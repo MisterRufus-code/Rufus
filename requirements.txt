@@ -1,43 +1,48 @@
-# Core AI / LLM
-anthropic>=0.40.0
+# ── Local LLM (free, runs on your GPU/CPU) ───────────────────────────────
+httpx>=0.27.0                     # Ollama HTTP client (no ollama package needed)
 
-# Vision models
+# ── Vision models (free, local) ──────────────────────────────────────────
 torch>=2.2.0
 torchvision>=0.17.0
 transformers>=4.40.0
 ftfy>=6.1.3
 regex>=2023.12.25
-openai-clip @ git+https://github.com/openai/CLIP.git
-ultralytics>=8.2.0            # YOLOv8
+git+https://github.com/openai/CLIP.git
+ultralytics>=8.2.0                # YOLOv8
 Pillow>=10.3.0
 opencv-python-headless>=4.9.0
 
-# Vector database
+# ── Vector database (free, self-hosted Docker) ───────────────────────────
 qdrant-client>=1.9.0
-faiss-cpu>=1.8.0              # swap for faiss-gpu if CUDA available
+faiss-cpu>=1.8.0                  # in-memory fallback
 
-# Google / YouTube
+# ── Free TTS (local, near-ElevenLabs quality) ────────────────────────────
+kokoro-onnx>=0.4.0
+soundfile>=0.12.1
+
+# ── Free stock footage APIs ──────────────────────────────────────────────
+# (keys are free — no credit card required)
+# Pexels:  https://www.pexels.com/api/
+# Pixabay: https://pixabay.com/api/docs/
+
+# ── Google / YouTube (free API) ──────────────────────────────────────────
 google-api-python-client>=2.100.0
 google-auth-httplib2>=0.2.0
 google-auth-oauthlib>=1.2.0
 
-# Trends
+# ── Trends (free) ────────────────────────────────────────────────────────
 pytrends>=4.9.2
 
-# ML / analytics
+# ── ML / analytics (free, local) ─────────────────────────────────────────
 scikit-learn>=1.4.0
 numpy>=1.26.0
 pandas>=2.2.0
 
-# Media processing
-ffmpeg-python>=0.2.0
-
-# CLI / UI
+# ── CLI / UI ─────────────────────────────────────────────────────────────
 click>=8.1.7
 rich>=13.7.0
 
-# Utilities
+# ── Utilities ────────────────────────────────────────────────────────────
 python-dotenv>=1.0.0
-httpx>=0.27.0
 tqdm>=4.66.0
 pyyaml>=6.0.1

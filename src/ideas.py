@@ -1,17 +1,102 @@
-"""AI-powered video idea and script generator using Claude."""
+"""AI-powered video idea and script generator using Ollama (100% free, local)."""
 
 from __future__ import annotations
 
-import anthropic
+import json
+import subprocess
 from dataclasses import dataclass
+from typing import Optional
+
 from rich.console import Console
 from rich.markdown import Markdown
 from rich.panel import Panel
 
-import config
-
 console = Console()
 
+DEFAULT_MODEL = "mistral"   # change to "llama3.1" or "phi3" if preferred
+
+
+# ---------------------------------------------------------------------------
+# Ollama helpers
+# ---------------------------------------------------------------------------
+
+def _check_ollama() -> bool:
+    """Return True if Ollama is running."""
+    try:
+        import httpx
+        r = httpx.get("http://localhost:11434/api/tags", timeout=3)
+        return r.status_code == 200
+    except Exception:
+        return False
+
+
+def _list_models() -> list[str]:
+    try:
+        import httpx
+        r = httpx.get("http://localhost:11434/api/tags", timeout=5)
+        return [m["name"] for m in r.json().get("models", [])]
+    except Exception:
+        return []
+
+
+def _ollama_generate(prompt: str, model: str = DEFAULT_MODEL, system: str = "") -> str:
+    """Send a prompt to the local Ollama server and return the response text."""
+    if not _check_ollama():
+        raise RuntimeError(
+            "Ollama is not running.\n"
+            "Start it with: ollama serve\n"
+            "Install from:  https://ollama.ai"
+        )
+
+    import httpx
+    payload = {
+        "model": model,
+        "prompt": prompt,
+        "system": system,
+        "stream": False,
+        "options": {"temperature": 0.85, "num_predict": 2048},
+    }
+    r = httpx.post(
+        "http://localhost:11434/api/generate",
+        json=payload,
+        timeout=120,
+    )
+    r.raise_for_status()
+    return r.json().get("response", "").strip()
+
+
+def _parse_json_response(raw: str) -> list | dict:
+    """Extract JSON from model output — handles markdown code fences."""
+    raw = raw.strip()
+    if "```" in raw:
+        parts = raw.split("```")
+        for part in parts:
+            part = part.strip()
+            if part.startswith("json"):
+                part = part[4:].strip()
+            try:
+                return json.loads(part)
+            except json.JSONDecodeError:
+                continue
+    # Try whole response
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        # Last resort: find first [ or { and slice from there
+        for start_char, end_char in [("[", "]"), ("{", "}")]:
+            s = raw.find(start_char)
+            e = raw.rfind(end_char)
+            if s != -1 and e != -1:
+                try:
+                    return json.loads(raw[s : e + 1])
+                except json.JSONDecodeError:
+                    continue
+        raise ValueError(f"Could not parse JSON from model response:\n{raw[:300]}")
+
+
+# ---------------------------------------------------------------------------
+# Data models
+# ---------------------------------------------------------------------------
 
 @dataclass
 class VideoIdea:
@@ -32,66 +117,52 @@ class VideoScript:
     tags: list[str]
 
 
-def _get_client() -> anthropic.Anthropic:
-    if not config.ANTHROPIC_API_KEY:
-        raise RuntimeError(
-            "ANTHROPIC_API_KEY not set. Add it to your .env file."
-        )
-    return anthropic.Anthropic(api_key=config.ANTHROPIC_API_KEY)
-
+# ---------------------------------------------------------------------------
+# Generation functions
+# ---------------------------------------------------------------------------
 
 def generate_video_ideas(
     topic: str,
     niche: str,
     count: int = 5,
     trending_context: str = "",
+    model: str = DEFAULT_MODEL,
 ) -> list[VideoIdea]:
-    """Generate viral video ideas for a given topic and niche."""
-    client = _get_client()
-
+    """Generate viral YouTube video ideas using a local Ollama model."""
     trending_block = (
-        f"\n\nCurrently trending context:\n{trending_context}"
-        if trending_context
-        else ""
+        f"\nCurrently trending context: {trending_context}" if trending_context else ""
     )
 
-    prompt = f"""You are a YouTube viral content strategist. Generate {count} viral video ideas for:
+    prompt = f"""Generate {count} viral YouTube video ideas.
 Topic: {topic}
-Niche/Channel: {niche}{trending_block}
+Niche: {niche}{trending_block}
 
-For each idea return a JSON array with objects containing:
-- title: compelling, clickbait-worthy title (under 70 chars)
-- hook: first 3 seconds hook line that grabs attention
-- description: 2-sentence video description
-- tags: list of 10 relevant SEO tags
-- estimated_virality: "Low" | "Medium" | "High" | "Viral"
+Return a JSON array. Each object must have exactly these keys:
+- title: compelling title under 70 characters
+- hook: first 3 seconds attention-grabbing line
+- description: 2 sentences about the video
+- tags: list of 10 SEO tags
+- estimated_virality: one of "Low", "Medium", "High", "Viral"
 
-Return ONLY valid JSON, no markdown, no explanation."""
+Return ONLY the JSON array, no explanation."""
 
-    response = client.messages.create(
-        model=config.CLAUDE_MODEL,
-        max_tokens=2048,
-        system="You are an expert YouTube growth strategist who specializes in creating viral content. Always return valid JSON.",
-        messages=[{"role": "user", "content": prompt}],
+    raw = _ollama_generate(
+        prompt,
+        model=model,
+        system="You are a YouTube viral content strategist. Always respond with valid JSON only.",
     )
-
-    import json
-    raw = response.content[0].text.strip()
-    if raw.startswith("```"):
-        raw = raw.split("```")[1]
-        if raw.startswith("json"):
-            raw = raw[4:]
-
-    ideas_data = json.loads(raw)
+    data = _parse_json_response(raw)
+    if isinstance(data, dict):
+        data = [data]
     return [
         VideoIdea(
-            title=d["title"],
-            hook=d["hook"],
-            description=d["description"],
+            title=d.get("title", ""),
+            hook=d.get("hook", ""),
+            description=d.get("description", ""),
             tags=d.get("tags", []),
             estimated_virality=d.get("estimated_virality", "Medium"),
         )
-        for d in ideas_data
+        for d in data
     ]
 
 
@@ -99,60 +170,49 @@ def generate_video_script(
     idea: VideoIdea,
     duration_minutes: int = 10,
     style: str = "engaging and conversational",
+    model: str = DEFAULT_MODEL,
 ) -> VideoScript:
-    """Generate a full video script from a VideoIdea."""
-    client = _get_client()
-
-    prompt = f"""Write a full YouTube video script for:
-
+    """Generate a full video script using a local Ollama model."""
+    prompt = f"""Write a YouTube video script.
 Title: {idea.title}
 Hook: {idea.hook}
 Style: {style}
-Target duration: ~{duration_minutes} minutes
+Target duration: {duration_minutes} minutes
 
-Return a JSON object with:
+Return a JSON object with exactly these keys:
 - title: the video title
-- hook: attention-grabbing opening (first 15 seconds, spoken word)
-- sections: array of objects with "heading" and "script" (the spoken words for that section)
-- call_to_action: final 30-second CTA encouraging likes/subscribe/comment
-- description: full YouTube description (with timestamps placeholder)
-- tags: list of 15 SEO-optimized tags
+- hook: spoken opening (first 15 seconds)
+- sections: array of objects with "heading" and "script" keys
+- call_to_action: final 30-second spoken CTA for likes/subscribe
+- description: full YouTube description with timestamp placeholders
+- tags: list of 15 SEO tags
 
-Return ONLY valid JSON, no markdown wrapper."""
+Return ONLY the JSON object, no explanation."""
 
-    response = client.messages.create(
-        model=config.CLAUDE_MODEL,
-        max_tokens=4096,
-        system="You are a professional YouTube scriptwriter. Write engaging, retention-optimized scripts. Always return valid JSON.",
-        messages=[{"role": "user", "content": prompt}],
+    raw = _ollama_generate(
+        prompt,
+        model=model,
+        system="You are a professional YouTube scriptwriter. Always respond with valid JSON only.",
     )
-
-    import json
-    raw = response.content[0].text.strip()
-    if raw.startswith("```"):
-        raw = raw.split("```")[1]
-        if raw.startswith("json"):
-            raw = raw[4:]
-
-    data = json.loads(raw)
+    data = _parse_json_response(raw)
     return VideoScript(
-        title=data["title"],
-        hook=data["hook"],
+        title=data.get("title", idea.title),
+        hook=data.get("hook", ""),
         sections=data.get("sections", []),
-        call_to_action=data["call_to_action"],
-        description=data["description"],
+        call_to_action=data.get("call_to_action", ""),
+        description=data.get("description", ""),
         tags=data.get("tags", []),
     )
 
 
+# ---------------------------------------------------------------------------
+# Display helpers
+# ---------------------------------------------------------------------------
+
 def print_ideas(ideas: list[VideoIdea]) -> None:
     virality_colors = {
-        "Low": "dim",
-        "Medium": "yellow",
-        "High": "green",
-        "Viral": "bold magenta",
+        "Low": "dim", "Medium": "yellow", "High": "green", "Viral": "bold magenta"
     }
-
     for i, idea in enumerate(ideas, 1):
         color = virality_colors.get(idea.estimated_virality, "white")
         console.print(
@@ -171,7 +231,19 @@ def print_ideas(ideas: list[VideoIdea]) -> None:
 def print_script(script: VideoScript) -> None:
     md_parts = [f"# {script.title}\n", f"## Hook\n{script.hook}\n"]
     for section in script.sections:
-        md_parts.append(f"## {section['heading']}\n{section['script']}\n")
+        md_parts.append(f"## {section.get('heading','')}\n{section.get('script','')}\n")
     md_parts.append(f"## Call to Action\n{script.call_to_action}\n")
-    md_parts.append(f"---\n**Description:**\n{script.description}")
+    md_parts.append(f"---\n**YouTube Description:**\n{script.description}")
     console.print(Markdown("\n".join(md_parts)))
+
+
+def check_ollama_status() -> None:
+    """Print Ollama status and available models."""
+    if _check_ollama():
+        models = _list_models()
+        console.print(f"[green]Ollama running[/green] — models: {', '.join(models) or 'none pulled yet'}")
+        if not models:
+            console.print("[yellow]Pull a model: ollama pull mistral[/yellow]")
+    else:
+        console.print("[red]Ollama not running.[/red] Start with: [bold]ollama serve[/bold]")
+        console.print("Install from: https://ollama.ai")
