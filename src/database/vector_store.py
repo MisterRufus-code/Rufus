@@ -79,13 +79,24 @@ class QdrantStore:
                 must=[FieldCondition(key="asset_type", match=MatchValue(value=asset_type_filter))]
             )
 
-        hits = self._qdrant.search(
-            collection_name=self._collection,
-            query_vector=query_vector,
-            limit=top_k,
-            query_filter=query_filter,
-            with_payload=True,
-        )
+        try:
+            # qdrant-client >= 1.7 uses query_points; older versions use search
+            result = self._qdrant.query_points(
+                collection_name=self._collection,
+                query=query_vector,
+                limit=top_k,
+                query_filter=query_filter,
+                with_payload=True,
+            )
+            hits = result.points
+        except AttributeError:
+            hits = self._qdrant.search(
+                collection_name=self._collection,
+                query_vector=query_vector,
+                limit=top_k,
+                query_filter=query_filter,
+                with_payload=True,
+            )
         return [MediaAsset.from_payload(h.payload) for h in hits]
 
     def get_all_asset_ids(self) -> set[str]:

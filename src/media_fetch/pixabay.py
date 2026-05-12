@@ -88,6 +88,10 @@ def download_videos(
     downloaded: list[Path] = []
 
     for query in queries:
+        import re
+        query = re.sub(r"^\d+\.\s*", "", query).strip()  # remove leading "1. "
+        if not query:
+            continue
         console.print(f"[cyan]Pixabay search:[/cyan] {query}")
         try:
             results = search_videos(query, per_page=videos_per_query,
