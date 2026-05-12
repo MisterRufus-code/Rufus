@@ -117,6 +117,35 @@ def analyse_feedback() -> OptimizationInsights:
     )
 
 
+def get_keyword_context(niche: str, topic: str) -> str:
+    """
+    Return a short ML context string for keyword generation.
+    Tells Ollama which types of footage performed well in the past.
+    """
+    try:
+        records = load_all_feedback()
+        relevant = [r for r in records if r.niche == niche or r.topic == topic]
+        if not relevant:
+            return ""
+        high = [r for r in relevant if r.performance_score >= 0.6]
+        if not high:
+            return ""
+        # Pull keywords_used from raw records
+        from src.ml.feedback import _load_db
+        raw_records = _load_db()
+        good_keywords: list[str] = []
+        for raw in raw_records:
+            if raw.get("niche") == niche and raw.get("entropy_score", 0) >= 0.55:
+                good_keywords.extend(raw.get("keywords_used", []))
+        if not good_keywords:
+            return ""
+        from collections import Counter
+        top = [kw for kw, _ in Counter(good_keywords).most_common(6)]
+        return f"Footage types that worked well before: {', '.join(top)}"
+    except Exception:
+        return ""
+
+
 def get_optimized_prompt_prefix(niche: str) -> str:
     """
     Return a learned prompt prefix for the given niche based on past feedback.

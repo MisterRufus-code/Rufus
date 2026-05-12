@@ -71,6 +71,7 @@ class QdrantStore:
         query_vector: list[float],
         top_k: int = 10,
         asset_type_filter: Optional[str] = None,
+        exclude_ids: Optional[set[str]] = None,
     ) -> list[MediaAsset]:
         from qdrant_client.models import Filter, FieldCondition, MatchValue
         query_filter = None
@@ -79,12 +80,12 @@ class QdrantStore:
                 must=[FieldCondition(key="asset_type", match=MatchValue(value=asset_type_filter))]
             )
 
+        fetch_k = top_k + len(exclude_ids) + 10 if exclude_ids else top_k
         try:
-            # qdrant-client >= 1.7 uses query_points; older versions use search
             result = self._qdrant.query_points(
                 collection_name=self._collection,
                 query=query_vector,
-                limit=top_k,
+                limit=fetch_k,
                 query_filter=query_filter,
                 with_payload=True,
             )
@@ -93,11 +94,34 @@ class QdrantStore:
             hits = self._qdrant.search(
                 collection_name=self._collection,
                 query_vector=query_vector,
-                limit=top_k,
+                limit=fetch_k,
                 query_filter=query_filter,
                 with_payload=True,
             )
-        return [MediaAsset.from_payload(h.payload) for h in hits]
+        assets = [MediaAsset.from_payload(h.payload) for h in hits]
+        if exclude_ids:
+            assets = [a for a in assets if a.asset_id not in exclude_ids]
+        return assets[:top_k]
+
+    def get_all_assets(self) -> list[MediaAsset]:
+        """Return all assets stored in Qdrant with their metadata."""
+        assets = []
+        offset = None
+        while True:
+            results, offset = self._qdrant.scroll(
+                collection_name=self._collection,
+                limit=256,
+                offset=offset,
+                with_payload=True,
+            )
+            for r in results:
+                try:
+                    assets.append(MediaAsset.from_payload(r.payload))
+                except Exception:
+                    pass
+            if offset is None:
+                break
+        return assets
 
     def get_all_asset_ids(self) -> set[str]:
         ids = set()
@@ -180,11 +204,12 @@ class FaissStore:
         query_vector: list[float],
         top_k: int = 10,
         asset_type_filter: Optional[str] = None,
+        exclude_ids: Optional[set[str]] = None,
     ) -> list[MediaAsset]:
         if self._index.ntotal == 0:
             return []
         vec = np.array([query_vector], dtype=np.float32)
-        k = min(top_k * 3, self._index.ntotal)
+        k = min(top_k * 4, self._index.ntotal)
         _, indices = self._index.search(vec, k)
         results = []
         for idx in indices[0]:
@@ -193,10 +218,15 @@ class FaissStore:
             asset = self._assets[idx]
             if asset_type_filter and asset.asset_type != asset_type_filter:
                 continue
+            if exclude_ids and asset.asset_id in exclude_ids:
+                continue
             results.append(asset)
             if len(results) >= top_k:
                 break
         return results
+
+    def get_all_assets(self) -> list[MediaAsset]:
+        return list(self._assets)
 
     def get_all_asset_ids(self) -> set[str]:
         return set(self._id_set)

@@ -91,6 +91,44 @@ def record_feedback(feedback: VideoFeedback) -> None:
         )
 
 
+def record_render(
+    topic: str,
+    niche: str,
+    asset_ids: list[str],
+    model: str = "mistral",
+    entropy_score: float = 0.0,
+    script_style: str = "",
+    keywords_used: list[str] | None = None,
+) -> None:
+    """
+    Record a local render (no YouTube upload needed).
+    This enables the no-repeat logic immediately after each video is made.
+    """
+    render_id = f"local_{datetime.datetime.utcnow().strftime('%Y%m%d_%H%M%S')}"
+    feedback = VideoFeedback(
+        video_id=render_id,
+        title=topic,
+        niche=niche,
+        topic=topic,
+        prompt_model=model,
+        asset_ids=asset_ids,
+        estimated_virality="Medium",
+    )
+    # Store extra metadata as extra fields via the raw dict
+    records = _load_db()
+    entry = asdict(feedback)
+    entry["entropy_score"] = entropy_score
+    entry["script_style"] = script_style
+    entry["keywords_used"] = keywords_used or []
+    entry["is_render_only"] = True
+    records.append(entry)
+    _save_db(records)
+    if console_import_ok:
+        console.print(
+            f"[green]Render recorded[/green] — {len(asset_ids)} clips saved for deduplication"
+        )
+
+
 def load_all_feedback() -> list[VideoFeedback]:
     records = _load_db()
     result = []

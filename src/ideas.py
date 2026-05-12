@@ -121,6 +121,128 @@ class VideoScript:
 # Generation functions
 # ---------------------------------------------------------------------------
 
+def generate_search_keywords(
+    topic: str,
+    niche: str,
+    model: str = DEFAULT_MODEL,
+    count: int = 8,
+    ml_context: str = "",
+) -> list[str]:
+    """Generate stock footage search queries for a topic using Ollama."""
+    prompt = f"""Generate {count} specific search queries to find stock footage for a YouTube video.
+Topic: {topic}
+Niche: {niche}
+{('Context from past videos: ' + ml_context) if ml_context else ''}
+
+Return a JSON array of strings. Each string must be 2-4 words, visual, and searchable on stock footage sites.
+Good examples: "people working laptop", "robot automation factory", "data charts screen", "city skyline night"
+Bad examples: "introduction", "section 1", "conclusion"
+
+Return ONLY the JSON array, no explanation."""
+    try:
+        raw = _ollama_generate(prompt, model=model,
+                               system="You are a stock footage researcher. Return only valid JSON arrays of strings.")
+        data = _parse_json_response(raw)
+        if isinstance(data, list):
+            return [str(k).strip() for k in data if k][:count]
+    except Exception:
+        pass
+    return [topic]
+
+
+def generate_ideas_from_media(
+    topic: str,
+    niche: str,
+    media_captions: list[str],
+    count: int = 3,
+    trending_context: str = "",
+    model: str = DEFAULT_MODEL,
+    ml_prefix: str = "",
+) -> list[VideoIdea]:
+    """Generate video ideas based on available footage captions."""
+    captions_block = "\n".join(f"- {c}" for c in media_captions[:20])
+    trending_block = f"\nTrending context: {trending_context}" if trending_context else ""
+    prompt = f"""{ml_prefix}
+Generate {count} viral YouTube video ideas.
+Topic: {topic}
+Niche: {niche}{trending_block}
+
+Available footage we actually have:
+{captions_block}
+
+Create ideas that can be made using ONLY the footage described above.
+
+Return a JSON array. Each object must have exactly these keys:
+- title: compelling title under 70 characters
+- hook: first 3 seconds attention-grabbing line
+- description: 2 sentences about the video
+- tags: list of 10 SEO tags
+- estimated_virality: one of "Low", "Medium", "High", "Viral"
+
+Return ONLY the JSON array, no explanation."""
+    raw = _ollama_generate(prompt, model=model,
+                           system="You are a YouTube viral content strategist. Always respond with valid JSON only.")
+    data = _parse_json_response(raw)
+    if isinstance(data, dict):
+        data = [data]
+    return [
+        VideoIdea(
+            title=d.get("title", ""),
+            hook=d.get("hook", ""),
+            description=d.get("description", ""),
+            tags=d.get("tags", []),
+            estimated_virality=d.get("estimated_virality", "Medium"),
+        )
+        for d in data
+    ]
+
+
+def generate_script_from_media(
+    idea: VideoIdea,
+    media_captions: list[str],
+    duration_minutes: int = 10,
+    style: str = "engaging and conversational",
+    model: str = DEFAULT_MODEL,
+    ml_prefix: str = "",
+) -> "VideoScript":
+    """Generate a script with sections that map to the available media clips."""
+    captions_block = "\n".join(f"[CLIP {i+1}]: {c}" for i, c in enumerate(media_captions[:15]))
+    prompt = f"""{ml_prefix}
+Write a YouTube video script using the available clips listed below.
+
+Title: {idea.title}
+Hook: {idea.hook}
+Style: {style}
+Target duration: {duration_minutes} minutes
+
+Available clips:
+{captions_block}
+
+Each section MUST reference footage that visually matches one of the clips above.
+
+Return a JSON object with exactly these keys:
+- title: the video title
+- hook: spoken opening (first 15 seconds)
+- sections: array of objects with "heading", "script", and "clip_hint" keys
+  (clip_hint = short phrase matching the visual content of one available clip)
+- call_to_action: final 30-second spoken CTA
+- description: full YouTube description
+- tags: list of 15 SEO tags
+
+Return ONLY the JSON object, no explanation."""
+    raw = _ollama_generate(prompt, model=model,
+                           system="You are a professional YouTube scriptwriter. Always respond with valid JSON only.")
+    data = _parse_json_response(raw)
+    return VideoScript(
+        title=data.get("title", idea.title),
+        hook=data.get("hook", ""),
+        sections=data.get("sections", []),
+        call_to_action=data.get("call_to_action", ""),
+        description=data.get("description", ""),
+        tags=data.get("tags", []),
+    )
+
+
 def generate_video_ideas(
     topic: str,
     niche: str,

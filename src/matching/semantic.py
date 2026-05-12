@@ -50,10 +50,25 @@ def build_scene_query(scene: SceneRequirement) -> str:
     return " ".join(p for p in parts if p).strip()
 
 
+def get_globally_used_asset_ids(recent_videos: int = 5) -> set[str]:
+    """Return asset IDs used in the last N rendered videos to avoid repetition."""
+    try:
+        from src.ml.feedback import load_all_feedback
+        records = load_all_feedback()
+        recent = records[-recent_videos:] if len(records) > recent_videos else records
+        used: set[str] = set()
+        for r in recent:
+            used.update(r.asset_ids)
+        return used
+    except Exception:
+        return set()
+
+
 def match_scene(
     scene: SceneRequirement,
-    top_k: int = 8,
+    top_k: int = 12,
     asset_type_filter: str | None = None,
+    exclude_ids: set[str] | None = None,
 ) -> MatchResult:
     """Find the best media assets for a single scene requirement."""
     store = get_vector_store()
@@ -69,9 +84,12 @@ def match_scene(
         scene.preferred_type if scene.preferred_type != "any" else None
     )
 
-    candidates = store.search(query_vec, top_k=top_k, asset_type_filter=asset_filter)
+    candidates = store.search(
+        query_vec, top_k=top_k,
+        asset_type_filter=asset_filter,
+        exclude_ids=exclude_ids,
+    )
 
-    # Filter by duration requirement for videos
     if scene.preferred_type == "video":
         candidates = [
             a for a in candidates
@@ -80,42 +98,44 @@ def match_scene(
 
     result = MatchResult(scene=scene, candidates=candidates)
     if candidates:
-        # Pick asset with best combined semantic + performance score
-        result.selected = max(
-            candidates,
-            key=lambda a: a.performance_score,
-        )
+        result.selected = max(candidates, key=lambda a: a.performance_score)
     return result
 
 
 def match_all_scenes(
     scenes: list[SceneRequirement],
-    top_k: int = 8,
+    top_k: int = 12,
     avoid_repeat: bool = True,
+    global_dedup_videos: int = 5,
 ) -> list[MatchResult]:
     """
-    Match every scene in a script.
+    Match every scene, avoiding clips used in this video AND in recent past videos.
 
-    With *avoid_repeat=True* the same asset won't be selected for two scenes
-    (entropy-style deduplication at the selection level).
+    - avoid_repeat: no clip appears twice in the same video
+    - global_dedup_videos: exclude clips used in the last N videos
     """
-    used_ids: set[str] = set()
+    globally_used = get_globally_used_asset_ids(recent_videos=global_dedup_videos)
+    session_used: set[str] = set()
     results: list[MatchResult] = []
 
     for scene in scenes:
-        result = match_scene(scene, top_k=top_k)
+        exclude = globally_used | session_used
+        result = match_scene(scene, top_k=top_k, exclude_ids=exclude)
+
+        # If global exclusion leaves nothing, fall back without global dedup
+        if not result.candidates:
+            result = match_scene(scene, top_k=top_k, exclude_ids=session_used)
 
         if avoid_repeat and result.candidates:
-            # Try to pick an unused asset
             for candidate in result.candidates:
-                if candidate.asset_id not in used_ids:
+                if candidate.asset_id not in session_used:
                     result.selected = candidate
                     break
             else:
                 result.selected = result.candidates[0]
 
         if result.selected:
-            used_ids.add(result.selected.asset_id)
+            session_used.add(result.selected.asset_id)
             store = get_vector_store()
             store.increment_usage_count(result.selected.asset_id)
 
