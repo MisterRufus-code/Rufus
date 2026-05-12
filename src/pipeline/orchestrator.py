@@ -66,7 +66,7 @@ def run_pipeline(
         from src.trends import fetch_google_trends
         topics = fetch_google_trends([topic], geo=geo)
         trending_ctx = ", ".join(
-            [t.keyword] + t.related_queries[:3] for t in topics
+            item for t in topics for item in ([t.keyword] + t.related_queries[:3])
         )
         console.print(f"[green]Trending context:[/green] {trending_ctx[:120]}")
     except Exception as exc:

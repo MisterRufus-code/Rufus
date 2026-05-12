@@ -65,33 +65,50 @@ def _ollama_generate(prompt: str, model: str = DEFAULT_MODEL, system: str = "") 
     return r.json().get("response", "").strip()
 
 
+def _clean_json_str(s: str) -> str:
+    """Fix common LLM JSON issues: unescaped newlines/tabs inside strings."""
+    import re
+    # Replace literal newlines inside JSON string values with \n
+    def fix_string(m: re.Match) -> str:
+        return m.group(0).replace("\n", "\\n").replace("\r", "\\r").replace("\t", "\\t")
+    return re.sub(r'"(?:[^"\\]|\\.)*"', fix_string, s, flags=re.DOTALL)
+
+
 def _parse_json_response(raw: str) -> list | dict:
-    """Extract JSON from model output — handles markdown code fences."""
+    """Extract JSON from model output — handles markdown fences and LLM quirks."""
     raw = raw.strip()
+
+    def try_parse(s: str) -> list | dict | None:
+        for candidate in (s, _clean_json_str(s)):
+            try:
+                return json.loads(candidate)
+            except json.JSONDecodeError:
+                continue
+        return None
+
     if "```" in raw:
-        parts = raw.split("```")
-        for part in parts:
+        for part in raw.split("```"):
             part = part.strip()
             if part.startswith("json"):
                 part = part[4:].strip()
-            try:
-                return json.loads(part)
-            except json.JSONDecodeError:
-                continue
-    # Try whole response
-    try:
-        return json.loads(raw)
-    except json.JSONDecodeError:
-        # Last resort: find first [ or { and slice from there
-        for start_char, end_char in [("[", "]"), ("{", "}")]:
-            s = raw.find(start_char)
-            e = raw.rfind(end_char)
-            if s != -1 and e != -1:
-                try:
-                    return json.loads(raw[s : e + 1])
-                except json.JSONDecodeError:
-                    continue
-        raise ValueError(f"Could not parse JSON from model response:\n{raw[:300]}")
+            result = try_parse(part)
+            if result is not None:
+                return result
+
+    result = try_parse(raw)
+    if result is not None:
+        return result
+
+    # Last resort: slice from first [ or {
+    for start_char, end_char in [("[", "]"), ("{", "}")]:
+        s = raw.find(start_char)
+        e = raw.rfind(end_char)
+        if s != -1 and e != -1:
+            result = try_parse(raw[s : e + 1])
+            if result is not None:
+                return result
+
+    raise ValueError(f"Could not parse JSON from model response:\n{raw[:300]}")
 
 
 # ---------------------------------------------------------------------------
