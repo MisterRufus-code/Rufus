@@ -1,0 +1,12 @@
+.env
+token.json
+client_secrets.json
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+output/
+*.mp4
+*.mov
+*.avi
