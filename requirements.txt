@@ -21,9 +21,9 @@ kokoro-onnx>=0.4.0
 soundfile>=0.12.1
 
 # ── Free stock footage APIs ──────────────────────────────────────────────
-# (keys are free — no credit card required)
-# Pexels:  https://www.pexels.com/api/
-# Pixabay: https://pixabay.com/api/docs/
+# Pexels: https://www.pexels.com/api/  (free key, instant)
+# YouTube CC: yt-dlp, no key needed
+yt-dlp>=2024.1.0
 
 # ── Google / YouTube (free API) ──────────────────────────────────────────
 google-api-python-client>=2.100.0

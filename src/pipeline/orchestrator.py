@@ -103,10 +103,10 @@ def run_pipeline(
             console.print(f"[yellow]Pexels: {exc}[/yellow]")
 
         try:
-            from src.media_fetch.pixabay import download_videos as pixabay_dl
-            pixabay_dl(keywords, videos_per_query=videos_per_scene)
+            from src.media_fetch.ytcc import download_videos as ytcc_dl
+            ytcc_dl(keywords, videos_per_query=videos_per_scene)
         except Exception as exc:
-            console.print(f"[yellow]Pixabay: {exc}[/yellow]")
+            console.print(f"[yellow]YouTube CC: {exc}[/yellow]")
     else:
         console.print(Rule("[bold]Step 3 — Footage Download (skipped)[/bold]"))
 
