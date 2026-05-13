@@ -2,11 +2,12 @@
 FastAPI server — exposes Rufus pipeline as HTTP endpoints for n8n.
 
 Endpoints:
-  POST /run/pipeline   — full long-form pipeline
-  POST /run/shorts     — Shorts-only pipeline
-  POST /run/both       — long form + Shorts in one run
-  GET  /status         — system health check
-  GET  /results        — recent pipeline outputs
+  POST /run/pipeline    — full long-form pipeline
+  POST /run/shorts      — Shorts-only pipeline
+  POST /run/both        — long form + Shorts in one run
+  GET  /status          — system health check
+  GET  /metrics         — observability: job stats, error rate, uptime
+  GET  /results         — recent pipeline outputs
   GET  /topics/trending — get trending topic for a niche
 """
 
@@ -15,10 +16,13 @@ from __future__ import annotations
 import os
 import secrets
 import threading
+import time as _time
 import uuid
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
+
+_SERVER_START = _time.monotonic()
 
 import signal as _signal
 import sys as _sys
@@ -308,6 +312,58 @@ def get_results(limit: int = 10, _: None = Security(_require_api_key)):
             if v.get("status") in ("done", "failed")
         ]
     return {"results": done[-limit:], "total": len(done)}
+
+
+@app.get("/metrics")
+def metrics(_: None = Security(_require_api_key)):
+    """Observability endpoint — job stats, error rate, uptime, system resources."""
+    import shutil
+
+    with _jobs_lock:
+        all_jobs = list(_jobs.values())
+
+    total = len(all_jobs)
+    done = sum(1 for j in all_jobs if j.get("status") == "done")
+    failed = sum(1 for j in all_jobs if j.get("status") == "failed")
+    running = sum(1 for j in all_jobs if j.get("status") == "running")
+    queued = sum(1 for j in all_jobs if j.get("status") == "queued")
+    error_rate = round(failed / total, 4) if total else 0.0
+
+    uptime_s = _time.monotonic() - _SERVER_START
+    uptime = {"hours": int(uptime_s // 3600), "minutes": int((uptime_s % 3600) // 60)}
+
+    # Disk space for output dir
+    disk: dict = {}
+    try:
+        usage = shutil.disk_usage(os.getenv("OUTPUT_PATH", "output"))
+        disk = {
+            "total_gb": round(usage.total / 1e9, 2),
+            "used_gb": round(usage.used / 1e9, 2),
+            "free_gb": round(usage.free / 1e9, 2),
+        }
+    except Exception:
+        pass
+
+    # Semaphore slots available (approximation)
+    semaphore_free = max(0, _MAX_CONCURRENT_JOBS - running)
+
+    return {
+        "uptime": uptime,
+        "jobs": {
+            "total": total,
+            "done": done,
+            "failed": failed,
+            "running": running,
+            "queued": queued,
+            "error_rate": error_rate,
+        },
+        "capacity": {
+            "max_concurrent": _MAX_CONCURRENT_JOBS,
+            "slots_free": semaphore_free,
+        },
+        "disk": disk,
+        "timestamp": datetime.utcnow().isoformat(),
+    }
 
 
 @app.get("/topics/trending")
