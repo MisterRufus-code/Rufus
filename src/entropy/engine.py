@@ -27,6 +27,14 @@ from src.database.models import MediaAsset, TimelineClip
 console = Console()
 
 
+def _scene_repeat_threshold() -> float:
+    """CLIP cosine similarity above which two consecutive clips are flagged as repetitive.
+    Configurable via ENTROPY_SCENE_REPEAT env var. Default 0.97 (stricter than old 0.92).
+    """
+    import os
+    return float(os.getenv("ENTROPY_SCENE_REPEAT", "0.97"))
+
+
 @dataclass
 class EntropyReport:
     overall_score: float                 # 0–1
@@ -68,7 +76,7 @@ def _scene_variety(clips: list[TimelineClip]) -> tuple[float, list[int]]:
             continue
         sim = _cosine_similarity(a_emb, b_emb)
         similarities.append(sim)
-        if sim > 0.92:
+        if sim > _scene_repeat_threshold():
             flagged.append(i)
 
     avg_sim = float(np.mean(similarities)) if similarities else 0.5

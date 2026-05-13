@@ -117,6 +117,7 @@ def match_all_scenes(
     globally_used = get_globally_used_asset_ids(recent_videos=global_dedup_videos)
     session_used: set[str] = set()
     results: list[MatchResult] = []
+    store = get_vector_store()  # hoist — same singleton every iteration
 
     for scene in scenes:
         exclude = globally_used | session_used
@@ -137,8 +138,10 @@ def match_all_scenes(
 
         if result.selected:
             session_used.add(result.selected.asset_id)
-            store = get_vector_store()
-            store.increment_usage_count(result.selected.asset_id)
+            try:
+                store.increment_usage_count(result.selected.asset_id)
+            except Exception:
+                pass
 
         results.append(result)
 

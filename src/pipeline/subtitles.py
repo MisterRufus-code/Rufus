@@ -67,16 +67,18 @@ def build_srt(
     """
     all_segments = []
     if hook:
-        all_segments.append(hook)
+        all_segments.append(hook.strip())
     for s in sections:
-        text = s.get("script", s.get("heading", ""))
+        text = s.get("script", s.get("heading", "")).strip()
         if text:
-            # Take first 100 chars — subtitles should be short
             all_segments.append(text[:100].replace("\n", " "))
     if call_to_action:
-        all_segments.append(call_to_action[:80])
+        all_segments.append(call_to_action[:80].strip())
 
-    if not all_segments:
+    # Remove any blank/whitespace-only segments
+    all_segments = [seg for seg in all_segments if seg.strip()]
+
+    if not all_segments or total_duration <= 0:
         return ""
 
     seg_duration = total_duration / len(all_segments)

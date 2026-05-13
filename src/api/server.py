@@ -12,17 +12,43 @@ Endpoints:
 
 from __future__ import annotations
 
-import asyncio
+import os
+import secrets
 import uuid
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
-from fastapi import FastAPI, BackgroundTasks
+from fastapi import FastAPI, BackgroundTasks, HTTPException, Security
+from fastapi.security import APIKeyHeader
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 app = FastAPI(title="Rufus API", version="1.0.0")
+
+# ---------------------------------------------------------------------------
+# API Key authentication — set RUFUS_API_KEY in .env (auto-generated if unset)
+# ---------------------------------------------------------------------------
+
+_API_KEY_HEADER = APIKeyHeader(name="X-API-Key", auto_error=False)
+
+def _get_configured_key() -> str:
+    key = os.getenv("RUFUS_API_KEY", "")
+    if not key:
+        # Auto-generate and print on first startup — user must save it
+        key = secrets.token_urlsafe(32)
+        from rich.console import Console
+        Console().print(
+            f"\n[bold yellow]No RUFUS_API_KEY set. Using auto-generated key for this session:[/bold yellow]\n"
+            f"[bold cyan]{key}[/bold cyan]\n"
+            f"Add  RUFUS_API_KEY={key}  to your .env to make it permanent.\n"
+        )
+        os.environ["RUFUS_API_KEY"] = key
+    return key
+
+def _require_api_key(api_key: Optional[str] = Security(_API_KEY_HEADER)) -> None:
+    if api_key != _get_configured_key():
+        raise HTTPException(status_code=401, detail="Invalid or missing X-API-Key header")
 
 # In-memory job store (good enough for single-machine use)
 _jobs: dict[str, dict] = {}
@@ -92,7 +118,7 @@ def _resolve_topic(topic: Optional[str], niche: str, model: str, geo: str) -> st
 # ---------------------------------------------------------------------------
 
 @app.get("/status")
-def status():
+def status(_: None = Security(_require_api_key)):
     """System health check — verifies Ollama, Qdrant, FFmpeg."""
     checks = {}
 
@@ -119,7 +145,7 @@ def status():
 
 
 @app.post("/run/pipeline", response_model=JobResponse)
-def run_pipeline_endpoint(req: PipelineRequest, background_tasks: BackgroundTasks):
+def run_pipeline_endpoint(req: PipelineRequest, background_tasks: BackgroundTasks, _: None = Security(_require_api_key)):
     """Start a long-form pipeline job. Returns job_id immediately."""
     job_id = str(uuid.uuid4())[:8]
     topic = _resolve_topic(req.topic, req.niche, req.model, req.geo)
@@ -133,7 +159,7 @@ def run_pipeline_endpoint(req: PipelineRequest, background_tasks: BackgroundTask
 
 
 @app.post("/run/shorts", response_model=JobResponse)
-def run_shorts_endpoint(req: PipelineRequest, background_tasks: BackgroundTasks):
+def run_shorts_endpoint(req: PipelineRequest, background_tasks: BackgroundTasks, _: None = Security(_require_api_key)):
     """Start a Shorts-only pipeline job."""
     job_id = str(uuid.uuid4())[:8]
     topic = _resolve_topic(req.topic, req.niche, req.model, req.geo)
@@ -147,7 +173,7 @@ def run_shorts_endpoint(req: PipelineRequest, background_tasks: BackgroundTasks)
 
 
 @app.post("/run/both", response_model=JobResponse)
-def run_both_endpoint(req: PipelineRequest, background_tasks: BackgroundTasks):
+def run_both_endpoint(req: PipelineRequest, background_tasks: BackgroundTasks, _: None = Security(_require_api_key)):
     """Start long-form + Shorts pipeline. One topic, two videos."""
     job_id = str(uuid.uuid4())[:8]
     topic = _resolve_topic(req.topic, req.niche, req.model, req.geo)
@@ -174,7 +200,7 @@ def run_both_endpoint(req: PipelineRequest, background_tasks: BackgroundTasks):
 
 
 @app.get("/jobs/{job_id}")
-def get_job(job_id: str):
+def get_job(job_id: str, _: None = Security(_require_api_key)):
     """Poll job status. n8n calls this until status == 'done' or 'failed'."""
     job = _jobs.get(job_id)
     if not job:
@@ -183,20 +209,23 @@ def get_job(job_id: str):
 
 
 @app.get("/results")
-def get_results(limit: int = 10):
+def get_results(limit: int = 10, _: None = Security(_require_api_key)):
     """Return recent completed jobs."""
     done = [
         {"job_id": k, **v}
         for k, v in _jobs.items()
         if v.get("status") in ("done", "failed")
-        and "_" not in k  # skip sub-jobs
+        and not k.endswith(("_longform", "_shorts"))  # skip sub-jobs with explicit suffix check
     ]
     return {"results": done[-limit:], "total": len(done)}
 
 
 @app.get("/topics/trending")
-def trending_topic(niche: str = "general", geo: str = "US", model: str = "mistral"):
+def trending_topic(niche: str = "general", geo: str = "US", model: str = "mistral", _: None = Security(_require_api_key)):
     """Get the best trending topic for a niche — called by n8n before triggering pipeline."""
-    from src.trends import get_trending_topic
-    topic = get_trending_topic(niche=niche, geo=geo, model=model)
-    return {"topic": topic, "niche": niche, "timestamp": datetime.utcnow().isoformat()}
+    try:
+        from src.trends import get_trending_topic
+        topic = get_trending_topic(niche=niche, geo=geo, model=model)
+        return {"topic": topic, "niche": niche, "timestamp": datetime.utcnow().isoformat()}
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))

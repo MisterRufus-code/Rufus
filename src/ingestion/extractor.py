@@ -110,7 +110,7 @@ def _extract_dominant_colors(image: Image.Image, k: int = 5) -> list[str]:
     from sklearn.cluster import MiniBatchKMeans
     img_small = image.resize((64, 64)).convert("RGB")
     pixels = np.array(img_small).reshape(-1, 3).astype(np.float32)
-    km = MiniBatchKMeans(n_clusters=k, random_state=42, n_init="auto")
+    km = MiniBatchKMeans(n_clusters=k, random_state=42, n_init=10)
     km.fit(pixels)
     centers = km.cluster_centers_.astype(int)
     return [f"#{r:02x}{g:02x}{b:02x}" for r, g, b in centers]
@@ -197,7 +197,12 @@ def extract_features(path: Path, asset_type: str) -> AssetFeatures:
 
     if asset_type == "video":
         image, features.duration_seconds, features.motion_score = _video_thumbnail(path)
-        features.frame_count = int(features.duration_seconds * 30)
+        # Use actual fps from OpenCV rather than assuming 30
+        import cv2 as _cv2
+        _cap = _cv2.VideoCapture(str(path))
+        _fps = _cap.get(_cv2.CAP_PROP_FPS) or 30.0
+        _cap.release()
+        features.frame_count = int(features.duration_seconds * _fps)
     else:
         image = Image.open(path).convert("RGB")
 

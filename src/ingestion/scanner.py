@@ -28,7 +28,12 @@ def scan_library(library_path: Path | None = None) -> Iterator[RawAsset]:
         root.mkdir(parents=True, exist_ok=True)
         return
 
+    _SKIP_DIRS = {"__pycache__", ".git", ".cache", ".DS_Store", "node_modules"}
+
     for p in root.rglob("*"):
+        # Skip hidden directories and system folders
+        if any(part.startswith(".") or part in _SKIP_DIRS for part in p.parts[len(root.parts):]):
+            continue
         if not p.is_file():
             continue
         ext = p.suffix.lower()

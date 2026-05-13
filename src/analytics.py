@@ -43,7 +43,13 @@ def get_channel_stats() -> ChannelStats:
         .execute()
     )
 
-    item = response["items"][0]
+    items = response.get("items", [])
+    if not items:
+        raise RuntimeError(
+            "YouTube API returned no channel data. "
+            "Check that OAuth scopes include youtube.readonly and re-authenticate."
+        )
+    item = items[0]
     stats = item["statistics"]
     snippet = item["snippet"]
 

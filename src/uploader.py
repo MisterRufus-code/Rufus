@@ -35,8 +35,15 @@ def get_youtube_client():
 
     if not creds or not creds.valid:
         if creds and creds.expired and creds.refresh_token:
-            creds.refresh(Request())
-        else:
+            try:
+                creds.refresh(Request())
+                with open(config.YOUTUBE_TOKEN_FILE, "w") as token_file:
+                    token_file.write(creds.to_json())
+            except Exception as refresh_err:
+                # Refresh failed — force full re-auth on next run, don't corrupt token
+                console.print(f"[yellow]Token refresh failed ({refresh_err}) — re-running auth flow.[/yellow]")
+                creds = None
+        if not creds or not creds.valid:
             if not os.path.exists(config.YOUTUBE_CLIENT_SECRETS_FILE):
                 raise FileNotFoundError(
                     f"OAuth client secrets not found at '{config.YOUTUBE_CLIENT_SECRETS_FILE}'.\n"
@@ -46,9 +53,8 @@ def get_youtube_client():
                 config.YOUTUBE_CLIENT_SECRETS_FILE, config.YOUTUBE_SCOPES
             )
             creds = flow.run_local_server(port=0)
-
-        with open(config.YOUTUBE_TOKEN_FILE, "w") as token_file:
-            token_file.write(creds.to_json())
+            with open(config.YOUTUBE_TOKEN_FILE, "w") as token_file:
+                token_file.write(creds.to_json())
 
     return build("youtube", "v3", credentials=creds)
 

@@ -55,6 +55,7 @@ def run_pipeline(
     music_path: Optional[Path] = None,
     shorts: bool = False,
     low_power: bool = False,
+    multi_shorts: bool = False,  # generate 4 Shorts angles from one long-form run
 ) -> PipelineResult:
     import time
 
@@ -70,6 +71,16 @@ def run_pipeline(
     result = PipelineResult(topic=topic, niche=niche)
     out = Path(output_dir or config.OUTPUT_PATH) / topic.replace(" ", "_")[:40]
     out.mkdir(parents=True, exist_ok=True)
+
+    # ------------------------------------------------------------------ #
+    # Pre-flight — fail fast before any expensive work
+    # ------------------------------------------------------------------ #
+    try:
+        from src.preflight import run_preflight
+        run_preflight(output_dir=out, abort_on_failure=True)
+    except SystemExit:
+        result.errors.append("Pre-flight check failed — see output above.")
+        return result
 
     # ------------------------------------------------------------------ #
     # Step 1 — Trend research
@@ -224,6 +235,23 @@ def run_pipeline(
         result.errors.append(f"Script generation failed: {exc}")
         console.print(f"[red]{exc}[/red]")
         return result
+
+    # ------------------------------------------------------------------ #
+    # Step 6b — Psychology hook optimisation
+    # ------------------------------------------------------------------ #
+    console.print(Rule("[bold]Step 6b — Psychology Hook Optimisation[/bold]"))
+    try:
+        from src.psychology.hooks import generate_hooks, print_hook_report
+        hook_scores = generate_hooks(topic, niche, model=ollama_model, count=8)
+        print_hook_report(hook_scores)
+        if hook_scores and hook_scores[0].total > 5.0:
+            old_hook = script.hook
+            script.hook = hook_scores[0].hook
+            console.print(f"[green]Hook upgraded:[/green] {old_hook[:50]}… → {script.hook[:50]}…")
+        else:
+            console.print("[dim]Hook score below threshold — keeping AI-generated hook.[/dim]")
+    except Exception as exc:
+        console.print(f"[yellow]Hook optimisation skipped ({exc})[/yellow]")
 
     script_file = out / "script.json"
     script_file.write_text(
@@ -385,6 +413,36 @@ def run_pipeline(
             )
         except Exception as exc:
             console.print(f"[yellow]ML record skipped ({exc})[/yellow]")
+
+    # ------------------------------------------------------------------ #
+    # Step 11b — Multi-angle Shorts (4 angles from one long-form script)
+    # ------------------------------------------------------------------ #
+    if multi_shorts and matched_clips and not shorts:
+        console.print(Rule("[bold]Step 11b — Multi-angle Shorts Generation[/bold]"))
+        try:
+            from src.pipeline.multi_shorts import generate_angles, render_all_angles
+            angles = generate_angles(
+                topic=topic,
+                niche=niche,
+                script_sections=script.sections,
+                original_hook=script.hook,
+                original_cta=script.call_to_action,
+                model=ollama_model,
+            )
+            console.print(f"[green]{len(angles)} Shorts angles generated[/green]")
+            angle_results = render_all_angles(
+                angles=angles,
+                clips=matched_clips,
+                audio_dir=out / "audio",
+                output_dir=out / "shorts",
+                tts_voice=tts_voice,
+                ollama_model=ollama_model,
+                upload=upload,
+                privacy=privacy,
+            )
+            console.print(f"[bold green]{sum(1 for r in angle_results if r['success'])} / {len(angle_results)} Shorts rendered[/bold green]")
+        except Exception as exc:
+            console.print(f"[yellow]Multi-Shorts skipped ({exc})[/yellow]")
 
     # ------------------------------------------------------------------ #
     # Step 12 — Upload to YouTube (free API, optional)

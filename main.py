@@ -125,26 +125,32 @@ def script_cmd(title, hook, duration, style, model, save):
 @cli.command("fetch")
 @click.option("--queries", "-q", multiple=True, required=True,
               help="Search queries for footage")
-@click.option("--source", "-s", type=click.Choice(["pexels", "pixabay", "both"]),
+@click.option("--source", "-s", type=click.Choice(["pexels", "ytcc", "both"]),
               default="both", show_default=True)
 @click.option("--count", "-c", default=3, show_default=True,
               help="Videos per query")
 @click.option("--images", is_flag=True, default=False,
               help="Download images instead of videos")
 def fetch_cmd(queries, source, count, images):
-    """Download free stock footage from Pexels and/or Pixabay."""
+    """Download free stock footage from Pexels and/or YouTube CC."""
     queries = list(queries)
+    total_paths: list = []
+
     if source in ("pexels", "both"):
         from src.media_fetch.pexels import download_videos, download_images
         fn = download_images if images else download_videos
-        paths = fn(queries, videos_per_query=count) if not images else fn(queries, images_per_query=count)
-        console.print(f"[green]Pexels: {len(paths)} files downloaded[/green]")
+        pexels_paths = fn(queries, images_per_query=count) if images else fn(queries, videos_per_query=count)
+        total_paths.extend(pexels_paths)
+        console.print(f"[green]Pexels: {len(pexels_paths)} files downloaded[/green]")
 
-    if source in ("pixabay", "both"):
-        from src.media_fetch.pixabay import download_videos, download_images
-        fn = download_images if images else download_videos
-        paths = fn(queries, videos_per_query=count) if not images else fn(queries, images_per_query=count)
-        console.print(f"[green]Pixabay: {len(paths)} files downloaded[/green]")
+    if source in ("ytcc", "both"):
+        from src.media_fetch.ytcc import download_videos as ytcc_dl
+        if not images:
+            ytcc_paths = ytcc_dl(queries, videos_per_query=count)
+            total_paths.extend(ytcc_paths)
+            console.print(f"[green]YouTube CC: {len(ytcc_paths)} files downloaded[/green]")
+
+    console.print(f"[bold green]Total: {len(total_paths)} files[/bold green]")
 
 
 # ---------------------------------------------------------------------------
@@ -358,9 +364,11 @@ def optimize_cmd():
               help="Produce a 9:16 YouTube Shorts video (≤60s) instead of long form")
 @click.option("--both", "both_formats", is_flag=True, default=False,
               help="Produce both long-form AND Shorts in one run (recommended)")
+@click.option("--multi-shorts", "multi_shorts", is_flag=True, default=False,
+              help="Generate 4 Shorts angles from the long-form script (4x upload volume)")
 @click.option("--low-power", is_flag=True, default=False,
               help="Limit CPU threads and add pauses — quieter PC, slower pipeline")
-def pipeline_cmd(topic, niche, model, voice, ideas_count, geo, no_download, upload, privacy, music, output, shorts, both_formats, low_power):
+def pipeline_cmd(topic, niche, model, voice, ideas_count, geo, no_download, upload, privacy, music, output, shorts, both_formats, multi_shorts, low_power):
     """
     Run the FULL free pipeline.
     --topic is optional: auto-selects trending topic if not provided.
@@ -400,7 +408,7 @@ def pipeline_cmd(topic, niche, model, voice, ideas_count, geo, no_download, uplo
             output_dir=Path(output) if output else None,
             upload=upload, privacy=privacy,
             music_path=Path(music) if music else None,
-            shorts=shorts, low_power=low_power,
+            shorts=shorts, low_power=low_power, multi_shorts=multi_shorts,
         )
         if not result.success:
             sys.exit(1)
