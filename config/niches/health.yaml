@@ -1,0 +1,43 @@
+name: health
+display_name: Health & Wellness
+
+model: mistral
+script_style: empathetic, evidence-based, actionable
+tone: warm, motivational
+
+topic_boosters:
+  - fitness
+  - nutrition
+  - mental health
+  - weight loss
+  - sleep
+  - stress management
+  - healthy habits
+  - workout
+
+hook_weights:
+  loss_aversion: 1.3
+  second_person: 1.4
+  open_loop: 1.2
+
+upload_schedule:
+  - weekday: monday
+    hour: 7
+  - weekday: wednesday
+    hour: 7
+  - weekday: saturday
+    hour: 9
+
+default_category_id: "26"   # Howto & Style
+default_tags:
+  - health
+  - wellness
+  - fitness
+  - nutrition
+  - healthy lifestyle
+
+entropy_min_score: 0.50
+entropy_scene_repeat_threshold: 0.96
+
+shorts_target_duration: 56
+shorts_hook_max_words: 11

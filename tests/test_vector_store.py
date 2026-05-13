@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import pytest
 
-from src.database.vector_store import _asset_point_id, FaissStore
-from src.ingestion.extractor import AssetFeatures
+pytest.importorskip("torch", reason="torch not installed — vector store requires CLIP models")
+
+from src.database.vector_store import _asset_point_id, FaissStore  # noqa: E402
+from src.ingestion.extractor import AssetFeatures  # noqa: E402
 
 
 def _make_features(asset_id: str, embedding: list[float] | None = None) -> AssetFeatures:

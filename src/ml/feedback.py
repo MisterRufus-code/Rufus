@@ -10,7 +10,9 @@ Data is stored in a local JSON file — no external service required.
 from __future__ import annotations
 
 import json
+import os
 import datetime
+import threading
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import Optional
@@ -52,6 +54,9 @@ class VideoFeedback:
         return round(ctr_w + ret_w + view_w, 4)
 
 
+_db_lock = threading.Lock()
+
+
 def _load_db() -> list[dict]:
     db_path = Path(config.FEEDBACK_DB_PATH)
     if not db_path.exists():
@@ -65,14 +70,17 @@ def _load_db() -> list[dict]:
 def _save_db(records: list[dict]) -> None:
     db_path = Path(config.FEEDBACK_DB_PATH)
     db_path.parent.mkdir(parents=True, exist_ok=True)
-    db_path.write_text(json.dumps(records, indent=2))
+    tmp_path = db_path.with_suffix(".tmp")
+    tmp_path.write_text(json.dumps(records, indent=2))
+    os.replace(tmp_path, db_path)  # atomic on POSIX, near-atomic on Windows
 
 
 def record_feedback(feedback: VideoFeedback) -> None:
     """Append a feedback record and update asset performance scores."""
-    records = _load_db()
-    records.append(asdict(feedback))
-    _save_db(records)
+    with _db_lock:
+        records = _load_db()
+        records.append(asdict(feedback))
+        _save_db(records)
 
     # Push updated performance scores back into the vector store
     if feedback.asset_ids:
@@ -115,14 +123,15 @@ def record_render(
         estimated_virality="Medium",
     )
     # Store extra metadata as extra fields via the raw dict
-    records = _load_db()
-    entry = asdict(feedback)
-    entry["entropy_score"] = entropy_score
-    entry["script_style"] = script_style
-    entry["keywords_used"] = keywords_used or []
-    entry["is_render_only"] = True
-    records.append(entry)
-    _save_db(records)
+    with _db_lock:
+        records = _load_db()
+        entry = asdict(feedback)
+        entry["entropy_score"] = entropy_score
+        entry["script_style"] = script_style
+        entry["keywords_used"] = keywords_used or []
+        entry["is_render_only"] = True
+        records.append(entry)
+        _save_db(records)
     if console_import_ok:
         console.print(
             f"[green]Render recorded[/green] — {len(asset_ids)} clips saved for deduplication"

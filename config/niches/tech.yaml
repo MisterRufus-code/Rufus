@@ -1,0 +1,43 @@
+name: tech
+display_name: Technology & AI
+
+model: llama3.1
+script_style: fast-paced, jargon-light, demo-forward
+tone: enthusiastic, forward-looking
+
+topic_boosters:
+  - artificial intelligence
+  - machine learning
+  - software tools
+  - productivity apps
+  - programming
+  - cybersecurity
+  - gadgets
+  - automation
+
+hook_weights:
+  curiosity_gap: 1.5
+  pattern_interrupt: 1.3
+  specificity: 1.2
+
+upload_schedule:
+  - weekday: monday
+    hour: 15
+  - weekday: wednesday
+    hour: 15
+  - weekday: friday
+    hour: 12
+
+default_category_id: "28"   # Science & Technology
+default_tags:
+  - technology
+  - AI
+  - machine learning
+  - tech news
+  - software
+
+entropy_min_score: 0.60
+entropy_scene_repeat_threshold: 0.94
+
+shorts_target_duration: 55
+shorts_hook_max_words: 10

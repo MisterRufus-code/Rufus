@@ -1,0 +1,50 @@
+name: finance
+display_name: Personal Finance & Investing
+
+# Ollama generation settings
+model: mistral
+script_style: authoritative, data-driven, trust-building
+tone: professional yet accessible
+
+# Keyword boosters fed to ideas.generate_search_keywords
+topic_boosters:
+  - investing
+  - passive income
+  - budgeting
+  - stocks
+  - retirement
+  - wealth building
+  - compound interest
+  - side hustle
+
+# Psychology hook weights (multipliers on top of defaults)
+hook_weights:
+  loss_aversion: 1.4
+  specificity: 1.3
+  open_loop: 1.1
+
+# Upload schedule — best times to post (UTC)
+upload_schedule:
+  - weekday: tuesday
+    hour: 14
+  - weekday: thursday
+    hour: 14
+  - weekday: saturday
+    hour: 11
+
+# YouTube metadata
+default_category_id: "22"   # People & Blogs
+default_tags:
+  - personal finance
+  - investing
+  - money tips
+  - financial freedom
+  - passive income
+
+# Entropy thresholds
+entropy_min_score: 0.55
+entropy_scene_repeat_threshold: 0.95
+
+# Shorts config
+shorts_target_duration: 58
+shorts_hook_max_words: 12

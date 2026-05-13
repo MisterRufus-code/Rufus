@@ -1,0 +1,32 @@
+name: general
+display_name: General
+
+model: mistral
+script_style: engaging, clear, well-paced
+tone: conversational
+
+topic_boosters: []
+
+hook_weights:
+  open_loop: 1.0
+  loss_aversion: 1.0
+  curiosity_gap: 1.0
+  specificity: 1.0
+
+upload_schedule:
+  - weekday: wednesday
+    hour: 14
+  - weekday: saturday
+    hour: 12
+
+default_category_id: "22"
+default_tags:
+  - tips
+  - howto
+  - education
+
+entropy_min_score: 0.50
+entropy_scene_repeat_threshold: 0.97
+
+shorts_target_duration: 58
+shorts_hook_max_words: 12

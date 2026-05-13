@@ -45,6 +45,11 @@ def synthesize(
     Convert *text* to speech and save as a WAV file at *output_path*.
     Returns the output path.
     """
+    valid = list_voices()
+    if voice not in valid:
+        console.print(f"[yellow]Unknown voice '{voice}', falling back to {DEFAULT_VOICE}[/yellow]")
+        voice = DEFAULT_VOICE
+
     Kokoro = _get_kokoro()
     import soundfile as sf
     import numpy as np

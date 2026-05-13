@@ -7,6 +7,15 @@ import time
 from pathlib import Path
 from typing import Optional
 
+
+def _atomic_write_token(path: str, content: str) -> None:
+    """Write OAuth token atomically to avoid corruption on crash/interrupt."""
+    p = Path(path)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    tmp = p.with_suffix(".tmp")
+    tmp.write_text(content)
+    os.replace(tmp, p)
+
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from google.auth.transport.requests import Request
@@ -37,8 +46,7 @@ def get_youtube_client():
         if creds and creds.expired and creds.refresh_token:
             try:
                 creds.refresh(Request())
-                with open(config.YOUTUBE_TOKEN_FILE, "w") as token_file:
-                    token_file.write(creds.to_json())
+                _atomic_write_token(config.YOUTUBE_TOKEN_FILE, creds.to_json())
             except Exception as refresh_err:
                 # Refresh failed — force full re-auth on next run, don't corrupt token
                 console.print(f"[yellow]Token refresh failed ({refresh_err}) — re-running auth flow.[/yellow]")
@@ -53,8 +61,7 @@ def get_youtube_client():
                 config.YOUTUBE_CLIENT_SECRETS_FILE, config.YOUTUBE_SCOPES
             )
             creds = flow.run_local_server(port=0)
-            with open(config.YOUTUBE_TOKEN_FILE, "w") as token_file:
-                token_file.write(creds.to_json())
+            _atomic_write_token(config.YOUTUBE_TOKEN_FILE, creds.to_json())
 
     return build("youtube", "v3", credentials=creds)
 
@@ -135,7 +142,7 @@ def _resumable_upload(request) -> Optional[str]:
                     if retry > MAX_RETRIES:
                         console.print(f"[red]Upload failed after {MAX_RETRIES} retries.[/red]")
                         return None
-                    wait = 2**retry
+                    wait = min(2**retry, 300)
                     console.print(f"[yellow]Retrying in {wait}s... (attempt {retry})[/yellow]")
                     time.sleep(wait)
                 else:

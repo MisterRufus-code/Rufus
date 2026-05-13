@@ -21,9 +21,12 @@ from src.database.models import TimelineClip
 console = Console()
 
 
-def _ffmpeg(*args: str, check: bool = True) -> subprocess.CompletedProcess:
+def _ffmpeg(*args: str, check: bool = True, timeout: int = 300) -> subprocess.CompletedProcess:
     cmd = ["ffmpeg", "-y", "-hide_banner", "-loglevel", "error"] + list(args)
-    return subprocess.run(cmd, check=check, capture_output=True, text=True)
+    try:
+        return subprocess.run(cmd, check=check, capture_output=True, text=True, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        raise RuntimeError(f"FFmpeg timed out after {timeout}s. Command: {' '.join(cmd[:6])}...")
 
 
 def _check_ffmpeg() -> bool:
@@ -132,6 +135,10 @@ def render_video(
     # Step 1: trim clips
     trimmed: list[Path] = []
     for i, clip in enumerate(clips):
+        asset_path = Path(clip.asset.path)
+        if not asset_path.exists():
+            console.print(f"[yellow]  skipping missing asset: {asset_path}[/yellow]")
+            continue
         out = tmp / f"clip_{i:03d}.mp4"
         if clip.asset.asset_type == "image":
             # Convert image to short video clip

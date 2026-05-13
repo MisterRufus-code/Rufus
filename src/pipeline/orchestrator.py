@@ -11,6 +11,7 @@ Media-first flow:
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
@@ -69,7 +70,8 @@ def run_pipeline(
             time.sleep(seconds)
 
     result = PipelineResult(topic=topic, niche=niche)
-    out = Path(output_dir or config.OUTPUT_PATH) / topic.replace(" ", "_")[:40]
+    safe_topic = re.sub(r"[^\w\s-]", "", topic).strip().replace(" ", "_")[:40] or "video"
+    out = Path(output_dir or config.OUTPUT_PATH) / safe_topic
     out.mkdir(parents=True, exist_ok=True)
 
     # ------------------------------------------------------------------ #
