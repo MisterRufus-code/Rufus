@@ -7,6 +7,10 @@ import time
 from pathlib import Path
 from typing import Optional
 
+from src.logging_config import get_logger
+
+_log = get_logger("uploader")
+
 
 def _atomic_write_token(path: str, content: str) -> None:
     """Write OAuth token atomically to avoid corruption on crash/interrupt."""
@@ -153,9 +157,11 @@ def _resumable_upload(request) -> Optional[str]:
     video_id = response.get("id") if response else None
     if not video_id:
         console.print("[red]Upload appeared to succeed but no video ID in response.[/red]")
+        _log.error("upload succeeded but response has no video ID", response=str(response))
         return None
     url = f"https://www.youtube.com/watch?v={video_id}"
     console.print(f"\n[bold green]Upload complete![/bold green] {url}")
+    _log.info("upload complete", video_id=video_id, url=url)
     return video_id
 
 

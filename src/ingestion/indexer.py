@@ -10,8 +10,10 @@ from rich.progress import Progress, SpinnerColumn, BarColumn, TextColumn, TaskPr
 from src.ingestion.scanner import scan_library, RawAsset
 from src.ingestion.extractor import extract_features
 from src.database.vector_store import get_vector_store
+from src.logging_config import get_logger
 
 console = Console()
+log = get_logger("ingestion.indexer")
 
 
 def index_library(
@@ -66,4 +68,6 @@ def index_library(
                 console.print(f"[red]Error indexing {raw.path.name}: {exc}[/red]")
                 errors += 1
 
-    return {"indexed": indexed, "skipped": skipped, "errors": errors}
+    summary = {"indexed": indexed, "skipped": skipped, "errors": errors}
+    log.info("indexing complete", **summary)
+    return summary

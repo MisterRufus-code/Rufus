@@ -21,8 +21,10 @@ from rich.rule import Rule
 
 import config
 from src.database.models import TimelineClip
+from src.logging_config import get_logger
 
 console = Console()
+log = get_logger("pipeline.orchestrator")
 
 
 @dataclass
@@ -39,6 +41,7 @@ class PipelineResult:
     thumbnail_path: Optional[Path] = None
     success: bool = False
     errors: list[str] = field(default_factory=list)
+    dry_run: bool = False
 
 
 def run_pipeline(
@@ -56,7 +59,8 @@ def run_pipeline(
     music_path: Optional[Path] = None,
     shorts: bool = False,
     low_power: bool = False,
-    multi_shorts: bool = False,  # generate 4 Shorts angles from one long-form run
+    multi_shorts: bool = False,
+    dry_run: bool = False,  # skip TTS, FFmpeg, upload — validate pipeline logic only
 ) -> PipelineResult:
     import time
 
@@ -69,10 +73,16 @@ def run_pipeline(
         if low_power:
             time.sleep(seconds)
 
-    result = PipelineResult(topic=topic, niche=niche)
+    result = PipelineResult(topic=topic, niche=niche, dry_run=dry_run)
     safe_topic = re.sub(r"[^\w\s-]", "", topic).strip().replace(" ", "_")[:40] or "video"
     out = Path(output_dir or config.OUTPUT_PATH) / safe_topic
     out.mkdir(parents=True, exist_ok=True)
+
+    log.info("pipeline started", topic=topic, niche=niche, model=ollama_model,
+             shorts=shorts, dry_run=dry_run, output_dir=str(out))
+
+    if dry_run:
+        console.print("[bold yellow]DRY RUN — TTS, FFmpeg render, and upload are skipped.[/bold yellow]")
 
     # ------------------------------------------------------------------ #
     # Pre-flight — fail fast before any expensive work
@@ -311,21 +321,24 @@ def run_pipeline(
     # ------------------------------------------------------------------ #
     console.print(Rule("[bold]Step 9 — Voiceover (Kokoro TTS)[/bold]"))
     audio_path: Optional[Path] = None
-    try:
-        from src.tts.kokoro import synthesize_sections, merge_audio_files
-        audio_dir = out / "audio"
-        normalized = [
-            {"script": s.get("script") or s.get("heading") or s.get("text") or ""}
-            for s in script.sections
-            if s.get("script") or s.get("heading") or s.get("text")
-        ]
-        all_sections = [{"script": script.hook}] + normalized + [{"script": script.call_to_action}]
-        wav_paths = synthesize_sections(all_sections, audio_dir, voice=tts_voice)
-        if wav_paths:
-            audio_path = out / "voiceover.wav"
-            merge_audio_files(wav_paths, audio_path)
-    except Exception as exc:
-        console.print(f"[yellow]TTS skipped ({exc})[/yellow]")
+    if dry_run:
+        console.print("[dim]dry-run: TTS skipped[/dim]")
+    else:
+        try:
+            from src.tts.kokoro import synthesize_sections, merge_audio_files
+            audio_dir = out / "audio"
+            normalized = [
+                {"script": s.get("script") or s.get("heading") or s.get("text") or ""}
+                for s in script.sections
+                if s.get("script") or s.get("heading") or s.get("text")
+            ]
+            all_sections = [{"script": script.hook}] + normalized + [{"script": script.call_to_action}]
+            wav_paths = synthesize_sections(all_sections, audio_dir, voice=tts_voice)
+            if wav_paths:
+                audio_path = out / "voiceover.wav"
+                merge_audio_files(wav_paths, audio_path)
+        except Exception as exc:
+            console.print(f"[yellow]TTS skipped ({exc})[/yellow]")
 
     breathe(2)
     # ------------------------------------------------------------------ #
@@ -335,7 +348,10 @@ def run_pipeline(
     console.print(Rule(f"[bold]Step 10 — {render_label}[/bold]"))
     raw_video_path = out / "raw_video.mp4"
     video_path = out / ("shorts.mp4" if shorts else "final_video.mp4")
-    if matched_clips:
+    if dry_run:
+        console.print("[dim]dry-run: FFmpeg render skipped[/dim]")
+        log.info("dry-run render skipped", clips=len(matched_clips))
+    elif matched_clips:
         try:
             if shorts:
                 from src.pipeline.shorts_renderer import render_shorts
@@ -350,6 +366,7 @@ def run_pipeline(
         except Exception as exc:
             result.errors.append(f"Render failed: {exc}")
             console.print(f"[red]Render error: {exc}[/red]")
+            log.error("render failed", exc=str(exc))
     else:
         console.print("[yellow]No clips matched — render skipped. Add media to media_library/ first.[/yellow]")
 
@@ -449,7 +466,9 @@ def run_pipeline(
     # ------------------------------------------------------------------ #
     # Step 12 — Upload to YouTube (free API, optional)
     # ------------------------------------------------------------------ #
-    if upload and result.video_path and result.video_path.exists():
+    if dry_run:
+        console.print("[dim]dry-run: upload skipped[/dim]")
+    elif upload and result.video_path and result.video_path.exists():
         console.print(Rule("[bold]Step 12 — YouTube Upload[/bold]"))
         try:
             from src.uploader import upload_video
@@ -463,14 +482,18 @@ def run_pipeline(
                 thumbnail_path=thumb_arg,
             )
             result.youtube_video_id = vid_id
+            log.info("video uploaded", video_id=vid_id, title=script.title)
         except Exception as exc:
             result.errors.append(f"Upload failed: {exc}")
             console.print(f"[red]Upload error: {exc}[/red]")
+            log.error("upload failed", exc=str(exc))
 
     # ------------------------------------------------------------------ #
     # Done
     # ------------------------------------------------------------------ #
-    result.success = result.video_path is not None and result.video_path.exists()
+    result.success = dry_run or (result.video_path is not None and result.video_path.exists())
+    log.info("pipeline finished", success=result.success, errors=result.errors,
+             entropy=result.entropy_score, clips=len(result.asset_ids_used))
     console.print(Rule("[bold green]Pipeline Complete[/bold green]"))
     console.print(f"Output directory: [cyan]{out.resolve()}[/cyan]")
     if result.youtube_video_id:

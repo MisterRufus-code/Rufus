@@ -368,7 +368,9 @@ def optimize_cmd():
               help="Generate 4 Shorts angles from the long-form script (4x upload volume)")
 @click.option("--low-power", is_flag=True, default=False,
               help="Limit CPU threads and add pauses — quieter PC, slower pipeline")
-def pipeline_cmd(topic, niche, model, voice, ideas_count, geo, no_download, upload, privacy, music, output, shorts, both_formats, multi_shorts, low_power):
+@click.option("--dry-run", "dry_run", is_flag=True, default=False,
+              help="Run full pipeline logic but skip TTS, FFmpeg render, and upload")
+def pipeline_cmd(topic, niche, model, voice, ideas_count, geo, no_download, upload, privacy, music, output, shorts, both_formats, multi_shorts, low_power, dry_run):
     """
     Run the FULL free pipeline.
     --topic is optional: auto-selects trending topic if not provided.
@@ -395,7 +397,7 @@ def pipeline_cmd(topic, niche, model, voice, ideas_count, geo, no_download, uplo
                 output_dir=Path(output) if output else None,
                 upload=upload, privacy=privacy,
                 music_path=Path(music) if music else None,
-                shorts=shorts_flag, low_power=low_power,
+                shorts=shorts_flag, low_power=low_power, dry_run=dry_run,
             )
             if not result.success:
                 success = False
@@ -409,6 +411,7 @@ def pipeline_cmd(topic, niche, model, voice, ideas_count, geo, no_download, uplo
             upload=upload, privacy=privacy,
             music_path=Path(music) if music else None,
             shorts=shorts, low_power=low_power, multi_shorts=multi_shorts,
+            dry_run=dry_run,
         )
         if not result.success:
             sys.exit(1)

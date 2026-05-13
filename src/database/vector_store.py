@@ -253,12 +253,24 @@ def get_vector_store() -> QdrantStore | FaissStore:
     global _store_instance
     if _store_instance is not None:
         return _store_instance
-    try:
-        _store_instance = QdrantStore()
-    except Exception:
-        from rich.console import Console
-        Console().print(
-            "[yellow]Qdrant unavailable — using in-memory FAISS fallback.[/yellow]"
-        )
-        _store_instance = FaissStore()
+    import time
+    from rich.console import Console as _Console
+    _con = _Console()
+    last_exc: Exception | None = None
+    for attempt in range(1, 4):  # 3 attempts: 0s, 2s, 4s
+        try:
+            _store_instance = QdrantStore()
+            if attempt > 1:
+                _con.print("[green]Qdrant connected.[/green]")
+            return _store_instance
+        except Exception as exc:
+            last_exc = exc
+            if attempt < 3:
+                wait = 2 * attempt
+                _con.print(f"[yellow]Qdrant not ready (attempt {attempt}/3) — retrying in {wait}s...[/yellow]")
+                time.sleep(wait)
+    _con.print(
+        f"[yellow]Qdrant unavailable after 3 attempts ({last_exc}) — using in-memory FAISS fallback.[/yellow]"
+    )
+    _store_instance = FaissStore()
     return _store_instance
