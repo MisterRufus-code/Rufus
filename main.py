@@ -353,10 +353,17 @@ def optimize_cmd():
 @click.option("--music", type=click.Path(), default=None,
               help="Optional background music file")
 @click.option("--output", "-o", type=click.Path(), default=None)
-def pipeline_cmd(topic, niche, model, voice, ideas_count, geo, no_download, upload, privacy, music, output):
+@click.option("--shorts", is_flag=True, default=False,
+              help="Produce a 9:16 YouTube Shorts video (≤60s) instead of long form")
+@click.option("--low-power", is_flag=True, default=False,
+              help="Limit CPU threads and add pauses — quieter PC, slower pipeline")
+def pipeline_cmd(topic, niche, model, voice, ideas_count, geo, no_download, upload, privacy, music, output, shorts, low_power):
     """
     Run the FULL free pipeline:
     trends → ideas → script → footage → match → entropy → voiceover → render → upload → learn
+
+    Use --shorts for a 60-second vertical video.
+    Use --low-power on slower/louder machines to reduce CPU load.
     """
     from src.pipeline.orchestrator import run_pipeline
     result = run_pipeline(
@@ -365,6 +372,8 @@ def pipeline_cmd(topic, niche, model, voice, ideas_count, geo, no_download, uplo
         output_dir=Path(output) if output else None,
         upload=upload, privacy=privacy,
         music_path=Path(music) if music else None,
+        shorts=shorts,
+        low_power=low_power,
     )
     if not result.success:
         sys.exit(1)

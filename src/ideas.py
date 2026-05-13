@@ -376,6 +376,53 @@ def print_script(script: VideoScript) -> None:
     console.print(Markdown("\n".join(md_parts)))
 
 
+def generate_shorts_script(
+    idea: VideoIdea,
+    model: str = "mistral",
+    ml_prefix: str = "",
+) -> VideoScript:
+    """
+    Generate a tight ≤60-second script for YouTube Shorts.
+    Max ~120 words: hook (5s) + 3 punchy points (15s each) + CTA (5s).
+    """
+    prompt = f"""{ml_prefix}
+You are a YouTube Shorts scriptwriter. Write a punchy 45-60 second script.
+Rules:
+- Hook: ONE sentence, max 10 words, shock or curiosity gap
+- Exactly 3 sections, each max 20 words
+- Call to action: max 8 words (e.g. "Follow for more!")
+- NO filler words, NO fluff, every word earns its place
+- Total word count: 80-120 words
+
+Topic: {idea.title}
+Hook idea: {idea.hook}
+
+Return ONLY valid JSON, no markdown:
+{{
+  "title": "...",
+  "hook": "...",
+  "sections": [
+    {{"heading": "Point 1", "script": "..."}},
+    {{"heading": "Point 2", "script": "..."}},
+    {{"heading": "Point 3", "script": "..."}}
+  ],
+  "call_to_action": "...",
+  "description": "...",
+  "tags": ["tag1", "tag2", "Shorts"]
+}}"""
+
+    raw = _ollama(prompt.strip(), model)
+    data = _parse_json_response(raw)
+    return VideoScript(
+        title=data.get("title", idea.title),
+        hook=data.get("hook", idea.hook),
+        sections=data.get("sections", []),
+        call_to_action=data.get("call_to_action", "Follow for more!"),
+        description=data.get("description", ""),
+        tags=data.get("tags", ["Shorts"]),
+    )
+
+
 def check_ollama_status() -> None:
     """Print Ollama status and available models."""
     if _check_ollama():

@@ -17,11 +17,18 @@ console = Console()
 def index_library(
     library_path: Path | None = None,
     force_reindex: bool = False,
+    low_power: bool = False,
 ) -> dict:
     """
     Full ingestion pipeline: scan → extract → upsert.
     Returns a summary dict.
     """
+    import time
+
+    if low_power:
+        from src.ingestion.extractor import set_low_power
+        set_low_power(True)
+
     store = get_vector_store()
     existing_ids = store.get_all_asset_ids() if not force_reindex else set()
 
@@ -50,6 +57,8 @@ def index_library(
                     continue
                 store.upsert(features)
                 indexed += 1
+                if low_power:
+                    time.sleep(0.8)  # breathe between files
             except Exception as exc:
                 console.print(f"[red]Error indexing {raw.path.name}: {exc}[/red]")
                 errors += 1

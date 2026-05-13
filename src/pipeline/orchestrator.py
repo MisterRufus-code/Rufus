@@ -53,7 +53,20 @@ def run_pipeline(
     upload: bool = False,
     privacy: str = "private",
     music_path: Optional[Path] = None,
+    shorts: bool = False,
+    low_power: bool = False,
 ) -> PipelineResult:
+    import time
+
+    if low_power:
+        from src.ingestion.extractor import set_low_power
+        set_low_power(True)
+        console.print("[dim]Low-power mode: CPU threads limited to 2[/dim]")
+
+    def breathe(seconds: float = 2.0) -> None:
+        if low_power:
+            time.sleep(seconds)
+
     result = PipelineResult(topic=topic, niche=niche)
     out = Path(output_dir or config.OUTPUT_PATH) / topic.replace(" ", "_")[:40]
     out.mkdir(parents=True, exist_ok=True)
@@ -92,6 +105,7 @@ def run_pipeline(
         keywords = [topic]
         result.keywords_used = keywords
 
+    breathe(2)
     # ------------------------------------------------------------------ #
     # Step 3 — Download footage FIRST (media-first approach)
     # ------------------------------------------------------------------ #
@@ -118,7 +132,7 @@ def run_pipeline(
     media_captions: list[str] = []
     try:
         from src.ingestion.indexer import index_library
-        index_result = index_library()
+        index_result = index_library(low_power=low_power)
         console.print(f"[green]Indexed:[/green] {index_result}")
 
         from src.database.vector_store import get_vector_store
@@ -181,12 +195,17 @@ def run_pipeline(
     )
     console.print(f"[cyan]Top idea:[/cyan] {best_idea.title} [{best_idea.estimated_virality}]")
 
+    breathe(2)
     # ------------------------------------------------------------------ #
-    # Step 6 — Generate script from media context
+    # Step 6 — Generate script from media context (or Shorts script)
     # ------------------------------------------------------------------ #
-    console.print(Rule("[bold]Step 6 — Script Generation from Media (Ollama)[/bold]"))
+    mode_label = "Shorts (60s)" if shorts else "Long Form"
+    console.print(Rule(f"[bold]Step 6 — Script Generation ({mode_label}, Ollama)[/bold]"))
     try:
-        if media_captions:
+        if shorts:
+            from src.ideas import generate_shorts_script
+            script = generate_shorts_script(best_idea, model=ollama_model, ml_prefix=ml_prefix)
+        elif media_captions:
             from src.ideas import generate_script_from_media
             script = generate_script_from_media(
                 best_idea,
@@ -269,16 +288,26 @@ def run_pipeline(
     except Exception as exc:
         console.print(f"[yellow]TTS skipped ({exc})[/yellow]")
 
+    breathe(2)
     # ------------------------------------------------------------------ #
     # Step 10 — Render video (FFmpeg, free)
     # ------------------------------------------------------------------ #
-    console.print(Rule("[bold]Step 10 — Video Render (FFmpeg)[/bold]"))
+    render_label = "Shorts Render (9:16, 60s)" if shorts else "Video Render (FFmpeg)"
+    console.print(Rule(f"[bold]Step 10 — {render_label}[/bold]"))
     raw_video_path = out / "raw_video.mp4"
-    video_path = out / "final_video.mp4"
+    video_path = out / ("shorts.mp4" if shorts else "final_video.mp4")
     if matched_clips:
         try:
-            from src.pipeline.renderer import render_video
-            render_video(matched_clips, audio_path, raw_video_path, music_path=music_path)
+            if shorts:
+                from src.pipeline.shorts_renderer import render_shorts
+                render_shorts(
+                    matched_clips, audio_path, raw_video_path,
+                    script_sections=script.sections, hook=script.hook,
+                    tmp_dir=out / "_tmp_shorts",
+                )
+            else:
+                from src.pipeline.renderer import render_video
+                render_video(matched_clips, audio_path, raw_video_path, music_path=music_path)
         except Exception as exc:
             result.errors.append(f"Render failed: {exc}")
             console.print(f"[red]Render error: {exc}[/red]")
@@ -286,9 +315,10 @@ def run_pipeline(
         console.print("[yellow]No clips matched — render skipped. Add media to media_library/ first.[/yellow]")
 
     # ------------------------------------------------------------------ #
-    # Step 10b — Subtitles + title card overlay
+    # Step 10b — Subtitles + title card overlay (long form only)
+    # Shorts already has captions burned in by shorts_renderer
     # ------------------------------------------------------------------ #
-    if raw_video_path.exists():
+    if raw_video_path.exists() and not shorts:
         console.print(Rule("[bold]Step 10b — Subtitles & Text Overlays[/bold]"))
         try:
             from src.pipeline.subtitles import apply_overlays
@@ -307,6 +337,8 @@ def run_pipeline(
             import shutil
             shutil.copy2(raw_video_path, video_path)
             result.video_path = video_path
+    elif raw_video_path.exists() and shorts:
+        result.video_path = raw_video_path
 
     # ------------------------------------------------------------------ #
     # Step 10c — Thumbnail generation

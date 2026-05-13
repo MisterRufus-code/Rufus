@@ -37,6 +37,13 @@ def _get_device() -> torch.device:
     return _device
 
 
+def set_low_power(enabled: bool, threads: int = 2) -> None:
+    """Limit PyTorch CPU threads to reduce fan noise / CPU heat."""
+    if enabled:
+        torch.set_num_threads(threads)
+        torch.set_num_interop_threads(1)
+
+
 def _load_clip():
     global _clip_model, _clip_preprocess
     if _clip_model is None:
