@@ -69,6 +69,7 @@ def match_scene(
     top_k: int = 12,
     asset_type_filter: str | None = None,
     exclude_ids: set[str] | None = None,
+    niche: str = "general",
 ) -> MatchResult:
     """Find the best media assets for a single scene requirement."""
     store = get_vector_store()
@@ -96,9 +97,21 @@ def match_scene(
             if a.duration_seconds and scene.min_duration <= a.duration_seconds <= scene.max_duration
         ]
 
+    # Blend CLIP performance_score with asset intelligence score (70/30 split)
+    try:
+        from src.ml.asset_intelligence import get_asset_intelligence
+        intel = get_asset_intelligence()
+        candidates = sorted(
+            candidates,
+            key=lambda a: a.performance_score * 0.7 + intel.score_asset(a, niche) * 0.3,
+            reverse=True,
+        )
+    except Exception:
+        candidates = sorted(candidates, key=lambda a: a.performance_score, reverse=True)
+
     result = MatchResult(scene=scene, candidates=candidates)
     if candidates:
-        result.selected = max(candidates, key=lambda a: a.performance_score)
+        result.selected = candidates[0]
     return result
 
 
@@ -107,12 +120,14 @@ def match_all_scenes(
     top_k: int = 12,
     avoid_repeat: bool = True,
     global_dedup_videos: int = 5,
+    niche: str = "general",
 ) -> list[MatchResult]:
     """
     Match every scene, avoiding clips used in this video AND in recent past videos.
 
     - avoid_repeat: no clip appears twice in the same video
     - global_dedup_videos: exclude clips used in the last N videos
+    - niche: used by asset intelligence to boost niche-relevant footage
     """
     globally_used = get_globally_used_asset_ids(recent_videos=global_dedup_videos)
     session_used: set[str] = set()
@@ -121,19 +136,19 @@ def match_all_scenes(
 
     for scene in scenes:
         exclude = globally_used | session_used
-        result = match_scene(scene, top_k=top_k, exclude_ids=exclude)
+        result = match_scene(scene, top_k=top_k, exclude_ids=exclude, niche=niche)
 
         # If global exclusion leaves nothing, fall back without global dedup
         if not result.candidates:
-            result = match_scene(scene, top_k=top_k, exclude_ids=session_used)
+            result = match_scene(scene, top_k=top_k, exclude_ids=session_used, niche=niche)
 
         if avoid_repeat and result.candidates:
             fresh = [c for c in result.candidates if c.asset_id not in session_used]
             if fresh:
-                result.selected = max(fresh, key=lambda a: a.performance_score)
+                result.selected = fresh[0]  # already sorted by blended score
             else:
                 # All candidates already used — accept best duplicate rather than worst
-                result.selected = max(result.candidates, key=lambda a: a.performance_score)
+                result.selected = result.candidates[0]
                 console.print("[yellow]No fresh clip for scene — reusing best available.[/yellow]")
 
         if result.selected:

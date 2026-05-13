@@ -297,9 +297,17 @@ def run_pipeline(
         return result
 
     # ------------------------------------------------------------------ #
-    # Step 6b — Psychology hook optimisation
+    # Step 6b — Psychology hook optimisation (experiment-driven style)
     # ------------------------------------------------------------------ #
     console.print(Rule("[bold]Step 6b — Psychology Hook Optimisation[/bold]"))
+    hook_exp_variant = None
+    try:
+        from src.experiments.engine import get_engine as _get_exp_engine
+        hook_exp_variant = _get_exp_engine().assign_variant("hook_style")
+        if hook_exp_variant:
+            console.print(f"[dim]Experiment: hook_style variant → {hook_exp_variant.name}[/dim]")
+    except Exception:
+        pass
     try:
         from src.psychology.hooks import generate_hooks, print_hook_report
         hook_scores = generate_hooks(topic, niche, model=ollama_model, count=8)
@@ -333,7 +341,7 @@ def run_pipeline(
     try:
         from src.matching.semantic import scenes_from_script, match_all_scenes
         scenes = scenes_from_script(script.sections)
-        match_results = match_all_scenes(scenes, global_dedup_videos=5)
+        match_results = match_all_scenes(scenes, global_dedup_videos=5, niche=niche)
         for mr in match_results:
             if mr.selected:
                 asset = mr.selected
@@ -375,7 +383,8 @@ def run_pipeline(
         console.print("[dim]dry-run: TTS skipped[/dim]")
     else:
         try:
-            from src.tts.kokoro import synthesize_sections, merge_audio_files
+            from src.tts.kokoro import synthesize_sections, merge_audio_files, pick_voice
+            from src.humanize import random_tts_speed
             audio_dir = out / "audio"
             normalized = [
                 {"script": s.get("script") or s.get("heading") or s.get("text") or ""}
@@ -383,7 +392,13 @@ def run_pipeline(
                 if s.get("script") or s.get("heading") or s.get("text")
             ]
             all_sections = [{"script": script.hook}] + normalized + [{"script": script.call_to_action}]
-            wav_paths = synthesize_sections(all_sections, audio_dir, voice=tts_voice)
+            # Use niche-aware voice unless caller explicitly overrode the default
+            effective_voice = tts_voice if tts_voice != "af_heart" else pick_voice(niche)
+            effective_speed = random_tts_speed()
+            console.print(f"[dim]TTS: voice={effective_voice}, speed={effective_speed}[/dim]")
+            wav_paths = synthesize_sections(
+                all_sections, audio_dir, voice=effective_voice, speed=effective_speed
+            )
             if wav_paths:
                 audio_path = out / "voiceover.wav"
                 merge_audio_files(wav_paths, audio_path)
@@ -483,6 +498,16 @@ def run_pipeline(
             )
         except Exception as exc:
             console.print(f"[yellow]ML record skipped ({exc})[/yellow]")
+
+        # Record hook_style experiment outcome (entropy as proxy until real CTR arrives)
+        if hook_exp_variant is not None:
+            try:
+                from src.experiments.engine import get_engine as _get_exp_engine
+                _get_exp_engine().record_outcome(
+                    "hook_style", hook_exp_variant, result.entropy_score
+                )
+            except Exception:
+                pass
 
     # ------------------------------------------------------------------ #
     # Step 11b — Multi-angle Shorts (4 angles from one long-form script)

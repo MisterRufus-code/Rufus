@@ -53,9 +53,14 @@ def _load_clip():
     global _clip_model, _clip_preprocess
     with _clip_lock:
         if _clip_model is None:
+            from src.gpu_scheduler import get_gpu_scheduler, CLIP_ViT_B32
+            get_gpu_scheduler().acquire("clip", CLIP_ViT_B32)
             import clip
             _clip_model, _clip_preprocess = clip.load("ViT-B/32", device=_get_device())
             _clip_model.eval()
+        else:
+            from src.gpu_scheduler import get_gpu_scheduler
+            get_gpu_scheduler().touch("clip")
     return _clip_model, _clip_preprocess
 
 
@@ -63,6 +68,8 @@ def _load_blip():
     global _blip_processor, _blip_model
     with _blip_lock:
         if _blip_model is None:
+            from src.gpu_scheduler import get_gpu_scheduler, BLIP_BASE
+            get_gpu_scheduler().acquire("blip", BLIP_BASE)
             from transformers import BlipProcessor, BlipForConditionalGeneration
             _blip_processor = BlipProcessor.from_pretrained(
                 "Salesforce/blip-image-captioning-base"
@@ -71,6 +78,9 @@ def _load_blip():
                 "Salesforce/blip-image-captioning-base"
             ).to(_get_device())
             _blip_model.eval()
+        else:
+            from src.gpu_scheduler import get_gpu_scheduler
+            get_gpu_scheduler().touch("blip")
     return _blip_processor, _blip_model
 
 
@@ -78,8 +88,13 @@ def _load_yolo():
     global _yolo_model
     with _yolo_lock:
         if _yolo_model is None:
+            from src.gpu_scheduler import get_gpu_scheduler, YOLO_N
+            get_gpu_scheduler().acquire("yolo", YOLO_N)
             from ultralytics import YOLO
             _yolo_model = YOLO("yolov8n.pt")
+        else:
+            from src.gpu_scheduler import get_gpu_scheduler
+            get_gpu_scheduler().touch("yolo")
     return _yolo_model
 
 

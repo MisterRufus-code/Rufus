@@ -246,4 +246,13 @@ def sync_feedback_from_youtube(max_videos: int = 20, niche: str = "general") -> 
     else:
         console.print(f"[bold green]{saved} feedback records saved.[/bold green]")
 
+    # Auto-resolve any A/B tests that have reached statistical significance
+    try:
+        from src.upload_optimizer import auto_resolve_ab_tests
+        resolved = auto_resolve_ab_tests(min_samples=5)
+        if resolved:
+            console.print(f"[green]{resolved} A/B test(s) auto-resolved from new data.[/green]")
+    except Exception:
+        pass
+
     return saved
