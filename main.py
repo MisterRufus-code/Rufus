@@ -283,6 +283,21 @@ def analytics_cmd(videos):
 
 
 # ---------------------------------------------------------------------------
+# sync-analytics  (auto-pull YouTube stats into ML feedback DB)
+# ---------------------------------------------------------------------------
+
+@cli.command("sync-analytics")
+@click.option("--videos", "-v", default=20, show_default=True,
+              help="Max number of recent videos to sync")
+@click.option("--niche", "-n", default="general", show_default=True,
+              help="Niche label to tag synced records with")
+def sync_analytics_cmd(videos, niche):
+    """Pull YouTube analytics and auto-save ML feedback for all uploaded videos."""
+    from src.analytics import sync_feedback_from_youtube
+    sync_feedback_from_youtube(max_videos=videos, niche=niche)
+
+
+# ---------------------------------------------------------------------------
 # feedback  (ML feedback — free, local)
 # ---------------------------------------------------------------------------
 

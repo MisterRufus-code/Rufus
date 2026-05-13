@@ -147,3 +147,94 @@ def print_video_stats(videos: list[VideoStats]) -> None:
         )
 
     console.print(table)
+
+
+def sync_feedback_from_youtube(max_videos: int = 20, niche: str = "general") -> int:
+    """
+    Pull real YouTube analytics and auto-record ML feedback for each video.
+    Returns the number of records saved.
+    """
+    from src.ml.feedback import VideoFeedback, record_feedback, load_all_feedback
+
+    existing_ids = {r.video_id for r in load_all_feedback()}
+
+    try:
+        videos = get_recent_videos_stats(max_results=max_videos)
+    except Exception as exc:
+        console.print(f"[red]Could not fetch YouTube stats: {exc}[/red]")
+        return 0
+
+    if not videos:
+        console.print("[yellow]No videos found on channel.[/yellow]")
+        return 0
+
+    # Fetch YouTube Analytics for CTR and retention if possible
+    analytics_data: dict[str, dict] = {}
+    try:
+        youtube = get_youtube_client()
+        from googleapiclient.discovery import build as yt_build
+        try:
+            yta = yt_build("youtubeAnalytics", "v2", credentials=youtube._http.credentials)
+            ids_str = ",".join(f"video=={v.video_id}" for v in videos)
+            resp = yta.reports().query(
+                ids="channel==MINE",
+                startDate="2020-01-01",
+                endDate="2030-01-01",
+                metrics="views,estimatedMinutesWatched,averageViewDuration,averageViewPercentage,annotationClickThroughRate",
+                dimensions="video",
+                filters=ids_str,
+            ).execute()
+            for row in resp.get("rows", []):
+                vid_id = row[0]
+                analytics_data[vid_id] = {
+                    "views": int(row[1]),
+                    "watch_minutes": float(row[2]),
+                    "avg_duration": float(row[3]),
+                    "retention_pct": float(row[4]),
+                    "ctr": float(row[5]) if len(row) > 5 else 0.0,
+                }
+        except Exception:
+            pass
+    except Exception:
+        pass
+
+    saved = 0
+    for v in videos:
+        if v.video_id in existing_ids:
+            continue
+
+        adata = analytics_data.get(v.video_id, {})
+        avg_duration = adata.get("avg_duration", 0.0)
+        retention = adata.get("retention_pct", 0.0) / 100.0
+        ctr = adata.get("ctr", 0.0)
+
+        # Estimate retention from likes/views ratio if Analytics unavailable
+        if retention == 0.0 and v.views > 0:
+            like_ratio = v.likes / max(v.views, 1)
+            retention = min(like_ratio * 8, 0.8)
+
+        fb = VideoFeedback(
+            video_id=v.video_id,
+            title=v.title,
+            niche=niche,
+            topic=v.title,
+            prompt_model="unknown",
+            ctr=ctr,
+            avg_watch_time_seconds=avg_duration,
+            retention_rate=retention,
+            views=v.views,
+            likes=v.likes,
+        )
+        record_feedback(fb)
+        saved += 1
+        console.print(
+            f"[green]Synced:[/green] {v.title[:50]} "
+            f"— {v.views:,} views, score: {fb.performance_score:.3f}"
+        )
+
+    if saved == 0:
+        console.print("[dim]All videos already in feedback DB.[/dim]")
+    else:
+        console.print(f"[bold green]{saved} feedback records saved.[/bold green]")
+
+    return saved

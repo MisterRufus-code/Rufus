@@ -35,6 +35,7 @@ class PipelineResult:
     entropy_score: float = 0.0
     keywords_used: list[str] = field(default_factory=list)
     asset_ids_used: list[str] = field(default_factory=list)
+    thumbnail_path: Optional[Path] = None
     success: bool = False
     errors: list[str] = field(default_factory=list)
 
@@ -272,17 +273,58 @@ def run_pipeline(
     # Step 10 — Render video (FFmpeg, free)
     # ------------------------------------------------------------------ #
     console.print(Rule("[bold]Step 10 — Video Render (FFmpeg)[/bold]"))
+    raw_video_path = out / "raw_video.mp4"
     video_path = out / "final_video.mp4"
     if matched_clips:
         try:
             from src.pipeline.renderer import render_video
-            render_video(matched_clips, audio_path, video_path, music_path=music_path)
-            result.video_path = video_path
+            render_video(matched_clips, audio_path, raw_video_path, music_path=music_path)
         except Exception as exc:
             result.errors.append(f"Render failed: {exc}")
             console.print(f"[red]Render error: {exc}[/red]")
     else:
         console.print("[yellow]No clips matched — render skipped. Add media to media_library/ first.[/yellow]")
+
+    # ------------------------------------------------------------------ #
+    # Step 10b — Subtitles + title card overlay
+    # ------------------------------------------------------------------ #
+    if raw_video_path.exists():
+        console.print(Rule("[bold]Step 10b — Subtitles & Text Overlays[/bold]"))
+        try:
+            from src.pipeline.subtitles import apply_overlays
+            apply_overlays(
+                video_path=raw_video_path,
+                output_path=video_path,
+                script_sections=script.sections,
+                hook=script.hook,
+                call_to_action=script.call_to_action,
+                title=script.title,
+                tmp_dir=out / "_tmp_overlays",
+            )
+            result.video_path = video_path
+        except Exception as exc:
+            console.print(f"[yellow]Overlays skipped ({exc}) — using raw render.[/yellow]")
+            import shutil
+            shutil.copy2(raw_video_path, video_path)
+            result.video_path = video_path
+
+    # ------------------------------------------------------------------ #
+    # Step 10c — Thumbnail generation
+    # ------------------------------------------------------------------ #
+    if result.video_path and result.video_path.exists():
+        console.print(Rule("[bold]Step 10c — Thumbnail Generation[/bold]"))
+        try:
+            from src.thumbnail.generator import generate_thumbnail
+            thumb_path = out / "thumbnail.jpg"
+            generate_thumbnail(
+                video_path=result.video_path,
+                title=script.title,
+                hook=script.hook,
+                output_path=thumb_path,
+            )
+            result.thumbnail_path = thumb_path
+        except Exception as exc:
+            console.print(f"[yellow]Thumbnail skipped ({exc})[/yellow]")
 
     # ------------------------------------------------------------------ #
     # Step 11 — Record asset usage for ML deduplication
@@ -310,12 +352,14 @@ def run_pipeline(
         console.print(Rule("[bold]Step 12 — YouTube Upload[/bold]"))
         try:
             from src.uploader import upload_video
+            thumb_arg = str(result.thumbnail_path) if getattr(result, "thumbnail_path", None) and result.thumbnail_path.exists() else None
             vid_id = upload_video(
                 video_path=str(result.video_path),
                 title=script.title,
                 description=script.description,
                 tags=script.tags,
                 privacy_status=privacy,
+                thumbnail_path=thumb_arg,
             )
             result.youtube_video_id = vid_id
         except Exception as exc:
