@@ -23,6 +23,7 @@ import config
 from src.database.models import TimelineClip
 from src.logging_config import get_logger
 from src.utils.retry import CircuitBreaker
+from src.pipeline.checkpoint import CheckpointManager, PipelineStage
 
 _ollama_cb = CircuitBreaker(threshold=5, reset_timeout=120.0)
 
@@ -94,6 +95,14 @@ def run_pipeline(
     out = Path(output_dir or config.OUTPUT_PATH) / safe_topic
     out.mkdir(parents=True, exist_ok=True)
 
+    cp = CheckpointManager(out)
+    _cp = cp.load()
+    if _cp and not dry_run:
+        console.print(f"[bold cyan]Resuming from checkpoint: stage={_cp.stage}[/bold cyan]")
+        log.info("pipeline resuming from checkpoint", stage=_cp.stage, topic=topic)
+    else:
+        cp.save(PipelineStage.STARTED, payload={"topic": topic, "niche": niche})
+
     log.info("pipeline started", topic=topic, niche=niche, model=ollama_model,
              shorts=shorts, dry_run=dry_run, output_dir=str(out))
 
@@ -145,6 +154,7 @@ def run_pipeline(
         console.print(f"[yellow]Keyword generation failed ({exc}), using topic directly.[/yellow]")
         keywords = [topic]
         result.keywords_used = keywords
+    cp.advance(PipelineStage.KEYWORDS, keywords=keywords)
 
     breathe(2)
     # ------------------------------------------------------------------ #
@@ -152,17 +162,21 @@ def run_pipeline(
     # ------------------------------------------------------------------ #
     if download_footage:
         console.print(Rule("[bold]Step 3 — Footage Download (Pexels/Pixabay)[/bold]"))
-        try:
-            from src.media_fetch.pexels import download_videos as pexels_dl
-            pexels_dl(keywords, videos_per_query=videos_per_scene)
-        except Exception as exc:
-            console.print(f"[yellow]Pexels: {exc}[/yellow]")
+        if not cp.completed_stage(PipelineStage.FOOTAGE_DOWNLOADED):
+            try:
+                from src.media_fetch.pexels import download_videos as pexels_dl
+                pexels_dl(keywords, videos_per_query=videos_per_scene)
+            except Exception as exc:
+                console.print(f"[yellow]Pexels: {exc}[/yellow]")
 
-        try:
-            from src.media_fetch.ytcc import download_videos as ytcc_dl
-            ytcc_dl(keywords, videos_per_query=videos_per_scene)
-        except Exception as exc:
-            console.print(f"[yellow]YouTube CC: {exc}[/yellow]")
+            try:
+                from src.media_fetch.ytcc import download_videos as ytcc_dl
+                ytcc_dl(keywords, videos_per_query=videos_per_scene)
+            except Exception as exc:
+                console.print(f"[yellow]YouTube CC: {exc}[/yellow]")
+            cp.advance(PipelineStage.FOOTAGE_DOWNLOADED)
+        else:
+            console.print("[dim]  Footage already downloaded (checkpoint) — skipping.[/dim]")
     else:
         console.print(Rule("[bold]Step 3 — Footage Download (skipped)[/bold]"))
 
@@ -192,6 +206,7 @@ def run_pipeline(
                 unique_captions.append(c)
         media_captions = unique_captions
         console.print(f"[green]{len(media_captions)} unique captions available for script context[/green]")
+        cp.advance(PipelineStage.MEDIA_INDEXED)
     except Exception as exc:
         console.print(f"[yellow]Media analysis skipped ({exc})[/yellow]")
 
@@ -242,6 +257,7 @@ def run_pipeline(
         ideas,
         key=lambda i: {"Low": 1, "Medium": 2, "High": 3, "Viral": 4}.get(i.estimated_virality, 2)
     )
+    cp.advance(PipelineStage.IDEAS_GENERATED, best_idea_title=best_idea.title)
     console.print(f"[cyan]Top idea:[/cyan] {best_idea.title} [{best_idea.estimated_virality}]")
 
     breathe(2)
@@ -306,6 +322,7 @@ def run_pipeline(
         }, indent=2)
     )
     result.script_path = script_file
+    cp.advance(PipelineStage.SCRIPT_GENERATED, script_hook=script.hook[:80])
     console.print(f"[green]Script ready:[/green] {len(script.sections)} sections")
 
     # ------------------------------------------------------------------ #
@@ -329,6 +346,7 @@ def run_pipeline(
                     in_point=0.0,
                     out_point=duration,
                 ))
+        cp.advance(PipelineStage.SCENES_MATCHED, clip_count=len(matched_clips))
         console.print(f"[green]Matched {len(matched_clips)} clips for {len(scenes)} scenes[/green]")
     except Exception as exc:
         console.print(f"[yellow]Matching skipped ({exc})[/yellow]")
@@ -369,6 +387,7 @@ def run_pipeline(
             if wav_paths:
                 audio_path = out / "voiceover.wav"
                 merge_audio_files(wav_paths, audio_path)
+                cp.advance(PipelineStage.TTS_COMPLETED, audio_path=str(audio_path))
         except Exception as exc:
             console.print(f"[yellow]TTS skipped ({exc})[/yellow]")
 
@@ -524,6 +543,9 @@ def run_pipeline(
     # Done
     # ------------------------------------------------------------------ #
     result.success = dry_run or (result.video_path is not None and result.video_path.exists())
+    if result.success and not dry_run:
+        cp.advance(PipelineStage.COMPLETED)
+        cp.clear()
     log.info("pipeline finished", success=result.success, errors=result.errors,
              entropy=result.entropy_score, clips=len(result.asset_ids_used))
     console.print(Rule("[bold green]Pipeline Complete[/bold green]"))
