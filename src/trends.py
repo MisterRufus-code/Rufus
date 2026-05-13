@@ -64,7 +64,11 @@ def fetch_trends_rss(geo: str = "US", max_results: int = 20) -> list[str]:
     try:
         r = httpx.get(url, timeout=10, follow_redirects=True)
         r.raise_for_status()
-        root = ET.fromstring(r.text)
+        try:
+            root = ET.fromstring(r.text)
+        except ET.ParseError as parse_err:
+            console.print(f"[yellow]Trends RSS XML parse error ({parse_err})[/yellow]")
+            return []
         topics = []
         for item in root.findall(".//item"):
             title = item.findtext("title", "").strip()

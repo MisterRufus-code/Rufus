@@ -48,17 +48,17 @@ def index_library(
     ) as progress:
         task = progress.add_task("Indexing media assets...", total=len(assets))
 
+        from src.task_lock import task_lock
         for raw in assets:
             progress.advance(task)
             try:
-                features = extract_features(raw.path, raw.asset_type)
+                with task_lock("clip_extract"):
+                    features = extract_features(raw.path, raw.asset_type)
                 if features.asset_id in existing_ids:
                     skipped += 1
                     continue
                 store.upsert(features)
                 indexed += 1
-                if low_power:
-                    time.sleep(0.8)  # breathe between files
             except Exception as exc:
                 console.print(f"[red]Error indexing {raw.path.name}: {exc}[/red]")
                 errors += 1

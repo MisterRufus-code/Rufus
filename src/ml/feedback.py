@@ -129,13 +129,17 @@ def record_render(
         )
 
 
+_FEEDBACK_FIELDS = {f.name for f in VideoFeedback.__dataclass_fields__.values()}  # type: ignore[attr-defined]
+
+
 def load_all_feedback() -> list[VideoFeedback]:
     records = _load_db()
     result = []
     for r in records:
         try:
-            result.append(VideoFeedback(**r))
-        except TypeError:
+            filtered = {k: v for k, v in r.items() if k in _FEEDBACK_FIELDS}
+            result.append(VideoFeedback(**filtered))
+        except (TypeError, KeyError):
             continue
     return result
 

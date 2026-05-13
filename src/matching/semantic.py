@@ -93,7 +93,7 @@ def match_scene(
     if scene.preferred_type == "video":
         candidates = [
             a for a in candidates
-            if scene.min_duration <= (a.duration_seconds or 999) <= scene.max_duration
+            if a.duration_seconds and scene.min_duration <= a.duration_seconds <= scene.max_duration
         ]
 
     result = MatchResult(scene=scene, candidates=candidates)
@@ -127,12 +127,13 @@ def match_all_scenes(
             result = match_scene(scene, top_k=top_k, exclude_ids=session_used)
 
         if avoid_repeat and result.candidates:
-            for candidate in result.candidates:
-                if candidate.asset_id not in session_used:
-                    result.selected = candidate
-                    break
+            fresh = [c for c in result.candidates if c.asset_id not in session_used]
+            if fresh:
+                result.selected = max(fresh, key=lambda a: a.performance_score)
             else:
-                result.selected = result.candidates[0]
+                # All candidates already used — accept best duplicate rather than worst
+                result.selected = max(result.candidates, key=lambda a: a.performance_score)
+                console.print("[yellow]No fresh clip for scene — reusing best available.[/yellow]")
 
         if result.selected:
             session_used.add(result.selected.asset_id)

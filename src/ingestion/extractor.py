@@ -9,6 +9,7 @@ YOLO  → detected objects + confidence scores
 from __future__ import annotations
 
 import hashlib
+import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
@@ -29,6 +30,10 @@ _blip_model = None
 _yolo_model = None
 _device: Optional[torch.device] = None
 
+_clip_lock = threading.Lock()
+_blip_lock = threading.Lock()
+_yolo_lock = threading.Lock()
+
 
 def _get_device() -> torch.device:
     global _device
@@ -46,32 +51,35 @@ def set_low_power(enabled: bool, threads: int = 2) -> None:
 
 def _load_clip():
     global _clip_model, _clip_preprocess
-    if _clip_model is None:
-        import clip
-        _clip_model, _clip_preprocess = clip.load("ViT-B/32", device=_get_device())
-        _clip_model.eval()
+    with _clip_lock:
+        if _clip_model is None:
+            import clip
+            _clip_model, _clip_preprocess = clip.load("ViT-B/32", device=_get_device())
+            _clip_model.eval()
     return _clip_model, _clip_preprocess
 
 
 def _load_blip():
     global _blip_processor, _blip_model
-    if _blip_model is None:
-        from transformers import BlipProcessor, BlipForConditionalGeneration
-        _blip_processor = BlipProcessor.from_pretrained(
-            "Salesforce/blip-image-captioning-base"
-        )
-        _blip_model = BlipForConditionalGeneration.from_pretrained(
-            "Salesforce/blip-image-captioning-base"
-        ).to(_get_device())
-        _blip_model.eval()
+    with _blip_lock:
+        if _blip_model is None:
+            from transformers import BlipProcessor, BlipForConditionalGeneration
+            _blip_processor = BlipProcessor.from_pretrained(
+                "Salesforce/blip-image-captioning-base"
+            )
+            _blip_model = BlipForConditionalGeneration.from_pretrained(
+                "Salesforce/blip-image-captioning-base"
+            ).to(_get_device())
+            _blip_model.eval()
     return _blip_processor, _blip_model
 
 
 def _load_yolo():
     global _yolo_model
-    if _yolo_model is None:
-        from ultralytics import YOLO
-        _yolo_model = YOLO("yolov8n.pt")
+    with _yolo_lock:
+        if _yolo_model is None:
+            from ultralytics import YOLO
+            _yolo_model = YOLO("yolov8n.pt")
     return _yolo_model
 
 

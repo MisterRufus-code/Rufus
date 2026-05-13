@@ -7,6 +7,7 @@ Falls back to in-memory FAISS if Qdrant is unavailable.
 
 from __future__ import annotations
 
+import hashlib
 import json
 from typing import Optional
 
@@ -17,6 +18,11 @@ from src.database.models import MediaAsset
 from src.ingestion.extractor import AssetFeatures
 
 _store_instance = None
+
+
+def _asset_point_id(asset_id: str) -> int:
+    """Stable 63-bit integer from asset_id using SHA256 — no hash() collision risk."""
+    return int(hashlib.sha256(asset_id.encode()).hexdigest(), 16) % (2**63)
 
 
 class QdrantStore:
@@ -53,8 +59,7 @@ class QdrantStore:
             frame_count=features.frame_count,
             clip_embedding=features.clip_embedding,
         )
-        # Qdrant needs an integer or UUID id — use integer hash of asset_id
-        point_id = abs(hash(features.asset_id)) % (2**63)
+        point_id = _asset_point_id(features.asset_id)
         self._qdrant.upsert(
             collection_name=self._collection,
             points=[
@@ -80,7 +85,7 @@ class QdrantStore:
                 must=[FieldCondition(key="asset_type", match=MatchValue(value=asset_type_filter))]
             )
 
-        fetch_k = top_k + len(exclude_ids) + 10 if exclude_ids else top_k
+        fetch_k = top_k + len(exclude_ids) + 10 if exclude_ids else top_k  # exclude_ids is set or None
         try:
             result = self._qdrant.query_points(
                 collection_name=self._collection,
@@ -143,7 +148,7 @@ class QdrantStore:
         """Increment usage count and update learned performance score."""
         from qdrant_client.models import SetPayload
         import datetime
-        point_id = abs(hash(asset_id)) % (2**63)
+        point_id = _asset_point_id(asset_id)
         self._qdrant.set_payload(
             collection_name=self._collection,
             payload={
@@ -154,7 +159,7 @@ class QdrantStore:
         )
 
     def increment_usage_count(self, asset_id: str) -> None:
-        point_id = abs(hash(asset_id)) % (2**63)
+        point_id = _asset_point_id(asset_id)
         results = self._qdrant.retrieve(
             collection_name=self._collection,
             ids=[point_id],

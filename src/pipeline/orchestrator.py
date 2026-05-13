@@ -189,6 +189,10 @@ def run_pipeline(
                      "estimated_virality": i.estimated_virality} for i in ideas], indent=2)
     )
     result.ideas_path = ideas_file
+    if not ideas:
+        result.errors.append("Idea generation returned empty list")
+        console.print("[red]No ideas generated — aborting.[/red]")
+        return result
     best_idea = max(
         ideas,
         key=lambda i: {"Low": 1, "Medium": 2, "High": 3, "Viral": 4}.get(i.estimated_virality, 2)
@@ -280,7 +284,12 @@ def run_pipeline(
     try:
         from src.tts.kokoro import synthesize_sections, merge_audio_files
         audio_dir = out / "audio"
-        all_sections = [{"script": script.hook}] + script.sections + [{"script": script.call_to_action}]
+        normalized = [
+            {"script": s.get("script") or s.get("heading") or s.get("text") or ""}
+            for s in script.sections
+            if s.get("script") or s.get("heading") or s.get("text")
+        ]
+        all_sections = [{"script": script.hook}] + normalized + [{"script": script.call_to_action}]
         wav_paths = synthesize_sections(all_sections, audio_dir, voice=tts_voice)
         if wav_paths:
             audio_path = out / "voiceover.wav"

@@ -114,7 +114,7 @@ def _burn_shorts_captions(
         if text:
             segments.append(text)
 
-    if not segments:
+    if not segments or total_duration <= 0:
         import shutil
         shutil.copy2(video_path, output_path)
         return output_path

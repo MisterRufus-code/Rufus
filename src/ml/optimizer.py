@@ -77,7 +77,8 @@ def analyse_feedback() -> OptimizationInsights:
     # --- Retention-driven entropy threshold ---
     # If average retention is high → keep threshold as-is
     # If retention is low → raise threshold (force more variety)
-    avg_retention = float(np.mean([r.retention_rate for r in records]))
+    retention_vals = [r.retention_rate for r in records]
+    avg_retention = float(np.mean(retention_vals)) if retention_vals else 0.0
     if avg_retention < 0.35:
         rec_threshold = 0.65
     elif avg_retention < 0.50:

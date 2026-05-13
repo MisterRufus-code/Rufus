@@ -49,6 +49,7 @@ def _ollama_generate(prompt: str, model: str = DEFAULT_MODEL, system: str = "") 
         )
 
     import httpx
+    from src.task_lock import task_lock
     payload = {
         "model": model,
         "prompt": prompt,
@@ -56,11 +57,12 @@ def _ollama_generate(prompt: str, model: str = DEFAULT_MODEL, system: str = "") 
         "stream": False,
         "options": {"temperature": 0.85, "num_predict": 2048},
     }
-    r = httpx.post(
-        "http://localhost:11434/api/generate",
-        json=payload,
-        timeout=120,
-    )
+    with task_lock("ollama_generate"):
+        r = httpx.post(
+            "http://localhost:11434/api/generate",
+            json=payload,
+            timeout=120,
+        )
     r.raise_for_status()
     return r.json().get("response", "").strip()
 
@@ -411,7 +413,7 @@ Return ONLY valid JSON, no markdown:
   "tags": ["tag1", "tag2", "Shorts"]
 }}"""
 
-    raw = _ollama(prompt.strip(), model)
+    raw = _ollama_generate(prompt.strip(), model)
     data = _parse_json_response(raw)
     return VideoScript(
         title=data.get("title", idea.title),

@@ -149,7 +149,8 @@ def add_title_card(
     safe_title = title[:60].replace("'", "\\'").replace(":", "\\:").replace("%", "\\%")
 
     font_arg = f":fontfile='{font}'" if font else ""
-    fade_out = max(0, duration - 0.5)
+    fade_out = max(0.0, duration - 0.5)
+    fade_range = max(duration - fade_out, 0.01)  # avoid division by zero
 
     vf = (
         # Dark rectangle behind text
@@ -160,7 +161,7 @@ def add_title_card(
         f":x=(w-text_w)/2:y=(h-text_h)/2"
         f":shadowcolor=black:shadowx=2:shadowy=2"
         f":enable='between(t,0,{duration})'"
-        f":alpha='if(lt(t,{fade_out}),1,1-(t-{fade_out})/{duration-fade_out})'"
+        f":alpha='if(lt(t,{fade_out}),1,1-(t-{fade_out})/{fade_range})'"
     )
 
     _ffmpeg(
