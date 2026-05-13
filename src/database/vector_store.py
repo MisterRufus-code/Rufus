@@ -85,7 +85,7 @@ class QdrantStore:
                 must=[FieldCondition(key="asset_type", match=MatchValue(value=asset_type_filter))]
             )
 
-        fetch_k = top_k + len(exclude_ids) + 10 if exclude_ids else top_k  # exclude_ids is set or None
+        fetch_k = top_k + (len(exclude_ids) + 10 if exclude_ids else 0)
         try:
             result = self._qdrant.query_points(
                 collection_name=self._collection,

@@ -150,7 +150,10 @@ def _resumable_upload(request) -> Optional[str]:
 
         progress.update(task, completed=100)
 
-    video_id = response.get("id")
+    video_id = response.get("id") if response else None
+    if not video_id:
+        console.print("[red]Upload appeared to succeed but no video ID in response.[/red]")
+        return None
     url = f"https://www.youtube.com/watch?v={video_id}"
     console.print(f"\n[bold green]Upload complete![/bold green] {url}")
     return video_id

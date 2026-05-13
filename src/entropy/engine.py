@@ -32,7 +32,10 @@ def _scene_repeat_threshold() -> float:
     Configurable via ENTROPY_SCENE_REPEAT env var. Default 0.97 (stricter than old 0.92).
     """
     import os
-    return float(os.getenv("ENTROPY_SCENE_REPEAT", "0.97"))
+    try:
+        return float(os.getenv("ENTROPY_SCENE_REPEAT", "0.97"))
+    except ValueError:
+        return 0.97
 
 
 @dataclass

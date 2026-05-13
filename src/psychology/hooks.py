@@ -212,13 +212,13 @@ Rules:
     # Parse numbered list
     hooks = []
     for line in raw.strip().splitlines():
-        line = re.sub(r"^\d+[\.\)]\s*", "", line).strip()
+        line = re.sub(r"^\d+[\.\):\s]+", "", line).strip()
         if len(line) > 10:
             hooks.append(line)
 
     if not hooks:
         hooks = _fallback_hooks(topic, niche, count).splitlines()
-        hooks = [re.sub(r"^\d+[\.\)]\s*", "", h).strip() for h in hooks if h.strip()]
+        hooks = [re.sub(r"^\d+[\.\):\s]+", "", h).strip() for h in hooks if h.strip()]
 
     return score_hooks(hooks[:count])
 

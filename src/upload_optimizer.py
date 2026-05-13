@@ -86,7 +86,7 @@ def _apply_historical_scores(niche: str, windows: list[UploadWindow]) -> None:
         if not bucket:
             return
         max_avg = max(sum(v) / len(v) for v in bucket.values())
-        if max_avg == 0:
+        if max_avg <= 0:
             return
         for w in windows:
             key = (w.weekday, w.hour)

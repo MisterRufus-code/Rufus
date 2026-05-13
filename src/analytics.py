@@ -191,12 +191,14 @@ def sync_feedback_from_youtube(max_videos: int = 20, niche: str = "general") -> 
                 filters=ids_str,
             ).execute()
             for row in resp.get("rows", []):
+                if not row or len(row) < 1:
+                    continue
                 vid_id = row[0]
                 analytics_data[vid_id] = {
-                    "views": int(row[1]),
-                    "watch_minutes": float(row[2]),
-                    "avg_duration": float(row[3]),
-                    "retention_pct": float(row[4]),
+                    "views": int(row[1]) if len(row) > 1 else 0,
+                    "watch_minutes": float(row[2]) if len(row) > 2 else 0.0,
+                    "avg_duration": float(row[3]) if len(row) > 3 else 0.0,
+                    "retention_pct": float(row[4]) if len(row) > 4 else 0.0,
                     "ctr": float(row[5]) if len(row) > 5 else 0.0,
                 }
         except Exception:
@@ -215,8 +217,9 @@ def sync_feedback_from_youtube(max_videos: int = 20, niche: str = "general") -> 
         ctr = adata.get("ctr", 0.0)
 
         # Estimate retention from likes/views ratio if Analytics unavailable
-        if retention == 0.0 and v.views > 0:
-            like_ratio = v.likes / max(v.views, 1)
+        # Only trust this heuristic when we have enough views to matter
+        if retention == 0.0 and v.views >= 100:
+            like_ratio = v.likes / v.views
             retention = min(like_ratio * 8, 0.8)
 
         fb = VideoFeedback(

@@ -53,7 +53,9 @@ def get_niche_config(niche: str) -> NicheConfig:
 
     try:
         data: dict = yaml.safe_load(path.read_text()) or {}
-    except Exception:
+    except Exception as exc:
+        import sys
+        print(f"[niche_config] WARNING: could not parse {path}: {exc}", file=sys.stderr)
         return NicheConfig(name=niche)
 
     return NicheConfig(

@@ -58,7 +58,7 @@ def get_globally_used_asset_ids(recent_videos: int = 5) -> set[str]:
         recent = records[-recent_videos:] if len(records) > recent_videos else records
         used: set[str] = set()
         for r in recent:
-            used.update(r.asset_ids)
+            used.update(r.asset_ids or [])
         return used
     except Exception:
         return set()

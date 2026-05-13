@@ -59,6 +59,9 @@ def index_library(
                     continue
                 store.upsert(features)
                 indexed += 1
+            except FileNotFoundError:
+                console.print(f"[yellow]Skipping missing asset: {raw.path.name}[/yellow]")
+                skipped += 1
             except Exception as exc:
                 console.print(f"[red]Error indexing {raw.path.name}: {exc}[/red]")
                 errors += 1

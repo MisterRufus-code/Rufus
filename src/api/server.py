@@ -91,9 +91,15 @@ def _prune_jobs() -> None:
         del _jobs[k]
     # Hard cap: evict oldest finished jobs first
     if len(_jobs) >= _JOB_MAX:
+        def _finished_at_dt(item):
+            try:
+                return datetime.fromisoformat(item[1].get("finished_at", "2000-01-01"))
+            except ValueError:
+                return datetime.min
+
         finished = sorted(
             [(k, v) for k, v in _jobs.items() if v.get("status") in ("done", "failed")],
-            key=lambda x: x[1].get("finished_at", ""),
+            key=_finished_at_dt,
         )
         for k, _ in finished[:len(_jobs) - _JOB_MAX + 1]:
             del _jobs[k]
@@ -249,17 +255,30 @@ def run_both_endpoint(req: PipelineRequest, background_tasks: BackgroundTasks, _
             _jobs[job_id]["status"] = "running"
             _jobs[job_id]["started_at"] = datetime.utcnow().isoformat()
         results = {}
-        for mode, shorts_flag in [("longform", False), ("shorts", True)]:
-            sub_id = _new_job({"status": "running", "topic": topic, "mode": mode})
-            _run_job(sub_id, topic, req.niche, req.model,
-                     req.voice, req.upload, req.privacy, req.low_power,
-                     shorts_flag, req.geo)
+        sub_ids: list[str] = []
+        try:
+            for mode, shorts_flag in [("longform", False), ("shorts", True)]:
+                sub_id = _new_job({"status": "running", "topic": topic, "mode": mode})
+                sub_ids.append(sub_id)
+                _run_job(sub_id, topic, req.niche, req.model,
+                         req.voice, req.upload, req.privacy, req.low_power,
+                         shorts_flag, req.geo)
+                with _jobs_lock:
+                    results[mode] = _jobs[sub_id].get("result", {})
             with _jobs_lock:
-                results[mode] = _jobs[sub_id].get("result", {})
-        with _jobs_lock:
-            _jobs[job_id]["status"] = "done"
-            _jobs[job_id]["results"] = results
-            _jobs[job_id]["finished_at"] = datetime.utcnow().isoformat()
+                _jobs[job_id]["status"] = "done"
+                _jobs[job_id]["results"] = results
+                _jobs[job_id]["finished_at"] = datetime.utcnow().isoformat()
+        except Exception as exc:
+            with _jobs_lock:
+                _jobs[job_id]["status"] = "failed"
+                _jobs[job_id]["error"] = str(exc)
+                _jobs[job_id]["finished_at"] = datetime.utcnow().isoformat()
+        finally:
+            # Clean up sub-jobs to avoid leaking memory
+            with _jobs_lock:
+                for sid in sub_ids:
+                    _jobs.pop(sid, None)
 
     background_tasks.add_task(_run_both)
     return JobResponse(job_id=job_id, status="queued",
