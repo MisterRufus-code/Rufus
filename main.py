@@ -339,7 +339,8 @@ def optimize_cmd():
 # ---------------------------------------------------------------------------
 
 @cli.command("pipeline")
-@click.option("--topic", "-t", required=True)
+@click.option("--topic", "-t", default=None,
+              help="Topic to make video about (auto-selected from trending if not provided)")
 @click.option("--niche", "-n", default="general", show_default=True)
 @click.option("--model", "-m", default="mistral", show_default=True)
 @click.option("--voice", default="af_heart", show_default=True)
@@ -355,28 +356,74 @@ def optimize_cmd():
 @click.option("--output", "-o", type=click.Path(), default=None)
 @click.option("--shorts", is_flag=True, default=False,
               help="Produce a 9:16 YouTube Shorts video (≤60s) instead of long form")
+@click.option("--both", "both_formats", is_flag=True, default=False,
+              help="Produce both long-form AND Shorts in one run (recommended)")
 @click.option("--low-power", is_flag=True, default=False,
               help="Limit CPU threads and add pauses — quieter PC, slower pipeline")
-def pipeline_cmd(topic, niche, model, voice, ideas_count, geo, no_download, upload, privacy, music, output, shorts, low_power):
+def pipeline_cmd(topic, niche, model, voice, ideas_count, geo, no_download, upload, privacy, music, output, shorts, both_formats, low_power):
     """
-    Run the FULL free pipeline:
-    trends → ideas → script → footage → match → entropy → voiceover → render → upload → learn
-
-    Use --shorts for a 60-second vertical video.
-    Use --low-power on slower/louder machines to reduce CPU load.
+    Run the FULL free pipeline.
+    --topic is optional: auto-selects trending topic if not provided.
+    --both produces long-form + Shorts in one run (recommended daily use).
+    --low-power reduces fan noise on slower machines.
     """
+    from src.trends import get_trending_topic
     from src.pipeline.orchestrator import run_pipeline
-    result = run_pipeline(
-        topic=topic, niche=niche, ollama_model=model, tts_voice=voice,
-        ideas_count=ideas_count, geo=geo, download_footage=not no_download,
-        output_dir=Path(output) if output else None,
-        upload=upload, privacy=privacy,
-        music_path=Path(music) if music else None,
-        shorts=shorts,
-        low_power=low_power,
-    )
-    if not result.success:
+
+    # Auto-select topic from trending if not provided
+    if not topic:
+        console.print(f"[cyan]No topic provided — finding trending topic for '{niche}'...[/cyan]")
+        topic = get_trending_topic(niche=niche, geo=geo, model=model)
+
+    if both_formats:
+        # Run long form then Shorts
+        success = True
+        for label, shorts_flag in [("Long Form", False), ("Shorts", True)]:
+            console.print(f"\n[bold magenta]{'='*20} {label} {'='*20}[/bold magenta]")
+            result = run_pipeline(
+                topic=topic, niche=niche, ollama_model=model, tts_voice=voice,
+                ideas_count=ideas_count, geo=geo,
+                download_footage=(not no_download) if label == "Long Form" else False,
+                output_dir=Path(output) if output else None,
+                upload=upload, privacy=privacy,
+                music_path=Path(music) if music else None,
+                shorts=shorts_flag, low_power=low_power,
+            )
+            if not result.success:
+                success = False
+        if not success:
+            sys.exit(1)
+    else:
+        result = run_pipeline(
+            topic=topic, niche=niche, ollama_model=model, tts_voice=voice,
+            ideas_count=ideas_count, geo=geo, download_footage=not no_download,
+            output_dir=Path(output) if output else None,
+            upload=upload, privacy=privacy,
+            music_path=Path(music) if music else None,
+            shorts=shorts, low_power=low_power,
+        )
+        if not result.success:
+            sys.exit(1)
+
+
+# ---------------------------------------------------------------------------
+# serve  (FastAPI server for n8n integration)
+# ---------------------------------------------------------------------------
+
+@cli.command("serve")
+@click.option("--host", default="0.0.0.0", show_default=True)
+@click.option("--port", default=8000, show_default=True)
+def serve_cmd(host, port):
+    """Start the Rufus API server for n8n automation."""
+    try:
+        import uvicorn
+    except ImportError:
+        console.print("[red]uvicorn not installed — run: pip install uvicorn fastapi[/red]")
         sys.exit(1)
+    console.print(f"[bold green]Rufus API starting on http://{host}:{port}[/bold green]")
+    console.print(f"[dim]n8n can reach it at: http://host.docker.internal:{port}[/dim]")
+    import uvicorn
+    uvicorn.run("src.api.server:app", host=host, port=port, reload=False)
 
 
 # ---------------------------------------------------------------------------
