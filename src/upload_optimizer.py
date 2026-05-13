@@ -173,6 +173,119 @@ def best_thumbnail_style(niche: str) -> Optional[str]:
     return max(style_ctrs, key=lambda s: sum(style_ctrs[s]) / len(style_ctrs[s]))
 
 
+# ── A/B auto-optimisation helpers ────────────────────────────────────────────
+
+def auto_resolve_ab_tests(min_samples: int = 5) -> int:
+    """
+    Scan all pending A/B test entries and automatically mark winner/loser.
+
+    An entry is eligible when:
+      - ``winner`` is currently ``None``
+      - Both A and B variants exist for the same ``video_id``
+      - Both variants have ``ctr > 0``
+      - The combined sample count across both variants is >= *min_samples*
+
+    Returns the number of tests resolved.
+    """
+    resolved = 0
+    with _ab_lock:
+        db = _load_ab_db()
+        # Group by video_id
+        by_video: dict[str, list[dict]] = {}
+        for entry in db:
+            by_video.setdefault(entry["video_id"], []).append(entry)
+
+        for video_id, variants in by_video.items():
+            # Only consider pairs where at least one side has winner=None
+            pending = [v for v in variants if v.get("winner") is None]
+            if not pending:
+                continue
+            # Must have exactly 2 variants (A and B) for the video
+            if len(variants) != 2:
+                continue
+            a_var = next((v for v in variants if v.get("variant") == "A"), None)
+            b_var = next((v for v in variants if v.get("variant") == "B"), None)
+            if a_var is None or b_var is None:
+                continue
+            # Both must have positive CTR
+            if not (a_var.get("ctr", 0) > 0 and b_var.get("ctr", 0) > 0):
+                continue
+            # Enough combined data points (each entry represents one sample)
+            if len(variants) < min_samples:
+                # min_samples applies per-video across all entries; if each
+                # variant is a single record, treat the threshold as 2 minimum
+                # and honour min_samples as a guard against very sparse data.
+                if min_samples > 2:
+                    continue
+            winner = a_var if a_var["ctr"] >= b_var["ctr"] else b_var
+            loser = b_var if winner is a_var else a_var
+            winner["winner"] = True
+            loser["winner"] = False
+            resolved += 1
+
+        if resolved:
+            _save_ab_db(db)
+
+    return resolved
+
+
+def get_ab_confidence(niche: str, style: str) -> float:
+    """
+    Return a confidence score (0.0–1.0) for *style* within *niche*.
+
+    Formula:  min(1.0, sample_count / 20) * win_rate
+
+    - ``sample_count``: number of resolved (winner != None) entries for this
+      niche+style combination.
+    - ``win_rate``: fraction of those entries where ``winner=True``.
+
+    Returns 0.0 when no data exists.
+    """
+    db = _load_ab_db()
+    entries = [
+        e for e in db
+        if e.get("style") == style and e.get("winner") is not None
+    ]
+    # Filter by niche: niche is not stored on ThumbnailVariant directly, so we
+    # cross-reference via the feedback store when available; otherwise we use
+    # all resolved entries for the style (niche-agnostic fallback).
+    niche_entries = _filter_entries_by_niche(entries, niche)
+    if niche_entries:
+        entries = niche_entries
+
+    sample_count = len(entries)
+    if sample_count == 0:
+        return 0.0
+
+    win_rate = sum(1 for e in entries if e.get("winner") is True) / sample_count
+    return min(1.0, sample_count / 20) * win_rate
+
+
+def _filter_entries_by_niche(entries: list[dict], niche: str) -> list[dict]:
+    """
+    Attempt to cross-reference AB entries with feedback records to filter by
+    niche.  Returns an empty list if the feedback store is unavailable, in
+    which case the caller falls back to all entries.
+    """
+    try:
+        from src.ml.feedback import load_all_feedback
+        niche_video_ids = {r.video_id for r in load_all_feedback() if r.niche == niche}
+        filtered = [e for e in entries if e.get("video_id") in niche_video_ids]
+        return filtered
+    except Exception:
+        return []
+
+
+def should_use_style(niche: str, style: str, min_confidence: float = 0.3) -> bool:
+    """
+    Return ``True`` when *style* has sufficient confidence data for *niche*.
+
+    Uses :func:`get_ab_confidence` internally.  Returns ``False`` when the
+    confidence score is below *min_confidence*.
+    """
+    return get_ab_confidence(niche, style) >= min_confidence
+
+
 def _load_ab_db() -> list[dict]:
     if not _AB_DB_PATH.exists():
         return []

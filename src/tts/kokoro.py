@@ -11,6 +11,7 @@ Voices: af_heart, af_bella, af_sarah, am_adam, am_michael, bf_emma, bm_george
 from __future__ import annotations
 
 import os
+import random
 from pathlib import Path
 from typing import Optional
 
@@ -21,6 +22,77 @@ console = Console()
 DEFAULT_VOICE = "af_heart"
 DEFAULT_SPEED = 1.0
 SAMPLE_RATE = 24000
+
+# ---------------------------------------------------------------------------
+# Niche → voice profiles
+# ---------------------------------------------------------------------------
+# Each key maps to a dict with two pools:
+#   "default"  – balanced selection for that niche
+#   "energetic" – higher-energy voices
+#   "calm"      – softer / warmer voices
+#
+# Override at runtime by mutating this dict before calling pick_voice().
+# ---------------------------------------------------------------------------
+NICHE_VOICE_PROFILES: dict[str, dict[str, list[str]]] = {
+    "finance": {
+        "default":   ["am_michael", "bm_george", "af_sarah"],
+        "energetic": ["am_michael", "am_adam"],
+        "calm":      ["bm_george", "af_sarah"],
+    },
+    "business": {
+        "default":   ["am_michael", "bm_george", "af_sarah"],
+        "energetic": ["am_michael", "am_adam"],
+        "calm":      ["bm_george", "af_sarah"],
+    },
+    "tech": {
+        "default":   ["am_adam", "af_nicole"],
+        "energetic": ["am_adam", "am_michael"],
+        "calm":      ["af_nicole", "af_sarah"],
+    },
+    "health": {
+        "default":   ["af_heart", "af_bella", "bf_emma"],
+        "energetic": ["af_bella", "bf_emma"],
+        "calm":      ["af_heart", "bf_isabella"],
+    },
+    "wellness": {
+        "default":   ["af_heart", "af_bella", "bf_emma"],
+        "energetic": ["af_bella", "bf_emma"],
+        "calm":      ["af_heart", "bf_isabella"],
+    },
+    "general": {
+        "default":   ["af_heart", "af_bella", "af_sarah", "af_nicole",
+                      "am_adam", "am_michael", "bf_emma", "bf_isabella",
+                      "bm_george", "bm_lewis"],
+        "energetic": ["am_adam", "am_michael", "af_bella", "bf_emma"],
+        "calm":      ["af_heart", "bf_isabella", "bm_george", "af_sarah"],
+    },
+}
+
+
+def pick_voice(niche: str, style: str = "default") -> str:
+    """
+    Choose a voice string appropriate for *niche* and *style*.
+
+    Args:
+        niche:  Content niche (e.g. "finance", "tech", "health", "wellness",
+                "business", "general").  Unknown niches fall back to "general".
+        style:  One of "default", "energetic", or "calm".
+                Unknown style values fall back to "default".
+
+    Returns:
+        A single voice string from :data:`NICHE_VOICE_PROFILES`, chosen
+        at random from the matching pool so repeated calls give variety.
+    """
+    niche_key = niche.lower().strip()
+    profile = NICHE_VOICE_PROFILES.get(niche_key, NICHE_VOICE_PROFILES["general"])
+
+    style_key = style.lower().strip()
+    pool = profile.get(style_key, profile.get("default", list_voices()))
+
+    if not pool:
+        pool = list_voices()
+
+    return random.choice(pool)
 
 
 def _get_kokoro():

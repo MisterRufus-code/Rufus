@@ -30,7 +30,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, BackgroundTasks, HTTPException, Request, Security
 from fastapi.security import APIKeyHeader
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, HTMLResponse
 from pydantic import BaseModel
 
 # Shutdown event — set on SIGTERM/SIGINT or app shutdown
@@ -375,6 +375,149 @@ def trending_topic(niche: str = "general", geo: str = "US", model: str = "mistra
         return {"topic": topic, "niche": niche, "timestamp": datetime.utcnow().isoformat()}
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc))
+
+
+@app.get("/dashboard", include_in_schema=False)
+def dashboard(request: Request):
+    """Live HTML dashboard — no auth required for browser convenience."""
+    import shutil
+
+    uptime_s = _time.monotonic() - _SERVER_START
+    uptime_h = int(uptime_s // 3600)
+    uptime_m = int((uptime_s % 3600) // 60)
+    uptime_str = f"{uptime_h}h {uptime_m}m"
+
+    # System health checks
+    ollama_ok = False
+    try:
+        import httpx
+        r = httpx.get("http://localhost:11434/api/tags", timeout=2)
+        ollama_ok = r.status_code == 200
+    except Exception:
+        pass
+
+    ffmpeg_ok = bool(shutil.which("ffmpeg"))
+
+    qdrant_ok = False
+    try:
+        from qdrant_client import QdrantClient
+        QdrantClient(host="localhost", port=6333).get_collections()
+        qdrant_ok = True
+    except Exception:
+        pass
+
+    def badge(ok: bool) -> str:
+        return '<span class="ok">OK</span>' if ok else '<span class="fail">FAIL</span>'
+
+    # Jobs table — sorted by started_at desc, limit 50
+    with _jobs_lock:
+        jobs_snapshot = list(_jobs.items())
+
+    def _started_key(item):
+        try:
+            return item[1].get("started_at") or "0000"
+        except Exception:
+            return "0000"
+
+    jobs_sorted = sorted(jobs_snapshot, key=_started_key, reverse=True)[:50]
+
+    total = len(jobs_snapshot)
+    done = sum(1 for _, v in jobs_snapshot if v.get("status") == "done")
+    running = sum(1 for _, v in jobs_snapshot if v.get("status") == "running")
+    queued = sum(1 for _, v in jobs_snapshot if v.get("status") == "queued")
+    success_rate = f"{round(done / total * 100)}%" if total else "—"
+
+    def status_cell(s: str) -> str:
+        colours = {"done": "#00ff88", "failed": "#ff4444", "running": "#ffcc00", "queued": "#aaaaaa"}
+        c = colours.get(s, "#ffffff")
+        return f'<span style="color:{c};font-weight:bold">{s}</span>'
+
+    rows = ""
+    for jid, jdata in jobs_sorted:
+        started = jdata.get("started_at", "—")
+        finished = jdata.get("finished_at")
+        if started != "—" and finished:
+            try:
+                dur_s = (datetime.fromisoformat(finished) - datetime.fromisoformat(started)).total_seconds()
+                duration = f"{int(dur_s)}s"
+            except Exception:
+                duration = "—"
+        elif started != "—" and jdata.get("status") == "running":
+            duration = "running…"
+        else:
+            duration = "—"
+        rows += (
+            f"<tr>"
+            f"<td>{jid[:8]}</td>"
+            f"<td>{jdata.get('mode', '—')}</td>"
+            f"<td>{status_cell(jdata.get('status', '?'))}</td>"
+            f"<td>{jdata.get('topic', '—')[:40]}</td>"
+            f"<td>{started[:19] if started != '—' else '—'}</td>"
+            f"<td>{duration}</td>"
+            f"</tr>\n"
+        )
+
+    html = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="refresh" content="10">
+<title>Rufus Dashboard</title>
+<style>
+  *{{box-sizing:border-box;margin:0;padding:0}}
+  body{{background:#0f0f0f;color:#e0e0e0;font-family:monospace;font-size:14px;padding:24px}}
+  h1{{color:#00ff88;font-size:1.6rem;margin-bottom:4px}}
+  .sub{{color:#666;margin-bottom:24px;font-size:12px}}
+  .section{{margin-bottom:28px}}
+  .section h2{{color:#00ff88;font-size:1rem;border-bottom:1px solid #222;padding-bottom:6px;margin-bottom:12px}}
+  .health-row{{display:flex;gap:24px;flex-wrap:wrap}}
+  .health-item{{background:#1a1a1a;border:1px solid #2a2a2a;border-radius:6px;padding:12px 20px;min-width:140px}}
+  .health-item .label{{color:#888;font-size:11px;margin-bottom:4px}}
+  .ok{{color:#00ff88;font-weight:bold}}
+  .fail{{color:#ff4444;font-weight:bold}}
+  .stats-row{{display:flex;gap:24px;flex-wrap:wrap}}
+  .stat{{background:#1a1a1a;border:1px solid #2a2a2a;border-radius:6px;padding:12px 20px;min-width:120px}}
+  .stat .val{{color:#00ff88;font-size:1.4rem;font-weight:bold}}
+  .stat .label{{color:#888;font-size:11px;margin-top:2px}}
+  table{{width:100%;border-collapse:collapse}}
+  th{{text-align:left;color:#888;font-size:11px;padding:6px 10px;border-bottom:1px solid #222}}
+  td{{padding:6px 10px;border-bottom:1px solid #1a1a1a;font-size:13px;max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}}
+  tr:hover td{{background:#141414}}
+</style>
+</head>
+<body>
+<h1>Rufus Dashboard</h1>
+<p class="sub">Uptime: {uptime_str} &nbsp;|&nbsp; Auto-refreshes every 10s</p>
+
+<div class="section">
+  <h2>System Health</h2>
+  <div class="health-row">
+    <div class="health-item"><div class="label">Ollama</div>{badge(ollama_ok)}</div>
+    <div class="health-item"><div class="label">FFmpeg</div>{badge(ffmpeg_ok)}</div>
+    <div class="health-item"><div class="label">Qdrant</div>{badge(qdrant_ok)}</div>
+  </div>
+</div>
+
+<div class="section">
+  <h2>Stats</h2>
+  <div class="stats-row">
+    <div class="stat"><div class="val">{total}</div><div class="label">Total Jobs</div></div>
+    <div class="stat"><div class="val">{success_rate}</div><div class="label">Success Rate</div></div>
+    <div class="stat"><div class="val">{running}</div><div class="label">Running</div></div>
+    <div class="stat"><div class="val">{queued}</div><div class="label">Queued</div></div>
+  </div>
+</div>
+
+<div class="section">
+  <h2>Jobs (last 50, newest first)</h2>
+  <table>
+    <thead><tr><th>Job ID</th><th>Mode</th><th>Status</th><th>Topic</th><th>Started</th><th>Duration</th></tr></thead>
+    <tbody>{rows if rows else '<tr><td colspan="6" style="color:#555;text-align:center;padding:20px">No jobs yet</td></tr>'}</tbody>
+  </table>
+</div>
+</body>
+</html>"""
+    return HTMLResponse(content=html)
 
 
 # ── Graceful shutdown ─────────────────────────────────────────────────────────

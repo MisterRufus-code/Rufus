@@ -125,6 +125,36 @@ def _clip_embed_image(image: Image.Image) -> list[float]:
     return embedding.squeeze().cpu().numpy().tolist()
 
 
+def clip_embed_batch(images: list[Image.Image]) -> list[list[float]]:
+    """
+    Embed a batch of PIL Images with CLIP in a single forward pass.
+
+    Significantly faster than calling _clip_embed_image() in a loop because
+    the GPU processes all images at once instead of one at a time.
+
+    Args:
+        images: List of PIL Images to embed.
+
+    Returns:
+        List of 512-dim embedding lists, one per input image, in the same order.
+    """
+    if not images:
+        return []
+
+    model, preprocess = _load_clip()
+    device = _get_device()
+
+    # Preprocess every image and stack into a single (N, C, H, W) batch tensor
+    tensors = [preprocess(img).to(device) for img in images]
+    batch_tensor = torch.stack(tensors)
+
+    with torch.no_grad():
+        embeddings = model.encode_image(batch_tensor)
+        embeddings = embeddings / embeddings.norm(dim=-1, keepdim=True)
+
+    return embeddings.cpu().numpy().tolist()
+
+
 def _blip_caption(image: Image.Image) -> str:
     processor, model = _load_blip()
     inputs = processor(image, return_tensors="pt").to(_get_device())

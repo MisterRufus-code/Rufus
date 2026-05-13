@@ -22,6 +22,22 @@ from rich.rule import Rule
 import config
 from src.database.models import TimelineClip
 from src.logging_config import get_logger
+from src.utils.retry import CircuitBreaker
+
+_ollama_cb = CircuitBreaker(threshold=5, reset_timeout=120.0)
+
+
+def _run_with_retry(fn, *args, max_attempts=3, **kwargs):
+    """Run fn(*args, **kwargs) with exponential backoff. Used for Ollama/network steps."""
+    for attempt in range(1, max_attempts + 1):
+        try:
+            return fn(*args, **kwargs)
+        except Exception as exc:
+            if attempt == max_attempts:
+                raise
+            import time, random
+            wait = min(2 ** (attempt - 1) + random.uniform(0, 1), 30)
+            time.sleep(wait)
 
 console = Console()
 log = get_logger("pipeline.orchestrator")
@@ -117,10 +133,12 @@ def run_pipeline(
     from src.ml.optimizer import get_keyword_context
     try:
         ml_kw_context = get_keyword_context(niche, topic)
-        keywords = generate_search_keywords(
-            topic, niche, model=ollama_model,
-            count=8, ml_context=ml_kw_context,
-        )
+        with _ollama_cb:
+            keywords = _run_with_retry(
+                generate_search_keywords,
+                topic, niche, model=ollama_model,
+                count=8, ml_context=ml_kw_context,
+            )
         result.keywords_used = keywords
         console.print(f"[green]Search keywords:[/green] {', '.join(keywords)}")
     except Exception as exc:
@@ -187,20 +205,24 @@ def run_pipeline(
     try:
         if media_captions:
             from src.ideas import generate_ideas_from_media
-            ideas = generate_ideas_from_media(
-                topic, niche,
-                media_captions=media_captions,
-                count=ideas_count,
-                trending_context=trending_ctx,
-                model=ollama_model,
-                ml_prefix=ml_prefix,
-            )
+            with _ollama_cb:
+                ideas = _run_with_retry(
+                    generate_ideas_from_media,
+                    topic, niche,
+                    media_captions=media_captions,
+                    count=ideas_count,
+                    trending_context=trending_ctx,
+                    model=ollama_model,
+                    ml_prefix=ml_prefix,
+                )
         else:
             from src.ideas import generate_video_ideas
-            ideas = generate_video_ideas(
-                topic, niche, count=ideas_count,
-                trending_context=trending_ctx, model=ollama_model,
-            )
+            with _ollama_cb:
+                ideas = _run_with_retry(
+                    generate_video_ideas,
+                    topic, niche, count=ideas_count,
+                    trending_context=trending_ctx, model=ollama_model,
+                )
     except Exception as exc:
         result.errors.append(f"Idea generation failed: {exc}")
         console.print(f"[red]{exc}[/red]")
@@ -231,18 +253,28 @@ def run_pipeline(
     try:
         if shorts:
             from src.ideas import generate_shorts_script
-            script = generate_shorts_script(best_idea, model=ollama_model, ml_prefix=ml_prefix)
+            with _ollama_cb:
+                script = _run_with_retry(
+                    generate_shorts_script,
+                    best_idea, model=ollama_model, ml_prefix=ml_prefix,
+                )
         elif media_captions:
             from src.ideas import generate_script_from_media
-            script = generate_script_from_media(
-                best_idea,
-                media_captions=media_captions,
-                model=ollama_model,
-                ml_prefix=ml_prefix,
-            )
+            with _ollama_cb:
+                script = _run_with_retry(
+                    generate_script_from_media,
+                    best_idea,
+                    media_captions=media_captions,
+                    model=ollama_model,
+                    ml_prefix=ml_prefix,
+                )
         else:
             from src.ideas import generate_video_script
-            script = generate_video_script(best_idea, model=ollama_model)
+            with _ollama_cb:
+                script = _run_with_retry(
+                    generate_video_script,
+                    best_idea, model=ollama_model,
+                )
     except Exception as exc:
         result.errors.append(f"Script generation failed: {exc}")
         console.print(f"[red]{exc}[/red]")
