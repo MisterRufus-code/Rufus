@@ -55,7 +55,7 @@ def _ollama_generate(prompt: str, model: str = DEFAULT_MODEL, system: str = "") 
         "prompt": prompt,
         "system": system,
         "stream": False,
-        "options": {"temperature": 0.85, "num_predict": 2048},
+        "options": {"temperature": 0.85, "num_predict": 4096},
     }
     with task_lock("ollama_generate"):
         r = httpx.post(
@@ -109,6 +109,19 @@ def _parse_json_response(raw: str) -> list | dict:
             result = try_parse(raw[s : e + 1])
             if result is not None:
                 return result
+
+    # Recovery: extract complete {...} objects from a truncated array
+    import re as _re
+    objects = []
+    for m in _re.finditer(r'\{[^{}]*\}', raw, _re.DOTALL):
+        try:
+            obj = json.loads(_clean_json_str(m.group(0)))
+            if isinstance(obj, dict):
+                objects.append(obj)
+        except json.JSONDecodeError:
+            pass
+    if objects:
+        return objects
 
     raise ValueError(f"Could not parse JSON from model response:\n{raw[:300]}")
 
