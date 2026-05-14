@@ -119,7 +119,7 @@ class AssetIntelligence:
         records = niche_records if niche_records else all_feedback
 
         if not records:
-            log.info("asset_intelligence: no feedback data available — returning neutral defaults")
+            log.debug("asset_intelligence: no feedback data available — returning neutral defaults")
             return _NEUTRAL_INSIGHT
 
         sample_count = len(records)
