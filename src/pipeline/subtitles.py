@@ -7,6 +7,7 @@ title card overlays into the video using FFmpeg drawtext / subtitles filter.
 
 from __future__ import annotations
 
+import re
 import subprocess
 from pathlib import Path
 from typing import Optional
@@ -14,6 +15,16 @@ from typing import Optional
 from rich.console import Console
 
 console = Console()
+
+_CLIP_REF_RE = re.compile(
+    r"(\[?(?:CLIP|footage|clip)\s*[\d_]+\]?:?\s*)", re.IGNORECASE
+)
+
+
+def _strip_clip_refs(text: str) -> str:
+    """Remove LLM-echoed clip labels like '[CLIP 1]:', 'footage_2:' from text."""
+    return _CLIP_REF_RE.sub("", text).strip()
+
 
 FONT_PATH_CANDIDATES = [
     "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
@@ -67,13 +78,13 @@ def build_srt(
     """
     all_segments = []
     if hook:
-        all_segments.append(hook.strip())
+        all_segments.append(_strip_clip_refs(hook.strip()))
     for s in sections:
-        text = s.get("script", s.get("heading", "")).strip()
+        text = _strip_clip_refs(s.get("script", s.get("heading", "")).strip())
         if text:
             all_segments.append(text[:100].replace("\n", " "))
     if call_to_action:
-        all_segments.append(call_to_action[:80].strip())
+        all_segments.append(_strip_clip_refs(call_to_action[:80].strip()))
 
     # Remove any blank/whitespace-only segments
     all_segments = [seg for seg in all_segments if seg.strip()]
@@ -155,8 +166,9 @@ def add_title_card(
     fade_range = max(duration - fade_out, 0.01)  # avoid division by zero
 
     vf = (
-        # Dark rectangle behind text
+        # Dark rectangle behind text — enable matches drawtext so it disappears with the title
         f"drawbox=x=0:y=ih*0.35:w=iw:h=ih*0.30:color=black@0.55:t=fill"
+        f":enable='between(t,0,{duration})'"
         f",drawtext=text='{safe_title}'"
         f"{font_arg}"
         f":fontsize={font_size}:fontcolor=white"

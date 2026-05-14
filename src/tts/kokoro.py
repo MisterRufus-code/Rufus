@@ -11,6 +11,7 @@ Voices: af_heart, af_bella, af_sarah, am_adam, am_michael, bf_emma, bm_george
 from __future__ import annotations
 
 import os
+import re
 import random
 from pathlib import Path
 from typing import Optional
@@ -18,6 +19,8 @@ from typing import Optional
 from rich.console import Console
 
 console = Console()
+
+_CLIP_REF_RE = re.compile(r"(\[?(?:CLIP|footage|clip)\s*[\d_]+\]?:?\s*)", re.IGNORECASE)
 
 DEFAULT_VOICE = "af_heart"
 DEFAULT_SPEED = 1.0
@@ -154,8 +157,8 @@ def synthesize_sections(
     paths: list[Path] = []
 
     for i, section in enumerate(sections):
-        text = section.get("script", "")
-        if not text.strip():
+        text = _CLIP_REF_RE.sub("", section.get("script", "")).strip()
+        if not text:
             continue
         out = output_dir / f"section_{i:02d}.wav"
         synthesize(text, out, voice=voice, speed=speed)

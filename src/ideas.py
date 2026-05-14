@@ -238,7 +238,7 @@ def generate_script_from_media(
     ml_prefix: str = "",
 ) -> "VideoScript":
     """Generate a script with sections that map to the available media clips."""
-    captions_block = "\n".join(f"[CLIP {i+1}]: {c}" for i, c in enumerate(media_captions[:15]))
+    captions_block = "\n".join(f"footage_{i+1}: {c}" for i, c in enumerate(media_captions[:15]))
     prompt = f"""{ml_prefix}
 Write a YouTube video script using the available clips listed below.
 
