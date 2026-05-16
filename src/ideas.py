@@ -142,13 +142,27 @@ def _parse_json_response(raw: str) -> list | dict:
                 return json.loads(candidate)
             except json.JSONDecodeError:
                 pass
-        # Try completing truncated JSON, then re-clean (closing a truncated string
-        # may leave literal newlines that only become escapable after closing the quote)
+        # Try completing a truncated string/structure, then re-clean so any
+        # literal newlines inside the newly-closed string get escaped.
         completed = _complete_truncated_json(cleaned)
         if completed != cleaned:
             for variant in (completed, _clean_json_str(completed)):
                 try:
                     return json.loads(variant)
+                except json.JSONDecodeError:
+                    pass
+        # Truncation may have happened mid-key-name (e.g. "descripti instead of
+        # "description": "...") making completion produce invalid JSON.  Fall back
+        # to salvaging all complete objects that appear before the cut.
+        bracket = cleaned.find("[")
+        last_brace = cleaned.rfind("}")
+        if bracket != -1 and last_brace > bracket:
+            salvaged = cleaned[bracket:last_brace + 1].rstrip().rstrip(",") + "]"
+            for variant in (salvaged, _clean_json_str(salvaged)):
+                try:
+                    result = json.loads(variant)
+                    if result:
+                        return result
                 except json.JSONDecodeError:
                     pass
         return None

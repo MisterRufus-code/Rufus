@@ -77,6 +77,22 @@ def _concat_clips(clip_paths: list[Path], output_path: Path) -> Path:
     return output_path
 
 
+def _loop_video_to_duration(video_path: Path, target_duration: float, output_path: Path) -> Path:
+    """Loop video until it is at least target_duration long."""
+    vid_dur = _get_duration(video_path)
+    if vid_dur <= 0:
+        return video_path
+    loops = int(target_duration / vid_dur) + 1
+    _ffmpeg(
+        "-stream_loop", str(loops),
+        "-i", str(video_path),
+        "-t", str(target_duration),
+        "-c", "copy",
+        str(output_path),
+    )
+    return output_path
+
+
 def _add_audio(video_path: Path, audio_path: Path, output_path: Path) -> Path:
     _ffmpeg(
         "-i", str(video_path),
@@ -223,8 +239,13 @@ def render_shorts(
     concat_path = tmp / "shorts_concat.mp4"
     _concat_clips(trimmed, concat_path)
 
-    # 3. Add audio
+    # 3. Add audio — loop video if shorter than voiceover so nothing cuts off
     if audio_path and audio_path.exists():
+        audio_dur = _get_duration(audio_path)
+        if audio_dur > 0 and _get_duration(concat_path) < audio_dur:
+            looped = tmp / "shorts_looped.mp4"
+            _loop_video_to_duration(concat_path, audio_dur, looped)
+            concat_path = looped
         voiced_path = tmp / "shorts_voiced.mp4"
         _add_audio(concat_path, audio_path, voiced_path)
     else:
