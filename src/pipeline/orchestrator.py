@@ -379,6 +379,7 @@ def run_pipeline(
     # ------------------------------------------------------------------ #
     console.print(Rule("[bold]Step 9 — Voiceover (Kokoro TTS)[/bold]"))
     audio_path: Optional[Path] = None
+    _section_durations: list[float] = []
     if dry_run:
         console.print("[dim]dry-run: TTS skipped[/dim]")
     else:
@@ -403,8 +404,13 @@ def run_pipeline(
                 audio_path = out / "voiceover.wav"
                 merge_audio_files(wav_paths, audio_path)
                 cp.advance(PipelineStage.TTS_COMPLETED, audio_path=str(audio_path))
+                from src.tts.kokoro import get_section_durations as _get_wav_durations
+                _section_durations = _get_wav_durations(wav_paths)
+            else:
+                _section_durations = []
         except Exception as exc:
             console.print(f"[yellow]TTS skipped ({exc})[/yellow]")
+            _section_durations = []
 
     breathe(2)
     # ------------------------------------------------------------------ #
@@ -452,6 +458,7 @@ def run_pipeline(
                 call_to_action=script.call_to_action,
                 title=script.title,
                 tmp_dir=out / "_tmp_overlays",
+                section_durations=_section_durations or None,
             )
             result.video_path = video_path
         except Exception as exc:

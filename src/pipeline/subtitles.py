@@ -26,6 +26,33 @@ def _strip_clip_refs(text: str) -> str:
     return _CLIP_REF_RE.sub("", text).strip()
 
 
+_SENT_SPLIT_RE = re.compile(r'(?<=[.!?])\s+')
+
+
+def _split_sentences(text: str, max_chars: int = 90) -> list[str]:
+    """Split text into sentence-level chunks suitable for subtitle display."""
+    sents = [s.strip() for s in _SENT_SPLIT_RE.split(text) if s.strip()]
+    result: list[str] = []
+    for sent in sents:
+        if len(sent) <= max_chars:
+            result.append(sent)
+        else:
+            # Break long sentences at commas
+            parts = [p.strip() for p in sent.split(',') if p.strip()]
+            buf = ""
+            for part in parts:
+                candidate = f"{buf}, {part}".lstrip(", ") if buf else part
+                if len(candidate) <= max_chars:
+                    buf = candidate
+                else:
+                    if buf:
+                        result.append(buf)
+                    buf = part
+            if buf:
+                result.append(buf)
+    return result or [text[:max_chars]]
+
+
 FONT_PATH_CANDIDATES = [
     "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
     "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
@@ -71,47 +98,71 @@ def build_srt(
     total_duration: float,
     hook: str = "",
     call_to_action: str = "",
+    section_durations: list[float] | None = None,
 ) -> str:
     """
-    Build an SRT subtitle string from script sections.
-    Distributes sections evenly across the video duration.
+    Build an SRT subtitle string with sentence-level granularity.
+
+    If section_durations is provided (one float per section in the same order
+    as hook + sections + call_to_action), subtitle timing is proportional to
+    actual audio duration rather than evenly split.
     """
-    all_segments = []
+    raw_segs: list[str] = []
     if hook:
-        all_segments.append(_strip_clip_refs(hook.strip()))
+        raw_segs.append(_strip_clip_refs(hook.strip()))
     for s in sections:
         text = _strip_clip_refs(s.get("script", s.get("heading", "")).strip())
         if text:
-            all_segments.append(text[:100].replace("\n", " "))
+            raw_segs.append(text.replace("\n", " "))
     if call_to_action:
-        all_segments.append(_strip_clip_refs(call_to_action[:80].strip()))
+        raw_segs.append(_strip_clip_refs(call_to_action.strip()))
 
-    # Remove any blank/whitespace-only segments
-    all_segments = [seg for seg in all_segments if seg.strip()]
-
-    if not all_segments or total_duration <= 0:
+    raw_segs = [seg for seg in raw_segs if seg.strip()]
+    if not raw_segs or total_duration <= 0:
         return ""
 
-    seg_duration = total_duration / len(all_segments)
-    lines = []
-    for i, text in enumerate(all_segments):
-        start = i * seg_duration
-        end = start + seg_duration - 0.3
-        lines.append(str(i + 1))
-        lines.append(f"{_seconds_to_srt_time(start)} --> {_seconds_to_srt_time(end)}")
-        # Wrap at ~42 chars per line
-        words = text.split()
-        subtitle_lines, current = [], ""
-        for word in words:
-            if len(current) + len(word) + 1 <= 42:
-                current = f"{current} {word}".strip()
-            else:
-                subtitle_lines.append(current)
-                current = word
-        if current:
-            subtitle_lines.append(current)
-        lines.extend(subtitle_lines[:2])
-        lines.append("")
+    # Per-segment time budget — use audio durations when available
+    if section_durations and len(section_durations) >= len(raw_segs):
+        raw_times = list(section_durations[:len(raw_segs)])
+        total_audio = sum(raw_times)
+        if total_audio > 0:
+            times = [t * total_duration / total_audio for t in raw_times]
+        else:
+            times = [total_duration / len(raw_segs)] * len(raw_segs)
+    else:
+        seg_dur = total_duration / len(raw_segs)
+        times = [seg_dur] * len(raw_segs)
+
+    lines: list[str] = []
+    entry_num = 1
+    cursor = 0.0
+
+    for seg_text, seg_time in zip(raw_segs, times):
+        sentences = _split_sentences(seg_text)
+        per_sent = seg_time / len(sentences)
+        for sentence in sentences:
+            start = cursor
+            end = cursor + per_sent - 0.1
+            cursor += per_sent
+
+            # Word-wrap at 50 chars per line, max 2 lines
+            words = sentence.split()
+            sub_lines: list[str] = []
+            current = ""
+            for word in words:
+                if len(current) + len(word) + 1 <= 50:
+                    current = f"{current} {word}".strip()
+                else:
+                    sub_lines.append(current)
+                    current = word
+            if current:
+                sub_lines.append(current)
+
+            lines.append(str(entry_num))
+            lines.append(f"{_seconds_to_srt_time(start)} --> {_seconds_to_srt_time(end)}")
+            lines.extend(sub_lines[:2])
+            lines.append("")
+            entry_num += 1
 
     return "\n".join(lines)
 
@@ -120,16 +171,17 @@ def burn_subtitles(
     video_path: Path,
     srt_path: Path,
     output_path: Path,
-    font_size: int = 22,
+    font_size: int = 30,
     font_color: str = "white",
     outline_color: str = "black",
 ) -> Path:
     """Burn SRT subtitles into video using FFmpeg subtitles filter."""
     font = _find_font()
+    # Bold white text, thick black outline, 50px bottom margin
     style = (
-        f"FontSize={font_size},PrimaryColour=&H00FFFFFF,"
-        f"OutlineColour=&H00000000,Outline=2,Shadow=1,"
-        f"Alignment=2,MarginV=30"
+        f"FontSize={font_size},Bold=1,PrimaryColour=&H00FFFFFF,"
+        f"OutlineColour=&H00000000,Outline=3,Shadow=2,"
+        f"Alignment=2,MarginV=50"
     )
     if font:
         style += f",FontName={Path(font).stem}"
@@ -196,6 +248,7 @@ def apply_overlays(
     call_to_action: str = "",
     title: str = "",
     tmp_dir: Optional[Path] = None,
+    section_durations: list[float] | None = None,
 ) -> Path:
     """
     Full overlay pipeline: title card → burned subtitles.
@@ -220,7 +273,7 @@ def apply_overlays(
     try:
         duration = _get_video_duration(current)
         if duration > 0 and script_sections:
-            srt_content = build_srt(script_sections, duration, hook, call_to_action)
+            srt_content = build_srt(script_sections, duration, hook, call_to_action, section_durations)
             if srt_content.strip():
                 srt_path = tmp / "subtitles.srt"
                 srt_path.write_text(srt_content, encoding="utf-8")

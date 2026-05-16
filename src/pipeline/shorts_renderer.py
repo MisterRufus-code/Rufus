@@ -12,11 +12,16 @@ import tempfile
 from pathlib import Path
 from typing import Optional
 
+import re
+
 from rich.console import Console
 
 from src.database.models import TimelineClip
 
 console = Console()
+
+_CLIP_REF_RE = re.compile(r"(\[?(?:CLIP|footage|clip)\s*[\d_]+\]?:?\s*)", re.IGNORECASE)
+_SENT_SPLIT_RE = re.compile(r'(?<=[.!?])\s+')
 
 MAX_SHORTS_DURATION = 58.0  # leave 2s buffer under YouTube's 60s limit
 
@@ -95,6 +100,13 @@ def _trim_to_60s(video_path: Path, output_path: Path) -> Path:
     return output_path
 
 
+def _clean_caption_text(text: str) -> str:
+    """Strip clip references and markdown from caption text."""
+    text = _CLIP_REF_RE.sub("", text)
+    text = re.sub(r'[*_#`~]', '', text)
+    return text.replace("\n", " ").strip()
+
+
 def _burn_shorts_captions(
     video_path: Path,
     script_sections: list[dict],
@@ -102,37 +114,45 @@ def _burn_shorts_captions(
     output_path: Path,
     total_duration: float,
 ) -> Path:
-    """Burn large centered white captions — the signature Shorts look."""
+    """Burn large centered bold captions — the signature Shorts look."""
     font = _find_font()
     font_arg = f":fontfile='{font}'" if font else ""
 
-    segments = []
+    # Build sentence-level segments for tighter caption timing
+    raw_segs: list[str] = []
     if hook:
-        segments.append(hook[:60])
+        raw_segs.append(_clean_caption_text(hook))
     for s in script_sections:
-        text = s.get("script", s.get("heading", ""))[:60].replace("\n", " ")
+        text = _clean_caption_text(s.get("script", s.get("heading", "")) or "")
         if text:
-            segments.append(text)
+            raw_segs.append(text)
 
-    if not segments or total_duration <= 0:
+    if not raw_segs or total_duration <= 0:
         import shutil
         shutil.copy2(video_path, output_path)
         return output_path
 
+    # Expand to sentence level
+    segments: list[str] = []
+    for seg in raw_segs:
+        sents = [s.strip() for s in _SENT_SPLIT_RE.split(seg) if s.strip()]
+        segments.extend(sents or [seg])
+
     seg_dur = total_duration / len(segments)
 
-    # Build a drawtext filter chain for each segment
+    # Build a drawtext filter chain for each sentence
     filters = []
     for i, text in enumerate(segments):
         t_start = i * seg_dur
         t_end = t_start + seg_dur - 0.15
-        safe = text.replace("'", "\\'").replace(":", "\\:").replace("%", "\\%")
+        # Truncate to ~45 chars for readability on mobile
+        display = text[:45].replace("'", "\\'").replace(":", "\\:").replace("%", "\\%")
         filters.append(
-            f"drawtext=text='{safe}'"
+            f"drawtext=text='{display}'"
             f"{font_arg}"
-            f":fontsize=52:fontcolor=white"
-            f":borderw=3:bordercolor=black"
-            f":x=(w-text_w)/2:y=(h-text_h)/2+80"
+            f":fontsize=58:fontcolor=white"
+            f":borderw=4:bordercolor=black"
+            f":x=(w-text_w)/2:y=h*0.72"
             f":enable='between(t,{t_start:.2f},{t_end:.2f})'"
         )
 

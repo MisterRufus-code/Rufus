@@ -22,7 +22,18 @@ console = Console()
 
 _CLIP_REF_RE = re.compile(r"(\[?(?:CLIP|footage|clip)\s*[\d_]+\]?:?\s*)", re.IGNORECASE)
 
-DEFAULT_VOICE = "af_heart"
+
+def _prep_tts_text(text: str) -> str:
+    """Strip markdown formatting and normalise punctuation for clean TTS delivery."""
+    text = re.sub(r'[*_#`~]', '', text)          # remove markdown symbols
+    text = re.sub(r'\n+', ' ', text)              # collapse newlines to spaces
+    text = re.sub(r'([.!?]){2,}', r'\1', text)   # deduplicate sentence-end punctuation
+    text = re.sub(r'\s+([.,!?;:])', r'\1', text)  # remove space before punctuation
+    text = re.sub(r' {2,}', ' ', text)            # collapse multiple spaces
+    return text.strip()
+
+
+
 DEFAULT_SPEED = 1.0
 SAMPLE_RATE = 24000
 
@@ -157,7 +168,7 @@ def synthesize_sections(
     paths: list[Path] = []
 
     for i, section in enumerate(sections):
-        text = _CLIP_REF_RE.sub("", section.get("script", "")).strip()
+        text = _prep_tts_text(_CLIP_REF_RE.sub("", section.get("script", "")).strip())
         if not text:
             continue
         out = output_dir / f"section_{i:02d}.wav"
@@ -194,3 +205,16 @@ def list_voices() -> list[str]:
         "bf_emma", "bf_isabella",
         "bm_george", "bm_lewis",
     ]
+
+
+def get_section_durations(wav_paths: list[Path]) -> list[float]:
+    """Return duration in seconds for each synthesised WAV section."""
+    import soundfile as sf
+    durations = []
+    for p in wav_paths:
+        try:
+            info = sf.info(str(p))
+            durations.append(float(info.duration))
+        except Exception:
+            durations.append(0.0)
+    return durations
