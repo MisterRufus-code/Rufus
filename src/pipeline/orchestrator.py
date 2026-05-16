@@ -78,6 +78,7 @@ def run_pipeline(
     low_power: bool = False,
     multi_shorts: bool = False,
     dry_run: bool = False,  # skip TTS, FFmpeg, upload — validate pipeline logic only
+    duration_minutes: int = 5,  # target long-form video length
 ) -> PipelineResult:
     import time
 
@@ -281,6 +282,7 @@ def run_pipeline(
                     generate_script_from_media,
                     best_idea,
                     media_captions=media_captions,
+                    duration_minutes=duration_minutes,
                     model=ollama_model,
                     ml_prefix=ml_prefix,
                 )
@@ -289,7 +291,7 @@ def run_pipeline(
             with _ollama_cb:
                 script = _run_with_retry(
                     generate_video_script,
-                    best_idea, model=ollama_model,
+                    best_idea, duration_minutes=duration_minutes, model=ollama_model,
                 )
     except Exception as exc:
         result.errors.append(f"Script generation failed: {exc}")

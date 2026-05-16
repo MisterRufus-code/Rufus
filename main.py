@@ -360,6 +360,8 @@ def optimize_cmd():
 @click.option("--music", type=click.Path(), default=None,
               help="Optional background music file")
 @click.option("--output", "-o", type=click.Path(), default=None)
+@click.option("--duration", "-d", default=5, show_default=True,
+              help="Target long-form video length in minutes (3-15)")
 @click.option("--shorts", is_flag=True, default=False,
               help="Produce a 9:16 YouTube Shorts video (≤60s) instead of long form")
 @click.option("--both", "both_formats", is_flag=True, default=False,
@@ -367,10 +369,10 @@ def optimize_cmd():
 @click.option("--multi-shorts", "multi_shorts", is_flag=True, default=False,
               help="Generate 4 Shorts angles from the long-form script (4x upload volume)")
 @click.option("--low-power", is_flag=True, default=False,
-              help="Limit CPU threads and add pauses — quieter PC, slower pipeline")
+              help="Limit CPU threads and add pauses — quieter PC, lower heat")
 @click.option("--dry-run", "dry_run", is_flag=True, default=False,
               help="Run full pipeline logic but skip TTS, FFmpeg render, and upload")
-def pipeline_cmd(topic, niche, model, voice, ideas_count, geo, no_download, upload, privacy, music, output, shorts, both_formats, multi_shorts, low_power, dry_run):
+def pipeline_cmd(topic, niche, model, voice, ideas_count, geo, no_download, upload, privacy, music, output, duration, shorts, both_formats, multi_shorts, low_power, dry_run):
     """
     Run the FULL free pipeline.
     --topic is optional: auto-selects trending topic if not provided.
@@ -398,6 +400,7 @@ def pipeline_cmd(topic, niche, model, voice, ideas_count, geo, no_download, uplo
                 upload=upload, privacy=privacy,
                 music_path=Path(music) if music else None,
                 shorts=shorts_flag, low_power=low_power, dry_run=dry_run,
+                duration_minutes=duration,
             )
             if not result.success:
                 success = False
@@ -411,7 +414,7 @@ def pipeline_cmd(topic, niche, model, voice, ideas_count, geo, no_download, uplo
             upload=upload, privacy=privacy,
             music_path=Path(music) if music else None,
             shorts=shorts, low_power=low_power, multi_shorts=multi_shorts,
-            dry_run=dry_run,
+            dry_run=dry_run, duration_minutes=duration,
         )
         if not result.success:
             sys.exit(1)
