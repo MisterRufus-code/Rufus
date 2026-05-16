@@ -80,8 +80,9 @@ def _ollama_generate(prompt: str, model: str = DEFAULT_MODEL, system: str = "") 
         "prompt": prompt,
         "system": system,
         "stream": False,
-        # num_predict=-1 means unlimited — prevents JSON truncation mid-response
-        "options": {"temperature": 0.85, "num_predict": -1},
+        # num_predict=-1 unlimited output; num_ctx=8192 prevents prompt eating
+        # all context leaving no room for the response (default is 4096)
+        "options": {"temperature": 0.85, "num_predict": -1, "num_ctx": 8192},
     }
     with task_lock("ollama_generate"):
         r = httpx.post(
@@ -97,7 +98,10 @@ def _clean_json_str(s: str) -> str:
     """Fix common LLM JSON issues: unescaped newlines/tabs inside strings."""
     def fix_string(m: re.Match) -> str:
         return m.group(0).replace("\n", "\\n").replace("\r", "\\r").replace("\t", "\\t")
-    return re.sub(r'"(?:[^"\\]|\\.)*"', fix_string, s, flags=re.DOTALL)
+    s = re.sub(r'"(?:[^"\\]|\\.)*"', fix_string, s, flags=re.DOTALL)
+    # Strip trailing commas before ] or } (invalid JSON that LLMs often emit)
+    s = re.sub(r',(\s*[}\]])', r'\1', s)
+    return s
 
 
 def _complete_truncated_json(s: str) -> str:
@@ -224,6 +228,12 @@ def _parse_json_response(raw: str) -> list | dict:
     if objects:
         return objects
 
+    # Dump the full response so we can diagnose truncation/malformation
+    try:
+        import pathlib
+        pathlib.Path("/tmp/rufus_json_fail.txt").write_text(raw, encoding="utf-8")
+    except Exception:
+        pass
     raise ValueError(f"Could not parse JSON from model response (first 200 chars): {raw[:200]!r}")
 
 
