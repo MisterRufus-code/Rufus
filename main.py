@@ -372,7 +372,9 @@ def optimize_cmd():
               help="Limit CPU threads and add pauses — quieter PC, lower heat")
 @click.option("--dry-run", "dry_run", is_flag=True, default=False,
               help="Run full pipeline logic but skip TTS, FFmpeg render, and upload")
-def pipeline_cmd(topic, niche, model, voice, ideas_count, geo, no_download, upload, privacy, music, output, duration, shorts, both_formats, multi_shorts, low_power, dry_run):
+@click.option("--fresh", is_flag=True, default=False,
+              help="Ignore saved checkpoint and start from scratch (new topic/title)")
+def pipeline_cmd(topic, niche, model, voice, ideas_count, geo, no_download, upload, privacy, music, output, duration, shorts, both_formats, multi_shorts, low_power, dry_run, fresh):
     """
     Run the FULL free pipeline.
     --topic is optional: auto-selects trending topic if not provided.
@@ -401,6 +403,7 @@ def pipeline_cmd(topic, niche, model, voice, ideas_count, geo, no_download, uplo
                 music_path=Path(music) if music else None,
                 shorts=shorts_flag, low_power=low_power, dry_run=dry_run,
                 duration_minutes=duration,
+                fresh=fresh if label == "Long Form" else False,
             )
             if not result.success:
                 success = False
@@ -414,7 +417,7 @@ def pipeline_cmd(topic, niche, model, voice, ideas_count, geo, no_download, uplo
             upload=upload, privacy=privacy,
             music_path=Path(music) if music else None,
             shorts=shorts, low_power=low_power, multi_shorts=multi_shorts,
-            dry_run=dry_run, duration_minutes=duration,
+            dry_run=dry_run, duration_minutes=duration, fresh=fresh,
         )
         if not result.success:
             sys.exit(1)

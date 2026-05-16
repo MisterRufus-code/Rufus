@@ -79,6 +79,7 @@ def run_pipeline(
     multi_shorts: bool = False,
     dry_run: bool = False,  # skip TTS, FFmpeg, upload — validate pipeline logic only
     duration_minutes: int = 5,  # target long-form video length
+    fresh: bool = False,  # clear checkpoint and regenerate everything (new title/script)
 ) -> PipelineResult:
     import time
 
@@ -97,6 +98,9 @@ def run_pipeline(
     out.mkdir(parents=True, exist_ok=True)
 
     cp = CheckpointManager(out)
+    if fresh:
+        cp.clear()
+        console.print("[dim]--fresh: checkpoint cleared, starting from scratch[/dim]")
     _cp = cp.load()
     if _cp and not dry_run:
         console.print(f"[bold cyan]Resuming from checkpoint: stage={_cp.stage}[/bold cyan]")

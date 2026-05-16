@@ -45,8 +45,14 @@ def _get_device() -> torch.device:
 def set_low_power(enabled: bool, threads: int = 2) -> None:
     """Limit PyTorch CPU threads to reduce fan noise / CPU heat."""
     if enabled:
-        torch.set_num_threads(threads)
-        torch.set_num_interop_threads(1)
+        try:
+            torch.set_num_threads(threads)
+        except RuntimeError:
+            pass
+        try:
+            torch.set_num_interop_threads(1)
+        except RuntimeError:
+            pass
 
 
 def _load_clip():

@@ -34,6 +34,7 @@ def _prep_tts_text(text: str) -> str:
 
 
 
+DEFAULT_VOICE = "af_heart"
 DEFAULT_SPEED = 1.0
 SAMPLE_RATE = 24000
 
