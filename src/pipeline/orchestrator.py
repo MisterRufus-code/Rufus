@@ -245,8 +245,15 @@ def run_pipeline(
                 )
     except Exception as exc:
         result.errors.append(f"Idea generation failed: {exc}")
-        console.print(f"[red]{exc}[/red]")
-        return result
+        console.print(f"[yellow]Idea generation failed ({exc}) — using topic as fallback idea[/yellow]")
+        from src.ideas import VideoIdea
+        ideas = [VideoIdea(
+            title=topic[:70],
+            hook=f"Did you know this about {topic[:40]}?",
+            description=f"A deep dive into {topic}.",
+            tags=[niche, topic.split()[0]] if topic.split() else [niche],
+            estimated_virality="Medium",
+        )]
 
     ideas_file = out / "ideas.json"
     ideas_file.write_text(
