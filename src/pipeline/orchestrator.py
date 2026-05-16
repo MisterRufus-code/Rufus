@@ -465,6 +465,7 @@ def run_pipeline(
                 title=script.title,
                 tmp_dir=out / "_tmp_overlays",
                 section_durations=_section_durations or None,
+                audio_path=audio_path,
             )
             result.video_path = video_path
         except Exception as exc:

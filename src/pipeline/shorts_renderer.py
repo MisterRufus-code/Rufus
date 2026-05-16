@@ -193,7 +193,7 @@ def render_shorts(
       2. Concatenate
       3. Add voiceover
       4. Trim to ≤58s
-      5. Burn centered captions
+      5. Burn karaoke subtitles (word-level highlight) or fallback captions
     """
     tmp = Path(tmp_dir or output_path.parent / "_tmp_shorts")
     tmp.mkdir(parents=True, exist_ok=True)
@@ -234,10 +234,27 @@ def render_shorts(
     trimmed_path = tmp / "shorts_trimmed.mp4"
     _trim_to_60s(voiced_path, trimmed_path)
 
-    # 5. Burn captions
-    if script_sections:
+    # 5. Burn karaoke subtitles (word-level) or fall back to drawtext captions
+    from src.pipeline.subtitles import get_word_timestamps, build_ass_karaoke, burn_ass_subtitles
+
+    captioned_path = tmp / "shorts_captioned.mp4"
+    word_timestamps: list[dict] = []
+    if audio_path and audio_path.exists():
+        word_timestamps = get_word_timestamps(audio_path)
+
+    if word_timestamps:
+        ass_content = build_ass_karaoke(
+            word_timestamps,
+            play_res_x=1080, play_res_y=1920,
+            font_size=58, words_per_group=3, margin_v=120,
+        )
+        ass_path = tmp / "shorts_karaoke.ass"
+        ass_path.write_text(ass_content, encoding="utf-8")
+        burn_ass_subtitles(trimmed_path, ass_path, captioned_path)
+        console.print("[dim]karaoke subtitles burned in (Shorts)[/dim]")
+        current = captioned_path
+    elif script_sections:
         duration = _get_duration(trimmed_path)
-        captioned_path = tmp / "shorts_captioned.mp4"
         _burn_shorts_captions(trimmed_path, script_sections, hook, captioned_path, duration)
         current = captioned_path
     else:
