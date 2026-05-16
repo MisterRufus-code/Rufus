@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 from dataclasses import dataclass
 from typing import Optional
@@ -39,6 +40,30 @@ def _list_models() -> list[str]:
         return []
 
 
+_EMOJI_RE = re.compile(
+    "[\U0001F600-\U0001F64F"
+    "\U0001F300-\U0001F5FF"
+    "\U0001F680-\U0001F6FF"
+    "\U0001F1E0-\U0001F1FF"
+    "\U00002702-\U000027B0"
+    "\U000024C2-\U0001F251"
+    "\U0001F900-\U0001F9FF"
+    "\U0001FA00-\U0001FA6F"
+    "\U0001FA70-\U0001FAFF"
+    "]+",
+    flags=re.UNICODE,
+)
+
+
+def _strip_emojis(text: str) -> str:
+    return _EMOJI_RE.sub("", text).strip()
+
+
+def _clean_str(value: object) -> str:
+    """Convert to string, strip emojis and excess whitespace."""
+    return _strip_emojis(str(value)).strip()
+
+
 def _ollama_generate(prompt: str, model: str = DEFAULT_MODEL, system: str = "") -> str:
     """Send a prompt to the local Ollama server and return the response text."""
     if not _check_ollama():
@@ -55,13 +80,14 @@ def _ollama_generate(prompt: str, model: str = DEFAULT_MODEL, system: str = "") 
         "prompt": prompt,
         "system": system,
         "stream": False,
-        "options": {"temperature": 0.85, "num_predict": 4096},
+        # num_predict=-1 means unlimited — prevents JSON truncation mid-response
+        "options": {"temperature": 0.85, "num_predict": -1},
     }
     with task_lock("ollama_generate"):
         r = httpx.post(
             "http://localhost:11434/api/generate",
             json=payload,
-            timeout=120,
+            timeout=180,
         )
     r.raise_for_status()
     return r.json().get("response", "").strip()
@@ -69,15 +95,44 @@ def _ollama_generate(prompt: str, model: str = DEFAULT_MODEL, system: str = "") 
 
 def _clean_json_str(s: str) -> str:
     """Fix common LLM JSON issues: unescaped newlines/tabs inside strings."""
-    import re
-    # Replace literal newlines inside JSON string values with \n
     def fix_string(m: re.Match) -> str:
         return m.group(0).replace("\n", "\\n").replace("\r", "\\r").replace("\t", "\\t")
     return re.sub(r'"(?:[^"\\]|\\.)*"', fix_string, s, flags=re.DOTALL)
 
 
+def _complete_truncated_json(s: str) -> str:
+    """
+    Walk the string tracking bracket/brace depth and whether we're inside a string.
+    If the JSON is truncated, close any open strings and structures.
+    """
+    stack: list[str] = []
+    in_string = False
+    escape = False
+    for ch in s:
+        if escape:
+            escape = False
+            continue
+        if ch == "\\":
+            escape = True
+            continue
+        if ch == '"':
+            in_string = not in_string
+        elif not in_string:
+            if ch in "[{":
+                stack.append("]" if ch == "[" else "}")
+            elif ch in "]}":
+                if stack and stack[-1] == ch:
+                    stack.pop()
+
+    suffix = ""
+    if in_string:
+        suffix += '"'
+    suffix += "".join(reversed(stack))
+    return s + suffix
+
+
 def _parse_json_response(raw: str) -> list | dict:
-    """Extract JSON from model output — handles markdown fences and LLM quirks."""
+    """Extract JSON from model output — handles markdown fences, emojis, and truncation."""
     raw = raw.strip()
 
     def try_parse(s: str) -> list | dict | None:
@@ -85,9 +140,17 @@ def _parse_json_response(raw: str) -> list | dict:
             try:
                 return json.loads(candidate)
             except json.JSONDecodeError:
-                continue
+                pass
+        # Try completing truncated JSON
+        completed = _complete_truncated_json(candidate)
+        if completed != candidate:
+            try:
+                return json.loads(completed)
+            except json.JSONDecodeError:
+                pass
         return None
 
+    # Strip markdown code fences
     if "```" in raw:
         for part in raw.split("```"):
             part = part.strip()
@@ -101,29 +164,50 @@ def _parse_json_response(raw: str) -> list | dict:
     if result is not None:
         return result
 
-    # Last resort: slice from first [ or {
-    for start_char, end_char in [("[", "]"), ("{", "}")]:
+    # Slice from first [ or {
+    for start_char in ("[", "{"):
         s = raw.find(start_char)
-        e = raw.rfind(end_char)
-        if s != -1 and e != -1:
-            result = try_parse(raw[s : e + 1])
+        if s != -1:
+            result = try_parse(raw[s:])
             if result is not None:
                 return result
 
-    # Recovery: extract complete {...} objects from a truncated array
-    import re as _re
-    objects = []
-    for m in _re.finditer(r'\{[^{}]*\}', raw, _re.DOTALL):
-        try:
-            obj = json.loads(_clean_json_str(m.group(0)))
-            if isinstance(obj, dict):
-                objects.append(obj)
-        except json.JSONDecodeError:
-            pass
+    # Last-resort: extract all complete top-level {...} objects (handles flat nested)
+    objects: list[dict] = []
+    depth = 0
+    start = -1
+    in_str = False
+    esc = False
+    for i, ch in enumerate(raw):
+        if esc:
+            esc = False
+            continue
+        if ch == "\\":
+            esc = True
+            continue
+        if ch == '"':
+            in_str = not in_str
+            continue
+        if in_str:
+            continue
+        if ch == "{":
+            if depth == 0:
+                start = i
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0 and start != -1:
+                try:
+                    obj = json.loads(_clean_json_str(raw[start:i + 1]))
+                    if isinstance(obj, dict):
+                        objects.append(obj)
+                except json.JSONDecodeError:
+                    pass
+                start = -1
     if objects:
         return objects
 
-    raise ValueError(f"Could not parse JSON from model response:\n{raw[:300]}")
+    raise ValueError(f"Could not parse JSON from model response (first 200 chars): {raw[:200]!r}")
 
 
 # ---------------------------------------------------------------------------
@@ -219,10 +303,10 @@ Return ONLY the JSON array, no explanation."""
         data = [data]
     return [
         VideoIdea(
-            title=d.get("title", ""),
-            hook=d.get("hook", ""),
-            description=d.get("description", ""),
-            tags=d.get("tags", []),
+            title=_clean_str(d.get("title", "")),
+            hook=_clean_str(d.get("hook", "")),
+            description=_clean_str(d.get("description", "")),
+            tags=[str(t) for t in d.get("tags", [])],
             estimated_virality=d.get("estimated_virality", "Medium"),
         )
         for d in data
@@ -266,11 +350,11 @@ Return ONLY the JSON object, no explanation."""
                            system="You are a professional YouTube scriptwriter. Always respond with valid JSON only.")
     data = _parse_json_response(raw)
     return VideoScript(
-        title=data.get("title", idea.title),
-        hook=data.get("hook", ""),
+        title=_clean_str(data.get("title", idea.title)),
+        hook=_clean_str(data.get("hook", "")),
         sections=data.get("sections", []),
-        call_to_action=data.get("call_to_action", ""),
-        description=data.get("description", ""),
+        call_to_action=_clean_str(data.get("call_to_action", "")),
+        description=_clean_str(data.get("description", "")),
         tags=data.get("tags", []),
     )
 
@@ -310,10 +394,10 @@ Return ONLY the JSON array, no explanation."""
         data = [data]
     return [
         VideoIdea(
-            title=d.get("title", ""),
-            hook=d.get("hook", ""),
-            description=d.get("description", ""),
-            tags=d.get("tags", []),
+            title=_clean_str(d.get("title", "")),
+            hook=_clean_str(d.get("hook", "")),
+            description=_clean_str(d.get("description", "")),
+            tags=[str(t) for t in d.get("tags", [])],
             estimated_virality=d.get("estimated_virality", "Medium"),
         )
         for d in data
@@ -350,11 +434,11 @@ Return ONLY the JSON object, no explanation."""
     )
     data = _parse_json_response(raw)
     return VideoScript(
-        title=data.get("title", idea.title),
-        hook=data.get("hook", ""),
+        title=_clean_str(data.get("title", idea.title)),
+        hook=_clean_str(data.get("hook", "")),
         sections=data.get("sections", []),
-        call_to_action=data.get("call_to_action", ""),
-        description=data.get("description", ""),
+        call_to_action=_clean_str(data.get("call_to_action", "")),
+        description=_clean_str(data.get("description", "")),
         tags=data.get("tags", []),
     )
 
@@ -429,11 +513,11 @@ Return ONLY valid JSON, no markdown:
     raw = _ollama_generate(prompt.strip(), model)
     data = _parse_json_response(raw)
     return VideoScript(
-        title=data.get("title", idea.title),
-        hook=data.get("hook", idea.hook),
+        title=_clean_str(data.get("title", idea.title)),
+        hook=_clean_str(data.get("hook", idea.hook)),
         sections=data.get("sections", []),
-        call_to_action=data.get("call_to_action", "Follow for more!"),
-        description=data.get("description", ""),
+        call_to_action=_clean_str(data.get("call_to_action", "Follow for more!")),
+        description=_clean_str(data.get("description", "")),
         tags=data.get("tags", ["Shorts"]),
     )
 

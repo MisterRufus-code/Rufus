@@ -75,9 +75,15 @@ def search_and_download(
             "quiet": True,
             "no_warnings": True,
             "outtmpl": str(out_path),
-            "format": "bestvideo[ext=mp4][height<=720]+bestaudio[ext=m4a]/best[ext=mp4][height<=720]/best",
+            # Prefer H264 mp4; exclude AV1 (av01) which OpenCV can't decode in software
+            "format": (
+                "bestvideo[ext=mp4][vcodec!*=av01][height<=720]"
+                "+bestaudio[ext=m4a]"
+                "/bestvideo[ext=mp4][height<=720]+bestaudio[ext=m4a]"
+                "/best[ext=mp4][height<=720]"
+                "/best"
+            ),
             "merge_output_format": "mp4",
-            # Only download if CC license
             "match_filter": yt_dlp.utils.match_filter_func("license ~= 'Creative Commons'"),
         }
         with yt_dlp.YoutubeDL(dl_opts) as ydl:
