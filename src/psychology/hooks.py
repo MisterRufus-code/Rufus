@@ -13,6 +13,8 @@ Principles implemented:
   - Authority / insider knowledge  → "secret / hidden / they don't want you"
   - Specificity bias               → exact numbers feel more credible
   - Second-person priming          → "you" language activates personal relevance
+  - Emotional trigger              → shock, disbelief, jaw-drop reactions
+  - Recency signal                 → "right now", "just happened", current year
 """
 
 from __future__ import annotations
@@ -20,16 +22,31 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 
+# Minimum combined viral score to use the psychology-generated hook.
+# Below this the AI-generated hook is kept and a warning is shown.
+VIRAL_THRESHOLD = 6.5
+
+# Maps LLM estimated_virality label → multiplier applied to hook raw score.
+# "Viral" ideas get a boost; "Low" ideas get penalised.
+_VIRALITY_MULTIPLIER: dict[str, float] = {
+    "Low": 0.75,
+    "Medium": 1.0,
+    "High": 1.25,
+    "Viral": 1.5,
+}
+
 
 @dataclass
 class HookScore:
     hook: str
-    total: float                            # 0–10 composite
+    total: float                            # 0–10 hook-only score
+    viral_score: float = 0.0               # 0–10 combined score (hook × virality × title)
+    virality_label: str = "Medium"
     breakdown: dict[str, float] = field(default_factory=dict)
     suggestions: list[str] = field(default_factory=list)
 
     def __str__(self) -> str:
-        return f"{self.total:.1f}/10 — {self.hook[:80]}"
+        return f"hook={self.total:.1f} viral={self.viral_score:.1f}/10 — {self.hook[:80]}"
 
 
 # ---------------------------------------------------------------------------
@@ -71,7 +88,7 @@ _PATTERNS: list[tuple[str, list[str], float, int]] = [
     (
         "social_proof",
         [
-            r"\b\d+[\s,]*(percent|%|million|thousand|people)\b",
+            r"\b\d+[\s,]*(percent|%|million|billion|thousand|people)\b",
             r"\b(everyone|most people|successful people|rich people|experts)\b",
             r"\bscience (says|shows|proves|confirms)\b",
         ],
@@ -83,6 +100,7 @@ _PATTERNS: list[tuple[str, list[str], float, int]] = [
             r"\b\d+\s*(ways|steps|reasons|things|habits|rules|secrets|tips|mistakes)\b",
             r"\bin \d+ (minutes|days|weeks|seconds|hours)\b",
             r"\b\$[\d,]+\b",
+            r"\b\d{2,}[\s,]*\d*\s*(k|million|billion)\b",
         ],
         1.3, 2,
     ),
@@ -100,6 +118,7 @@ _PATTERNS: list[tuple[str, list[str], float, int]] = [
             r"\b(nobody talks about|forget everything|i was wrong|this changed)\b",
             r"\b(actually|in reality|the opposite|contrary to)\b",
             r"\b(controversial|unpopular opinion|hot take)\b",
+            r"\b(rejected|refused|turned down|said no)\b",
         ],
         1.4, 1,
     ),
@@ -113,15 +132,59 @@ _PATTERNS: list[tuple[str, list[str], float, int]] = [
         ],
         1.0, 1,
     ),
+    (
+        "emotional_trigger",
+        [
+            r"\b(jaw.?drop|mind.?blow|unbelievable|insane|crazy|wild|brutal)\b",
+            r"\b(destroyed|collapsed|bankrupt|lost (it all|everything))\b",
+            r"\b(shocking truth|dark side|exposed|revealed)\b",
+        ],
+        1.3, 1,
+    ),
+    (
+        "recency_signal",
+        [
+            r"\b(202[3-9]|right now|just happened|this (week|month|year)|breaking)\b",
+            r"\b(today|overnight|suddenly|already|still)\b",
+        ],
+        0.9, 1,
+    ),
 ]
 
 _MAX_SCORE = sum(w * m for _, _, w, m in _PATTERNS)
 
 
-def score_hook(hook: str) -> HookScore:
+def _score_title(title: str) -> float:
+    """Return a 0–1 title quality score based on viral title patterns."""
+    t = title.lower()
+    score = 0.0
+    # Numbers in title
+    if re.search(r"\b\d+\b", t):
+        score += 0.25
+    # Dollar/big number
+    if re.search(r"\$[\d,]+|\d+\s*(billion|million)", t):
+        score += 0.25
+    # Power words
+    if re.search(r"\b(why|how|what|the truth|the real|secret|rejected|lost|failed|won)\b", t):
+        score += 0.2
+    # Named entity (capitalized word other than first word)
+    words = title.split()
+    if any(w[0].isupper() for w in words[1:] if len(w) > 2):
+        score += 0.15
+    # Length sweet spot 6–12 words
+    if 6 <= len(words) <= 12:
+        score += 0.15
+    return min(score, 1.0)
+
+
+def score_hook(hook: str, virality_label: str = "Medium", title: str = "") -> HookScore:
     """
-    Score a hook string on psychological engagement principles.
-    Returns a HookScore with total 0–10 and per-principle breakdown.
+    Score a hook combining:
+      - Psychology pattern matching (0–10 base)
+      - Estimated virality from the idea generator (multiplier)
+      - Title quality bonus
+
+    viral_score is the final number that determines if the hook is good enough.
     """
     text = hook.lower()
     raw_total = 0.0
@@ -151,14 +214,41 @@ def score_hook(hook: str) -> HookScore:
         suggestions.append("Add loss aversion: start with 'Stop doing X' or 'You're wasting Y'")
     if breakdown.get("specificity", 0) == 0:
         suggestions.append("Add a number: '5 ways', '3 mistakes', 'in 30 days' — specifics build trust.")
+    if breakdown.get("emotional_trigger", 0) == 0:
+        suggestions.append("Add emotion: 'shocking', 'jaw-dropping', 'destroyed' raises watch urgency.")
 
-    total = round(min(raw_total / _MAX_SCORE * 10, 10.0), 2)
-    return HookScore(hook=hook, total=total, breakdown=breakdown, suggestions=suggestions)
+    base = round(min(raw_total / _MAX_SCORE * 10, 10.0), 2)
+
+    # Apply virality multiplier from LLM estimate
+    v_mult = _VIRALITY_MULTIPLIER.get(virality_label, 1.0)
+
+    # Title quality adds up to 1.5 bonus points
+    title_bonus = _score_title(title) * 1.5 if title else 0.0
+
+    viral_score = round(min(base * v_mult + title_bonus, 10.0), 2)
+
+    if virality_label == "Low":
+        suggestions.append("LLM rated this idea 'Low' virality — consider a more shocking angle.")
+    elif virality_label in ("High", "Viral"):
+        pass  # already boosted
+
+    return HookScore(
+        hook=hook,
+        total=base,
+        viral_score=viral_score,
+        virality_label=virality_label,
+        breakdown=breakdown,
+        suggestions=suggestions,
+    )
 
 
-def score_hooks(hooks: list[str]) -> list[HookScore]:
-    """Score and rank a list of hooks. Best hook is first."""
-    return sorted([score_hook(h) for h in hooks], key=lambda s: s.total, reverse=True)
+def score_hooks(hooks: list[str], virality_label: str = "Medium", title: str = "") -> list[HookScore]:
+    """Score and rank a list of hooks by viral_score. Best hook is first."""
+    return sorted(
+        [score_hook(h, virality_label=virality_label, title=title) for h in hooks],
+        key=lambda s: s.viral_score,
+        reverse=True,
+    )
 
 
 def generate_hooks(
@@ -166,6 +256,8 @@ def generate_hooks(
     niche: str,
     model: str = "mistral",
     count: int = 10,
+    virality_label: str = "Medium",
+    title: str = "",
 ) -> list[HookScore]:
     """
     Generate `count` hook variants via Ollama, score each with the
@@ -174,24 +266,34 @@ def generate_hooks(
     from src.task_lock import task_lock
     import httpx
 
-    prompt = f"""You are a YouTube hook writer trained in psychology and copywriting.
+    virality_instruction = {
+        "Low":    "Make the hooks more provocative — this topic needs extra shock value.",
+        "Medium": "Balance curiosity and specificity.",
+        "High":   "Push for maximum emotional impact and curiosity gap.",
+        "Viral":  "Go all-in: the most shocking, jaw-dropping, specific hooks possible. Think MrBeast-level attention grabbing.",
+    }.get(virality_label, "")
+
+    prompt = f"""You are a viral YouTube hook writer trained in psychology, NLP, and copywriting.
 
 Topic: {topic}
 Niche: {niche}
+Virality target: {virality_label}
+Instruction: {virality_instruction}
 
-Write {count} different YouTube video hooks (opening sentences / titles).
-Each hook must use at least one of these psychological principles:
-- Open loop (incomplete thought the brain must resolve)
-- Loss aversion (stop, mistake, avoid, wasting)
-- Curiosity gap (secret, hidden, nobody knows)
-- Social proof (specific numbers, "most people")
-- Pattern interrupt (counterintuitive, surprising claim)
-- Second person ("you", "your")
+Write {count} different YouTube video opening hooks.
+REQUIRED — each hook must combine AT LEAST 2 of these:
+- Open loop: "What nobody tells you about…", "The real reason…"
+- Loss aversion: "Stop", "You're losing", "Most people never"
+- Curiosity gap: "The secret", "Hidden truth", "They don't want you to know"
+- Specific numbers: exact dollar amounts, percentages, durations
+- Pattern interrupt: counterintuitive or shocking claim
+- Emotional trigger: "jaw-dropping", "destroyed", "collapsed", "shocking"
 
 Rules:
 - 8–15 words each
 - No emojis
 - No quotes around the hook
+- Be SPECIFIC — use real numbers, real consequences, real stakes
 - Return ONLY the list, one hook per line, numbered 1–{count}
 - No explanations, no intros"""
 
@@ -220,7 +322,7 @@ Rules:
         hooks = _fallback_hooks(topic, niche, count).splitlines()
         hooks = [re.sub(r"^\d+[\.\):\s]+", "", h).strip() for h in hooks if h.strip()]
 
-    return score_hooks(hooks[:count])
+    return score_hooks(hooks[:count], virality_label=virality_label, title=title)
 
 
 def best_hook(
@@ -257,24 +359,32 @@ def print_hook_report(scores: list[HookScore]) -> None:
     console = Console()
     table = Table(title="Hook Scores — Psychology Engine", show_lines=True)
     table.add_column("#", style="dim", width=3)
-    table.add_column("Score", justify="center", width=7)
-    table.add_column("Hook", style="cyan")
+    table.add_column("Hook", justify="center", width=7)
+    table.add_column("Viral", justify="center", width=7)
+    table.add_column("Hook text", style="cyan")
     table.add_column("Top Principle", style="yellow")
 
     for i, s in enumerate(scores, 1):
         top = max(s.breakdown, key=lambda k: s.breakdown[k]) if s.breakdown else "—"
-        color = "green" if s.total >= 6 else "yellow" if s.total >= 4 else "red"
+        h_color = "green" if s.total >= 6 else "yellow" if s.total >= 4 else "red"
+        v_color = "bold green" if s.viral_score >= VIRAL_THRESHOLD else "yellow" if s.viral_score >= 5 else "red"
         table.add_row(
             str(i),
-            f"[{color}]{s.total:.1f}[/{color}]",
-            s.hook[:90],
+            f"[{h_color}]{s.total:.1f}[/{h_color}]",
+            f"[{v_color}]{s.viral_score:.1f}[/{v_color}]",
+            s.hook[:85],
             top.replace("_", " "),
         )
 
     console.print(table)
 
     best = scores[0] if scores else None
-    if best and best.suggestions:
-        console.print("\n[bold]Improvement suggestions for top hook:[/bold]")
-        for sug in best.suggestions:
-            console.print(f"  [yellow]•[/yellow] {sug}")
+    if best:
+        if best.viral_score >= VIRAL_THRESHOLD:
+            console.print(f"[bold green]VIRAL SCORE {best.viral_score:.1f}/10 ✓ — hook qualifies[/bold green]")
+        else:
+            console.print(f"[bold red]VIRAL SCORE {best.viral_score:.1f}/10 — below {VIRAL_THRESHOLD} threshold[/bold red]")
+        if best.suggestions:
+            console.print("[bold]To improve:[/bold]")
+            for sug in best.suggestions[:3]:
+                console.print(f"  [yellow]•[/yellow] {sug}")

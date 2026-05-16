@@ -322,15 +322,38 @@ def run_pipeline(
     except Exception:
         pass
     try:
-        from src.psychology.hooks import generate_hooks, print_hook_report
-        hook_scores = generate_hooks(topic, niche, model=ollama_model, count=8)
+        from src.psychology.hooks import generate_hooks, print_hook_report, VIRAL_THRESHOLD
+        virality_label = best_idea.estimated_virality  # "Low" | "Medium" | "High" | "Viral"
+
+        hook_scores = generate_hooks(
+            topic, niche, model=ollama_model, count=8,
+            virality_label=virality_label, title=best_idea.title,
+        )
         print_hook_report(hook_scores)
-        if hook_scores and hook_scores[0].total > 5.0:
+
+        best_hook_score = hook_scores[0] if hook_scores else None
+
+        # Retry up to 2 more rounds if we haven't hit the viral threshold
+        for _attempt in range(2):
+            if best_hook_score and best_hook_score.viral_score >= VIRAL_THRESHOLD:
+                break
+            console.print(f"[yellow]Viral score {best_hook_score.viral_score if best_hook_score else 0:.1f} < {VIRAL_THRESHOLD} — retrying hook generation…[/yellow]")
+            retry_scores = generate_hooks(
+                topic, niche, model=ollama_model, count=8,
+                virality_label=virality_label, title=best_idea.title,
+            )
+            if retry_scores and (not best_hook_score or retry_scores[0].viral_score > best_hook_score.viral_score):
+                best_hook_score = retry_scores[0]
+                hook_scores = retry_scores
+                print_hook_report(hook_scores)
+
+        if best_hook_score and best_hook_score.viral_score >= VIRAL_THRESHOLD:
             old_hook = script.hook
-            script.hook = hook_scores[0].hook
-            console.print(f"[green]Hook upgraded:[/green] {old_hook[:50]}… → {script.hook[:50]}…")
+            script.hook = best_hook_score.hook
+            console.print(f"[bold green]Hook upgraded (viral score {best_hook_score.viral_score:.1f}):[/bold green] {script.hook[:60]}…")
         else:
-            console.print("[dim]Hook score below threshold — keeping AI-generated hook.[/dim]")
+            score_str = f"{best_hook_score.viral_score:.1f}" if best_hook_score else "N/A"
+            console.print(f"[yellow]Best hook viral score {score_str} — keeping AI hook (may lack punch)[/yellow]")
     except Exception as exc:
         console.print(f"[yellow]Hook optimisation skipped ({exc})[/yellow]")
 

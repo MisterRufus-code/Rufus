@@ -340,6 +340,29 @@ Return ONLY the JSON array, no explanation."""
     ]
 
 
+def _viral_script_instructions(virality: str) -> str:
+    """Return virality-level-specific writing instructions for the script prompt."""
+    base = (
+        "Structure: hook (shock the viewer in 5 words) → problem/tension → "
+        "revelation → proof → call to action. Every sentence must pull the viewer forward."
+    )
+    extras = {
+        "Low": "The topic needs extra energy — start with the most surprising stat or fact you can invent from context.",
+        "Medium": "Use storytelling — open with a specific moment, not a generic statement.",
+        "High": (
+            "Open with the most shocking sentence possible. Use present tense for urgency. "
+            "Every section must end with a teaser for the next one (open loop)."
+        ),
+        "Viral": (
+            "Write like MrBeast meets a financial thriller. Open with the single most jaw-dropping "
+            "fact. Use short punchy sentences. Build tension in every paragraph. "
+            "Reveal information in layers — never give it all at once. "
+            "End every section on a cliffhanger. The CTA must feel urgent, not generic."
+        ),
+    }
+    return f"{base}\n{extras.get(virality, extras['Medium'])}"
+
+
 def generate_script_from_media(
     idea: VideoIdea,
     media_captions: list[str],
@@ -348,33 +371,40 @@ def generate_script_from_media(
     model: str = DEFAULT_MODEL,
     ml_prefix: str = "",
 ) -> "VideoScript":
-    """Generate a script with sections that map to the available media clips."""
+    """Generate a viral script with sections that map to the available media clips."""
     captions_block = "\n".join(f"footage_{i+1}: {c}" for i, c in enumerate(media_captions[:15]))
+    virality = getattr(idea, "estimated_virality", "Medium")
+    viral_instructions = _viral_script_instructions(virality)
     prompt = f"""{ml_prefix}
-Write a YouTube video script using the available clips listed below.
+Write a high-retention YouTube video script designed to go viral.
 
 Title: {idea.title}
 Hook: {idea.hook}
-Style: {style}
+Virality target: {virality}
+Style: {style}, high-energy, no fluff
 Target duration: {duration_minutes} minutes
 
-Available clips:
+Viral writing rules:
+{viral_instructions}
+
+Available footage clips (MUST use these):
 {captions_block}
 
 Each section MUST reference footage that visually matches one of the clips above.
+Each section script must be punchy, specific, and keep the viewer watching.
 
 Return a JSON object with exactly these keys:
-- title: the video title
-- hook: spoken opening (first 15 seconds)
+- title: viral video title (use power words, numbers, or shock value)
+- hook: spoken opening — most shocking sentence first, 2-3 sentences max
 - sections: array of objects with "heading", "script", and "clip_hint" keys
-  (clip_hint = short phrase matching the visual content of one available clip)
-- call_to_action: final 30-second spoken CTA
-- description: full YouTube description
+  ("script" = what is spoken, "clip_hint" = visual description matching available footage)
+- call_to_action: urgent, specific CTA (not "like and subscribe" — give them a reason)
+- description: YouTube description with keywords
 - tags: list of 15 SEO tags
 
 Return ONLY the JSON object, no explanation."""
     raw = _ollama_generate(prompt, model=model,
-                           system="You are a professional YouTube scriptwriter. Always respond with valid JSON only.")
+                           system="You are a viral YouTube scriptwriter. Write to maximise watch time and shares. Always respond with valid JSON only.")
     data = _parse_json_response(raw)
     return VideoScript(
         title=_clean_str(data.get("title", idea.title)),
@@ -507,21 +537,34 @@ def generate_shorts_script(
     model: str = "mistral",
     ml_prefix: str = "",
 ) -> VideoScript:
-    """
-    Generate a tight ≤60-second script for YouTube Shorts.
-    Max ~120 words: hook (5s) + 3 punchy points (15s each) + CTA (5s).
-    """
+    """Generate a viral ≤60-second script for YouTube Shorts scaled to the idea's virality."""
+    virality = getattr(idea, "estimated_virality", "Medium")
+    viral_instructions = {
+        "Low":    "Make it bold — lead with the most surprising fact you can.",
+        "Medium": "Start with curiosity, end with a cliffhanger that makes them follow.",
+        "High":   "Every sentence must be a mini-hook. No sentence is throwaway.",
+        "Viral":  (
+            "Write like it's the most important 60 seconds on the internet today. "
+            "Open with the single most shocking stat or fact. "
+            "Use present tense. Short punchy sentences only. "
+            "Create tension in every section. End on a reveal that makes them want to share it."
+        ),
+    }.get(virality, "")
+
     prompt = f"""{ml_prefix}
-You are a YouTube Shorts scriptwriter. Write a punchy 45-60 second script.
-Rules:
-- Hook: ONE sentence, max 10 words, shock or curiosity gap
-- Exactly 3 sections, each max 20 words
-- Call to action: max 8 words (e.g. "Follow for more!")
-- NO filler words, NO fluff, every word earns its place
-- Total word count: 80-120 words
+You are a viral YouTube Shorts scriptwriter. Write a punchy 45-60 second script.
 
 Topic: {idea.title}
 Hook idea: {idea.hook}
+Virality target: {virality}
+Viral writing rule: {viral_instructions}
+
+Script rules:
+- Hook: ONE sentence, max 10 words, use shock or a curiosity gap
+- Exactly 3 sections, each 15-25 words — every word must earn its place
+- Call to action: specific and urgent, max 10 words
+- NO filler words, NO generic phrases like "in today's video"
+- Total word count: 80-120 words
 
 Return ONLY valid JSON, no markdown:
 {{
