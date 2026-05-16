@@ -21,11 +21,14 @@ from rich.console import Console
 console = Console()
 
 _CLIP_REF_RE = re.compile(r"(\[?(?:CLIP|footage|clip)\s*[\d_]+\]?:?\s*)", re.IGNORECASE)
+_HEADING_RE = re.compile(r'\b(point|step|section|part|footage|scene)[_ ]?\d+[:\.\)]?\s*', re.IGNORECASE)
 
 
 def _prep_tts_text(text: str) -> str:
     """Strip markdown formatting and normalise punctuation for clean TTS delivery."""
-    text = re.sub(r'[*_#`~]', '', text)          # remove markdown symbols
+    text = _CLIP_REF_RE.sub("", text)             # strip footage_1:, [CLIP 2] etc.
+    text = _HEADING_RE.sub("", text)              # strip "Point 1:", "Step 2" etc.
+    text = re.sub(r'[*_#`~]', '', text)           # remove markdown symbols
     text = re.sub(r'\n+', ' ', text)              # collapse newlines to spaces
     text = re.sub(r'([.!?]){2,}', r'\1', text)   # deduplicate sentence-end punctuation
     text = re.sub(r'\s+([.,!?;:])', r'\1', text)  # remove space before punctuation

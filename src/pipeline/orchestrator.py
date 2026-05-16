@@ -424,9 +424,9 @@ def run_pipeline(
             from src.humanize import random_tts_speed
             audio_dir = out / "audio"
             normalized = [
-                {"script": s.get("script") or s.get("heading") or s.get("text") or ""}
+                {"script": s.get("script") or s.get("text") or ""}
                 for s in script.sections
-                if s.get("script") or s.get("heading") or s.get("text")
+                if s.get("script") or s.get("text")
             ]
             all_sections = [{"script": script.hook}] + normalized + [{"script": script.call_to_action}]
             # Use niche-aware voice unless caller explicitly overrode the default

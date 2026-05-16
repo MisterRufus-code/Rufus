@@ -45,6 +45,31 @@ def _ffmpeg(*args: str, check: bool = True) -> subprocess.CompletedProcess:
     return subprocess.run(cmd, check=check, capture_output=True, text=True)
 
 
+def _has_nvenc() -> bool:
+    """Return True if NVIDIA NVENC h264 encoder is available."""
+    try:
+        r = subprocess.run(
+            ["ffmpeg", "-hide_banner", "-encoders"],
+            capture_output=True, text=True,
+        )
+        return "h264_nvenc" in r.stdout
+    except Exception:
+        return False
+
+
+_NVENC_AVAILABLE: bool | None = None
+
+
+def _video_codec_args() -> list[str]:
+    """Return the best available video encoder args (NVENC if possible)."""
+    global _NVENC_AVAILABLE
+    if _NVENC_AVAILABLE is None:
+        _NVENC_AVAILABLE = _has_nvenc()
+    if _NVENC_AVAILABLE:
+        return ["-c:v", "h264_nvenc", "-preset", "p4", "-rc", "vbr", "-cq", "23"]
+    return ["-c:v", "libx264", "-preset", "fast", "-crf", "23"]
+
+
 def _trim_vertical(clip: TimelineClip, output_path: Path) -> Path:
     """Trim clip and center-crop landscape → 9:16 vertical (1080x1920)."""
     duration = min(clip.out_point - clip.in_point, 8.0)
@@ -55,7 +80,7 @@ def _trim_vertical(clip: TimelineClip, output_path: Path) -> Path:
         "-vf",
         # Scale so height = 1920, then center crop width to 1080
         "scale=-2:1920,crop=1080:1920",
-        "-c:v", "libx264", "-preset", "fast", "-crf", "23",
+        *_video_codec_args(),
         "-an",
         str(output_path),
     )
@@ -83,11 +108,13 @@ def _loop_video_to_duration(video_path: Path, target_duration: float, output_pat
     if vid_dur <= 0:
         return video_path
     loops = int(target_duration / vid_dur) + 1
+    # Re-encode instead of -c copy to prevent B-frame freeze at loop boundary
     _ffmpeg(
         "-stream_loop", str(loops),
         "-i", str(video_path),
         "-t", str(target_duration),
-        "-c", "copy",
+        "-c:v", "libx264", "-preset", "fast", "-crf", "23",
+        "-an",
         str(output_path),
     )
     return output_path
