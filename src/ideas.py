@@ -64,7 +64,7 @@ def _clean_str(value: object) -> str:
     return _strip_emojis(str(value)).strip()
 
 
-def _ollama_generate(prompt: str, model: str = DEFAULT_MODEL, system: str = "") -> str:
+def _ollama_generate(prompt: str, model: str = DEFAULT_MODEL, system: str = "", json_mode: bool = False) -> str:
     """Send a prompt to the local Ollama server and return the response text."""
     if not _check_ollama():
         raise RuntimeError(
@@ -84,6 +84,11 @@ def _ollama_generate(prompt: str, model: str = DEFAULT_MODEL, system: str = "") 
         # all context leaving no room for the response (default is 4096)
         "options": {"temperature": 0.85, "num_predict": -1, "num_ctx": 8192},
     }
+    # JSON mode: model is constrained to output only valid JSON — eliminates
+    # all truncation and bracket-recovery issues for structured generation calls
+    if json_mode:
+        payload["format"] = "json"
+
     with task_lock("ollama_generate"):
         r = httpx.post(
             "http://localhost:11434/api/generate",
@@ -91,7 +96,10 @@ def _ollama_generate(prompt: str, model: str = DEFAULT_MODEL, system: str = "") 
             timeout=180,
         )
     r.raise_for_status()
-    return r.json().get("response", "").strip()
+    raw = r.json().get("response", "").strip()
+    # Strip emojis that the model sneaks into JSON strings — they don't break
+    # JSON but cause issues downstream and are unwanted in titles/hooks
+    return _strip_emojis(raw)
 
 
 def _clean_json_str(s: str) -> str:
@@ -283,7 +291,7 @@ Bad examples: "introduction", "section 1", "conclusion"
 
 Return ONLY the JSON array, no explanation."""
     try:
-        raw = _ollama_generate(prompt, model=model,
+        raw = _ollama_generate(prompt, model=model, json_mode=True,
                                system="You are a stock footage researcher. Return only valid JSON arrays of strings.")
         data = _parse_json_response(raw)
         if isinstance(data, list):
@@ -323,7 +331,7 @@ Return a JSON array. Each object must have exactly these keys:
 - estimated_virality: one of "Low", "Medium", "High", "Viral"
 
 Return ONLY the JSON array, no explanation."""
-    raw = _ollama_generate(prompt, model=model,
+    raw = _ollama_generate(prompt, model=model, json_mode=True,
                            system="You are a YouTube viral content strategist. Always respond with valid JSON only.")
     data = _parse_json_response(raw)
     if isinstance(data, dict):
@@ -403,7 +411,7 @@ Return a JSON object with exactly these keys:
 - tags: list of 15 SEO tags
 
 Return ONLY the JSON object, no explanation."""
-    raw = _ollama_generate(prompt, model=model,
+    raw = _ollama_generate(prompt, model=model, json_mode=True,
                            system="You are a viral YouTube scriptwriter. Write to maximise watch time and shares. Always respond with valid JSON only.")
     data = _parse_json_response(raw)
     return VideoScript(
@@ -444,6 +452,7 @@ Return ONLY the JSON array, no explanation."""
     raw = _ollama_generate(
         prompt,
         model=model,
+        json_mode=True,
         system="You are a YouTube viral content strategist. Always respond with valid JSON only.",
     )
     data = _parse_json_response(raw)
@@ -487,6 +496,7 @@ Return ONLY the JSON object, no explanation."""
     raw = _ollama_generate(
         prompt,
         model=model,
+        json_mode=True,
         system="You are a professional YouTube scriptwriter. Always respond with valid JSON only.",
     )
     data = _parse_json_response(raw)
@@ -580,7 +590,7 @@ Return ONLY valid JSON, no markdown:
   "tags": ["tag1", "tag2", "Shorts"]
 }}"""
 
-    raw = _ollama_generate(prompt.strip(), model)
+    raw = _ollama_generate(prompt.strip(), model, json_mode=True)
     data = _parse_json_response(raw)
     return VideoScript(
         title=_clean_str(data.get("title", idea.title)),
