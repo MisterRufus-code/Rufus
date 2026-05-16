@@ -136,18 +136,21 @@ def _parse_json_response(raw: str) -> list | dict:
     raw = raw.strip()
 
     def try_parse(s: str) -> list | dict | None:
-        for candidate in (s, _clean_json_str(s)):
+        cleaned = _clean_json_str(s)
+        for candidate in (s, cleaned):
             try:
                 return json.loads(candidate)
             except json.JSONDecodeError:
                 pass
-        # Try completing truncated JSON
-        completed = _complete_truncated_json(candidate)
-        if completed != candidate:
-            try:
-                return json.loads(completed)
-            except json.JSONDecodeError:
-                pass
+        # Try completing truncated JSON, then re-clean (closing a truncated string
+        # may leave literal newlines that only become escapable after closing the quote)
+        completed = _complete_truncated_json(cleaned)
+        if completed != cleaned:
+            for variant in (completed, _clean_json_str(completed)):
+                try:
+                    return json.loads(variant)
+                except json.JSONDecodeError:
+                    pass
         return None
 
     # Strip markdown code fences

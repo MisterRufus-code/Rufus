@@ -9,7 +9,11 @@ YOLO  → detected objects + confidence scores
 from __future__ import annotations
 
 import hashlib
+import os
 import threading
+
+# Suppress OpenCV AV1/codec software-fallback warnings (harmless, but noisy)
+os.environ.setdefault("OPENCV_LOG_LEVEL", "ERROR")
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional

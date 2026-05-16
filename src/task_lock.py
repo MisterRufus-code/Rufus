@@ -63,11 +63,9 @@ def task_lock(label: str = "task", timeout: float = 300.0) -> Generator[None, No
     with _lock_meta:
         _current_task = label
 
-    console.print(f"[dim]🔒 Task lock acquired: [{label}][/dim]")
     try:
         yield
     finally:
         with _lock_meta:
             _current_task = ""
         _lock.release()
-        console.print(f"[dim]🔓 Task lock released: [{label}][/dim]")

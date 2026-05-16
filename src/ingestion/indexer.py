@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
 
 from rich.console import Console
@@ -76,6 +77,11 @@ def index_library(
 
             for raw in batch:
                 progress.advance(task)
+                # Skip already-indexed assets before expensive extraction
+                raw_id = hashlib.sha256(str(raw.path.resolve()).encode()).hexdigest()[:16]
+                if raw_id in existing_ids and not force_reindex:
+                    skipped += 1
+                    continue
                 try:
                     with task_lock("clip_extract"):
                         features = extract_features(raw.path, raw.asset_type)

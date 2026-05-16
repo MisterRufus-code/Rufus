@@ -79,9 +79,9 @@ def search_and_download(
             "format": (
                 "bestvideo[ext=mp4][vcodec!*=av01][height<=720]"
                 "+bestaudio[ext=m4a]"
-                "/bestvideo[ext=mp4][height<=720]+bestaudio[ext=m4a]"
-                "/best[ext=mp4][height<=720]"
-                "/best"
+                "/bestvideo[ext=mp4][vcodec!*=av01][height<=720]+bestaudio[ext=m4a]"
+                "/best[ext=mp4][vcodec!*=av01][height<=720]"
+                "/best[height<=720]"
             ),
             "merge_output_format": "mp4",
             "match_filter": yt_dlp.utils.match_filter_func("license ~= 'Creative Commons'"),
