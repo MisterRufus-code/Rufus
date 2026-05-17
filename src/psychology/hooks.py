@@ -367,8 +367,51 @@ Rules:
 
     # Enhance each hook to patch any missing patterns
     hooks = [_enhance_hook(h, topic, niche) for h in hooks[:count]]
+    scored = score_hooks(hooks, virality_label=effective_virality, title=title)
 
-    return score_hooks(hooks, virality_label=effective_virality, title=title)
+    # ── Hook Genome: evolve with past winners from Memory ──────────────
+    try:
+        from src.viral_intelligence.hook_genome import evolve_hooks
+        from src.memory import store_hook
+
+        llm_texts  = [s.hook for s in scored]
+        llm_scores = [s.viral_score for s in scored]
+
+        # Store all generated hooks to memory
+        for s in scored:
+            store_hook(niche=niche, topic=topic, hook_text=s.hook,
+                       viral_score=s.viral_score, hook_score=s.total)
+
+        # Evolve: cross-breed with past winners
+        evolved = evolve_hooks(niche, topic, llm_texts, llm_scores, generations=3)
+
+        if evolved:
+            best_evolved_score = evolved[0][1]
+            best_current_score = scored[0].viral_score if scored else 0
+            if best_evolved_score > best_current_score:
+                # Re-score evolved hooks properly
+                evolved_hooks_text = [h for h, _ in evolved[:count]]
+                evolved_scored = score_hooks(
+                    evolved_hooks_text, virality_label=effective_virality, title=title
+                )
+                if evolved_scored and evolved_scored[0].viral_score > best_current_score:
+                    scored = evolved_scored
+
+    except Exception:
+        pass
+
+    # ── Emit event ─────────────────────────────────────────────────────
+    try:
+        from src.events import emit
+        if scored:
+            emit("hook.scored", niche=niche, topic=topic,
+                 viral_score=scored[0].viral_score,
+                 hook_score=scored[0].total,
+                 hook=scored[0].hook[:80])
+    except Exception:
+        pass
+
+    return scored
 
 
 def best_hook(

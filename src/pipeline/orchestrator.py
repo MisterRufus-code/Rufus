@@ -111,6 +111,15 @@ def run_pipeline(
     log.info("pipeline started", topic=topic, niche=niche, model=ollama_model,
              shorts=shorts, dry_run=dry_run, output_dir=str(out))
 
+    _pipeline_start = time.time()
+    try:
+        from src.events import emit as _emit
+    except Exception:
+        def _emit(event, **kw): pass  # noqa: E731
+
+    _emit("pipeline.start", niche=niche, topic=topic,
+          mode="shorts" if shorts else "long_form")
+
     if dry_run:
         console.print("[bold yellow]DRY RUN — TTS, FFmpeg render, and upload are skipped.[/bold yellow]")
 
@@ -128,6 +137,7 @@ def run_pipeline(
     # Step 1 — Trend research
     # ------------------------------------------------------------------ #
     console.print(Rule("[bold]Step 1 — Trend Research[/bold]"))
+    _emit("pipeline.stage", stage="trend_research", step=1, total=12, niche=niche)
     trending_ctx = ""
     try:
         from src.trends import fetch_google_trends
@@ -143,6 +153,7 @@ def run_pipeline(
     # Step 2 — AI keyword generation (footage search terms)
     # ------------------------------------------------------------------ #
     console.print(Rule("[bold]Step 2 — AI Keyword Generation (Ollama)[/bold]"))
+    _emit("pipeline.stage", stage="keyword_generation", step=2, total=12, niche=niche)
     from src.ideas import generate_search_keywords
     from src.ml.optimizer import get_keyword_context
     try:
@@ -219,6 +230,7 @@ def run_pipeline(
     # Step 5 — Generate ideas from media context
     # ------------------------------------------------------------------ #
     console.print(Rule("[bold]Step 5 — Idea Generation from Media (Ollama)[/bold]"))
+    _emit("pipeline.stage", stage="idea_generation", step=5, total=12, niche=niche)
     from src.ml.optimizer import get_optimized_prompt_prefix
     ml_prefix = get_optimized_prompt_prefix(niche)
 
@@ -278,6 +290,7 @@ def run_pipeline(
     # ------------------------------------------------------------------ #
     mode_label = "Shorts (60s)" if shorts else "Long Form"
     console.print(Rule(f"[bold]Step 6 — Script Generation ({mode_label}, Ollama)[/bold]"))
+    _emit("pipeline.stage", stage="script_generation", step=6, total=12, niche=niche)
     try:
         if shorts:
             from src.ideas import generate_shorts_script
@@ -302,7 +315,8 @@ def run_pipeline(
             with _ollama_cb:
                 script = _run_with_retry(
                     generate_video_script,
-                    best_idea, duration_minutes=duration_minutes, model=ollama_model,
+                    best_idea, duration_minutes=duration_minutes,
+                    model=ollama_model, niche=niche,
                 )
     except Exception as exc:
         result.errors.append(f"Script generation failed: {exc}")
@@ -313,6 +327,7 @@ def run_pipeline(
     # Step 6b — Psychology hook optimisation (experiment-driven style)
     # ------------------------------------------------------------------ #
     console.print(Rule("[bold]Step 6b — Psychology Hook Optimisation[/bold]"))
+    _emit("pipeline.stage", stage="hook_optimisation", step=7, total=12, niche=niche)
     hook_exp_variant = None
     try:
         from src.experiments.engine import get_engine as _get_exp_engine
@@ -369,6 +384,17 @@ def run_pipeline(
     cp.advance(PipelineStage.SCRIPT_GENERATED, script_hook=script.hook[:80])
     console.print(f"[green]Script ready:[/green] {len(script.sections)} sections")
 
+    # Persist script to memory for future reference
+    try:
+        from src.memory import store_script as _store_script
+        _store_script(
+            niche=niche, topic=topic, title=script.title,
+            sections=script.sections, retention_score=0.0,
+            viral_score=best_hook_score.viral_score if best_hook_score else 0.0,
+        )
+    except Exception:
+        pass
+
     # ------------------------------------------------------------------ #
     # Step 7 — Semantic matching with global deduplication
     # ------------------------------------------------------------------ #
@@ -414,6 +440,7 @@ def run_pipeline(
     # Step 9 — TTS voiceover (Kokoro, free)
     # ------------------------------------------------------------------ #
     console.print(Rule("[bold]Step 9 — Voiceover (Kokoro TTS)[/bold]"))
+    _emit("pipeline.stage", stage="tts", step=9, total=12, niche=niche)
     audio_path: Optional[Path] = None
     _section_durations: list[float] = []
     if dry_run:
@@ -615,8 +642,11 @@ def run_pipeline(
     if result.success and not dry_run:
         cp.advance(PipelineStage.COMPLETED)
         cp.clear()
+    _runtime = time.time() - _pipeline_start
     log.info("pipeline finished", success=result.success, errors=result.errors,
              entropy=result.entropy_score, clips=len(result.asset_ids_used))
+    _emit("pipeline.done", niche=niche, topic=topic,
+          success=result.success, runtime_s=round(_runtime, 1))
     console.print(Rule("[bold green]Pipeline Complete[/bold green]"))
     console.print(f"Output directory: [cyan]{out.resolve()}[/cyan]")
     if result.youtube_video_id:
