@@ -227,10 +227,18 @@ class HookGenome:
             # Fill rest with crossover + mutation
             while len(offspring) < self.population_size:
                 parent_a = self._tournament_select()
-                parent_b = self._tournament_select()
+                # Force different parent for crossover diversity
+                for _ in range(5):
+                    parent_b = self._tournament_select()
+                    if parent_b.hook != parent_a.hook:
+                        break
 
-                child_hook = _crossover(parent_a.hook, parent_b.hook)
-                child_hook = _mutate(child_hook, strength=0.4)
+                if parent_a.hook == parent_b.hook:
+                    # Pure mutation when pool has low diversity
+                    child_hook = _mutate(parent_a.hook, strength=0.9)
+                else:
+                    child_hook = _crossover(parent_a.hook, parent_b.hook)
+                    child_hook = _mutate(child_hook, strength=0.4)
 
                 child_score = self._score_hook(child_hook, topic=topic)
                 offspring.append(Gene(
@@ -241,14 +249,22 @@ class HookGenome:
 
             self._pool = offspring
 
-        self._pool.sort(key=lambda g: g.fitness(), reverse=True)
+        # Deduplicate — keep only unique hooks (by normalized text)
+        seen: set[str] = set()
+        unique: list[Gene] = []
+        for g in sorted(self._pool, key=lambda x: x.fitness(), reverse=True):
+            key = g.hook.lower().strip()
+            if key not in seen:
+                seen.add(key)
+                unique.append(g)
+        self._pool = unique
 
         best = self._pool[0] if self._pool else None
         if best:
             console.print(
                 f"[cyan]HookGenome[/cyan] gen={generations} "
                 f"best=[bold]{best.score:.2f}/10[/bold] "
-                f"pool={len(self._pool)}"
+                f"unique={len(self._pool)}"
             )
 
         return self._pool
@@ -256,13 +272,11 @@ class HookGenome:
     def best(self) -> Optional[str]:
         """Return the single best hook from the current population."""
         if self._pool:
-            self._pool.sort(key=lambda g: g.fitness(), reverse=True)
             return self._pool[0].hook
         return None
 
     def top_n(self, n: int = 5) -> list[tuple[str, float]]:
-        """Return top N (hook, score) pairs."""
-        self._pool.sort(key=lambda g: g.fitness(), reverse=True)
+        """Return top N unique (hook, score) pairs."""
         return [(g.hook, g.score) for g in self._pool[:n]]
 
 

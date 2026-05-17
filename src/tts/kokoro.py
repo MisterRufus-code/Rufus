@@ -41,6 +41,23 @@ DEFAULT_VOICE = "af_heart"
 DEFAULT_SPEED = 1.0
 SAMPLE_RATE = 24000
 
+# Model files: look in <project_root>/models/, then fall back to cwd
+_PROJECT_ROOT = Path(__file__).resolve().parents[2]
+_MODELS_DIR   = _PROJECT_ROOT / "models"
+
+
+def _model_path(filename: str) -> str:
+    """Return absolute path to a Kokoro model file, checking models/ first."""
+    candidate = _MODELS_DIR / filename
+    if candidate.exists():
+        return str(candidate)
+    # legacy: file placed in cwd / project root
+    cwd_candidate = _PROJECT_ROOT / filename
+    if cwd_candidate.exists():
+        return str(cwd_candidate)
+    # return models/ path so the error message is helpful
+    return str(candidate)
+
 # ---------------------------------------------------------------------------
 # Niche → voice profiles
 # ---------------------------------------------------------------------------
@@ -149,7 +166,7 @@ def synthesize(
 
     console.print(f"[cyan]TTS:[/cyan] generating voiceover ({len(text)} chars, voice={voice})")
 
-    kokoro = Kokoro("kokoro-v1.0.onnx", "voices-v1.0.bin")
+    kokoro = Kokoro(_model_path("kokoro-v1.0.onnx"), _model_path("voices-v1.0.bin"))
     samples, sample_rate = kokoro.create(text, voice=voice, speed=speed, lang=lang)
 
     sf.write(str(output_path), samples, sample_rate)

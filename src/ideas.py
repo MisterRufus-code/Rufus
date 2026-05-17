@@ -414,7 +414,7 @@ Return ONLY the JSON object, no explanation."""
     raw = _ollama_generate(prompt, model=model, json_mode=True,
                            system="You are a viral YouTube scriptwriter. Write to maximise watch time and shares. Always respond with valid JSON only.")
     data = _parse_json_response(raw)
-    return VideoScript(
+    script = VideoScript(
         title=_clean_str(data.get("title", idea.title)),
         hook=_clean_str(data.get("hook", "")),
         sections=data.get("sections", []),
@@ -422,6 +422,17 @@ Return ONLY the JSON object, no explanation."""
         description=_clean_str(data.get("description", "")),
         tags=data.get("tags", []),
     )
+    try:
+        from src.viral_intelligence.retention_engine import RetentionEngine
+        engine = RetentionEngine()
+        score  = engine.score(script.sections, hook=script.hook)
+        if score.total < 55:
+            script.sections = _inject_retention_patterns(script.sections)
+            score = engine.score(script.sections, hook=script.hook)
+        engine.print_report(score)
+    except Exception:
+        pass
+    return script
 
 
 def generate_video_ideas(
@@ -537,16 +548,86 @@ Return ONLY valid JSON, no explanation."""
         tags=data.get("tags", []),
     )
 
-    # ── 3. Score and log retention quality ─────────────────────────────
+    # ── 3. Score retention and auto-enhance if below threshold ─────────
     try:
         from src.viral_intelligence.retention_engine import RetentionEngine
         engine = RetentionEngine()
         score  = engine.score(script.sections, hook=script.hook)
+
+        if score.total < 55:
+            script.sections = _inject_retention_patterns(script.sections)
+            score = engine.score(script.sections, hook=script.hook)
+
         engine.print_report(score)
     except Exception:
         pass
 
     return script
+
+
+def _inject_retention_patterns(sections: list[dict]) -> list[dict]:
+    """
+    Programmatically inject retention patterns into script sections when
+    Ollama produces a low-quality script. Ensures every section has:
+      - An open-loop question near the start
+      - A pattern interrupt in the middle
+      - A bridge to the next section at the end
+    """
+    _BRIDGES = [
+        "But here's where it gets really interesting...",
+        "Now, this is the part most people never hear about.",
+        "Wait — there's something even more important you need to know.",
+        "And this next part changes everything.",
+        "But before I reveal the answer, you need to understand this first.",
+    ]
+    _INTERRUPTS = [
+        "But here's the thing — ",
+        "Now here's what nobody talks about: ",
+        "Stop and think about this for a second. ",
+        "Here's the shocking part: ",
+        "This is where it gets wild — ",
+    ]
+    _OPEN_LOOPS = [
+        "But what actually causes this? I'll tell you in just a moment.",
+        "You're probably wondering why — and the answer is going to surprise you.",
+        "Stay with me, because what comes next is the key to everything.",
+        "I'll reveal the exact reason in just a second.",
+        "And the reason why will completely change how you think about this.",
+    ]
+
+    import random as _rnd
+    enhanced = []
+    for i, section in enumerate(sections):
+        text: str = section.get("script", "")
+        if not text:
+            enhanced.append(section)
+            continue
+
+        sentences = [s.strip() for s in text.replace("  ", " ").split(". ") if s.strip()]
+
+        # Inject open loop after 1st sentence (if not already present)
+        if i < len(sections) - 1 and len(sentences) >= 2:
+            loop_words = ["wondering", "reveal", "moment", "answer", "reason", "stay with"]
+            has_loop = any(w in text.lower() for w in loop_words)
+            if not has_loop:
+                sentences.insert(1, _rnd.choice(_OPEN_LOOPS))
+
+        # Inject pattern interrupt before the middle sentence
+        interrupt_words = ["here's the thing", "nobody talks", "shocking", "wild", "stop and"]
+        has_interrupt = any(w in text.lower() for w in interrupt_words)
+        if not has_interrupt and len(sentences) >= 3:
+            mid = max(1, len(sentences) // 2)
+            sentences[mid] = _rnd.choice(_INTERRUPTS) + sentences[mid][0].lower() + sentences[mid][1:]
+
+        # Add bridge at end (if not last section)
+        bridge_words = ["interesting", "important", "need to know", "changes everything", "before i reveal"]
+        has_bridge = any(w in text.lower() for w in bridge_words)
+        if i < len(sections) - 1 and not has_bridge:
+            sentences.append(_rnd.choice(_BRIDGES))
+
+        enhanced.append({**section, "script": ". ".join(sentences)})
+
+    return enhanced
 
 
 # ---------------------------------------------------------------------------

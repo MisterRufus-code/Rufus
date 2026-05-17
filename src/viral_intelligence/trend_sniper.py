@@ -245,10 +245,34 @@ class TrendSniper:
     # Source 4 — Cross-niche spillover
     # ------------------------------------------------------------------
 
+    # Keywords that must appear in a spillover topic for it to be relevant
+    _NICHE_RELEVANCE: dict[str, list[str]] = {
+        "finance":  ["money", "invest", "stock", "market", "fund", "crypto", "bank",
+                     "earn", "income", "wealth", "saving", "budget", "debt", "tax",
+                     "trading", "etf", "portfolio", "dividend", "rate", "inflation"],
+        "tech":     ["ai", "app", "software", "hardware", "gpu", "chip", "data",
+                     "cloud", "startup", "code", "model", "robot", "cyber"],
+        "health":   ["health", "diet", "exercise", "vitamin", "sleep", "weight",
+                     "fitness", "mental", "stress", "nutrition", "workout"],
+        "wellness": ["wellness", "mindfulness", "meditation", "anxiety", "habit",
+                     "routine", "self", "care", "breathe", "yoga"],
+        "business": ["business", "startup", "revenue", "ceo", "brand", "marketing",
+                     "sales", "growth", "customer", "product"],
+    }
+
+    def _is_niche_relevant(self, topic: str) -> bool:
+        """Return True if the topic contains at least one niche keyword."""
+        keywords = self._NICHE_RELEVANCE.get(self.niche, [])
+        if not keywords:
+            return True  # no filter for unknown niches
+        topic_lower = topic.lower()
+        return any(kw in topic_lower for kw in keywords)
+
     def _cross_niche_spillover(self) -> list[tuple[str, float]]:
         """
-        Topics trending in adjacent niches are likely to spill over.
+        Topics trending in adjacent niches that are also relevant to *this* niche.
         E.g., a finance topic trending in tech subreddits = early signal.
+        Irrelevant topics (sports players, celebrities) are filtered out.
         """
         adjacent = {
             "finance":  ["tech", "business"],
@@ -264,8 +288,8 @@ class TrendSniper:
             try:
                 rss = sniper._google_rising()[:5]
                 for topic, score in rss:
-                    # Spillover discount — adjacent-niche signal is weaker
-                    spillovers.append((topic, score * 0.55))
+                    if self._is_niche_relevant(topic):
+                        spillovers.append((topic, score * 0.55))
             except Exception:
                 continue
         return spillovers

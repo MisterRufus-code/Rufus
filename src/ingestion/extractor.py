@@ -59,6 +59,20 @@ def set_low_power(enabled: bool, threads: int = 2) -> None:
             pass
 
 
+_clip_available: bool | None = None  # None = not yet checked
+
+
+def _check_clip_available() -> bool:
+    global _clip_available
+    if _clip_available is None:
+        try:
+            import clip as _c  # noqa: F401
+            _clip_available = True
+        except ImportError:
+            _clip_available = False
+    return _clip_available
+
+
 def _load_clip():
     global _clip_model, _clip_preprocess
     with _clip_lock:
@@ -72,6 +86,28 @@ def _load_clip():
             from src.gpu_scheduler import get_gpu_scheduler
             get_gpu_scheduler().touch("clip")
     return _clip_model, _clip_preprocess
+
+
+def _keyword_embedding(text: str) -> list[float]:
+    """
+    Deterministic 512-dim pseudo-embedding from text keywords.
+    Used when CLIP is not installed — keeps the pipeline alive with
+    lower-quality (keyword-overlap) matching instead of crashing.
+    """
+    vec = np.zeros(512, dtype=np.float32)
+    words = re.findall(r"[a-zA-Z]+", text.lower())
+    for word in words:
+        h = int(hashlib.md5(word.encode()).hexdigest(), 16)
+        for dim in range(4):
+            idx = (h >> (dim * 9)) % 512
+            vec[idx] += 1.0
+    norm = np.linalg.norm(vec)
+    if norm > 0:
+        vec /= norm
+    return vec.tolist()
+
+
+import re as _re_mod  # used by _keyword_embedding above
 
 
 def _load_blip():
@@ -142,6 +178,14 @@ def _extract_dominant_colors(image: Image.Image, k: int = 5) -> list[str]:
 
 
 def _clip_embed_image(image: Image.Image) -> list[float]:
+    if not _check_clip_available():
+        # Fallback: keyword embedding from image color statistics
+        arr = np.array(image.resize((32, 32))).flatten().astype(np.float32)
+        arr = arr / (np.linalg.norm(arr) + 1e-8)
+        # Pad/trim to 512 dims
+        if len(arr) < 512:
+            arr = np.pad(arr, (0, 512 - len(arr)))
+        return arr[:512].tolist()
     model, preprocess = _load_clip()
     tensor = preprocess(image).unsqueeze(0).to(_get_device())
     with torch.no_grad():
@@ -151,32 +195,18 @@ def _clip_embed_image(image: Image.Image) -> list[float]:
 
 
 def clip_embed_batch(images: list[Image.Image]) -> list[list[float]]:
-    """
-    Embed a batch of PIL Images with CLIP in a single forward pass.
-
-    Significantly faster than calling _clip_embed_image() in a loop because
-    the GPU processes all images at once instead of one at a time.
-
-    Args:
-        images: List of PIL Images to embed.
-
-    Returns:
-        List of 512-dim embedding lists, one per input image, in the same order.
-    """
+    """Batch CLIP embed. Falls back to per-image color-hash when CLIP not installed."""
     if not images:
         return []
-
+    if not _check_clip_available():
+        return [_clip_embed_image(img) for img in images]
     model, preprocess = _load_clip()
     device = _get_device()
-
-    # Preprocess every image and stack into a single (N, C, H, W) batch tensor
     tensors = [preprocess(img).to(device) for img in images]
     batch_tensor = torch.stack(tensors)
-
     with torch.no_grad():
         embeddings = model.encode_image(batch_tensor)
         embeddings = embeddings / embeddings.norm(dim=-1, keepdim=True)
-
     return embeddings.cpu().numpy().tolist()
 
 
@@ -262,15 +292,32 @@ def extract_features(path: Path, asset_type: str) -> AssetFeatures:
         image = Image.open(path).convert("RGB")
 
     features.clip_embedding = _clip_embed_image(image)
-    features.caption = _blip_caption(image)
-    features.detected_objects = _yolo_objects(image)
-    features.dominant_colors = _extract_dominant_colors(image)
+
+    # Caption: try BLIP, fall back to filename-derived description
+    try:
+        features.caption = _blip_caption(image)
+    except Exception:
+        stem = Path(path).stem.replace("_", " ").replace("-", " ")
+        features.caption = stem
+
+    # YOLO + colors: best-effort, non-blocking
+    try:
+        features.detected_objects = _yolo_objects(image)
+    except Exception:
+        features.detected_objects = []
+    try:
+        features.dominant_colors = _extract_dominant_colors(image)
+    except Exception:
+        features.dominant_colors = []
 
     return features
 
 
 def embed_text(text: str) -> list[float]:
-    """Embed a text string with CLIP (same space as image embeddings)."""
+    """Embed a text string with CLIP (same space as image embeddings).
+    Falls back to keyword-hash embedding when CLIP is not installed."""
+    if not _check_clip_available():
+        return _keyword_embedding(text)
     import clip
     model, _ = _load_clip()
     tokens = clip.tokenize([text], truncate=True).to(_get_device())
