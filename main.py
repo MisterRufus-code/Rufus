@@ -384,7 +384,17 @@ def pipeline_cmd(topic, niche, model, voice, ideas_count, geo, no_download, uplo
     from src.trends import get_trending_topic
     from src.pipeline.orchestrator import run_pipeline
 
-    # Auto-select topic from trending if not provided
+    # Auto-select topic: prefer niche seed_topics over trending when available
+    if not topic:
+        try:
+            from src.niche_config import get_niche_config as _gnc
+            _nc = _gnc(niche)
+            if _nc.seed_topics:
+                import random as _rnd
+                topic = _rnd.choice(_nc.seed_topics)
+                console.print(f"[cyan]Using seed topic for '{niche}': {topic}[/cyan]")
+        except Exception:
+            pass
     if not topic:
         console.print(f"[cyan]No topic provided — finding trending topic for '{niche}'...[/cyan]")
         topic = get_trending_topic(niche=niche, geo=geo, model=model)
