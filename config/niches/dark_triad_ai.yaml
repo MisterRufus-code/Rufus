@@ -1,0 +1,166 @@
+name: dark_triad_ai
+display_name: Power, AI & The New World Order
+
+# ─────────────────────────────────────────────────────────────────
+# CHANNEL PHILOSOPHY
+# ─────────────────────────────────────────────────────────────────
+# The thesis: a small elite with Dark Triad traits (narcissism,
+# Machiavellianism, psychopathy) will exploit the AI labor revolution
+# to cement permanent class hierarchy before ordinary people realise
+# what is happening. Topics span:
+#   - AI & automation displacing 90% of jobs
+#   - Digital currency control / end of physical cash
+#   - Bank surveillance & programmable money
+#   - Kardashev civilisation scale & who benefits
+#   - Historical patterns: every major tech shift concentrated power
+#   - How to build leverage BEFORE the window closes
+# Tone: investigative journalist meets geopolitical analyst.
+# NOT conspiracy — cite real events, real economists, real data.
+# ─────────────────────────────────────────────────────────────────
+
+# Ollama generation settings
+model: mistral
+script_style: >
+  Investigative, urgent, and deeply researched. Write like a fearless
+  journalist who has connected dots that mainstream media refuses to print.
+  Use real names, real institutions, real timelines. Every claim backed by
+  a specific data point or historical precedent. The tone is never
+  hysterical — it is calm, precise, and devastating. The viewer should
+  finish the video feeling informed and activated, not helpless.
+tone: calm urgency, intellectual authority, moral clarity
+
+# ─────────────────────────────────────────────────────────────────
+# SEED TOPICS (fed to the pipeline's topic rotation)
+# ─────────────────────────────────────────────────────────────────
+topic_boosters:
+  - AI job automation collapse
+  - digital currency surveillance state
+  - end of physical cash
+  - central bank digital currency CBDC
+  - Kardashev scale AI civilisation
+  - Dark Triad billionaires tech power
+  - universal basic income trap
+  - programmable money control
+  - robot labor displacement workers
+  - power elite AI monopoly
+  - billionaire AI race
+  - surveillance capitalism
+  - wealth gap AI economy
+  - oligarchy automation future
+  - human labor obsolescence
+
+# ─────────────────────────────────────────────────────────────────
+# SEED VIDEO TOPICS (explicit starting points for the pipeline)
+# ─────────────────────────────────────────────────────────────────
+seed_topics:
+  - "Why they want to ban cash before AI takes your job"
+  - "The Dark Triad of Big Tech — narcissism, manipulation, and your future"
+  - "CBDC: how central banks will control every dollar you spend"
+  - "90% of jobs gone by 2045 — what the elites are NOT telling you"
+  - "Kardashev Type 1: who decides which humans make it to the next level?"
+  - "The playbook: how every industrial revolution created a new aristocracy"
+  - "Digital serfs — the two-tier society being built right now"
+  - "Why billionaires fund UBI (hint: it is not to help you)"
+  - "The last 10 years to build real leverage before machines replace you"
+  - "How psychopathic leadership traits explain Silicon Valley's real agenda"
+  - "From worker to ward: how your economic identity will be reset"
+  - "The death of meritocracy — when hard work can no longer move you up"
+
+# ─────────────────────────────────────────────────────────────────
+# PSYCHOLOGY HOOK WEIGHTS
+# Amplify patterns that drive maximum engagement for this niche
+# ─────────────────────────────────────────────────────────────────
+hook_weights:
+  loss_aversion: 1.8        # "you will lose the ability to climb — forever"
+  open_loop: 1.6            # "the reason why is hidden in plain sight"
+  specificity: 1.5          # exact years, percentages, names, institutions
+  social_proof_inverse: 1.4 # "99% of people have no idea this is happening"
+  authority_contrast: 1.3   # "economists admit / CEOs privately acknowledge"
+  urgency: 1.5              # "the window is 5-10 years — after that it closes"
+
+# ─────────────────────────────────────────────────────────────────
+# PROMPT SYSTEM INJECTION
+# Injected into every Ollama script/idea generation call
+# ─────────────────────────────────────────────────────────────────
+system_prompt_injection: >
+  You are writing for a channel that investigates the intersection of
+  Dark Triad psychology, AI labor displacement, and elite power consolidation.
+  Every script must:
+  1. Open with a specific real-world event, statistic, or named institution
+     — never a vague claim
+  2. Connect the immediate topic to the larger thesis: those who control
+     AI and digital money will form a permanent ruling class unless
+     ordinary people act NOW
+  3. Use calm, analytical language — no hysteria, no unfounded claims
+  4. Include at least one historical parallel (Industrial Revolution,
+     enclosure movement, railroad monopolies, etc.)
+  5. End with a specific, actionable insight the viewer can use TODAY
+  6. The call to action must be about awareness, preparation, and
+     community building — never passive victimhood
+
+# ─────────────────────────────────────────────────────────────────
+# RETENTION ENGINE WEIGHTS
+# ─────────────────────────────────────────────────────────────────
+retention_weights:
+  open_loops: 2.0
+  pattern_interrupts: 1.5
+  specificity_numbers: 1.8
+  emotional_escalation: 1.6
+  loop_closures: 1.4
+
+# ─────────────────────────────────────────────────────────────────
+# UPLOAD SCHEDULE — peak times for investigative / political content
+# ─────────────────────────────────────────────────────────────────
+upload_schedule:
+  - weekday: monday
+    hour: 17       # Monday evening — start of week, news-cycle peak
+  - weekday: wednesday
+    hour: 19       # Mid-week, high engagement window
+  - weekday: friday
+    hour: 15       # Friday afternoon — people check feeds before weekend
+  - weekday: sunday
+    hour: 12       # Sunday midday — extended watch time
+
+# YouTube metadata
+default_category_id: "25"   # News & Politics
+default_tags:
+  - AI future
+  - artificial intelligence jobs
+  - digital currency
+  - CBDC
+  - power elite
+  - AI automation
+  - dark triad
+  - future of work
+  - economic collapse
+  - new world order
+  - wealth inequality
+  - AI society
+  - Kardashev scale
+  - billionaires AI
+  - future society
+
+# ─────────────────────────────────────────────────────────────────
+# VISUAL STYLE DIRECTION
+# ─────────────────────────────────────────────────────────────────
+visual_style: dark cinematic
+# Footage search terms that match the visual tone of this channel
+visual_keywords:
+  - dark office boardroom
+  - code screen hacker
+  - surveillance camera city
+  - robot factory automation
+  - digital money cryptocurrency
+  - crowd protest movement
+  - powerful executive meeting
+  - data center server room
+  - money printing machine
+  - Orwell dystopia city surveillance
+
+# Entropy thresholds — this content benefits from high visual variety
+entropy_min_score: 0.60
+entropy_scene_repeat_threshold: 0.93
+
+# Shorts config
+shorts_target_duration: 58
+shorts_hook_max_words: 10

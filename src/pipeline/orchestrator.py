@@ -111,6 +111,22 @@ def run_pipeline(
     log.info("pipeline started", topic=topic, niche=niche, model=ollama_model,
              shorts=shorts, dry_run=dry_run, output_dir=str(out))
 
+    # Load niche config (provides seed_topics, system_prompt_injection, visual_keywords, etc.)
+    try:
+        from src.niche_config import get_niche_config
+        _niche_cfg = get_niche_config(niche)
+        # If no topic given but niche has seed topics, pick one at random
+        if not topic.strip() and _niche_cfg.seed_topics:
+            import random as _rnd
+            topic = _rnd.choice(_niche_cfg.seed_topics)
+            console.print(f"[dim]Using seed topic from niche config: {topic}[/dim]")
+        _niche_visual_kw = _niche_cfg.visual_keywords or []
+        _niche_sys_inject = _niche_cfg.system_prompt_injection or ""
+    except Exception:
+        _niche_cfg = None
+        _niche_visual_kw = []
+        _niche_sys_inject = ""
+
     _pipeline_start = time.time()
     try:
         from src.events import emit as _emit
@@ -163,6 +179,7 @@ def run_pipeline(
                 generate_search_keywords,
                 topic, niche, model=ollama_model,
                 count=8, ml_context=ml_kw_context,
+                niche_visual_keywords=_niche_visual_kw,
             )
         result.keywords_used = keywords
         console.print(f"[green]Search keywords:[/green] {', '.join(keywords)}")
@@ -309,6 +326,7 @@ def run_pipeline(
                     duration_minutes=duration_minutes,
                     model=ollama_model,
                     ml_prefix=ml_prefix,
+                    niche_system_prompt=_niche_sys_inject,
                 )
         else:
             from src.ideas import generate_video_script
@@ -317,6 +335,7 @@ def run_pipeline(
                     generate_video_script,
                     best_idea, duration_minutes=duration_minutes,
                     model=ollama_model, niche=niche,
+                    niche_system_prompt=_niche_sys_inject,
                 )
     except Exception as exc:
         result.errors.append(f"Script generation failed: {exc}")

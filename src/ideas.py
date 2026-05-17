@@ -321,11 +321,15 @@ def generate_search_keywords(
     model: str = DEFAULT_MODEL,
     count: int = 8,
     ml_context: str = "",
+    niche_visual_keywords: list[str] | None = None,
 ) -> list[str]:
     """Generate stock footage search queries for a topic using Ollama."""
+    visual_hint = ""
+    if niche_visual_keywords:
+        visual_hint = f"\nNiche visual style keywords (prefer these themes): {', '.join(niche_visual_keywords[:8])}"
     prompt = f"""Generate {count} specific search queries to find stock footage for a YouTube video.
 Topic: {topic}
-Niche: {niche}
+Niche: {niche}{visual_hint}
 {('Context from past videos: ' + ml_context) if ml_context else ''}
 
 Return a JSON array of strings. Each string must be 2-4 words, visual, and searchable on stock footage sites.
@@ -453,6 +457,7 @@ def generate_script_from_media(
     style: str = "engaging and conversational",
     model: str = DEFAULT_MODEL,
     ml_prefix: str = "",
+    niche_system_prompt: str = "",
 ) -> "VideoScript":
     """Generate a viral script with sections that map to the available media clips."""
     captions_block = "\n".join(f"footage_{i+1}: {c}" for i, c in enumerate(media_captions[:15]))
@@ -488,7 +493,8 @@ Return a JSON object with exactly these keys:
 - tags: list of 15 SEO tags
 
 Return ONLY the JSON object, no explanation."""
-    system_msg = "You are a viral YouTube scriptwriter. Write to maximise watch time and shares. Always respond with valid JSON only."
+    base_sys = "You are a viral YouTube scriptwriter. Write to maximise watch time and shares. Always respond with valid JSON only."
+    system_msg = f"{niche_system_prompt}\n\n{base_sys}".strip() if niche_system_prompt else base_sys
     raw = _ollama_generate(prompt, model=model, json_mode=True, system=system_msg)
     from src.models import VideoScriptModel
     try:
@@ -570,6 +576,7 @@ def generate_video_script(
     style: str = "engaging and conversational",
     model: str = DEFAULT_MODEL,
     niche: str = "general",
+    niche_system_prompt: str = "",
 ) -> VideoScript:
     """Generate a full video script using a local Ollama model.
 
@@ -616,7 +623,8 @@ Return a JSON object with exactly these keys:
 
 Return ONLY valid JSON, no explanation."""
 
-    system_msg = "You are a professional YouTube scriptwriter. Always respond with valid JSON only."
+    base_sys = "You are a professional YouTube scriptwriter. Always respond with valid JSON only."
+    system_msg = f"{niche_system_prompt}\n\n{base_sys}".strip() if niche_system_prompt else base_sys
     raw = _ollama_generate(prompt, model=model, json_mode=True, system=system_msg)
     from src.models import VideoScriptModel
     try:

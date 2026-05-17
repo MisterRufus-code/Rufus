@@ -28,7 +28,9 @@ class NicheConfig:
     script_style: str = ""
     tone: str = "conversational"
     topic_boosters: list[str] = field(default_factory=list)
+    seed_topics: list[str] = field(default_factory=list)
     hook_weights: dict[str, float] = field(default_factory=dict)
+    retention_weights: dict[str, float] = field(default_factory=dict)
     upload_schedule: list[dict] = field(default_factory=list)
     default_category_id: str = "22"
     default_tags: list[str] = field(default_factory=list)
@@ -36,6 +38,9 @@ class NicheConfig:
     entropy_scene_repeat_threshold: float = 0.97
     shorts_target_duration: int = 58
     shorts_hook_max_words: int = 12
+    system_prompt_injection: str = ""
+    visual_style: str = ""
+    visual_keywords: list[str] = field(default_factory=list)
 
 
 def get_niche_config(niche: str) -> NicheConfig:
@@ -65,7 +70,9 @@ def get_niche_config(niche: str) -> NicheConfig:
         script_style=data.get("script_style", ""),
         tone=data.get("tone", "conversational"),
         topic_boosters=data.get("topic_boosters") or [],
+        seed_topics=data.get("seed_topics") or [],
         hook_weights=data.get("hook_weights") or {},
+        retention_weights=data.get("retention_weights") or {},
         upload_schedule=data.get("upload_schedule") or [],
         default_category_id=str(data.get("default_category_id", "22")),
         default_tags=data.get("default_tags") or [],
@@ -73,6 +80,9 @@ def get_niche_config(niche: str) -> NicheConfig:
         entropy_scene_repeat_threshold=float(data.get("entropy_scene_repeat_threshold", 0.97)),
         shorts_target_duration=int(data.get("shorts_target_duration", 58)),
         shorts_hook_max_words=int(data.get("shorts_hook_max_words", 12)),
+        system_prompt_injection=data.get("system_prompt_injection", ""),
+        visual_style=data.get("visual_style", ""),
+        visual_keywords=data.get("visual_keywords") or [],
     )
 
 
