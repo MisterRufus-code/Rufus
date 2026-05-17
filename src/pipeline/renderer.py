@@ -70,10 +70,53 @@ def concat_clips(clip_paths: list[Path], output_path: Path) -> Path:
     return output_path
 
 
-def add_audio(video_path: Path, audio_path: Path, output_path: Path) -> Path:
-    """Merge voiceover audio with muted video. Audio ends when shortest track ends."""
+def _get_duration(path: Path) -> float:
+    """Get video/audio duration in seconds using ffprobe."""
+    result = subprocess.run(
+        ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+         "-of", "default=noprint_wrappers=1:nokey=1", str(path)],
+        capture_output=True, text=True,
+    )
+    try:
+        return float(result.stdout.strip())
+    except ValueError:
+        return 0.0
+
+
+def _loop_video_to_duration(video_path: Path, target_duration: float, output_path: Path) -> Path:
+    """Loop the video track until it covers target_duration seconds."""
+    vid_dur = _get_duration(video_path)
+    if vid_dur <= 0:
+        return video_path
+    loops = int(target_duration / vid_dur) + 2
     _ffmpeg(
+        "-stream_loop", str(loops),
         "-i", str(video_path),
+        "-t", str(target_duration + 0.5),   # tiny extra buffer
+        "-c:v", "libx264", "-preset", "fast", "-crf", "23",
+        "-an",
+        str(output_path),
+    )
+    return output_path
+
+
+def add_audio(video_path: Path, audio_path: Path, output_path: Path) -> Path:
+    """Merge voiceover with video. Video is looped if shorter than audio so nothing freezes."""
+    audio_dur  = _get_duration(audio_path)
+    video_dur  = _get_duration(video_path)
+
+    working_video = video_path
+    if audio_dur > 0 and video_dur < audio_dur - 0.5:
+        looped = video_path.parent / ("_looped_" + video_path.name)
+        console.print(
+            f"[dim]Video ({video_dur:.1f}s) shorter than audio ({audio_dur:.1f}s)"
+            f" — looping footage to match[/dim]"
+        )
+        _loop_video_to_duration(video_path, audio_dur, looped)
+        working_video = looped
+
+    _ffmpeg(
+        "-i", str(working_video),
         "-i", str(audio_path),
         "-map", "0:v:0",
         "-map", "1:a:0",

@@ -403,11 +403,18 @@ def run_pipeline(
     try:
         from src.matching.semantic import scenes_from_script, match_all_scenes
         scenes = scenes_from_script(script.sections)
+
+        # Target total footage = voiceover duration + 20% buffer
+        # Each clip capped at 25s for long-form, 8s for Shorts
+        max_clip_dur = 8.0 if shorts else 25.0
+
         match_results = match_all_scenes(scenes, global_dedup_videos=5, niche=niche)
+        used_asset_ids: set[str] = set()
         for mr in match_results:
             if mr.selected:
                 asset = mr.selected
-                duration = min(asset.duration_seconds or 5.0, 8.0)
+                used_asset_ids.add(asset.asset_id)
+                duration = min(asset.duration_seconds or 5.0, max_clip_dur)
                 matched_clips.append(TimelineClip(
                     asset=asset,
                     start_time=0,
@@ -416,6 +423,52 @@ def run_pipeline(
                     in_point=0.0,
                     out_point=duration,
                 ))
+
+        # If total clip duration < estimated voiceover, fill with extra clips from library
+        # Estimate: ~2.3 words/second TTS speed
+        _script_words = sum(
+            len((s.get("script") or s.get("text") or "")).split()
+            for s in script.sections
+        )
+        _estimated_audio = max(60.0, _script_words / 2.3) if not shorts else 60.0
+
+        if not shorts and matched_clips:
+            total_audio = _estimated_audio
+            total_video = sum(c.out_point - c.in_point for c in matched_clips)
+            if total_video < total_audio * 0.85:
+                console.print(
+                    f"[dim]Footage {total_video:.0f}s < audio {total_audio:.0f}s"
+                    f" — fetching extra clips...[/dim]"
+                )
+                try:
+                    from src.database.vector_store import get_vector_store
+                    store  = get_vector_store()
+                    extras = store.get_all_assets()
+                    import random as _rnd
+                    _rnd.shuffle(extras)
+                    scene_idx = len(matched_clips)
+                    for asset in extras:
+                        if total_video >= total_audio:
+                            break
+                        if asset.asset_id in used_asset_ids:
+                            continue
+                        if asset.asset_type != "video":
+                            continue
+                        dur = min(asset.duration_seconds or 5.0, max_clip_dur)
+                        matched_clips.append(TimelineClip(
+                            asset=asset,
+                            start_time=0,
+                            end_time=dur,
+                            scene_index=scene_idx,
+                            in_point=0.0,
+                            out_point=dur,
+                        ))
+                        used_asset_ids.add(asset.asset_id)
+                        total_video += dur
+                        scene_idx  += 1
+                except Exception:
+                    pass
+
         cp.advance(PipelineStage.SCENES_MATCHED, clip_count=len(matched_clips))
         console.print(f"[green]Matched {len(matched_clips)} clips for {len(scenes)} scenes[/green]")
     except Exception as exc:
