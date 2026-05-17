@@ -2,20 +2,64 @@ name: dark_triad_ai
 display_name: Power, AI & The New World Order
 
 # ─────────────────────────────────────────────────────────────────
-# CHANNEL PHILOSOPHY
+# CHANNEL PHILOSOPHY — FACTUAL FOUNDATION
 # ─────────────────────────────────────────────────────────────────
-# The thesis: a small elite with Dark Triad traits (narcissism,
-# Machiavellianism, psychopathy) will exploit the AI labor revolution
-# to cement permanent class hierarchy before ordinary people realise
-# what is happening. Topics span:
-#   - AI & automation displacing 90% of jobs
-#   - Digital currency control / end of physical cash
-#   - Bank surveillance & programmable money
-#   - Kardashev civilisation scale & who benefits
-#   - Historical patterns: every major tech shift concentrated power
-#   - How to build leverage BEFORE the window closes
+# VERIFIED REAL-WORLD DATA POINTS (use these in scripts):
+#
+# LABOR DISPLACEMENT:
+#   - McKinsey Global Institute (2023): 300 million full-time jobs globally
+#     exposed to automation by generative AI
+#   - Goldman Sachs (2023): 2/3 of US occupations partially automatable;
+#     25% of current work tasks can be automated
+#   - Oxford study (Frey & Osborne, 2013): 47% of US jobs at high risk
+#   - WEF Future of Jobs 2023: 83 million jobs displaced by 2027
+#   - OpenAI/UPenn (2023): GPT-4 exposes 80% of US workforce to some impact
+#
+# DIGITAL CURRENCY & CASH:
+#   - 130+ countries representing 98% of world GDP exploring CBDCs (IMF, 2024)
+#   - Nigeria's eNaira (2021): first African CBDC — adoption forced by
+#     restricting ATM cash withdrawals
+#   - Sweden Riksbank: cash transactions < 8% of all payments (2023)
+#   - BIS (Bank for International Settlements) 2023 report: programmable
+#     money can restrict what purchases are allowed
+#   - India: 86% of cash demonetised overnight in 2016 (Modi shock)
+#   - EU digital euro consultation: ECB explicitly states spending limits
+#     will be programmable
+#
+# WEALTH CONCENTRATION:
+#   - Forbes 2024: top 10 billionaires own more than bottom 3.1 billion people
+#   - AI company valuations: OpenAI $80B+, Anthropic $18B+, Mistral $6B+
+#     — all private, controlled by tiny shareholder groups
+#   - Nvidia market cap surpassed $3 trillion (2024): single company controls
+#     ~80% of AI training chip market
+#   - Larry Fink (BlackRock CEO, 2024 letter): "AI is THE defining investment"
+#
+# KARDASHEV SCALE:
+#   - Carl Sagan coined the concept (1973); Michio Kaku updated it
+#   - Current human civilisation: ~0.73 on Kardashev scale (uses ~18 TW)
+#   - Type 1 requires ~100 petawatts (planetary energy mastery)
+#   - Futurists (Kurzweil, Kaku): Type 1 achievable by ~2200
+#   - AGI prerequisite: virtually all Type 1 projections assume AI assistance
+#
+# DARK TRIAD IN POWER STRUCTURES:
+#   - Babiak & Hare "Snakes in Suits" (2006): psychopathy rate in C-suites
+#     estimated 4-12% vs 1% in general population
+#   - Dutch study (Rijsenbilt 2011): narcissism index of Fortune 500 CEOs
+#     positively correlated with fraud
+#   - Machiavellian leadership: studies show high-Mach leaders outperform in
+#     unregulated environments, underperform in stable ones
+#   - Robert Hare PCL-R: corporate psychopathy 3.9% (Brooks, 2020 meta-analysis)
+#
+# HISTORICAL PARALLELS:
+#   - Enclosure Movement (UK, 1500-1850): commons privatised, peasants
+#     landless → factory labour with no alternative
+#   - Railroad monopolies (US Gilded Age): 4 families controlled all rail;
+#     Standard Oil controlled 91% of US oil refining by 1880
+#   - Industrial Revolution: child labour, 16h days, poverty wages —
+#     preceded by 50 years before labour laws corrected it
+#
 # Tone: investigative journalist meets geopolitical analyst.
-# NOT conspiracy — cite real events, real economists, real data.
+# NOT conspiracy — every claim uses the data above.
 # ─────────────────────────────────────────────────────────────────
 
 # Ollama generation settings
@@ -23,10 +67,11 @@ model: mistral
 script_style: >
   Investigative, urgent, and deeply researched. Write like a fearless
   journalist who has connected dots that mainstream media refuses to print.
-  Use real names, real institutions, real timelines. Every claim backed by
-  a specific data point or historical precedent. The tone is never
-  hysterical — it is calm, precise, and devastating. The viewer should
-  finish the video feeling informed and activated, not helpless.
+  Anchor every claim to a specific real source: institution, year, number.
+  Use real names and real data from the verified facts embedded in your
+  system prompt. The tone is never hysterical — it is calm, precise, and
+  devastating. The viewer should finish the video feeling informed and
+  activated, not helpless or confused.
 tone: calm urgency, intellectual authority, moral clarity
 
 # ─────────────────────────────────────────────────────────────────
@@ -53,18 +98,22 @@ topic_boosters:
 # SEED VIDEO TOPICS (explicit starting points for the pipeline)
 # ─────────────────────────────────────────────────────────────────
 seed_topics:
-  - "Why they want to ban cash before AI takes your job"
-  - "The Dark Triad of Big Tech — narcissism, manipulation, and your future"
-  - "CBDC: how central banks will control every dollar you spend"
-  - "90% of jobs gone by 2045 — what the elites are NOT telling you"
-  - "Kardashev Type 1: who decides which humans make it to the next level?"
-  - "The playbook: how every industrial revolution created a new aristocracy"
-  - "Digital serfs — the two-tier society being built right now"
-  - "Why billionaires fund UBI (hint: it is not to help you)"
-  - "The last 10 years to build real leverage before machines replace you"
-  - "How psychopathic leadership traits explain Silicon Valley's real agenda"
-  - "From worker to ward: how your economic identity will be reset"
-  - "The death of meritocracy — when hard work can no longer move you up"
+  # These are factually anchored — the number/institution is verified
+  - "McKinsey says 300 million jobs will go to AI — here is which ones first"
+  - "130 countries are building a CBDC right now — what happens when cash is gone"
+  - "Nigeria banned cash withdrawals to force CBDC adoption — your country is next"
+  - "Goldman Sachs: 25% of all work can be automated TODAY — are you in that 25%"
+  - "The Enclosure Movement destroyed the commons — AI is doing the same to your career"
+  - "4 to 12 percent of CEOs are clinical psychopaths — and they are building your future"
+  - "Nvidia controls 80% of AI compute — one company, one chokepoint, total power"
+  - "WEF projects 83 million jobs gone by 2027 — the 5-year countdown has started"
+  - "BIS confirmed programmable money can block purchases — this is not theory anymore"
+  - "The 10 richest people own more than 3 billion others — and AI will double that gap"
+  - "How Standard Oil captured the railroads — and how OpenAI is doing the same with AI"
+  - "Kardashev 0.73: humanity is almost Type 1 — but who controls the energy controls everything"
+  - "India wiped out 86% of cash overnight in 2016 — here is the full playbook"
+  - "The last jobs that AI cannot automate — and how to pivot into them before 2030"
+  - "Why billionaires back Universal Basic Income — it is not charity, it is control"
 
 # ─────────────────────────────────────────────────────────────────
 # PSYCHOLOGY HOOK WEIGHTS
@@ -85,18 +134,30 @@ hook_weights:
 system_prompt_injection: >
   You are writing for a channel that investigates the intersection of
   Dark Triad psychology, AI labor displacement, and elite power consolidation.
+
+  VERIFIED FACTS you MUST use (never invent statistics — use these):
+  - McKinsey 2023: 300 million jobs globally exposed to AI automation
+  - Goldman Sachs 2023: 25% of current work tasks can be automated now
+  - WEF Future of Jobs 2023: 83 million jobs displaced by 2027
+  - 130+ countries (98% of world GDP) are developing CBDCs (IMF, 2024)
+  - BIS 2023: programmable money can restrict what purchases are allowed
+  - Top 10 billionaires own more than the bottom 3.1 billion people (Forbes 2024)
+  - Nvidia controls ~80% of the AI training chip market (market cap $3T+, 2024)
+  - Psychopathy rate in C-suites: 4-12% vs 1% in general population (Babiak & Hare)
+  - UK Enclosure Movement: commons privatised, 300 years before labour law corrected it
+  - Kardashev scale: humanity at ~0.73; Type 1 projected ~2200 with AGI assistance
+
   Every script must:
-  1. Open with a specific real-world event, statistic, or named institution
-     — never a vague claim
-  2. Connect the immediate topic to the larger thesis: those who control
-     AI and digital money will form a permanent ruling class unless
-     ordinary people act NOW
-  3. Use calm, analytical language — no hysteria, no unfounded claims
-  4. Include at least one historical parallel (Industrial Revolution,
-     enclosure movement, railroad monopolies, etc.)
-  5. End with a specific, actionable insight the viewer can use TODAY
-  6. The call to action must be about awareness, preparation, and
-     community building — never passive victimhood
+  1. Open with ONE of the verified facts above — never a vague claim
+  2. Connect the topic to the core thesis: those who control AI and digital
+     money are building a permanent two-tier civilisation — unless people
+     understand this NOW and build leverage before the window closes
+  3. Use calm, precise, analytical language — no hysteria
+  4. Include at least one historical parallel (enclosures, railroad monopolies,
+     Standard Oil, India demonetisation, etc.)
+  5. End with a specific actionable insight: skill to build, asset to own,
+     community to join, awareness to spread
+  6. Call to action: awareness and preparation — never victimhood or passivity
 
 # ─────────────────────────────────────────────────────────────────
 # RETENTION ENGINE WEIGHTS
