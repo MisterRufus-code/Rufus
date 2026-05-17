@@ -424,6 +424,56 @@ def pipeline_cmd(topic, niche, model, voice, ideas_count, geo, no_download, uplo
 
 
 # ---------------------------------------------------------------------------
+# supervisor  (autonomous pipeline brain)
+# ---------------------------------------------------------------------------
+
+@cli.command("supervisor")
+@click.option("--niches", "-n", multiple=True, default=["finance", "tech", "health", "general"],
+              show_default=True, help="Niches to manage (repeat flag for multiple)")
+@click.option("--interval-hours", default=6.0, show_default=True,
+              help="Hours between runs per niche")
+@click.option("--mode", default="both", show_default=True,
+              type=click.Choice(["both", "long", "shorts"]),
+              help="Pipeline mode for each run")
+@click.option("--max-concurrent", default=1, show_default=True,
+              help="Max parallel pipeline jobs")
+@click.option("--once", metavar="NICHE",
+              help="Run one pipeline for NICHE then exit")
+@click.option("--status", "show_status", is_flag=True,
+              help="Print schedule state and exit")
+@click.option("--reset-niche", metavar="NICHE",
+              help="Clear failure counter for a suspended niche")
+def supervisor_cmd(niches, interval_hours, mode, max_concurrent,
+                   once, show_status, reset_niche):
+    """Autonomous daemon: schedules pipelines, retries failures, learns from ML."""
+    from src.supervisor import Supervisor, SupervisorConfig
+
+    cfg = SupervisorConfig(
+        niches=list(niches),
+        mode=mode,
+        run_interval_hours=interval_hours,
+        max_concurrent=max_concurrent,
+    )
+    sv = Supervisor(cfg)
+
+    if reset_niche:
+        sv._fail_count[reset_niche] = 0
+        sv._save_state()
+        console.print(f"[green]Reset failure counter for '{reset_niche}'[/green]")
+        return
+
+    if show_status:
+        sv.print_status()
+        return
+
+    if once:
+        ok = sv.run_once(once)
+        sys.exit(0 if ok else 1)
+
+    sv.run()
+
+
+# ---------------------------------------------------------------------------
 # serve  (FastAPI server for n8n integration)
 # ---------------------------------------------------------------------------
 
