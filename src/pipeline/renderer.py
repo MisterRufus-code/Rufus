@@ -20,6 +20,30 @@ from src.database.models import TimelineClip
 
 console = Console()
 
+_NVENC_AVAILABLE: bool | None = None
+
+
+def _has_nvenc() -> bool:
+    global _NVENC_AVAILABLE
+    if _NVENC_AVAILABLE is not None:
+        return _NVENC_AVAILABLE
+    try:
+        r = subprocess.run(
+            ["ffmpeg", "-hide_banner", "-encoders"],
+            capture_output=True, text=True, timeout=10,
+        )
+        _NVENC_AVAILABLE = "h264_nvenc" in r.stdout
+    except Exception:
+        _NVENC_AVAILABLE = False
+    return _NVENC_AVAILABLE
+
+
+def _video_codec_args() -> list[str]:
+    """Return the best available H.264 encoder args: NVENC if available, else libx264."""
+    if _has_nvenc():
+        return ["-c:v", "h264_nvenc", "-preset", "p4", "-rc", "vbr", "-cq", "23"]
+    return ["-c:v", "libx264", "-preset", "fast", "-crf", "23"]
+
 
 def _ffmpeg(*args: str, check: bool = True, timeout: int = 300) -> subprocess.CompletedProcess:
     cmd = ["ffmpeg", "-y", "-hide_banner", "-loglevel", "error"] + list(args)
@@ -68,7 +92,7 @@ def trim_clip(clip: TimelineClip, output_path: Path, ken_burns: bool = True) -> 
         "-ss", str(clip.in_point),
         "-i", asset_path,
         "-t", str(duration),
-        "-c:v", "libx264", "-preset", "fast", "-crf", "23",
+        *_video_codec_args(),
         "-an",
         "-vf", vf,
         str(output_path),
@@ -102,7 +126,7 @@ def apply_visual_mutation(input_path: Path, output_path: Path, seed: int = 0) ->
         f"pad=1920:1080:(ow-iw)/2:(oh-ih)/2,"
         f"{eq_filter}",
         "-af", f"atempo={speed:.3f}",
-        "-c:v", "libx264", "-preset", "fast", "-crf", "23",
+        *_video_codec_args(),
         "-c:a", "copy",
         str(output_path),
     )
@@ -149,7 +173,7 @@ def _loop_video_to_duration(video_path: Path, target_duration: float, output_pat
         "-stream_loop", str(loops),
         "-i", str(video_path),
         "-t", str(target_duration + 0.5),   # tiny extra buffer
-        "-c:v", "libx264", "-preset", "fast", "-crf", "23",
+        *_video_codec_args(),
         "-an",
         str(output_path),
     )

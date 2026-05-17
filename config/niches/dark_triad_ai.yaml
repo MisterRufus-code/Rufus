@@ -63,7 +63,9 @@ display_name: Power, AI & The New World Order
 # ─────────────────────────────────────────────────────────────────
 
 # Ollama generation settings
-model: mistral
+# llama3.1 has a much larger context window and stronger instruction-following
+# than mistral — critical for long structured scripts that stay on topic
+model: llama3.1
 script_style: >
   Investigative, urgent, and deeply researched. Write like a fearless
   journalist who has connected dots that mainstream media refuses to print.

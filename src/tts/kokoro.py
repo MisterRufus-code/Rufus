@@ -94,6 +94,11 @@ NICHE_VOICE_PROFILES: dict[str, dict[str, list[str]]] = {
         "energetic": ["af_bella", "bf_emma"],
         "calm":      ["af_heart", "bf_isabella"],
     },
+    "dark_triad_ai": {
+        "default":   ["bm_george", "am_michael", "am_adam"],
+        "energetic": ["am_michael", "am_adam"],
+        "calm":      ["bm_george", "bm_lewis"],
+    },
     "general": {
         "default":   ["af_heart", "af_bella", "af_sarah", "af_nicole",
                       "am_adam", "am_michael", "bf_emma", "bf_isabella",
@@ -141,15 +146,23 @@ def _get_kokoro():
         )
 
 
+def _build_kokoro_instance():
+    """Create a single Kokoro model instance (expensive — reuse across sections)."""
+    Kokoro = _get_kokoro()
+    return Kokoro(_model_path("kokoro-v1.0.onnx"), _model_path("voices-v1.0.bin"))
+
+
 def synthesize(
     text: str,
     output_path: Path,
     voice: str = DEFAULT_VOICE,
     speed: float = DEFAULT_SPEED,
     lang: str = "en-us",
+    _kokoro_instance=None,
 ) -> Path:
     """
     Convert *text* to speech and save as a WAV file at *output_path*.
+    Pass a pre-built _kokoro_instance to avoid re-loading the model.
     Returns the output path.
     """
     valid = list_voices()
@@ -157,16 +170,14 @@ def synthesize(
         console.print(f"[yellow]Unknown voice '{voice}', falling back to {DEFAULT_VOICE}[/yellow]")
         voice = DEFAULT_VOICE
 
-    Kokoro = _get_kokoro()
     import soundfile as sf
-    import numpy as np
 
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     console.print(f"[cyan]TTS:[/cyan] generating voiceover ({len(text)} chars, voice={voice})")
 
-    kokoro = Kokoro(_model_path("kokoro-v1.0.onnx"), _model_path("voices-v1.0.bin"))
+    kokoro = _kokoro_instance if _kokoro_instance is not None else _build_kokoro_instance()
     samples, sample_rate = kokoro.create(text, voice=voice, speed=speed, lang=lang)
 
     sf.write(str(output_path), samples, sample_rate)
@@ -181,19 +192,23 @@ def synthesize_sections(
     speed: float = DEFAULT_SPEED,
 ) -> list[Path]:
     """
-    Synthesize each script section separately.
+    Synthesize each script section using a single shared Kokoro model instance.
+    Sharing the instance prevents pacing inconsistencies caused by model re-initialization.
     Returns list of WAV file paths in section order.
     """
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     paths: list[Path] = []
 
+    # Build model once — reuse across all sections for consistent pacing
+    kokoro_instance = _build_kokoro_instance()
+
     for i, section in enumerate(sections):
         text = _prep_tts_text(_CLIP_REF_RE.sub("", section.get("script", "")).strip())
         if not text:
             continue
         out = output_dir / f"section_{i:02d}.wav"
-        synthesize(text, out, voice=voice, speed=speed)
+        synthesize(text, out, voice=voice, speed=speed, _kokoro_instance=kokoro_instance)
         paths.append(out)
 
     return paths

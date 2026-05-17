@@ -101,8 +101,8 @@ def vary_description(description: str) -> str:
 # ---------------------------------------------------------------------------
 
 def random_tts_speed() -> float:
-    """Return a slight variation in TTS speed (0.93–1.07, centred on 1.0)."""
-    return round(random.gauss(1.0, 0.03), 3)
+    """Return a minimal variation in TTS speed (0.98–1.02) for natural but steady delivery."""
+    return round(random.gauss(1.0, 0.01), 3)
 
 
 def random_pause_duration() -> float:
