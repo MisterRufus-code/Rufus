@@ -167,8 +167,8 @@ def scenes_from_script(script_sections: list[dict], default_mood: str = "neutral
     """Convert raw script sections into SceneRequirement objects."""
     scenes = []
     for i, section in enumerate(script_sections):
-        heading = section.get("heading", f"Scene {i + 1}")
-        script_text = section.get("script", "")
+        heading = str(section.get("heading", f"Scene {i + 1}"))
+        script_text = str(section.get("script") or section.get("text") or "")
         # First 120 chars of script text = semantic query
         semantic_query = script_text[:120].replace("\n", " ").strip()
         scenes.append(

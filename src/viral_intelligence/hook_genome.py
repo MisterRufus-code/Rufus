@@ -62,7 +62,7 @@ _NUMBER_INJECTIONS = [
     ("N secrets",      lambda: f"{random.choice([3,5,7])} secrets"),
     ("N mistakes",     lambda: f"{random.choice([3,5,7])} mistakes"),
     ("in N days",      lambda: f"in {random.choice([7,14,21,30])} days"),
-    ("$N",             lambda: f"${random.choice([100,500,1000,5000,10000]):,}"),
+    ("$N",             lambda: f"{random.choice([100, 500, 1000, 5000, 10000])} dollars"),
     ("N%",             lambda: f"{random.choice([80,90,95,99])}%"),
 ]
 

@@ -434,9 +434,11 @@ Each section script must be punchy, specific, and keep the viewer watching.
 Return a JSON object with exactly these keys:
 - title: viral video title (use power words, numbers, or shock value)
 - hook: spoken opening — most shocking sentence first, 2-3 sentences max
-- sections: array of objects with "heading", "script", and "clip_hint" keys
-  ("script" = what is spoken, "clip_hint" = visual description matching available footage)
-- call_to_action: urgent, specific CTA (not "like and subscribe" — give them a reason)
+- sections: array of 5-7 objects with "heading", "script", and "clip_hint" keys.
+  CRITICAL: each "script" MUST be at least 120 words of full spoken narration — not bullet points.
+  Write like a charismatic YouTuber speaking to camera: stories, examples, specific numbers.
+  "clip_hint" = short visual description matching available footage above.
+- call_to_action: urgent specific CTA, minimum 60 words spoken
 - description: YouTube description with keywords
 - tags: list of 15 SEO tags
 
@@ -557,8 +559,10 @@ RETENTION ARCHITECTURE RULES (mandatory):
 Return a JSON object with exactly these keys:
 - title: the video title (10 words max, must include a number or dollar amount)
 - hook: spoken opening (first 15 seconds, must use loss aversion + open loop)
-- sections: array of objects with "heading" and "script" keys (4-6 sections)
-- call_to_action: final 30-second spoken CTA
+- sections: array of 5-7 objects with "heading" and "script" keys.
+  CRITICAL: each "script" value MUST be a string of at least 120 words (spoken narration).
+  Do NOT write short bullet points — write full spoken paragraphs with detail, examples, and stories.
+- call_to_action: final 30-second spoken CTA (minimum 60 words)
 - description: YouTube description with timestamps
 - tags: list of 15 SEO tags
 
@@ -643,7 +647,7 @@ def _inject_retention_patterns(sections: list[dict]) -> list[dict]:
     last_idx = len(sections) - 1
 
     for i, section in enumerate(sections):
-        text: str = section.get("script", "")
+        text: str = str(section.get("script") or section.get("text") or "")
         if not text:
             enhanced.append(section)
             continue

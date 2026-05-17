@@ -427,8 +427,8 @@ def run_pipeline(
         # If total clip duration < estimated voiceover, fill with extra clips from library
         # Estimate: ~2.3 words/second TTS speed
         _script_words = sum(
-            len((s.get("script") or s.get("text") or "")).split()
-            for s in script.sections
+            len(str(s.get("script") or s.get("text") or "").split())
+            for s in (script.sections or [])
         )
         _estimated_audio = max(60.0, _script_words / 2.3) if not shorts else 60.0
 
