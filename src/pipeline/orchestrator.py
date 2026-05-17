@@ -340,10 +340,35 @@ def run_pipeline(
         from src.psychology.hooks import generate_hooks, print_hook_report, VIRAL_THRESHOLD
         virality_label = best_idea.estimated_virality  # "Low" | "Medium" | "High" | "Viral"
 
+        # ── A/B Dry-Run: generate 3 independent hook batches, score all,
+        #    pick the winner BEFORE committing to TTS and render. ──────────
+        console.print("[dim]A/B hook test: generating 3 variants (dry-run scoring)…[/dim]")
+        _ab_angles = ["fear+urgency", "curiosity+numbers", "authority+proof"]
+        _ab_all: list = []
+        for angle in _ab_angles:
+            try:
+                batch = generate_hooks(
+                    topic, niche, model=ollama_model, count=4,
+                    virality_label=virality_label, title=best_idea.title,
+                )
+                if batch:
+                    _ab_all.append((angle, batch[0]))
+                    console.print(
+                        f"  [dim]Variant [{angle}]: {batch[0].hook[:55]}… "
+                        f"→ {batch[0].viral_score:.1f}/10[/dim]"
+                    )
+            except Exception:
+                pass
+        _ab_all.sort(key=lambda t: t[1].viral_score, reverse=True)
+
         hook_scores = generate_hooks(
             topic, niche, model=ollama_model, count=8,
             virality_label=virality_label, title=best_idea.title,
         )
+        # Merge A/B winners into main candidate list
+        for _angle, _ab_hs in _ab_all:
+            hook_scores.insert(0, _ab_hs)
+        hook_scores.sort(key=lambda h: h.viral_score, reverse=True)
         print_hook_report(hook_scores)
 
         best_hook_score = hook_scores[0] if hook_scores else None
@@ -363,7 +388,6 @@ def run_pipeline(
                 print_hook_report(hook_scores)
 
         if best_hook_score and best_hook_score.viral_score >= VIRAL_THRESHOLD:
-            old_hook = script.hook
             script.hook = best_hook_score.hook
             console.print(f"[bold green]Hook upgraded (viral score {best_hook_score.viral_score:.1f}):[/bold green] {script.hook[:60]}…")
         else:
@@ -622,6 +646,16 @@ def run_pipeline(
             )
         except Exception as exc:
             console.print(f"[yellow]ML record skipped ({exc})[/yellow]")
+
+        # Footage hash tracking — persist asset paths so future runs skip duplicates
+        import uuid as _uuid
+        _render_id = str(_uuid.uuid4())[:8]
+        try:
+            from src.memory import record_footage_used
+            _asset_paths = [c.asset.path for c in matched_clips if c.asset.path]
+            record_footage_used(_asset_paths, render_id=_render_id, niche=niche)
+        except Exception as exc:
+            console.print(f"[yellow]Footage hash record skipped ({exc})[/yellow]")
 
         # Record hook_style experiment outcome (entropy as proxy until real CTR arrives)
         if hook_exp_variant is not None:

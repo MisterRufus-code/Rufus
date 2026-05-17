@@ -26,8 +26,12 @@ _SENT_SPLIT_RE = re.compile(r'(?<=[.!?])\s+')
 MAX_SHORTS_DURATION = 58.0  # leave 2s buffer under YouTube's 60s limit
 
 FONT_PATH_CANDIDATES = [
-    "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+    "/usr/share/fonts/truetype/msttcorefonts/Impact.ttf",
+    "/usr/share/fonts/truetype/impact.ttf",
+    "/usr/share/fonts/Impact.ttf",
+    "/usr/share/fonts/truetype/montserrat/Montserrat-Bold.ttf",
     "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
     "/usr/share/fonts/truetype/freefont/FreeSansBold.ttf",
     "/usr/share/fonts/truetype/ubuntu/Ubuntu-B.ttf",
 ]
@@ -70,16 +74,30 @@ def _video_codec_args() -> list[str]:
     return ["-c:v", "libx264", "-preset", "fast", "-crf", "23"]
 
 
-def _trim_vertical(clip: TimelineClip, output_path: Path) -> Path:
-    """Trim clip and center-crop landscape → 9:16 vertical (1080x1920)."""
+def _trim_vertical(clip: TimelineClip, output_path: Path, ken_burns: bool = True) -> Path:
+    """
+    Trim clip and convert landscape → 9:16 vertical (1080×1920).
+    Uses subject-biased crop (upper-third) so faces stay in frame.
+    Adds subtle Ken Burns zoom for motion when enabled.
+    """
     duration = min(clip.out_point - clip.in_point, 8.0)
+    # Upper-third crop: y offset = H*0.1 keeps heads in frame for talking-head footage.
+    # The crop starts at 10% from top instead of center (50%).
+    crop_vf = "scale=-2:1920,crop=1080:1920:x=(iw-1080)/2:y=ih*0.10"
+    if ken_burns and clip.asset.asset_type != "image":
+        # Very subtle zoom: 1.00 → 1.04 over the clip duration (barely perceptible, adds life)
+        zoom_vf = (
+            f"scale=2160:3840,zoompan=z='min(1+({0.04}/({duration}*25))*on,1.04)'"
+            f":x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d={int(duration*25)}:s=1080x1920"
+        )
+        vf = zoom_vf
+    else:
+        vf = crop_vf
     _ffmpeg(
         "-ss", str(clip.in_point),
         "-i", clip.asset.path,
         "-t", str(duration),
-        "-vf",
-        # Scale so height = 1920, then center crop width to 1080
-        "scale=-2:1920,crop=1080:1920",
+        "-vf", vf,
         *_video_codec_args(),
         "-an",
         str(output_path),
@@ -115,6 +133,84 @@ def _loop_video_to_duration(video_path: Path, target_duration: float, output_pat
         "-t", str(target_duration),
         "-c:v", "libx264", "-preset", "fast", "-crf", "23",
         "-an",
+        str(output_path),
+    )
+    return output_path
+
+
+def _speed_audio_to_fit(audio_path: Path, target_dur: float, output_path: Path) -> Path:
+    """
+    Apply atempo FFmpeg filter to compress audio duration to target_dur.
+    atempo is capped at 1.25× (any faster sounds unnatural for a voice).
+    If multiple passes are needed they are chained (atempo max = 2.0 per pass).
+    """
+    current_dur = _get_duration(audio_path)
+    if current_dur <= 0 or current_dur <= target_dur:
+        import shutil
+        shutil.copy2(audio_path, output_path)
+        return output_path
+
+    factor = min(1.25, current_dur / target_dur)
+    if factor <= 1.02:
+        import shutil
+        shutil.copy2(audio_path, output_path)
+        return output_path
+
+    console.print(
+        f"[dim]Smart render: audio {current_dur:.1f}s > {target_dur:.0f}s"
+        f" — speeding up ×{factor:.2f} (atempo)[/dim]"
+    )
+    # Chain two atempo passes if factor > 2.0 (atempo limit)
+    if factor > 2.0:
+        af = f"atempo=2.0,atempo={factor/2.0:.3f}"
+    else:
+        af = f"atempo={factor:.3f}"
+    _ffmpeg("-i", str(audio_path), "-filter:a", af, str(output_path))
+    return output_path
+
+
+def _add_audio_with_ducking(
+    video_path: Path,
+    audio_path: Path,
+    music_path: Path | None,
+    output_path: Path,
+    music_volume: float = 0.10,
+) -> Path:
+    """
+    Merge TTS voiceover + optional background music with sidechain ducking.
+    Music automatically drops when TTS is speaking and rises in gaps.
+    Falls back to simple merge if music_path is None.
+    """
+    if music_path is None or not music_path.exists():
+        _ffmpeg(
+            "-i", str(video_path),
+            "-i", str(audio_path),
+            "-map", "0:v:0", "-map", "1:a:0",
+            "-c:v", "copy",
+            "-c:a", "aac", "-b:a", "192k",
+            "-shortest",
+            str(output_path),
+        )
+        return output_path
+
+    # Sidechain compress: music ducked when TTS amplitude exceeds threshold
+    _ffmpeg(
+        "-i", str(video_path),
+        "-i", str(audio_path),
+        "-stream_loop", "-1", "-i", str(music_path),
+        "-filter_complex",
+        (
+            f"[1:a]asplit=2[tts_main][tts_sc];"
+            f"[2:a]volume={music_volume}[bg];"
+            f"[bg][tts_sc]sidechaincompress="
+            f"threshold=0.025:ratio=8:attack=5:release=200:makeup=1[bg_duck];"
+            f"[tts_main][bg_duck]amix=inputs=2:duration=first:dropout_transition=0[aout]"
+        ),
+        "-map", "0:v:0",
+        "-map", "[aout]",
+        "-c:v", "copy",
+        "-c:a", "aac", "-b:a", "192k",
+        "-shortest",
         str(output_path),
     )
     return output_path
@@ -193,9 +289,10 @@ def _burn_shorts_captions(
         filters.append(
             f"drawtext=text='{display}'"
             f"{font_arg}"
-            f":fontsize=58:fontcolor=white"
-            f":borderw=4:bordercolor=black"
-            f":x=(w-text_w)/2:y=h*0.72"
+            f":fontsize=64:fontcolor=yellow"
+            f":borderw=6:bordercolor=black"
+            f":shadowx=3:shadowy=3:shadowcolor=black@0.8"
+            f":x=(w-text_w)/2:y=h*0.70"
             f":enable='between(t,{t_start:.2f},{t_end:.2f})'"
         )
 
@@ -229,6 +326,7 @@ def render_shorts(
     script_sections: list[dict] | None = None,
     hook: str = "",
     tmp_dir: Optional[Path] = None,
+    music_path: Optional[Path] = None,
 ) -> Path:
     """
     Full Shorts render:
@@ -244,37 +342,50 @@ def render_shorts(
 
     console.print(f"[cyan]Rendering Shorts — {len(clips)} clips → 9:16[/cyan]")
 
-    # 1. Vertical crop each clip
+    # 1. Vertical crop each clip (Ken Burns enabled by default)
     trimmed: list[Path] = []
     for i, clip in enumerate(clips):
         out = tmp / f"short_clip_{i:03d}.mp4"
         if clip.asset.asset_type == "image":
             duration = min(clip.out_point - clip.in_point or 3.0, 5.0)
+            # Ken Burns on images: gentle zoom 1.00→1.08 over the still
+            frames = int(duration * 25)
             _ffmpeg(
                 "-loop", "1", "-i", clip.asset.path,
                 "-t", str(duration),
-                "-vf", "scale=-2:1920,crop=1080:1920",
+                "-vf",
+                f"scale=2160:3840,"
+                f"zoompan=z='min(1+0.003*on,1.08)':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)'"
+                f":d={frames}:s=1080x1920",
                 "-c:v", "libx264", "-preset", "fast", "-crf", "23",
                 "-pix_fmt", "yuv420p",
                 str(out),
             )
         else:
-            _trim_vertical(clip, out)
+            _trim_vertical(clip, out, ken_burns=True)
         trimmed.append(out)
 
     # 2. Concat
     concat_path = tmp / "shorts_concat.mp4"
     _concat_clips(trimmed, concat_path)
 
-    # 3. Add audio — loop video if shorter than voiceover so nothing cuts off
+    # 3. Smart rendering loop: if audio > 58s, speed it up with atempo
+    working_audio = audio_path
     if audio_path and audio_path.exists():
         audio_dur = _get_duration(audio_path)
+        if audio_dur > MAX_SHORTS_DURATION:
+            sped_audio = tmp / "shorts_sped.wav"
+            working_audio = _speed_audio_to_fit(audio_path, MAX_SHORTS_DURATION, sped_audio)
+            audio_dur = _get_duration(working_audio)
+
+        # Loop video if shorter than (possibly sped-up) audio
         if audio_dur > 0 and _get_duration(concat_path) < audio_dur:
             looped = tmp / "shorts_looped.mp4"
             _loop_video_to_duration(concat_path, audio_dur, looped)
             concat_path = looped
+
         voiced_path = tmp / "shorts_voiced.mp4"
-        _add_audio(concat_path, audio_path, voiced_path)
+        _add_audio_with_ducking(concat_path, working_audio, music_path, voiced_path)
     else:
         voiced_path = concat_path
 

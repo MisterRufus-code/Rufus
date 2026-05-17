@@ -30,9 +30,19 @@ def _strip_clip_refs(text: str) -> str:
 
 _SENT_SPLIT_RE = re.compile(r'(?<=[.!?])\s+')
 
+# Impact and Montserrat (bold) give the viral Shorts caption look.
+# Fall back through progressively less ideal fonts.
 FONT_PATH_CANDIDATES = [
-    "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+    # Impact — the classic viral caption font
+    "/usr/share/fonts/truetype/msttcorefonts/Impact.ttf",
+    "/usr/share/fonts/truetype/impact.ttf",
+    "/usr/share/fonts/Impact.ttf",
+    # Montserrat Bold — modern alternative
+    "/usr/share/fonts/truetype/montserrat/Montserrat-Bold.ttf",
+    "/usr/share/fonts/truetype/Montserrat-Bold.ttf",
+    # Liberation Sans Bold (Linux safe fallback)
     "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
     "/usr/share/fonts/truetype/freefont/FreeSansBold.ttf",
     "/usr/share/fonts/truetype/ubuntu/Ubuntu-B.ttf",
 ]
@@ -127,7 +137,15 @@ def build_ass_karaoke(
         return ""
 
     found_font = _find_font()
-    fname = Path(found_font).stem if found_font else "DejaVu Sans"
+    # Prefer Impact by name if found, otherwise use the stem of whatever we found
+    if found_font and "impact" in Path(found_font).stem.lower():
+        fname = "Impact"
+    elif found_font and "montserrat" in Path(found_font).stem.lower():
+        fname = "Montserrat"
+    elif found_font:
+        fname = Path(found_font).stem
+    else:
+        fname = "DejaVu Sans"
 
     header = (
         "[Script Info]\n"
@@ -147,7 +165,8 @@ def build_ass_karaoke(
         "&H00FFFFFF,"   # SecondaryColour = white  (unspoken)
         "&H00000000,"   # OutlineColour   = black
         "&H80000000,"   # BackColour      = semi-transparent black
-        "-1,0,0,0,100,100,0,0,1,3,1,"  # Bold=-1 (on), no italic/underline, border+shadow
+        # Bold=-1 (on), BorderStyle=1 (outline+shadow), Outline=5 (thick black stroke), Shadow=2
+        "-1,0,0,0,100,100,0,0,1,5,2,"
         f"2,20,20,{margin_v},1\n"       # Alignment=2 (bottom center), margins
         "\n"
         "[Events]\n"

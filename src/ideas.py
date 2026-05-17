@@ -143,6 +143,44 @@ def _complete_truncated_json(s: str) -> str:
     return s + suffix
 
 
+def _parse_and_validate(
+    raw: str,
+    schema_cls,
+    prompt: str,
+    model: str,
+    system: str = "",
+    max_retries: int = 2,
+):
+    """
+    Parse Ollama JSON output and validate against a Pydantic schema.
+    Auto-retries up to max_retries times on validation failure.
+    Returns validated model instance or raises on exhausted retries.
+    """
+    from pydantic import ValidationError
+    last_exc: Exception | None = None
+    current_raw = raw
+    for attempt in range(max_retries + 1):
+        try:
+            data = _parse_json_response(current_raw)
+            if isinstance(data, list) and data:
+                data = data[0]  # take first element for single-object schemas
+            return schema_cls.model_validate(data)
+        except (ValidationError, ValueError, TypeError) as exc:
+            last_exc = exc
+            if attempt < max_retries:
+                console.print(f"[yellow]JSON validation attempt {attempt+1} failed ({exc.__class__.__name__}) — retrying…[/yellow]")
+                try:
+                    current_raw = _ollama_generate(
+                        prompt + "\n\nIMPORTANT: Return ONLY valid JSON matching the schema exactly.",
+                        model=model,
+                        json_mode=True,
+                        system=system or "You must respond with valid JSON only.",
+                    )
+                except Exception:
+                    pass
+    raise ValueError(f"Pydantic validation failed after {max_retries} retries: {last_exc}")
+
+
 def _parse_json_response(raw: str) -> list | dict:
     """Extract JSON from model output — handles markdown fences, emojis, and truncation."""
     raw = raw.strip()
@@ -152,8 +190,13 @@ def _parse_json_response(raw: str) -> list | dict:
         for candidate in (s, cleaned):
             try:
                 return json.loads(candidate)
-            except json.JSONDecodeError:
-                pass
+            except json.JSONDecodeError as _jde:
+                # "Extra data" means JSON ends before the string does — parse just the valid prefix
+                if "Extra data" in str(_jde) and _jde.pos > 0:
+                    try:
+                        return json.loads(candidate[:_jde.pos])
+                    except json.JSONDecodeError:
+                        pass
         # Try completing a truncated string/structure, then re-clean so any
         # literal newlines inside the newly-closed string get escaped.
         completed = _complete_truncated_json(cleaned)
@@ -358,22 +401,24 @@ Return a JSON array. Each object must have exactly these keys:
 - estimated_virality: one of "Low", "Medium", "High", "Viral"
 
 Return ONLY the JSON array, no explanation."""
-    raw = _ollama_generate(prompt, model=model, json_mode=True,
-                           system="You are a YouTube viral content strategist. Always respond with valid JSON only.")
+    system_msg = "You are a YouTube viral content strategist. Always respond with valid JSON only."
+    raw = _ollama_generate(prompt, model=model, json_mode=True, system=system_msg)
     data = _parse_json_response(raw)
     if isinstance(data, dict):
         data = [data]
     ideas = []
+    from src.models import VideoIdeaModel
     for d in data:
-        title = _clean_str(d.get("title", ""))
-        if not title:
-            title = topic[:65]
+        try:
+            m = VideoIdeaModel.from_dict(d, fallback_title=topic)
+        except Exception:
+            m = VideoIdeaModel(title=topic[:65], hook=f"You need to know the truth about {topic}")
         ideas.append(VideoIdea(
-            title=title,
-            hook=_clean_str(d.get("hook", f"You need to know the truth about {topic}")),
-            description=_clean_str(d.get("description", "")),
-            tags=[str(t) for t in d.get("tags", [])] or [niche, topic],
-            estimated_virality=d.get("estimated_virality", "Medium"),
+            title=m.title,
+            hook=m.hook or f"You need to know the truth about {topic}",
+            description=m.description,
+            tags=m.tags or [niche, topic],
+            estimated_virality=m.estimated_virality,
         ))
     return ideas
 
@@ -443,16 +488,21 @@ Return a JSON object with exactly these keys:
 - tags: list of 15 SEO tags
 
 Return ONLY the JSON object, no explanation."""
-    raw = _ollama_generate(prompt, model=model, json_mode=True,
-                           system="You are a viral YouTube scriptwriter. Write to maximise watch time and shares. Always respond with valid JSON only.")
-    data = _parse_json_response(raw)
+    system_msg = "You are a viral YouTube scriptwriter. Write to maximise watch time and shares. Always respond with valid JSON only."
+    raw = _ollama_generate(prompt, model=model, json_mode=True, system=system_msg)
+    from src.models import VideoScriptModel
+    try:
+        validated = _parse_and_validate(raw, VideoScriptModel, prompt, model, system_msg)
+        data = validated.model_dump()
+    except Exception:
+        data = _parse_json_response(raw)
     script = VideoScript(
-        title=_clean_str(data.get("title", idea.title)),
-        hook=_clean_str(data.get("hook", "")),
-        sections=data.get("sections", []),
+        title=_clean_str(data.get("title", idea.title)) or idea.title,
+        hook=_clean_str(data.get("hook", idea.hook)),
+        sections=data.get("sections", []) or [],
         call_to_action=_clean_str(data.get("call_to_action", "")),
         description=_clean_str(data.get("description", "")),
-        tags=data.get("tags", []),
+        tags=data.get("tags", []) or [],
     )
     try:
         from src.viral_intelligence.retention_engine import RetentionEngine
@@ -492,26 +542,24 @@ Return a JSON array. Each object must have exactly these keys:
 
 Return ONLY the JSON array, no explanation."""
 
-    raw = _ollama_generate(
-        prompt,
-        model=model,
-        json_mode=True,
-        system="You are a YouTube viral content strategist. Always respond with valid JSON only.",
-    )
+    system_msg = "You are a YouTube viral content strategist. Always respond with valid JSON only."
+    raw = _ollama_generate(prompt, model=model, json_mode=True, system=system_msg)
     data = _parse_json_response(raw)
     if isinstance(data, dict):
         data = [data]
     ideas = []
+    from src.models import VideoIdeaModel
     for d in data:
-        title = _clean_str(d.get("title", ""))
-        if not title:
-            title = topic[:65]
+        try:
+            m = VideoIdeaModel.from_dict(d, fallback_title=topic)
+        except Exception:
+            m = VideoIdeaModel(title=topic[:65], hook=f"You need to know the truth about {topic}")
         ideas.append(VideoIdea(
-            title=title,
-            hook=_clean_str(d.get("hook", f"You need to know the truth about {topic}")),
-            description=_clean_str(d.get("description", "")),
-            tags=[str(t) for t in d.get("tags", [])] or [niche, topic],
-            estimated_virality=d.get("estimated_virality", "Medium"),
+            title=m.title,
+            hook=m.hook or f"You need to know the truth about {topic}",
+            description=m.description,
+            tags=m.tags or [niche, topic],
+            estimated_virality=m.estimated_virality,
         ))
     return ideas
 
@@ -568,21 +616,22 @@ Return a JSON object with exactly these keys:
 
 Return ONLY valid JSON, no explanation."""
 
-    raw = _ollama_generate(
-        prompt,
-        model=model,
-        json_mode=True,
-        system="You are a professional YouTube scriptwriter. Always respond with valid JSON only.",
-    )
-    data = _parse_json_response(raw)
+    system_msg = "You are a professional YouTube scriptwriter. Always respond with valid JSON only."
+    raw = _ollama_generate(prompt, model=model, json_mode=True, system=system_msg)
+    from src.models import VideoScriptModel
+    try:
+        validated = _parse_and_validate(raw, VideoScriptModel, prompt, model, system_msg)
+        data = validated.model_dump()
+    except Exception:
+        data = _parse_json_response(raw)
 
     script = VideoScript(
-        title=_clean_str(data.get("title", idea.title)),
-        hook=_clean_str(data.get("hook", "")),
-        sections=data.get("sections", []),
+        title=_clean_str(data.get("title", idea.title)) or idea.title,
+        hook=_clean_str(data.get("hook", idea.hook)),
+        sections=data.get("sections", []) or [],
         call_to_action=_clean_str(data.get("call_to_action", "")),
         description=_clean_str(data.get("description", "")),
-        tags=data.get("tags", []),
+        tags=data.get("tags", []) or [],
     )
 
     # ── 3. Score retention and auto-enhance if below threshold ─────────

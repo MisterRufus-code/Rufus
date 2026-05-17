@@ -78,10 +78,22 @@ def _init_db(conn: sqlite3.Connection) -> None:
         created_at  REAL    DEFAULT (unixepoch())
     );
 
+    CREATE TABLE IF NOT EXISTS footage_hashes (
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        niche       TEXT    NOT NULL DEFAULT '',
+        channel_id  TEXT    NOT NULL DEFAULT '',
+        url         TEXT,
+        file_hash   TEXT,
+        filename    TEXT,
+        render_id   TEXT    NOT NULL DEFAULT '',
+        created_at  REAL    DEFAULT (unixepoch())
+    );
+
     CREATE INDEX IF NOT EXISTS idx_hooks_niche ON hooks(niche);
     CREATE INDEX IF NOT EXISTS idx_hooks_score ON hooks(viral_score DESC);
     CREATE INDEX IF NOT EXISTS idx_scripts_niche ON scripts(niche);
     CREATE INDEX IF NOT EXISTS idx_topics_niche ON topics(niche);
+    CREATE INDEX IF NOT EXISTS idx_footage_niche ON footage_hashes(niche, channel_id, created_at DESC);
     """)
     conn.commit()
 
@@ -273,6 +285,84 @@ def memory_context(niche: str) -> str:
 
     lines.append("=== END MEMORY ===")
     return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# Footage hash tracking (duplicate-content prevention)
+# ---------------------------------------------------------------------------
+
+def _hash_file(path: str) -> str:
+    """Return a short MD5 of the first 1 MB of a file (fast, good enough for dedup)."""
+    import hashlib
+    h = hashlib.md5()
+    try:
+        with open(path, "rb") as f:
+            h.update(f.read(1_048_576))
+    except OSError:
+        pass
+    return h.hexdigest()
+
+
+def record_footage_used(
+    urls_or_paths: list[str],
+    render_id: str,
+    niche: str = "",
+    channel_id: str = "",
+) -> None:
+    """Persist URLs/file-paths used in a render so future renders can skip them."""
+    import hashlib
+    from pathlib import Path
+    with _db() as conn:
+        for item in urls_or_paths:
+            p = Path(item)
+            file_hash = _hash_file(item) if p.exists() else hashlib.md5(item.encode()).hexdigest()
+            url = item if item.startswith("http") else ""
+            filename = p.name if p.exists() else ""
+            conn.execute(
+                """INSERT INTO footage_hashes
+                   (niche, channel_id, url, file_hash, filename, render_id)
+                   VALUES (?,?,?,?,?,?)""",
+                (niche, channel_id, url, file_hash, filename, render_id),
+            )
+
+
+def get_recently_used_hashes(
+    niche: str = "",
+    channel_id: str = "",
+    last_n_renders: int = 3,
+) -> set[str]:
+    """Return file-hashes used in the last N renders for this channel/niche."""
+    with _db() as conn:
+        # Find the most recent N distinct render_ids
+        rows = conn.execute(
+            """SELECT DISTINCT render_id FROM footage_hashes
+               WHERE niche=? AND channel_id=?
+               ORDER BY created_at DESC LIMIT ?""",
+            (niche, channel_id, last_n_renders),
+        ).fetchall()
+        if not rows:
+            return set()
+        render_ids = tuple(r["render_id"] for r in rows)
+        placeholders = ",".join("?" * len(render_ids))
+        hash_rows = conn.execute(
+            f"SELECT file_hash FROM footage_hashes WHERE render_id IN ({placeholders})",
+            render_ids,
+        ).fetchall()
+    return {r["file_hash"] for r in hash_rows}
+
+
+def is_footage_used_recently(
+    url_or_path: str,
+    niche: str = "",
+    channel_id: str = "",
+    last_n_renders: int = 3,
+) -> bool:
+    """Return True if this URL/file was used in the last N renders."""
+    from pathlib import Path
+    import hashlib
+    p = Path(url_or_path)
+    file_hash = _hash_file(url_or_path) if p.exists() else hashlib.md5(url_or_path.encode()).hexdigest()
+    return file_hash in get_recently_used_hashes(niche, channel_id, last_n_renders)
 
 
 def stats() -> dict:
