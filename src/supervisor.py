@@ -46,19 +46,46 @@ class JobStatus(str, Enum):
     TIMEOUT = "timeout"
 
 
+# Pipeline stage markers — matched against job log output
+_STAGE_PATTERNS = [
+    (r"Step 1",           "1/10 Trend research"),
+    (r"Step 2",           "2/10 AI keywords"),
+    (r"Step 3",           "3/10 Footage download"),
+    (r"Step 4",           "4/10 Indexing media"),
+    (r"Step 5",           "5/10 Idea generation"),
+    (r"Step 6b",          "6b/10 Hook optimisation"),
+    (r"Step 6",           "6/10 Script writing"),
+    (r"Step 7",           "7/10 Semantic matching"),
+    (r"Step 8",           "8/10 Entropy check"),
+    (r"Step 9",           "9/10 TTS voiceover"),
+    (r"Step 10",          "10/10 Rendering video"),
+    (r"Step 11",          "10/10 Subtitles"),
+    (r"Step 12",          "10/10 Uploading"),
+    (r"pipeline finished","✓ Done"),
+    (r"pipeline resuming","↩ Resuming checkpoint"),
+]
+
+import re as _re
+_STAGE_RE = [((_re.compile(p, _re.IGNORECASE)), label) for p, label in _STAGE_PATTERNS]
+
+SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
+
+
 @dataclass
 class Job:
-    job_id:      str
-    niche:       str
-    topic:       str
-    mode:        str          # "both" | "long" | "shorts"
-    status:      JobStatus    = JobStatus.RUNNING
-    started_at:  Optional[datetime] = None
-    finished_at: Optional[datetime] = None
-    pid:         Optional[int]      = None
-    attempt:     int                = 1
-    error:       Optional[str]      = None
-    proc:        Optional[subprocess.Popen] = field(default=None, repr=False)
+    job_id:        str
+    niche:         str
+    topic:         str
+    mode:          str          # "both" | "long" | "shorts"
+    status:        JobStatus    = JobStatus.RUNNING
+    started_at:    Optional[datetime] = None
+    finished_at:   Optional[datetime] = None
+    pid:           Optional[int]      = None
+    attempt:       int                = 1
+    error:         Optional[str]      = None
+    log_path:      Optional[Path]     = None
+    current_stage: str                = "starting…"
+    proc:          Optional[subprocess.Popen] = field(default=None, repr=False)
 
     def runtime_str(self) -> str:
         if not self.started_at:
@@ -67,6 +94,23 @@ class Job:
         m = int(delta.total_seconds() // 60)
         s = int(delta.total_seconds() % 60)
         return f"{m}m{s:02d}s"
+
+    def refresh_stage(self) -> None:
+        """Parse the tail of the job log to find the current pipeline stage."""
+        if not self.log_path or not self.log_path.exists():
+            return
+        try:
+            with open(self.log_path, "rb") as f:
+                # Read last 4 KB — enough to catch the latest stage line
+                f.seek(0, 2)
+                size = f.tell()
+                f.seek(max(0, size - 4096))
+                tail = f.read().decode("utf-8", errors="replace")
+            for pattern, label in _STAGE_RE:
+                if pattern.search(tail):
+                    self.current_stage = label
+        except Exception:
+            pass
 
 
 @dataclass
@@ -251,6 +295,7 @@ class Supervisor:
             cmd.append("--shorts")
 
         log_path = self.config.log_file.parent / f"job_{job.job_id}.log"
+        job.log_path = log_path
         try:
             log_fh = open(log_path, "w")
             proc = subprocess.Popen(
@@ -278,15 +323,18 @@ class Supervisor:
             if job.status != JobStatus.RUNNING or job.proc is None:
                 continue
 
+            job.refresh_stage()
             ret = job.proc.poll()
             if ret is not None:
                 job.finished_at = now
                 if ret == 0:
                     job.status = JobStatus.DONE
+                    job.current_stage = "✓ complete"
                     self._fail_count[job.niche] = 0      # reset on success
                     self._log(f"DONE   niche={job.niche} runtime={job.runtime_str()}")
                 else:
                     job.status = JobStatus.FAILED
+                    job.current_stage = "✗ failed"
                     self._fail_count[job.niche] = self._fail_count.get(job.niche, 0) + 1
                     self._log(f"FAIL   niche={job.niche} exit={ret} fails={self._fail_count[job.niche]}")
                 self._save_state()
@@ -309,26 +357,29 @@ class Supervisor:
         now = datetime.now()
 
         # ── Active / recent jobs table ──────────────────────────────
+        spin_frame = SPINNER_FRAMES[int(now.timestamp() * 4) % len(SPINNER_FRAMES)]
+
         t = Table(box=None, header_style="bold cyan", show_edge=False)
-        t.add_column("ID",      style="dim",    width=9)
-        t.add_column("Niche",                   width=10)
-        t.add_column("Topic",                   width=42)
-        t.add_column("Status",                  width=12)
-        t.add_column("Time",                    width=8)
-        t.add_column("#",       style="dim",    width=3)
+        t.add_column("ID",      style="dim",  width=9)
+        t.add_column("Niche",                 width=10)
+        t.add_column("Stage",                 width=22)
+        t.add_column("Status",                width=12)
+        t.add_column("Elapsed",               width=8)
+        t.add_column("#", style="dim",        width=3)
 
         STATUS_STYLE = {
-            JobStatus.RUNNING: "[yellow]⟳ running[/yellow]",
+            JobStatus.RUNNING: f"[yellow]{spin_frame} running[/yellow]",
             JobStatus.DONE:    "[green]✓ done[/green]",
             JobStatus.FAILED:  "[red]✗ failed[/red]",
             JobStatus.TIMEOUT: "[red]⏱ timeout[/red]",
         }
 
         for job in reversed(self.jobs[-15:]):
+            stage = job.current_stage if job.status == JobStatus.RUNNING else ""
             t.add_row(
                 job.job_id,
                 job.niche,
-                (job.topic[:40] + "..") if len(job.topic) > 42 else job.topic,
+                stage,
                 STATUS_STYLE[job.status],
                 job.runtime_str(),
                 str(job.attempt),
