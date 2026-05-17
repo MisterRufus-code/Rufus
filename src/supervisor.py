@@ -372,7 +372,7 @@ class Supervisor:
             t,
             Text(""),
             Text("Niche schedule:", style="bold"),
-            Text("\n".join(lines)),
+            Text.from_markup("\n".join(lines)),
             Text(""),
             Text.from_markup(footer),
         )
