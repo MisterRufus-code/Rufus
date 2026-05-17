@@ -280,6 +280,19 @@ Reply with ONLY the topic/hook. One sentence. No explanation."""
 # Main entry point
 # ---------------------------------------------------------------------------
 
+def fetch_trending_topic(niche: str = "general", geo: str = "US") -> str:
+    """TrendSniper entry point — used by Supervisor and ViralIntelligence."""
+    try:
+        from src.viral_intelligence.trend_sniper import TrendSniper
+        sniper = TrendSniper(niche=niche, geo=geo)
+        topic = sniper.best_topic()
+        if topic:
+            return topic
+    except Exception:
+        pass
+    return get_trending_topic(niche=niche, geo=geo)
+
+
 def get_trending_topic(
     niche: str = "general",
     geo: str = "US",

@@ -475,23 +475,50 @@ def generate_video_script(
     duration_minutes: int = 10,
     style: str = "engaging and conversational",
     model: str = DEFAULT_MODEL,
+    niche: str = "general",
 ) -> VideoScript:
-    """Generate a full video script using a local Ollama model."""
-    prompt = f"""Write a YouTube video script.
+    """Generate a full video script using a local Ollama model.
+
+    Automatically injects ViralDNA patterns and RetentionEngine requirements
+    into the prompt so every script is built for maximum watch time.
+    """
+    # ── 1. Load ViralDNA context ────────────────────────────────────────
+    dna_context = ""
+    try:
+        from src.viral_intelligence.dna_extractor import ViralDNA
+        dna = ViralDNA(niche=niche)
+        profile = dna.extract()
+        dna_context = "\n\n" + profile.to_ollama_context()
+    except Exception:
+        pass
+
+    # ── 2. Build retention-aware prompt ────────────────────────────────
+    prompt = f"""You are the world's best YouTube scriptwriter. Your videos average 70%+ retention.
+
 Title: {idea.title}
 Hook: {idea.hook}
 Style: {style}
 Target duration: {duration_minutes} minutes
+Niche: {niche}
+{dna_context}
+
+RETENTION ARCHITECTURE RULES (mandatory):
+- First 30 seconds: create 3 open loops (questions viewer must stay to see answered)
+- Every section: end with a bridge "But here's where it gets interesting..."
+- Every section: deliver one specific reward (number, insight, revelation)
+- Use exact dollar amounts, percentages, timeframes — never vague
+- Close ALL open loops before the final section
+- Final section: "If this surprised you, wait until you see [related topic]"
 
 Return a JSON object with exactly these keys:
-- title: the video title
-- hook: spoken opening (first 15 seconds)
-- sections: array of objects with "heading" and "script" keys
-- call_to_action: final 30-second spoken CTA for likes/subscribe
-- description: full YouTube description with timestamp placeholders
+- title: the video title (10 words max, must include a number or dollar amount)
+- hook: spoken opening (first 15 seconds, must use loss aversion + open loop)
+- sections: array of objects with "heading" and "script" keys (4-6 sections)
+- call_to_action: final 30-second spoken CTA
+- description: YouTube description with timestamps
 - tags: list of 15 SEO tags
 
-Return ONLY the JSON object, no explanation."""
+Return ONLY valid JSON, no explanation."""
 
     raw = _ollama_generate(
         prompt,
@@ -500,7 +527,8 @@ Return ONLY the JSON object, no explanation."""
         system="You are a professional YouTube scriptwriter. Always respond with valid JSON only.",
     )
     data = _parse_json_response(raw)
-    return VideoScript(
+
+    script = VideoScript(
         title=_clean_str(data.get("title", idea.title)),
         hook=_clean_str(data.get("hook", "")),
         sections=data.get("sections", []),
@@ -508,6 +536,17 @@ Return ONLY the JSON object, no explanation."""
         description=_clean_str(data.get("description", "")),
         tags=data.get("tags", []),
     )
+
+    # ── 3. Score and log retention quality ─────────────────────────────
+    try:
+        from src.viral_intelligence.retention_engine import RetentionEngine
+        engine = RetentionEngine()
+        score  = engine.score(script.sections, hook=script.hook)
+        engine.print_report(score)
+    except Exception:
+        pass
+
+    return script
 
 
 # ---------------------------------------------------------------------------
