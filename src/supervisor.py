@@ -27,10 +27,11 @@ from enum import Enum
 from pathlib import Path
 from typing import Optional
 
-from rich.console import Console
+from rich.console import Console, Group
 from rich.live import Live
 from rich.panel import Panel
 from rich.table import Table
+from rich.text import Text
 
 console = Console()
 
@@ -363,11 +364,17 @@ class Supervisor:
         free_gb = shutil.disk_usage("/").free / 1024**3
         health  = f"disk [green]{free_gb:.0f} GB[/green]"
 
-        body = (
-            f"[bold]Jobs (last 15):[/bold]\n{t}\n\n"
-            f"[bold]Niche schedule:[/bold]\n" + "\n".join(lines) +
-            f"\n\n[dim]Health: {health}  |  "
-            f"Updated: {now.strftime('%H:%M:%S')}[/dim]"
+        footer = (
+            f"[dim]Health: {health}  |  Updated: {now.strftime('%H:%M:%S')}[/dim]"
+        )
+        body = Group(
+            Text("Jobs (last 15):", style="bold"),
+            t,
+            Text(""),
+            Text("Niche schedule:", style="bold"),
+            Text("\n".join(lines)),
+            Text(""),
+            Text.from_markup(footer),
         )
         return Panel(body, title="[bold green]Rufus Supervisor[/bold green]",
                      border_style="green")
