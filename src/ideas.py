@@ -336,16 +336,19 @@ Return ONLY the JSON array, no explanation."""
     data = _parse_json_response(raw)
     if isinstance(data, dict):
         data = [data]
-    return [
-        VideoIdea(
-            title=_clean_str(d.get("title", "")),
-            hook=_clean_str(d.get("hook", "")),
+    ideas = []
+    for d in data:
+        title = _clean_str(d.get("title", ""))
+        if not title:
+            title = topic[:65]
+        ideas.append(VideoIdea(
+            title=title,
+            hook=_clean_str(d.get("hook", f"You need to know the truth about {topic}")),
             description=_clean_str(d.get("description", "")),
-            tags=[str(t) for t in d.get("tags", [])],
+            tags=[str(t) for t in d.get("tags", [])] or [niche, topic],
             estimated_virality=d.get("estimated_virality", "Medium"),
-        )
-        for d in data
-    ]
+        ))
+    return ideas
 
 
 def _viral_script_instructions(virality: str) -> str:
@@ -469,16 +472,19 @@ Return ONLY the JSON array, no explanation."""
     data = _parse_json_response(raw)
     if isinstance(data, dict):
         data = [data]
-    return [
-        VideoIdea(
-            title=_clean_str(d.get("title", "")),
-            hook=_clean_str(d.get("hook", "")),
+    ideas = []
+    for d in data:
+        title = _clean_str(d.get("title", ""))
+        if not title:
+            title = topic[:65]
+        ideas.append(VideoIdea(
+            title=title,
+            hook=_clean_str(d.get("hook", f"You need to know the truth about {topic}")),
             description=_clean_str(d.get("description", "")),
-            tags=[str(t) for t in d.get("tags", [])],
+            tags=[str(t) for t in d.get("tags", [])] or [niche, topic],
             estimated_virality=d.get("estimated_virality", "Medium"),
-        )
-        for d in data
-    ]
+        ))
+    return ideas
 
 
 def generate_video_script(
