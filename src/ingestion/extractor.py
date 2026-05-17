@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import re
 import threading
 
 # Suppress OpenCV AV1/codec software-fallback warnings (harmless, but noisy)
@@ -107,7 +108,6 @@ def _keyword_embedding(text: str) -> list[float]:
     return vec.tolist()
 
 
-import re as _re_mod  # used by _keyword_embedding above
 
 
 def _load_blip():

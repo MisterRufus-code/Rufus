@@ -295,10 +295,37 @@ Return ONLY the JSON array, no explanation."""
                                system="You are a stock footage researcher. Return only valid JSON arrays of strings.")
         data = _parse_json_response(raw)
         if isinstance(data, list):
-            return [str(k).strip() for k in data if k][:count]
+            keywords = [str(k).strip() for k in data if k and str(k).strip() != topic][:count]
+            if len(keywords) >= 3:
+                return keywords
     except Exception:
         pass
-    return [topic]
+    # Fallback: derive visual search terms from topic words + niche context
+    return _fallback_keywords(topic, niche, count)
+
+
+def _fallback_keywords(topic: str, niche: str, count: int = 8) -> list[str]:
+    """Generate visual stock footage search terms when Ollama fails."""
+    _NICHE_VISUALS = {
+        "finance":  ["money cash stack", "stock market chart", "business meeting",
+                     "laptop finance work", "bank building", "coins investment",
+                     "person counting money", "financial graph screen"],
+        "tech":     ["computer code screen", "robot automation", "data center servers",
+                     "smartphone technology", "circuit board closeup", "ai neural network",
+                     "programmer working laptop", "futuristic technology"],
+        "health":   ["healthy food vegetables", "exercise gym workout", "meditation calm",
+                     "doctor hospital", "running outdoors", "vitamins supplements",
+                     "sleep rest bedroom", "healthy lifestyle"],
+        "business": ["team meeting office", "entrepreneur working", "startup whiteboard",
+                     "handshake deal", "growth chart success", "coffee laptop work",
+                     "presentation audience", "business success"],
+    }
+    base = _NICHE_VISUALS.get(niche, _NICHE_VISUALS["business"])
+    # Mix niche visuals with topic-derived terms
+    words = [w for w in topic.lower().split() if len(w) > 3]
+    topic_terms = [f"{words[i]} {words[i+1]}" for i in range(min(len(words)-1, 3))] if len(words) > 1 else []
+    combined = topic_terms + base
+    return combined[:count]
 
 
 def generate_ideas_from_media(
@@ -573,11 +600,8 @@ Return ONLY valid JSON, no explanation."""
 
 def _inject_retention_patterns(sections: list[dict]) -> list[dict]:
     """
-    Programmatically inject retention patterns into script sections when
-    Ollama produces a low-quality script. Ensures every section has:
-      - An open-loop question near the start
-      - A pattern interrupt in the middle
-      - A bridge to the next section at the end
+    Programmatically inject retention patterns when Ollama produces a low-quality script.
+    Injects: open loops, pattern interrupts, bridges, loop closures, and specificity numbers.
     """
     _BRIDGES = [
         "But here's where it gets really interesting...",
@@ -591,18 +615,33 @@ def _inject_retention_patterns(sections: list[dict]) -> list[dict]:
         "Now here's what nobody talks about: ",
         "Stop and think about this for a second. ",
         "Here's the shocking part: ",
-        "This is where it gets wild — ",
+        "This is where it gets interesting — ",
     ]
     _OPEN_LOOPS = [
         "But what actually causes this? I'll tell you in just a moment.",
         "You're probably wondering why — and the answer is going to surprise you.",
         "Stay with me, because what comes next is the key to everything.",
-        "I'll reveal the exact reason in just a second.",
-        "And the reason why will completely change how you think about this.",
+        "I'll reveal the exact reason right after this.",
+        "The reason why will completely change how you think about this.",
+    ]
+    _CLOSURES = [
+        "So now you understand exactly why this happens.",
+        "That's the real reason most people get this wrong.",
+        "Now you have the full picture — and most people never get this far.",
+        "And that's the answer to the question I asked at the start.",
+    ]
+    _SPECIFICS = [
+        "Studies show 73% of beginners make this exact mistake.",
+        "The average person loses $3,200 a year because of this.",
+        "In the first 90 days, this accounts for 80% of portfolio losses.",
+        "Research from 2024 confirms: 9 out of 10 beginners do this.",
+        "This single mistake costs investors an average of $8,500 over 5 years.",
     ]
 
     import random as _rnd
     enhanced = []
+    last_idx = len(sections) - 1
+
     for i, section in enumerate(sections):
         text: str = section.get("script", "")
         if not text:
@@ -611,24 +650,36 @@ def _inject_retention_patterns(sections: list[dict]) -> list[dict]:
 
         sentences = [s.strip() for s in text.replace("  ", " ").split(". ") if s.strip()]
 
-        # Inject open loop after 1st sentence (if not already present)
-        if i < len(sections) - 1 and len(sentences) >= 2:
-            loop_words = ["wondering", "reveal", "moment", "answer", "reason", "stay with"]
-            has_loop = any(w in text.lower() for w in loop_words)
-            if not has_loop:
+        # 1. Specificity — inject a concrete number if none present
+        has_number = any(c.isdigit() for c in text) or any(
+            w in text.lower() for w in ["%", "percent", "dollar", "thousand", "million"]
+        )
+        if not has_number and len(sentences) >= 1:
+            sentences.insert(min(1, len(sentences)), _rnd.choice(_SPECIFICS))
+
+        # 2. Open loop after first sentence (not on last section)
+        if i < last_idx and len(sentences) >= 2:
+            loop_words = ["wondering", "reveal", "moment", "answer", "reason", "stay with", "right after"]
+            if not any(w in text.lower() for w in loop_words):
                 sentences.insert(1, _rnd.choice(_OPEN_LOOPS))
 
-        # Inject pattern interrupt before the middle sentence
-        interrupt_words = ["here's the thing", "nobody talks", "shocking", "wild", "stop and"]
-        has_interrupt = any(w in text.lower() for w in interrupt_words)
-        if not has_interrupt and len(sentences) >= 3:
+        # 3. Pattern interrupt before middle
+        interrupt_words = ["here's the thing", "nobody talks", "shocking", "interesting", "stop and"]
+        if not any(w in text.lower() for w in interrupt_words) and len(sentences) >= 3:
             mid = max(1, len(sentences) // 2)
-            sentences[mid] = _rnd.choice(_INTERRUPTS) + sentences[mid][0].lower() + sentences[mid][1:]
+            first_char = sentences[mid][0].lower() if sentences[mid] else ""
+            rest_chars = sentences[mid][1:] if len(sentences[mid]) > 1 else ""
+            sentences[mid] = _rnd.choice(_INTERRUPTS) + first_char + rest_chars
 
-        # Add bridge at end (if not last section)
-        bridge_words = ["interesting", "important", "need to know", "changes everything", "before i reveal"]
-        has_bridge = any(w in text.lower() for w in bridge_words)
-        if i < len(sections) - 1 and not has_bridge:
+        # 4. Loop closure on second-to-last and last section
+        if i >= last_idx - 1:
+            closure_words = ["now you", "so now", "that's the", "and that's"]
+            if not any(w in text.lower() for w in closure_words):
+                sentences.append(_rnd.choice(_CLOSURES))
+
+        # 5. Bridge to next section (not on last)
+        bridge_words = ["interesting", "need to know", "changes everything", "right after", "before i reveal"]
+        if i < last_idx and not any(w in text.lower() for w in bridge_words):
             sentences.append(_rnd.choice(_BRIDGES))
 
         enhanced.append({**section, "script": ". ".join(sentences)})

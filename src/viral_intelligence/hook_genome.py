@@ -94,14 +94,23 @@ def _mutate(hook: str, strength: float = 0.3) -> str:
                 result = re.sub(pattern, vivid, result, count=1, flags=re.IGNORECASE)
                 break
 
-    # 3. Number injection (if no number present)
+    # 3. Number injection (if no number present) — prefix format, not mid-sentence insert
     if random.random() < strength:
         if not re.search(r"\b\d+\b|\$", result):
-            _, make_num = random.choice(_NUMBER_INJECTIONS)
-            words  = result.split()
-            insert = min(2, len(words))
-            words.insert(insert, make_num())
-            result = " ".join(words)
+            label, make_num = random.choice(_NUMBER_INJECTIONS)
+            num = make_num()
+            if label.startswith("N ways"):
+                result = f"{num} to {result[0].lower()}{result[1:]}"
+            elif label.startswith("N secrets"):
+                result = f"{num} {result[0].lower()}{result[1:]}"
+            elif label.startswith("in N"):
+                result = result.rstrip(".,!?") + f" — achieve this {num}"
+            elif label.startswith("$"):
+                result = result.rstrip(".,!?") + f" (costs you {num}/year)"
+            elif label.startswith("N%"):
+                result = f"{num} of people don't know: {result[0].lower()}{result[1:]}"
+            else:
+                result = result.rstrip(".,!?") + f" — {num}"
 
     # 4. Recency suffix
     if random.random() < strength * 0.5:
