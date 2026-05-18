@@ -85,10 +85,11 @@ def _trim_vertical(clip: TimelineClip, output_path: Path, ken_burns: bool = True
     # The crop starts at 10% from top instead of center (50%).
     crop_vf = "scale=-2:1920,crop=1080:1920:x=(iw-1080)/2:y=ih*0.10"
     if ken_burns and clip.asset.asset_type != "image":
-        # Very subtle zoom: 1.00 → 1.04 over the clip duration (barely perceptible, adds life)
+        # Start at z=1.01 to avoid gray edge artifact at z=1.0 boundary
         zoom_vf = (
-            f"scale=2160:3840,zoompan=z='min(1+({0.04}/({duration}*25))*on,1.04)'"
-            f":x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d={int(duration*25)}:s=1080x1920"
+            f"scale=2160:3840,zoompan=z='min(1.01+({0.03}/({duration}*25))*on,1.04)'"
+            f":x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)'"
+            f":d={int(duration*25)}:s=1080x1920:fps=25"
         )
         vf = zoom_vf
     else:

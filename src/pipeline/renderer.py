@@ -75,15 +75,17 @@ def trim_clip(clip: TimelineClip, output_path: Path, ken_burns: bool = True) -> 
     asset_path = clip.asset.path
     duration = clip.out_point - clip.in_point
 
-    base_vf = "scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2"
+    base_vf = "scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2:color=black"
 
     if ken_burns and _has_motion(clip):
         frames = max(25, int(duration * 25))
-        # Gentle zoom 1.00 → 1.06, centred
+        # Start at z=1.01 (not 1.00) to stay safely inside the scaled frame and
+        # avoid the gray edge artifact caused by sub-pixel overflow at z=1.0 exactly.
         vf = (
             f"scale=3840:2160,"
-            f"zoompan=z='min(1+({0.06}/{frames})*on,1.06)'"
-            f":x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d={frames}:s=1920x1080"
+            f"zoompan=z='min(1.01+({0.05}/{frames})*on,1.06)'"
+            f":x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)'"
+            f":d={frames}:s=1920x1080:fps=25"
         )
     else:
         vf = base_vf
