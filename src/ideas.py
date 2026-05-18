@@ -61,13 +61,25 @@ _FILLER_PHRASES: list[tuple[str, str]] = [
 
 
 def _strip_filler(text: str) -> str:
-    """Remove known filler/stalling phrases from generated script text."""
+    """Remove filler phrases and consecutive duplicate sentences from generated scripts."""
     for phrase, replacement in _FILLER_PHRASES:
         text = text.replace(phrase, replacement)
-    # Collapse double spaces and leading/trailing whitespace per sentence
     text = re.sub(r'  +', ' ', text)
     text = re.sub(r'\. \.', '.', text)
-    return text.strip()
+
+    # Remove consecutive duplicate sentences (LLMs often repeat a sentence back-to-back)
+    sentences = re.split(r'(?<=[.!?])\s+', text.strip())
+    deduped: list[str] = []
+    for sent in sentences:
+        norm = re.sub(r'\s+', ' ', sent.lower().strip().rstrip('.!?'))
+        if not deduped:
+            deduped.append(sent)
+        else:
+            prev_norm = re.sub(r'\s+', ' ', deduped[-1].lower().strip().rstrip('.!?'))
+            # Skip if identical or one contains the other (substring repeat)
+            if norm != prev_norm and norm not in prev_norm and prev_norm not in norm:
+                deduped.append(sent)
+    return ' '.join(deduped).strip()
 
 
 def _log_script(script: "VideoScript", niche: str, topic: str) -> None:

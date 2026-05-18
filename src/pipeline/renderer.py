@@ -183,18 +183,27 @@ def _loop_video_to_duration(video_path: Path, target_duration: float, output_pat
 
 
 def add_audio(video_path: Path, audio_path: Path, output_path: Path) -> Path:
-    """Merge voiceover with video. Video is looped if shorter than audio so nothing freezes."""
-    audio_dur  = _get_duration(audio_path)
-    video_dur  = _get_duration(video_path)
+    """Merge voiceover with video. Loops footage smoothly if shorter than audio."""
+    audio_dur = _get_duration(audio_path)
+    video_dur = _get_duration(video_path)
 
     working_video = video_path
     if audio_dur > 0 and video_dur < audio_dur - 0.5:
-        looped = video_path.parent / ("_looped_" + video_path.name)
         console.print(
             f"[dim]Video ({video_dur:.1f}s) shorter than audio ({audio_dur:.1f}s)"
-            f" — looping footage to match[/dim]"
+            f" — looping footage[/dim]"
         )
-        _loop_video_to_duration(video_path, audio_dur, looped)
+        looped = video_path.parent / ("_looped_" + video_path.name)
+        loops = int(audio_dur / max(video_dur, 1)) + 2
+        # Re-encode the loop so there's no freeze at the seam
+        _ffmpeg(
+            "-stream_loop", str(loops),
+            "-i", str(video_path),
+            "-t", str(audio_dur + 1.0),
+            *_video_codec_args(),
+            "-an",
+            str(looped),
+        )
         working_video = looped
 
     _ffmpeg(
@@ -284,11 +293,11 @@ def render_video(
                 "-loop", "1",
                 "-i", clip.asset.path,
                 "-t", str(duration),
-                "-c:v", "libx264", "-preset", "fast", "-crf", "23",
+                *_video_codec_args(),
                 "-vf",
                 f"scale=3840:2160,"
-                f"zoompan=z='min(1+({0.06}/{frames})*on,1.06)'"
-                f":x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d={frames}:s=1920x1080",
+                f"zoompan=z='min(1.01+({0.05}/{frames})*on,1.06)'"
+                f":x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d={frames}:s=1920x1080:fps=25",
                 "-pix_fmt", "yuv420p",
                 str(out),
             )

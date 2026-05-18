@@ -69,7 +69,7 @@ def run_pipeline(
     ideas_count: int = 3,
     geo: str = "US",
     download_footage: bool = True,
-    videos_per_scene: int = 3,
+    videos_per_scene: int = 5,
     output_dir: Optional[Path] = None,
     upload: bool = False,
     privacy: str = "private",

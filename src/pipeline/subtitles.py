@@ -203,14 +203,27 @@ def build_ass_karaoke(
     return header + "\n".join(events) + "\n"
 
 
+def _video_codec_args() -> list[str]:
+    """Use NVENC if available, else libx264."""
+    try:
+        r = subprocess.run(
+            ["ffmpeg", "-hide_banner", "-encoders"],
+            capture_output=True, text=True, timeout=10,
+        )
+        if "h264_nvenc" in r.stdout:
+            return ["-c:v", "h264_nvenc", "-preset", "p4", "-rc", "vbr", "-cq", "22"]
+    except Exception:
+        pass
+    return ["-c:v", "libx264", "-preset", "fast", "-crf", "22"]
+
+
 def burn_ass_subtitles(video_path: Path, ass_path: Path, output_path: Path) -> Path:
     """Burn ASS karaoke subtitles using FFmpeg ass filter (requires libass)."""
-    # FFmpeg ass filter path: forward slashes, colon-escaped on Windows
     ass_str = str(ass_path.resolve()).replace("\\", "/")
     _ffmpeg(
         "-i", str(video_path),
         "-vf", f"ass={ass_str}",
-        "-c:v", "libx264", "-preset", "fast", "-crf", "22",
+        *_video_codec_args(),
         "-c:a", "copy",
         str(output_path),
     )
@@ -273,6 +286,14 @@ def build_srt(
         raw_segs.append(_strip_clip_refs(call_to_action.strip()))
 
     raw_segs = [seg for seg in raw_segs if seg.strip()]
+
+    # Deduplicate adjacent identical segments (can occur when LLM repeats a phrase
+    # at both the end of one section and the start of the next)
+    deduped: list[str] = []
+    for seg in raw_segs:
+        if not deduped or seg.lower().strip() != deduped[-1].lower().strip():
+            deduped.append(seg)
+    raw_segs = deduped
     if not raw_segs or total_duration <= 0:
         return ""
 
@@ -342,7 +363,7 @@ def burn_subtitles(
     _ffmpeg(
         "-i", str(video_path),
         "-vf", f"subtitles='{srt_escaped}':force_style='{style}'",
-        "-c:v", "libx264", "-preset", "fast", "-crf", "22",
+        *_video_codec_args(),
         "-c:a", "copy",
         str(output_path),
     )
