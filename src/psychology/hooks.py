@@ -268,7 +268,9 @@ def _enhance_hook(hook: str, topic: str, niche: str) -> str:
         text,
     ))
     if not has_number:
-        result = f"3 shocking {niche} secrets: {result}"
+        # Derive 1-2 topic words for a natural prefix instead of raw niche key
+        topic_words = " ".join(topic.split()[:3]).rstrip(".,!?:")
+        result = f"3 shocking truths about {topic_words}: {result}"
         text = result.lower()
 
     # Emotional trigger — append if missing

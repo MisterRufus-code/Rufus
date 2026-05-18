@@ -72,6 +72,28 @@ _RECENCY_SUFFIXES = [
 ]
 
 
+_POWER_START_WORDS = frozenset({
+    "stop", "never", "you're", "most", "the", "what",
+    "they", "i", "3", "5", "7", "9", "10",
+})
+
+_LEADING_POWER_RE = re.compile(
+    r"^(?:stop|never|most people never|you(?:'re| are)|"
+    r"the (?:shocking truth|real reason|hidden)|"
+    r"what nobody|they don't|i was)[\s\w]*?[,:—–]\s*",
+    re.IGNORECASE,
+)
+
+
+def _strip_leading_power(text: str) -> str:
+    """Remove a duplicate opener that was left as the start of 'rest'."""
+    m = _LEADING_POWER_RE.match(text)
+    if m:
+        stripped = text[m.end():].strip()
+        return stripped if len(stripped.split()) >= 4 else text
+    return text
+
+
 def _mutate(hook: str, strength: float = 0.3) -> str:
     """Apply random mutations to a hook string."""
     result = hook
@@ -79,11 +101,17 @@ def _mutate(hook: str, strength: float = 0.3) -> str:
     # 1. Power start replacement
     if random.random() < strength:
         first_word = result.split()[0].lower() if result.split() else ""
-        if first_word not in {"stop", "never", "you're", "most", "the", "what"}:
+        if first_word not in _POWER_START_WORDS:
             new_start = random.choice(_POWER_STARTS)
             # Keep the rest of the hook after the first clause
             parts = re.split(r"[,:—–]", result, maxsplit=1)
             rest  = parts[1].strip() if len(parts) > 1 else result
+            # Strip any dangling power opener that was the first clause
+            rest = _strip_leading_power(rest)
+            # Avoid double-applying the same opener word
+            rest_lower = rest.lower()
+            if any(rest_lower.startswith(w.lower()) for w in new_start.split()):
+                rest = re.sub(r"^\S+\s+", "", rest, count=1)
             result = f"{new_start} {rest}"
 
     # 2. Emotional word swap
