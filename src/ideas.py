@@ -16,6 +16,84 @@ console = Console()
 
 DEFAULT_MODEL = "mistral"   # change to "llama3.1" or "phi3" if preferred
 
+# Phrases the model loves to write that kill credibility and waste airtime.
+# Applied as a post-processing strip after every script generation.
+_FILLER_PHRASES: list[tuple[str, str]] = [
+    # "stay with me" family
+    ("Stay with me, because what comes next is the key to everything.", ""),
+    ("Stay with me.", ""),
+    ("Stay with me —", ""),
+    ("Stay with me,", ""),
+    # "don't go anywhere" family
+    ("Don't go anywhere.", ""),
+    ("Don't miss this.", ""),
+    ("Don't skip this part.", ""),
+    ("Don't skip this.", ""),
+    # "I'll tell you in a moment" family
+    ("I'll tell you in just a moment.", ""),
+    ("I'll tell you right after this.", ""),
+    ("I'll reveal the exact reason right after this.", ""),
+    ("I'll get to that in a moment.", ""),
+    ("We'll get to that in a moment.", ""),
+    # "but first" padding
+    ("But before I reveal the answer, you need to understand this first.", ""),
+    ("But first, let me explain something.", ""),
+    ("But first —", ""),
+    # "here's the thing" empty bridges
+    ("But here's where it gets really interesting...", ""),
+    ("But here's where it gets interesting —", ""),
+    ("Here's where it gets really interesting.", ""),
+    ("This is where it gets interesting —", ""),
+    # "you're watching" ego-strokes
+    ("If you're watching this,", ""),
+    ("Since you're watching this,", ""),
+    ("The fact that you're watching this", ""),
+    # hollow loops
+    ("You're probably wondering why — and the answer is going to surprise you.", ""),
+    ("The reason why will completely change how you think about this.", ""),
+    ("What comes next will change how you see everything.", ""),
+    ("And that changes everything.", ""),
+    ("This changes everything.", ""),
+    # hollow closures
+    ("Now you have the full picture — and most people never get this far.", ""),
+    ("Now you understand exactly why this happens.", ""),
+]
+
+
+def _strip_filler(text: str) -> str:
+    """Remove known filler/stalling phrases from generated script text."""
+    for phrase, replacement in _FILLER_PHRASES:
+        text = text.replace(phrase, replacement)
+    # Collapse double spaces and leading/trailing whitespace per sentence
+    text = re.sub(r'  +', ' ', text)
+    text = re.sub(r'\. \.', '.', text)
+    return text.strip()
+
+
+def _log_script(script: "VideoScript", niche: str, topic: str) -> None:
+    """Save generated script to logs/scripts/ so it can be inspected and improved."""
+    import pathlib, datetime
+    logs_dir = pathlib.Path("logs/scripts")
+    logs_dir.mkdir(parents=True, exist_ok=True)
+    ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    safe_niche = re.sub(r'[^a-z0-9_]', '_', niche.lower())
+    log_path = logs_dir / f"{ts}_{safe_niche}.txt"
+    lines = [
+        f"NICHE:  {niche}",
+        f"TOPIC:  {topic}",
+        f"TITLE:  {script.title}",
+        f"HOOK:   {script.hook}",
+        "",
+    ]
+    for i, sec in enumerate(script.sections, 1):
+        lines.append(f"── SECTION {i}: {sec.get('heading', '(no heading)')}")
+        lines.append(sec.get('script', '(empty)'))
+        lines.append("")
+    lines.append("── CALL TO ACTION")
+    lines.append(script.call_to_action)
+    log_path.write_text("\n".join(lines), encoding="utf-8")
+    console.print(f"[dim]Script logged → {log_path}[/dim]")
+
 
 # ---------------------------------------------------------------------------
 # Ollama helpers
@@ -427,24 +505,41 @@ Return ONLY the JSON array, no explanation."""
     return ideas
 
 
+_BANNED_PHRASES_BLOCK = """
+BANNED PHRASES — never write any of these:
+- "Stay with me" / "Don't go anywhere" / "Don't miss this"
+- "I'll tell you in a moment" / "I'll reveal this later" / "We'll get to that"
+- "But first let me explain" / "Before we continue"
+- "Here's where it gets interesting" / "This is where it gets really interesting"
+- "If you're watching this" / "Since you're watching this"
+- "You're probably wondering" / "The answer might surprise you"
+- "This changes everything" / "And that changes everything"
+- "Stay tuned" / "Keep watching" / "Let that sink in"
+Any sentence that delays the point rather than making it is FORBIDDEN.
+"""
+
+
 def _viral_script_instructions(virality: str) -> str:
     """Return virality-level-specific writing instructions for the script prompt."""
     base = (
-        "Structure: hook (shock the viewer in 5 words) → problem/tension → "
-        "revelation → proof → call to action. Every sentence must pull the viewer forward."
+        "Structure: hook (one shocking specific fact) → problem with real numbers → "
+        "historical parallel → who controls the outcome today → what the viewer can do. "
+        "Every single sentence must deliver information, a number, a name, or a revelation. "
+        "Never stall. Never delay. Get to the point immediately."
     )
     extras = {
-        "Low": "The topic needs extra energy — start with the most surprising stat or fact you can invent from context.",
-        "Medium": "Use storytelling — open with a specific moment, not a generic statement.",
+        "Low": "Open with the most surprising verified statistic. Every sentence = one concrete fact.",
+        "Medium": "Open with a real event and its real consequence. Name the institution. Give the year.",
         "High": (
-            "Open with the most shocking sentence possible. Use present tense for urgency. "
-            "Every section must end with a teaser for the next one (open loop)."
+            "First sentence: one jaw-dropping verified number. No preamble. "
+            "Each section ends by revealing the next piece of the puzzle — not by teasing it."
         ),
         "Viral": (
-            "Write like MrBeast meets a financial thriller. Open with the single most jaw-dropping "
-            "fact. Use short punchy sentences. Build tension in every paragraph. "
-            "Reveal information in layers — never give it all at once. "
-            "End every section on a cliffhanger. The CTA must feel urgent, not generic."
+            "First sentence is a verified fact that reframes everything the viewer thought they knew. "
+            "Short sentences. Real names. Real numbers. Real years. "
+            "Each section answers ONE question completely, then raises the next question by "
+            "revealing a new fact — never by saying 'I'll tell you later'. "
+            "The CTA must tell the viewer exactly what awareness or action this calls for."
         ),
     }
     return f"{base}\n{extras.get(virality, extras['Medium'])}"
@@ -464,31 +559,32 @@ def generate_script_from_media(
     virality = getattr(idea, "estimated_virality", "Medium")
     viral_instructions = _viral_script_instructions(virality)
     prompt = f"""{ml_prefix}
-Write a high-retention YouTube video script designed to go viral.
+Write a factual, high-retention YouTube video script on this topic.
 
 Title: {idea.title}
 Hook: {idea.hook}
 Virality target: {virality}
-Style: {style}, high-energy, no fluff
+Style: {style}
 Target duration: {duration_minutes} minutes
 
-Viral writing rules:
+Content rules:
 {viral_instructions}
+
+{_BANNED_PHRASES_BLOCK}
 
 Available footage clips (MUST use these):
 {captions_block}
 
 Each section MUST reference footage that visually matches one of the clips above.
-Each section script must be punchy, specific, and keep the viewer watching.
 
 Return a JSON object with exactly these keys:
-- title: viral video title (use power words, numbers, or shock value)
-- hook: spoken opening — most shocking sentence first, 2-3 sentences max
+- title: video title under 70 characters, include a specific number or year
+- hook: first spoken sentence — one verified fact that immediately reframes the topic, 2-3 sentences max
 - sections: array of 5-7 objects with "heading", "script", and "clip_hint" keys.
-  CRITICAL: each "script" MUST be at least 120 words of full spoken narration — not bullet points.
-  Write like a charismatic YouTuber speaking to camera: stories, examples, specific numbers.
+  CRITICAL: each "script" MUST be at least 120 words of full spoken narration.
+  Write real paragraphs with specific events, institutions, numbers, and consequences.
   "clip_hint" = short visual description matching available footage above.
-- call_to_action: urgent specific CTA, minimum 60 words spoken
+- call_to_action: specific action the viewer can take right now, minimum 60 words spoken
 - description: YouTube description with keywords
 - tags: list of 15 SEO tags
 
@@ -502,24 +598,19 @@ Return ONLY the JSON object, no explanation."""
         data = validated.model_dump()
     except Exception:
         data = _parse_json_response(raw)
+    raw_sections = data.get("sections", []) or []
+    clean_sections = [
+        {**s, "script": _strip_filler(s.get("script", ""))} for s in raw_sections
+    ]
     script = VideoScript(
         title=_clean_str(data.get("title", idea.title)) or idea.title,
-        hook=_clean_str(data.get("hook", idea.hook)),
-        sections=data.get("sections", []) or [],
-        call_to_action=_clean_str(data.get("call_to_action", "")),
+        hook=_strip_filler(_clean_str(data.get("hook", idea.hook))),
+        sections=clean_sections,
+        call_to_action=_strip_filler(_clean_str(data.get("call_to_action", ""))),
         description=_clean_str(data.get("description", "")),
         tags=data.get("tags", []) or [],
     )
-    try:
-        from src.viral_intelligence.retention_engine import RetentionEngine
-        engine = RetentionEngine()
-        score  = engine.score(script.sections, hook=script.hook)
-        if score.total < 55:
-            script.sections = _inject_retention_patterns(script.sections)
-            score = engine.score(script.sections, hook=script.hook)
-        engine.print_report(score)
-    except Exception:
-        pass
+    _log_script(script, niche=getattr(idea, "niche", "unknown"), topic=idea.title)
     return script
 
 
@@ -594,7 +685,9 @@ def generate_video_script(
         pass
 
     # ── 2. Build retention-aware prompt ────────────────────────────────
-    prompt = f"""You are the world's best YouTube scriptwriter. Your videos average 70%+ retention.
+    virality = getattr(idea, "estimated_virality", "High")
+    viral_instructions = _viral_script_instructions(virality)
+    prompt = f"""Write a factual, high-retention YouTube video script on this topic.
 
 Title: {idea.title}
 Hook: {idea.hook}
@@ -603,22 +696,20 @@ Target duration: {duration_minutes} minutes
 Niche: {niche}
 {dna_context}
 
-RETENTION ARCHITECTURE RULES (mandatory):
-- First 30 seconds: create 3 open loops (questions viewer must stay to see answered)
-- Every section: end with a bridge "But here's where it gets interesting..."
-- Every section: deliver one specific reward (number, insight, revelation)
-- Use exact dollar amounts, percentages, timeframes — never vague
-- Close ALL open loops before the final section
-- Final section: "If this surprised you, wait until you see [related topic]"
+CONTENT RULES (mandatory):
+{viral_instructions}
+
+{_BANNED_PHRASES_BLOCK}
 
 Return a JSON object with exactly these keys:
-- title: the video title (10 words max, must include a number or dollar amount)
-- hook: spoken opening (first 15 seconds, must use loss aversion + open loop)
+- title: the video title (under 70 characters, include a specific number or year)
+- hook: first spoken sentence — one verified fact that reframes the topic, 2-3 sentences max
 - sections: array of 5-7 objects with "heading" and "script" keys.
-  CRITICAL: each "script" value MUST be a string of at least 120 words (spoken narration).
-  Do NOT write short bullet points — write full spoken paragraphs with detail, examples, and stories.
-- call_to_action: final 30-second spoken CTA (minimum 60 words)
-- description: YouTube description with timestamps
+  CRITICAL: each "script" value MUST be at least 120 words of spoken narration.
+  Write full paragraphs — specific events, real institutions, real numbers, real consequences.
+  Do NOT write bullet points. Do NOT write filler. Every sentence must add information.
+- call_to_action: final spoken CTA — specific action the viewer can take right now, minimum 60 words
+- description: YouTube description with keywords
 - tags: list of 15 SEO tags
 
 Return ONLY valid JSON, no explanation."""
@@ -633,118 +724,43 @@ Return ONLY valid JSON, no explanation."""
     except Exception:
         data = _parse_json_response(raw)
 
+    raw_sections = data.get("sections", []) or []
+    clean_sections = [
+        {**s, "script": _strip_filler(s.get("script", ""))} for s in raw_sections
+    ]
     script = VideoScript(
         title=_clean_str(data.get("title", idea.title)) or idea.title,
-        hook=_clean_str(data.get("hook", idea.hook)),
-        sections=data.get("sections", []) or [],
-        call_to_action=_clean_str(data.get("call_to_action", "")),
+        hook=_strip_filler(_clean_str(data.get("hook", idea.hook))),
+        sections=clean_sections,
+        call_to_action=_strip_filler(_clean_str(data.get("call_to_action", ""))),
         description=_clean_str(data.get("description", "")),
         tags=data.get("tags", []) or [],
     )
 
-    # ── 3. Score retention and auto-enhance if below threshold ─────────
+    # ── 3. Score retention (report only — no filler injection) ─────────
     try:
         from src.viral_intelligence.retention_engine import RetentionEngine
         engine = RetentionEngine()
-        score  = engine.score(script.sections, hook=script.hook)
-
-        if score.total < 55:
-            script.sections = _inject_retention_patterns(script.sections)
-            score = engine.score(script.sections, hook=script.hook)
-
+        score = engine.score(script.sections, hook=script.hook)
         engine.print_report(score)
     except Exception:
         pass
 
+    _log_script(script, niche=niche, topic=idea.title)
     return script
 
 
 def _inject_retention_patterns(sections: list[dict]) -> list[dict]:
     """
-    Programmatically inject retention patterns when Ollama produces a low-quality script.
-    Injects: open loops, pattern interrupts, bridges, loop closures, and specificity numbers.
+    Fallback enhancement when the model produces thin content.
+    Strips filler and ensures each section has at least some substance.
+    Does NOT inject filler phrases — only cleans what's there.
     """
-    _BRIDGES = [
-        "But here's where it gets really interesting...",
-        "Now, this is the part most people never hear about.",
-        "Wait — there's something even more important you need to know.",
-        "And this next part changes everything.",
-        "But before I reveal the answer, you need to understand this first.",
-    ]
-    _INTERRUPTS = [
-        "But here's the thing — ",
-        "Now here's what nobody talks about: ",
-        "Stop and think about this for a second. ",
-        "Here's the shocking part: ",
-        "This is where it gets interesting — ",
-    ]
-    _OPEN_LOOPS = [
-        "But what actually causes this? I'll tell you in just a moment.",
-        "You're probably wondering why — and the answer is going to surprise you.",
-        "Stay with me, because what comes next is the key to everything.",
-        "I'll reveal the exact reason right after this.",
-        "The reason why will completely change how you think about this.",
-    ]
-    _CLOSURES = [
-        "So now you understand exactly why this happens.",
-        "That's the real reason most people get this wrong.",
-        "Now you have the full picture — and most people never get this far.",
-        "And that's the answer to the question I asked at the start.",
-    ]
-    _SPECIFICS = [
-        "Studies show 73% of beginners make this exact mistake.",
-        "The average person loses $3,200 a year because of this.",
-        "In the first 90 days, this accounts for 80% of portfolio losses.",
-        "Research from 2024 confirms: 9 out of 10 beginners do this.",
-        "This single mistake costs investors an average of $8,500 over 5 years.",
-    ]
-
-    import random as _rnd
     enhanced = []
-    last_idx = len(sections) - 1
-
-    for i, section in enumerate(sections):
+    for section in sections:
         text: str = str(section.get("script") or section.get("text") or "")
-        if not text:
-            enhanced.append(section)
-            continue
-
-        sentences = [s.strip() for s in text.replace("  ", " ").split(". ") if s.strip()]
-
-        # 1. Specificity — inject a concrete number if none present
-        has_number = any(c.isdigit() for c in text) or any(
-            w in text.lower() for w in ["%", "percent", "dollar", "thousand", "million"]
-        )
-        if not has_number and len(sentences) >= 1:
-            sentences.insert(min(1, len(sentences)), _rnd.choice(_SPECIFICS))
-
-        # 2. Open loop after first sentence (not on last section)
-        if i < last_idx and len(sentences) >= 2:
-            loop_words = ["wondering", "reveal", "moment", "answer", "reason", "stay with", "right after"]
-            if not any(w in text.lower() for w in loop_words):
-                sentences.insert(1, _rnd.choice(_OPEN_LOOPS))
-
-        # 3. Pattern interrupt before middle
-        interrupt_words = ["here's the thing", "nobody talks", "shocking", "interesting", "stop and"]
-        if not any(w in text.lower() for w in interrupt_words) and len(sentences) >= 3:
-            mid = max(1, len(sentences) // 2)
-            first_char = sentences[mid][0].lower() if sentences[mid] else ""
-            rest_chars = sentences[mid][1:] if len(sentences[mid]) > 1 else ""
-            sentences[mid] = _rnd.choice(_INTERRUPTS) + first_char + rest_chars
-
-        # 4. Loop closure on second-to-last and last section
-        if i >= last_idx - 1:
-            closure_words = ["now you", "so now", "that's the", "and that's"]
-            if not any(w in text.lower() for w in closure_words):
-                sentences.append(_rnd.choice(_CLOSURES))
-
-        # 5. Bridge to next section (not on last)
-        bridge_words = ["interesting", "need to know", "changes everything", "right after", "before i reveal"]
-        if i < last_idx and not any(w in text.lower() for w in bridge_words):
-            sentences.append(_rnd.choice(_BRIDGES))
-
-        enhanced.append({**section, "script": ". ".join(sentences)})
-
+        cleaned = _strip_filler(text)
+        enhanced.append({**section, "script": cleaned})
     return enhanced
 
 
