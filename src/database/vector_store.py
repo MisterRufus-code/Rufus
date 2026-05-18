@@ -175,14 +175,61 @@ class QdrantStore:
 
 
 class FaissStore:
-    """In-memory FAISS fallback when Qdrant is not running."""
+    """
+    FAISS fallback when Qdrant is not running.
+
+    Persists the index and asset list to disk (data/faiss_store/) so that
+    re-running the pipeline skips already-indexed assets rather than
+    re-processing all 150+ files every time.
+    """
+
+    _STORE_DIR = "data/faiss_store"
 
     def __init__(self):
         import faiss
+        from pathlib import Path
         self._dim = config.CLIP_EMBEDDING_DIM
-        self._index = faiss.IndexFlatIP(self._dim)  # cosine via normalized vectors
+        self._index = faiss.IndexFlatIP(self._dim)
         self._assets: list[MediaAsset] = []
         self._id_set: set[str] = set()
+        self._store_dir = Path(self._STORE_DIR)
+        self._store_dir.mkdir(parents=True, exist_ok=True)
+        self._load_from_disk()
+
+    def _index_path(self):
+        return self._store_dir / "faiss.index"
+
+    def _meta_path(self):
+        return self._store_dir / "assets.pkl"
+
+    def _load_from_disk(self) -> None:
+        import faiss
+        import pickle
+        idx_path = self._index_path()
+        meta_path = self._meta_path()
+        if idx_path.exists() and meta_path.exists():
+            try:
+                self._index = faiss.read_index(str(idx_path))
+                with open(meta_path, "rb") as f:
+                    data = pickle.load(f)
+                self._assets = data.get("assets", [])
+                self._id_set = data.get("id_set", set())
+            except Exception:
+                # Corrupt cache — start fresh
+                import faiss as _f
+                self._index = _f.IndexFlatIP(self._dim)
+                self._assets = []
+                self._id_set = set()
+
+    def _save_to_disk(self) -> None:
+        import faiss
+        import pickle
+        try:
+            faiss.write_index(self._index, str(self._index_path()))
+            with open(self._meta_path(), "wb") as f:
+                pickle.dump({"assets": self._assets, "id_set": self._id_set}, f)
+        except Exception:
+            pass
 
     def upsert(self, features: AssetFeatures) -> None:
         if features.asset_id in self._id_set:
@@ -203,6 +250,7 @@ class FaissStore:
         )
         self._assets.append(asset)
         self._id_set.add(features.asset_id)
+        self._save_to_disk()
 
     def search(
         self,

@@ -15,6 +15,10 @@ import threading
 
 # Suppress OpenCV AV1/codec software-fallback warnings (harmless, but noisy)
 os.environ.setdefault("OPENCV_LOG_LEVEL", "ERROR")
+# Suppress HuggingFace "Loading weights" progress bar spam (printed per-asset)
+os.environ.setdefault("TRANSFORMERS_VERBOSITY", "error")
+os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
+os.environ.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", "1")
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
@@ -116,6 +120,12 @@ def _load_blip():
         if _blip_model is None:
             from src.gpu_scheduler import get_gpu_scheduler, BLIP_BASE
             get_gpu_scheduler().acquire("blip", BLIP_BASE)
+            # Silence transformers progress bars during model load
+            try:
+                from transformers.utils import logging as _hf_log
+                _hf_log.set_verbosity_error()
+            except Exception:
+                pass
             from transformers import BlipProcessor, BlipForConditionalGeneration
             _blip_processor = BlipProcessor.from_pretrained(
                 "Salesforce/blip-image-captioning-base"
