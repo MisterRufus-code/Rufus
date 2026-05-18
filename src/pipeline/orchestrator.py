@@ -114,17 +114,65 @@ def run_pipeline(
     try:
         from src.niche_config import get_niche_config
         _niche_cfg = get_niche_config(niche)
-        # If no topic given but niche has seed topics, pick one at random
-        if not topic.strip() and _niche_cfg.seed_topics:
-            import random as _rnd
-            topic = _rnd.choice(_niche_cfg.seed_topics)
-            console.print(f"[dim]Using seed topic from niche config: {topic}[/dim]")
         _niche_visual_kw = _niche_cfg.visual_keywords or []
         _niche_sys_inject = _niche_cfg.system_prompt_injection or ""
     except Exception:
         _niche_cfg = None
         _niche_visual_kw = []
         _niche_sys_inject = ""
+
+    # ── Topic variety: prefer memory unused topics → LLM-generated → seed list ──
+    if not topic.strip():
+        import random as _rnd
+        try:
+            from src.memory import unused_topics as _unused_topics, store_topic as _store_topic
+            _mem_topics = _unused_topics(niche, limit=20)
+        except Exception:
+            _mem_topics = []
+
+        if _mem_topics:
+            topic = _rnd.choice(_mem_topics)
+            console.print(f"[dim]Topic from memory (unused): {topic}[/dim]")
+        elif _niche_cfg and _niche_cfg.seed_topics:
+            # Seed list exhausted in memory — generate fresh topics via LLM
+            try:
+                from src.memory import was_topic_recently_used as _was_used
+                from src.ideas import generate_novel_topics as _gen_topics
+                _used_topics = [t for t in (_niche_cfg.seed_topics + _mem_topics) if t]
+                console.print("[dim]Seed topics exhausted — generating novel topics via LLM...[/dim]")
+                _new_topics = _gen_topics(
+                    niche,
+                    model=ollama_model,
+                    system_prompt=_niche_sys_inject,
+                    used_topics=_used_topics,
+                    count=10,
+                )
+                if _new_topics:
+                    # Store them so they're available on future runs
+                    for _nt in _new_topics:
+                        try:
+                            _store_topic(niche, _nt, source="llm_generated", momentum=0.5)
+                        except Exception:
+                            pass
+                    topic = _rnd.choice(_new_topics)
+                    console.print(f"[dim]LLM-generated topic: {topic}[/dim]")
+                else:
+                    topic = _rnd.choice(_niche_cfg.seed_topics)
+                    console.print(f"[dim]Fallback seed topic: {topic}[/dim]")
+            except Exception as _te:
+                topic = _rnd.choice(_niche_cfg.seed_topics)
+                console.print(f"[dim]Seed topic (LLM gen failed: {_te}): {topic}[/dim]")
+        elif _niche_cfg and _niche_cfg.topic_boosters:
+            topic = _rnd.choice(_niche_cfg.topic_boosters)
+            console.print(f"[dim]Topic booster: {topic}[/dim]")
+
+    # Mark this topic used so it won't repeat for 60 days
+    if topic.strip():
+        try:
+            from src.memory import mark_topic_used as _mark_used
+            _mark_used(niche, topic, outcome=0)
+        except Exception:
+            pass
 
     _pipeline_start = time.time()
     try:
@@ -357,6 +405,69 @@ def run_pipeline(
         console.print(f"[red]{exc}[/red]")
         return result
 
+    # ── Step 6.1 — Humanizer pass (remove AI writing patterns) ─────────────
+    try:
+        from src.humanize import humanize_script as _humanize_script
+        _humanize_script(script)
+        console.print("[dim]Humanizer applied — AI writing patterns removed[/dim]")
+    except Exception as _he:
+        console.print(f"[dim]Humanizer skipped ({_he})[/dim]")
+
+    # ── Step 6.2 — Quality gate: validate script before expensive render ────
+    console.print(Rule("[bold]Step 6.2 — Script Quality Gate[/bold]"))
+    _quality_passed = True
+    try:
+        from src.pipeline.quality_gate import check_script_quality, print_quality_report
+        _qr = check_script_quality(script, hook_viral_score=0.0)
+        print_quality_report(_qr)
+        if _qr.level == "FAIL":
+            _quality_passed = False
+            console.print("[yellow]Quality gate FAILED — retrying script generation once with stricter prompt...[/yellow]")
+            # One retry with explicit minimum-length instruction injected
+            try:
+                _strict_idea = best_idea
+                _strict_media = media_captions
+                if _strict_media:
+                    from src.ideas import generate_script_from_media
+                    with _ollama_cb:
+                        _retry_script = _run_with_retry(
+                            generate_script_from_media,
+                            _strict_idea,
+                            media_captions=_strict_media,
+                            duration_minutes=max(duration_minutes, 7),
+                            model=ollama_model,
+                            ml_prefix=(ml_prefix or "") + "\nWARNING: PREVIOUS ATTEMPT WAS TOO SHORT. Each section MUST contain at least 150 words of full spoken narration. No section may be fewer than 150 words.",
+                            niche_system_prompt=_niche_sys_inject,
+                            research_context=research_ctx,
+                        )
+                else:
+                    from src.ideas import generate_video_script
+                    with _ollama_cb:
+                        _retry_script = _run_with_retry(
+                            generate_video_script,
+                            _strict_idea,
+                            duration_minutes=max(duration_minutes, 7),
+                            model=ollama_model,
+                            niche=niche,
+                            niche_system_prompt=_niche_sys_inject,
+                            research_context=research_ctx,
+                        )
+                _qr2 = check_script_quality(_retry_script)
+                if _qr2.word_count_total > _qr.word_count_total:
+                    script = _retry_script
+                    try:
+                        from src.humanize import humanize_script as _humanize_script2
+                        _humanize_script2(script)
+                    except Exception:
+                        pass
+                    print_quality_report(_qr2)
+                    _quality_passed = _qr2.level != "FAIL"
+                    console.print("[green]Retry improved script quality[/green]")
+            except Exception as _re:
+                console.print(f"[yellow]Quality retry failed ({_re}) — proceeding with original[/yellow]")
+    except Exception as _qe:
+        console.print(f"[dim]Quality gate skipped ({_qe})[/dim]")
+
     # ------------------------------------------------------------------ #
     # Step 6b — Psychology hook optimisation (experiment-driven style)
     # ------------------------------------------------------------------ #
@@ -530,6 +641,15 @@ def run_pipeline(
 
         cp.advance(PipelineStage.SCENES_MATCHED, clip_count=len(matched_clips))
         console.print(f"[green]Matched {len(matched_clips)} clips for {len(scenes)} scenes[/green]")
+
+        # Footage quality gate
+        try:
+            from src.pipeline.quality_gate import check_footage_quality, print_quality_report as _pqr
+            _fqr = check_footage_quality(matched_clips, _estimated_audio)
+            _pqr(_fqr)
+        except Exception:
+            pass
+
     except Exception as exc:
         console.print(f"[yellow]Matching skipped ({exc})[/yellow]")
 

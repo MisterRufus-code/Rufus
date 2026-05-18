@@ -824,6 +824,65 @@ def _inject_retention_patterns(sections: list[dict]) -> list[dict]:
     return enhanced
 
 
+def generate_novel_topics(
+    niche: str,
+    model: str = DEFAULT_MODEL,
+    system_prompt: str = "",
+    used_topics: list[str] | None = None,
+    count: int = 10,
+) -> list[str]:
+    """
+    Generate fresh, factually-anchored video topics when the seed list is exhausted.
+
+    Uses the niche system_prompt (which contains verified stats and facts) so
+    the LLM produces specific, credible topics rather than vague placeholders.
+    Topics are stored in memory so they are not repeated on future runs.
+    """
+    used_block = ""
+    if used_topics:
+        used_block = "\n\nALREADY COVERED — do NOT suggest these or close paraphrases:\n" + "\n".join(
+            f"- {t}" for t in used_topics[:30]
+        )
+
+    prompt = f"""Generate {count} brand-new viral YouTube video topics for this niche.
+
+Niche: {niche}
+{used_block}
+
+Requirements for every topic:
+- Include a specific verified number, institution, year, or named event
+- Cover a DIFFERENT angle from the already-covered topics above
+- Be explorable as a 5-10 minute stand-alone YouTube video
+- Title style: "McKinsey: X happened — here is what it means" or "Country did Y in YEAR — your turn is coming"
+- No vague titles ("The future of AI", "How this changes everything")
+- No filler ("You won't believe", "This will shock you")
+
+Good examples:
+- "Goldman Sachs admits 25% of US jobs can be automated TODAY — the list just leaked"
+- "India demonetised 86% of cash in one night — and 130 other countries are watching"
+- "Nvidia controls 80% of AI chips: one company, one chokepoint, what happens if it fails"
+
+Return a JSON array of {count} topic strings only. No explanation."""
+
+    system = system_prompt or (
+        f"You are a viral YouTube content strategist for the {niche} niche. "
+        "Return only valid JSON arrays of strings."
+    )
+    try:
+        raw = _ollama_generate(prompt, model=model, json_mode=True, system=system)
+        data = _parse_json_response(raw)
+        if isinstance(data, list):
+            topics = [
+                str(t).strip()
+                for t in data
+                if t and len(str(t).strip()) > 15
+            ]
+            return topics[:count]
+    except Exception:
+        pass
+    return []
+
+
 def generate_shorts_script(
     idea: VideoIdea,
     model: str = "mistral",

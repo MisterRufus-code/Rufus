@@ -158,3 +158,116 @@ def random_subtitle_style() -> dict:
 def random_bgm_volume() -> float:
     """Slight BGM volume variation (0.06–0.12) so edits don't sound identical."""
     return round(random.uniform(0.06, 0.12), 3)
+
+
+# ---------------------------------------------------------------------------
+# Script humanizer — removes AI writing patterns from generated script text
+# Based on Wikipedia's "Signs of AI writing" documented patterns
+# ---------------------------------------------------------------------------
+
+# Each entry: (compiled regex, replacement string)
+_AI_VOCAB: list[tuple[re.Pattern, str]] = [
+    # Signposting openers — announce before doing; just do it
+    (re.compile(r"\bLet'?s (?:dive (?:in|into)|explore|break (?:this )?down|take a (?:look|deep dive))[^.!?]*[.!?]?\s*", re.IGNORECASE), ""),
+    (re.compile(r"\bHere'?s what you need to know[.:]*\s*", re.IGNORECASE), ""),
+    (re.compile(r"\bWithout (?:further )?ado[,.:]*\s*", re.IGNORECASE), ""),
+    (re.compile(r"\bNow let'?s (?:look at|turn to|examine)[^.!?]*[.!?]?\s*", re.IGNORECASE), ""),
+    # Copula avoidance → simpler verbs
+    (re.compile(r"\bserves as\b", re.IGNORECASE), "is"),
+    (re.compile(r"\bstands as\b", re.IGNORECASE), "is"),
+    (re.compile(r"\bmarks as\b", re.IGNORECASE), "is"),
+    (re.compile(r"\bfunctions as\b", re.IGNORECASE), "is"),
+    # Promotional / inflated vocabulary
+    (re.compile(r"\bgroundbreaking\b", re.IGNORECASE), "new"),
+    (re.compile(r"\bpivotal\b", re.IGNORECASE), "key"),
+    (re.compile(r"\bvibrant\b", re.IGNORECASE), "active"),
+    (re.compile(r"\btapestry\b", re.IGNORECASE), "mix"),
+    (re.compile(r"\blandscape\b(?= of| for)", re.IGNORECASE), "world"),
+    (re.compile(r"\bdelve\b", re.IGNORECASE), "get"),
+    (re.compile(r"\bunderscores?\b", re.IGNORECASE), "shows"),
+    (re.compile(r"\bhighlights? the\b", re.IGNORECASE), "shows the"),
+    (re.compile(r"\bfosters?\b", re.IGNORECASE), "builds"),
+    (re.compile(r"\bfostering\b", re.IGNORECASE), "building"),
+    (re.compile(r"\bshowcases?\b", re.IGNORECASE), "shows"),
+    (re.compile(r"\btestament to\b", re.IGNORECASE), "proof of"),
+    (re.compile(r"\bembark(?:s|ing|ed)? on\b", re.IGNORECASE), "start"),
+    (re.compile(r"\bnestled\b", re.IGNORECASE), "located"),
+    (re.compile(r"\bbreathtaking\b", re.IGNORECASE), "striking"),
+    (re.compile(r"\bprofoundly?\b", re.IGNORECASE), "deeply"),
+    (re.compile(r"\bintricate\b", re.IGNORECASE), "complex"),
+    (re.compile(r"\bcrucially?\b", re.IGNORECASE), "importantly"),
+    (re.compile(r"\bvitally?\b", re.IGNORECASE), "importantly"),
+    (re.compile(r"\benhances?\b", re.IGNORECASE), "improves"),
+    (re.compile(r"\benhancing\b", re.IGNORECASE), "improving"),
+    (re.compile(r"\baligns? with\b", re.IGNORECASE), "fits"),
+    (re.compile(r"\bgarners?\b", re.IGNORECASE), "gets"),
+    # Excessive hedging
+    (re.compile(r"\bdue to the fact that\b", re.IGNORECASE), "because"),
+    (re.compile(r"\bin order to\b", re.IGNORECASE), "to"),
+    (re.compile(r"\bat this point in time\b", re.IGNORECASE), "now"),
+    (re.compile(r"\bin the event that\b", re.IGNORECASE), "if"),
+    (re.compile(r"\bhas the ability to\b", re.IGNORECASE), "can"),
+    (re.compile(r"\bit is (?:important|worth noting|crucial) to note that\b", re.IGNORECASE), ""),
+    (re.compile(r"\bit (?:can|should) be noted that\b", re.IGNORECASE), ""),
+    # Generic positive conclusions
+    (re.compile(r"\bthe future (?:looks|is) bright[^.!?]*[.!?]", re.IGNORECASE), ""),
+    (re.compile(r"\bexciting times (?:lie|are) ahead[^.!?]*[.!?]", re.IGNORECASE), ""),
+    # Chatbot artifacts
+    (re.compile(r"\bI hope this helps[.!]?\s*", re.IGNORECASE), ""),
+    (re.compile(r"\blet me know if you(?:'?d like| have)[^.!?]*[.!?]\s*", re.IGNORECASE), ""),
+    (re.compile(r"\bGreat question[.!]\s*", re.IGNORECASE), ""),
+    (re.compile(r"\bOf course[.!]\s*", re.IGNORECASE), ""),
+    (re.compile(r"\bCertainly[.!]\s*", re.IGNORECASE), ""),
+]
+
+_AI_SIGNPOST_REMOVE = re.compile(
+    r"\b(?:In today['']s|In this) (?:video|episode)[^,;.!?]*[,;]?\s*",
+    re.IGNORECASE,
+)
+
+
+def humanize_script_section(text: str) -> str:
+    """
+    Rule-based humanization for a single script section.
+
+    Removes AI writing patterns (Wikipedia "Signs of AI writing"):
+    signposting, AI vocabulary, copula avoidance, excessive hedging,
+    promotional language, chatbot artifacts, generic conclusions.
+    """
+    if not text:
+        return text
+
+    text = _AI_SIGNPOST_REMOVE.sub("", text)
+
+    for pattern, replacement in _AI_VOCAB:
+        text = pattern.sub(replacement, text)
+
+    # Reduce em dash overuse: word—word → word, word
+    text = re.sub(r"(\w)\s*—\s*(\w)", r"\1, \2", text)
+
+    # Clean up artifacts from removals
+    text = re.sub(r"  +", " ", text)
+    text = re.sub(r"\s+([.,;:!?])", r"\1", text)
+    text = re.sub(r"([.!?]){2,}", r"\1", text)
+    text = text.strip()
+    if text and text[0].islower():
+        text = text[0].upper() + text[1:]
+
+    return text.strip()
+
+
+def humanize_script(script) -> None:
+    """
+    In-place humanization of a VideoScript object.
+    Applies humanize_script_section to hook, each section, and CTA.
+    """
+    if getattr(script, "hook", None):
+        script.hook = humanize_script_section(script.hook)
+
+    for section in getattr(script, "sections", []) or []:
+        for key in ("script", "text"):
+            if section.get(key):
+                section[key] = humanize_script_section(section[key])
+
+    if getattr(script, "call_to_action", None):
+        script.call_to_action = humanize_script_section(script.call_to_action)
