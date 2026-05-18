@@ -255,6 +255,82 @@ default_tags:
   - future society
 
 # ─────────────────────────────────────────────────────────────────
+# SCRIPT STRUCTURE TEMPLATE
+# Injected into the system prompt so every video follows a proven arc
+# ─────────────────────────────────────────────────────────────────
+script_structure: >
+  Every video MUST follow this exact 5-section arc — no deviations:
+
+  SECTION 1 — THE VERIFIED SHOCK (opening statement)
+  Lead with ONE data point from the verified facts list. Name the institution,
+  the year, and the exact number. Explain what this number means in plain terms —
+  how many people, how much money, how many years. Then ask: who made this happen,
+  and who benefits?
+
+  SECTION 2 — THE HISTORICAL PARALLEL
+  Find the closest historical moment where the same power consolidation happened.
+  Use: Enclosure Movement, Standard Oil, railroad monopolies, India demonetisation,
+  or the Industrial Revolution child labour period. Show the structural parallel
+  in precise detail — what was taken, who took it, what the people lost, and
+  how long it took for law to correct it (often 50+ years).
+
+  SECTION 3 — WHO IS DOING THIS TODAY
+  Name the specific companies, people, and institutions doing the same thing now.
+  Use only verified names: OpenAI, Nvidia, BlackRock, IMF, BIS, ECB, Larry Fink,
+  Sam Altman, the WEF. Connect their stated goals (from public documents, letters,
+  reports) to the pattern identified in Section 2. Show the timeline: what has
+  already happened, what is in motion now, what the endpoint looks like by 2027-2035.
+
+  SECTION 4 — THE MECHANISM OF CONTROL
+  Explain the technical or financial mechanism that makes this lock-in permanent.
+  For AI: compute concentration (Nvidia 80%), API dependency, proprietary data moats.
+  For digital money: programmable restrictions (BIS 2023), CBDC spending limits (ECB),
+  ATM withdrawal caps (Nigeria 2021). Show how once this infrastructure is in place,
+  opting out becomes structurally impossible — not illegal, just economically lethal.
+
+  SECTION 5 — THE LEVERAGE WINDOW (what the viewer can do)
+  The window is 5-10 years before lock-in is complete. Name 3 specific, actionable
+  steps: (1) a skill to build that is automation-resistant, (2) a financial habit
+  that preserves sovereignty (hard assets, non-CBDC savings, local exchange), and
+  (3) an awareness to spread — share the specific verified fact from Section 1 with
+  3 people who don't know it. End with the core thesis restated as a question the
+  viewer must now answer for themselves.
+
+# ─────────────────────────────────────────────────────────────────
+# CTA TEMPLATES — specific actionable CTAs (never generic)
+# Randomly selected from this list; never "like and subscribe"
+# ─────────────────────────────────────────────────────────────────
+cta_templates:
+  - >
+    Here is what you do with this information right now. First: learn one skill that
+    cannot be automated — complex negotiation, physical trade, community organising,
+    legal literacy. Second: move 10 percent of savings into something no algorithm
+    controls — physical gold, land, or a local credit union outside the CBDC pilot
+    programmes. Third: send this video to one person who works in an exposed sector.
+    The window is 2027. After that the structural lock-in is complete. Act before then.
+  - >
+    You now know something that 99 percent of people around you do not. Use it.
+    Research your country's CBDC timeline — most governments publish it publicly.
+    Find out what percentage of your job tasks appear on the Goldman Sachs automation
+    list. Build one income stream that a robot cannot replicate: teaching, physical
+    installation, human trust. Knowledge of the mechanism is the first form of leverage.
+    The second is building alternatives before the alternatives are regulated away.
+  - >
+    The enclosure of your economic future is already in progress. But the window is
+    still open. Three moves: (1) build skills in domains where human judgment is legally
+    required — medicine, law, skilled trades. (2) Understand how your country's CBDC
+    proposal handles spending limits — the ECB document is public, read it. (3) Build
+    local — a local network, a local skill, a local food source. Centralised systems
+    collapse when the centre decides you are no longer useful. Local networks do not.
+  - >
+    The data you just heard is public. The McKinsey report is free to download. The
+    BIS working paper on programmable money is on their website. The ECB digital euro
+    consultation is published in full. Read the primary sources — not the press releases.
+    Then do one thing: map your own income against the automation exposure list and
+    give yourself 18 months to move at least 30 percent of it to something the model
+    cannot replace. That is not fear. That is applied intelligence.
+
+# ─────────────────────────────────────────────────────────────────
 # VISUAL STYLE DIRECTION
 # ─────────────────────────────────────────────────────────────────
 visual_style: dark cinematic
@@ -270,6 +346,20 @@ visual_keywords:
   - data center server room
   - money printing machine
   - Orwell dystopia city surveillance
+  - stock market crash red screen
+  - empty factory floor
+  - politician signing document
+  - bank vault door closing
+  - artificial intelligence neural network
+  - workers protest unemployment
+  - billionaire private jet luxury
+  - global map network connections
+  - smart city surveillance drone
+  - cash money burning inflation
+  - government document classified
+  - wall street trading floor
+  - prison bars shadow silhouette
+  - crowd marching city street
 
 # Entropy thresholds — this content benefits from high visual variety
 entropy_min_score: 0.60

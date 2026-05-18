@@ -116,6 +116,14 @@ def run_pipeline(
         _niche_cfg = get_niche_config(niche)
         _niche_visual_kw = _niche_cfg.visual_keywords or []
         _niche_sys_inject = _niche_cfg.system_prompt_injection or ""
+        # Append script structure template if defined
+        if _niche_cfg.script_structure:
+            _niche_sys_inject = (_niche_sys_inject + "\n\n" + _niche_cfg.script_structure).strip()
+        # Pick a random CTA template and append so LLM uses it as a model
+        if _niche_cfg.cta_templates:
+            import random as _rnd_cta
+            _cta_example = _rnd_cta.choice(_niche_cfg.cta_templates)
+            _niche_sys_inject += f"\n\nCTA EXAMPLE (use this style and specificity, not generic phrases):\n{_cta_example}"
     except Exception:
         _niche_cfg = None
         _niche_visual_kw = []

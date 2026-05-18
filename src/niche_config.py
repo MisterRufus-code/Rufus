@@ -39,6 +39,8 @@ class NicheConfig:
     shorts_target_duration: int = 58
     shorts_hook_max_words: int = 12
     system_prompt_injection: str = ""
+    script_structure: str = ""
+    cta_templates: list[str] = field(default_factory=list)
     visual_style: str = ""
     visual_keywords: list[str] = field(default_factory=list)
 
@@ -81,6 +83,8 @@ def get_niche_config(niche: str) -> NicheConfig:
         shorts_target_duration=int(data.get("shorts_target_duration", 58)),
         shorts_hook_max_words=int(data.get("shorts_hook_max_words", 12)),
         system_prompt_injection=data.get("system_prompt_injection", ""),
+        script_structure=data.get("script_structure", ""),
+        cta_templates=data.get("cta_templates") or [],
         visual_style=data.get("visual_style", ""),
         visual_keywords=data.get("visual_keywords") or [],
     )
