@@ -156,6 +156,34 @@ def _get_duration(path: Path) -> float:
         return 0.0
 
 
+def _loop_video_to_duration(video_path: Path, target_dur: float, output_path: Path) -> Path:
+    """
+    Loop a video file until it reaches target_dur using the concat demuxer.
+    More reliable than -stream_loop on files produced by concat -c copy.
+    """
+    video_dur = _get_duration(video_path)
+    loops = int(target_dur / max(video_dur, 1)) + 2
+
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False) as f:
+        for _ in range(loops):
+            f.write(f"file '{video_path.resolve()}'\n")
+        list_file = Path(f.name)
+
+    try:
+        _ffmpeg(
+            "-f", "concat", "-safe", "0",
+            "-i", str(list_file),
+            "-t", str(target_dur + 1.0),
+            *_video_codec_args(),
+            "-an",
+            str(output_path),
+        )
+    finally:
+        list_file.unlink(missing_ok=True)
+
+    return output_path
+
+
 def add_audio(video_path: Path, audio_path: Path, output_path: Path) -> Path:
     """Merge voiceover with video. Loops footage smoothly if shorter than audio."""
     audio_dur = _get_duration(audio_path)
@@ -168,25 +196,21 @@ def add_audio(video_path: Path, audio_path: Path, output_path: Path) -> Path:
             f" — looping footage[/dim]"
         )
         looped = video_path.parent / ("_looped_" + video_path.name)
-        loops = int(audio_dur / max(video_dur, 1)) + 2
-        _ffmpeg(
-            "-stream_loop", str(loops),
-            "-i", str(video_path),
-            "-t", str(audio_dur + 1.0),
-            *_video_codec_args(),
-            "-an",
-            str(looped),
-        )
+        _loop_video_to_duration(video_path, audio_dur, looped)
         working_video = looped
 
+    # Use explicit -t instead of -shortest to hard-cut at audio length.
+    # -c:v copy + -shortest holds the last frame when video > audio; re-encoding
+    # with -t gives frame-accurate termination.
+    duration_args = ["-t", str(audio_dur)] if audio_dur > 0 else []
     _ffmpeg(
         "-i", str(working_video),
         "-i", str(audio_path),
         "-map", "0:v:0",
         "-map", "1:a:0",
-        "-c:v", "copy",
+        *_video_codec_args(),
         "-c:a", "aac", "-b:a", "192k",
-        "-shortest",
+        *duration_args,
         str(output_path),
     )
     return output_path
