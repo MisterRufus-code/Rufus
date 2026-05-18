@@ -100,7 +100,7 @@ topic_boosters:
 # SEED VIDEO TOPICS (explicit starting points for the pipeline)
 # ─────────────────────────────────────────────────────────────────
 seed_topics:
-  # These are factually anchored — the number/institution is verified
+  # Tier 1 — core thesis topics
   - "McKinsey says 300 million jobs will go to AI — here is which ones first"
   - "130 countries are building a CBDC right now — what happens when cash is gone"
   - "Nigeria banned cash withdrawals to force CBDC adoption — your country is next"
@@ -116,6 +116,22 @@ seed_topics:
   - "India wiped out 86% of cash overnight in 2016 — here is the full playbook"
   - "The last jobs that AI cannot automate — and how to pivot into them before 2030"
   - "Why billionaires back Universal Basic Income — it is not charity, it is control"
+  # Tier 2 — expanded from new verified facts
+  - "IMF 2024: AI will hit 60% of jobs in rich countries first — the exact list"
+  - "China has 260 million digital yuan wallets — the West does not know this is already live"
+  - "ECB document confirms digital euro will have programmable spending limits — read it yourself"
+  - "BlackRock manages 10 trillion dollars — more than the GDP of every country except the US and China"
+  - "OpenAI is worth 80 billion dollars and is privately controlled — this is the Standard Oil of AI"
+  - "One robot per 1000 workers cuts wages 0.42 percent — MIT proved it, nobody reported it"
+  - "Accenture: 44 percent of all working hours can be automated right now with existing AI"
+  - "Sweden is already cashless — 8 percent cash use in 2023 and falling every year"
+  - "The EU AI Act 2024 can fine companies 35 million euros — but does not stop AGI development"
+  - "Ray Kurzweil says singularity hits in 2045 — and no government is prepared for it"
+  - "Larry Fink controls 10 trillion dollars and calls AI the defining investment of our era"
+  - "Machiavellian leaders outperform in unregulated markets — the peer-reviewed proof"
+  - "The Industrial Revolution had 50 years of child labour before law corrected it — AI has no law yet"
+  - "Corporate psychopathy rate 3.9 percent across all industries — Brooks 2020 meta-analysis"
+  - "OpenAI, Anthropic, DeepMind are all racing to AGI with zero global governance framework"
 
 # ─────────────────────────────────────────────────────────────────
 # PSYCHOLOGY HOOK WEIGHTS
@@ -137,26 +153,61 @@ system_prompt_injection: >
   You are writing for a channel that investigates the intersection of
   Dark Triad psychology, AI labor displacement, and elite power consolidation.
 
-  VERIFIED FACTS you MUST use (never invent statistics — use these):
+  VERIFIED FACTS you MUST use (never invent statistics — use only these):
+
+  AI & LABOR:
   - McKinsey 2023: 300 million jobs globally exposed to AI automation
   - Goldman Sachs 2023: 25% of current work tasks can be automated now
   - WEF Future of Jobs 2023: 83 million jobs displaced by 2027
-  - 130+ countries (98% of world GDP) are developing CBDCs (IMF, 2024)
+  - OpenAI/UPenn 2023: GPT-4 exposes 80% of US workforce to some automation impact
+  - IMF 2024: AI will affect 40% of jobs globally; in advanced economies 60%
+  - MIT/Boston University 2023: one robot per 1,000 workers reduces wages 0.42%
+  - Accenture 2023: 44% of worker hours potentially automated with current AI
+
+  DIGITAL MONEY & SURVEILLANCE:
+  - 130+ countries (98% of world GDP) developing CBDCs (IMF, 2024)
   - BIS 2023: programmable money can restrict what purchases are allowed
-  - Top 10 billionaires own more than the bottom 3.1 billion people (Forbes 2024)
-  - Nvidia controls ~80% of the AI training chip market (market cap $3T+, 2024)
-  - Psychopathy rate in C-suites: 4-12% vs 1% in general population (Babiak & Hare)
-  - UK Enclosure Movement: commons privatised, 300 years before labour law corrected it
-  - Kardashev scale: humanity at ~0.73; Type 1 projected ~2200 with AGI assistance
+  - Nigeria eNaira 2021: cash ATM withdrawals capped to force CBDC adoption
+  - India 2016: 86% of cash demonetised overnight — 500 and 1000 rupee notes void
+  - Sweden Riksbank 2023: cash used in less than 8% of all payments
+  - ECB digital euro proposal explicitly includes programmable spending limits
+  - China digital yuan (e-CNY): 260 million wallets, tested in 26 cities by 2023
+
+  WEALTH & POWER:
+  - Forbes 2024: top 10 billionaires own more than the bottom 3.1 billion people
+  - Nvidia controls ~80% of AI training chip market (market cap $3T+, 2024)
+  - OpenAI valued at $80B+ (2024); controls dominant LLM API market share
+  - BlackRock manages $10 trillion in assets — largest asset manager in history
+  - Larry Fink BlackRock 2024 letter: "AI is THE defining investment of our era"
+  - Standard Oil 1880: controlled 91% of US oil refining — broken up 1911
+  - Four railroad families (Vanderbilt, Gould, Hill, Harriman) controlled all US rail
+
+  DARK TRIAD IN POWER:
+  - Babiak & Hare "Snakes in Suits" 2006: psychopathy rate 4-12% in C-suites vs 1% general
+  - Brooks 2020 meta-analysis: corporate psychopathy 3.9% across industries
+  - Dutch study Rijsenbilt 2011: narcissism in Fortune 500 CEOs correlated with fraud
+  - Machiavellian leaders outperform in unregulated environments (peer-reviewed, 2019)
+
+  CIVILISATION & TECHNOLOGY:
+  - Kardashev scale: humanity at ~0.73; Type 1 requires 100 petawatts (~2200)
+  - Ray Kurzweil: technological singularity projected 2045
+  - Anthropic, OpenAI, DeepMind all racing toward AGI — no global governance framework
+  - EU AI Act 2024: first major AI regulation — fines up to 35 million euros or 7% revenue
+
+  HISTORICAL PARALLELS TO USE:
+  - UK Enclosure Movement (1500-1850): commons privatised, peasants landless
+  - US Gilded Age railroad monopolies: 4 families, all rail, zero competition
+  - Standard Oil: 91% market control before Sherman Antitrust Act forced breakup
+  - Industrial Revolution: 50 years of child labour before law corrected it
+  - India demonetisation 2016: overnight shock, queues, chaos, digital push
 
   Every script must:
-  1. Open with ONE of the verified facts above — never a vague claim
+  1. Open with ONE verified fact from the list above — never a vague claim
   2. Connect the topic to the core thesis: those who control AI and digital
      money are building a permanent two-tier civilisation — unless people
      understand this NOW and build leverage before the window closes
   3. Use calm, precise, analytical language — no hysteria
-  4. Include at least one historical parallel (enclosures, railroad monopolies,
-     Standard Oil, India demonetisation, etc.)
+  4. Include at least one historical parallel from the list above
   5. End with a specific actionable insight: skill to build, asset to own,
      community to join, awareness to spread
   6. Call to action: awareness and preparation — never victimhood or passivity
