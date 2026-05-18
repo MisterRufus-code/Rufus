@@ -381,9 +381,22 @@ def add_title_card(
     duration: float = 2.5,
     font_size: int = 52,
 ) -> Path:
-    """Overlay a semi-transparent title card for the first `duration` seconds."""
+    """Overlay a semi-transparent title card for the first `duration` seconds.
+
+    Uses textfile= instead of text= so special characters (colons, apostrophes,
+    percent signs, backslashes) in the title never break FFmpeg's filter parser.
+    """
+    import tempfile
+
     font = _find_font()
-    safe_title = title[:60].replace("'", "\\'").replace(":", "\\:").replace("%", "\\%")
+    display_title = title[:60]
+
+    # Write title to a temp file — avoids all drawtext escaping pitfalls
+    with tempfile.NamedTemporaryFile(
+        mode="w", suffix=".txt", delete=False, encoding="utf-8"
+    ) as tf:
+        tf.write(display_title)
+        title_file = tf.name
 
     font_arg = f":fontfile='{font}'" if font else ""
     fade_out = max(0.0, duration - 0.5)
@@ -392,7 +405,7 @@ def add_title_card(
     vf = (
         f"drawbox=x=0:y=ih*0.35:w=iw:h=ih*0.30:color=black@0.55:t=fill"
         f":enable='between(t,0,{duration})'"
-        f",drawtext=text='{safe_title}'"
+        f",drawtext=textfile='{title_file}'"
         f"{font_arg}"
         f":fontsize={font_size}:fontcolor=white"
         f":x=(w-text_w)/2:y=(h-text_h)/2"
@@ -401,13 +414,17 @@ def add_title_card(
         f":alpha='if(lt(t,{fade_out}),1,1-(t-{fade_out})/{fade_range})'"
     )
 
-    _ffmpeg(
-        "-i", str(video_path),
-        "-vf", vf,
-        "-c:v", "libx264", "-preset", "fast", "-crf", "22",
-        "-c:a", "copy",
-        str(output_path),
-    )
+    try:
+        _ffmpeg(
+            "-i", str(video_path),
+            "-vf", vf,
+            *_video_codec_args(),
+            "-c:a", "copy",
+            str(output_path),
+        )
+    finally:
+        Path(title_file).unlink(missing_ok=True)
+
     return output_path
 
 

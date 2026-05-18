@@ -126,6 +126,14 @@ def run_pipeline(
         import random as _rnd
         try:
             from src.memory import unused_topics as _unused_topics, store_topic as _store_topic
+            # Seed topics from YAML are never in the DB on first run — pre-register them
+            # so unused_topics() can track and rotate them properly.
+            if _niche_cfg and _niche_cfg.seed_topics:
+                for _st in _niche_cfg.seed_topics:
+                    try:
+                        _store_topic(niche, _st, source="seed", momentum=1.0)
+                    except Exception:
+                        pass
             _mem_topics = _unused_topics(niche, limit=20)
         except Exception:
             _mem_topics = []
