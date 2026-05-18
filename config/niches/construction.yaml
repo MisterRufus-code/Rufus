@@ -1,0 +1,220 @@
+name: construction
+display_name: House Building From Zero — AI Time-lapse
+
+model: llama3.1
+script_style: >
+  Documentary narrator. Calm, precise, technical but accessible.
+  Every sentence describes something the viewer can SEE happening on screen.
+  Write as if narrating a time-lapse — each section is one visible stage
+  of construction. Real measurements, real materials, real timelines.
+tone: documentary, educational, satisfying
+
+# ─────────────────────────────────────────────────────────────────
+# SCRIPT STRUCTURE — follows the physical build sequence
+# ─────────────────────────────────────────────────────────────────
+script_structure: >
+  Every video MUST follow the physical construction sequence exactly.
+  Each section describes ONE visible stage. Write what the camera SEES.
+
+  SECTION 1 — SITE PREPARATION & FOUNDATION
+  Describe the empty plot. Excavation machines breaking ground.
+  Dimensions of the foundation in metres. Type of foundation (slab/strip/raft).
+  Concrete pouring. Rebar reinforcement. Curing time (28 days minimum).
+  What the viewer sees: raw earth → concrete base.
+
+  SECTION 2 — STRUCTURAL FRAME
+  Wall construction — brick, block, timber frame, or steel.
+  Floor-by-floor progression. Window and door openings formed.
+  Lintels placed. Each wall course laid with precision.
+  What the viewer sees: concrete slab → walls rising.
+
+  SECTION 3 — ROOF STRUCTURE
+  Roof trusses or rafters installed. Ridge beam placed.
+  Roofing material applied — tiles, metal sheet, flat membrane.
+  Fascias, soffits, guttering attached.
+  What the viewer sees: open walls → weathertight shell.
+
+  SECTION 4 — ROUGH-IN SERVICES
+  Electrical conduit and wiring run through walls and ceiling.
+  Plumbing pipes — supply and waste — positioned before plastering.
+  HVAC ducts if applicable. Insulation installed in walls and roof.
+  What the viewer sees: open stud walls full of pipes and cables.
+
+  SECTION 5 — FINISHING & INTERIOR
+  Plastering or drywall applied and skimmed smooth.
+  Flooring — tile, wood, or concrete polished.
+  Kitchen and bathroom fixtures installed.
+  Paint applied — two coats minimum. Final snagging.
+  What the viewer sees: raw shell → finished home.
+
+  CLOSING — THE REVEAL
+  Exterior render or cladding complete. Landscaping done.
+  Front door opens to finished interior. Total build time stated.
+  Cost per square metre compared to buying equivalent property.
+
+# ─────────────────────────────────────────────────────────────────
+# TEXT-TO-VIDEO SCENE PROMPTS
+# Each maps to a script section — used by ComfyUI/Wan2.1
+# ─────────────────────────────────────────────────────────────────
+scene_prompts:
+  site_preparation: >
+    cinematic drone shot of empty building plot, excavator breaking ground,
+    workers measuring foundations, golden hour lighting, construction documentary style,
+    photorealistic, 4K, time-lapse effect
+  foundation: >
+    concrete being poured into foundation formwork, rebar reinforcement visible,
+    construction workers in hard hats, cinematic close-up, dusty atmosphere,
+    photorealistic, professional construction photography
+  frame_walls: >
+    brick walls being laid course by course, masonry work, scaffolding,
+    cinematic time-lapse, construction documentary, late afternoon light,
+    photorealistic, 4K footage
+  roof_structure: >
+    wooden roof trusses being lifted by crane, workers installing rafters,
+    wide angle cinematic shot, blue sky background, construction site,
+    photorealistic, golden hour
+  roof_tiles: >
+    roofers laying clay tiles on roof, cinematic overhead drone shot,
+    completed sections vs in-progress, photorealistic, 4K, sharp detail
+  electrical_rough: >
+    electrician running cables through wall studs, conduit installation,
+    interior construction site, professional lighting, close-up detail,
+    photorealistic, documentary style
+  plumbing: >
+    plumber installing copper pipes, bathroom rough-in, construction interior,
+    cinematic lighting, photorealistic, professional photography
+  insulation: >
+    workers installing pink insulation batts between wall studs,
+    interior construction, cinematic, warm lighting, photorealistic
+  plastering: >
+    plasterer applying smooth render to interior walls, skim coat,
+    cinematic close-up of smooth plaster finish, professional documentary,
+    photorealistic, 4K
+  flooring: >
+    tiler laying large format tiles in perfect pattern, cinematic overhead shot,
+    construction interior, photorealistic, sharp detail, professional photography
+  kitchen_install: >
+    kitchen units being installed, cabinet fitting, modern kitchen,
+    cinematic interior photography, photorealistic, bright natural light
+  exterior_finish: >
+    finished house exterior with render and landscaping, front garden,
+    cinematic wide shot, golden hour, photorealistic, architecture photography
+  reveal: >
+    front door opening to reveal beautifully finished interior, cinematic push shot,
+    warm interior lighting, photorealistic, luxury home reveal, 4K
+
+# ─────────────────────────────────────────────────────────────────
+# CTA TEMPLATES
+# ─────────────────────────────────────────────────────────────────
+cta_templates:
+  - >
+    If you are planning to build, the single most important decision is the
+    foundation type — get a structural engineer before you pour concrete.
+    Second: lock in your trades (electrician, plumber, plasterer) before
+    you break ground — the best ones are booked 6 months ahead. Third:
+    build a 15 percent contingency into your budget. Every build has surprises.
+    The difference between stress and success is preparation. Start with the
+    site survey and soil test — everything else follows from that.
+  - >
+    Three things most self-builders get wrong. One: underestimating groundworks —
+    budget at least 20 percent of total build cost just for foundations and drainage.
+    Two: changing the design mid-build — every change order costs three times
+    what it would have cost upfront. Three: skipping the thermal envelope —
+    insulation and airtightness pay back in energy bills every month forever.
+    Get these three right and the rest of the build is manageable.
+
+# ─────────────────────────────────────────────────────────────────
+# SEED TOPICS
+# ─────────────────────────────────────────────────────────────────
+seed_topics:
+  - "Building a house from zero — complete time-lapse foundation to finish"
+  - "How a concrete slab foundation is built — step by step"
+  - "Brick wall construction from first course to roof level"
+  - "How roof trusses are made and installed in one day"
+  - "Rough-in electrical wiring — how your walls get power before plaster"
+  - "How plumbers rough-in a bathroom before the walls go up"
+  - "Plastering a house interior — from bare block to smooth finish"
+  - "Tiling a floor perfectly — professional technique time-lapse"
+  - "How a kitchen is fitted — units, worktops, appliances in sequence"
+  - "House exterior render and cladding — before and after"
+  - "Foundation to handover in 6 months — full build diary"
+  - "Why 40 percent of self-builds go over budget — and how to avoid it"
+  - "Steel frame vs timber frame vs brick — which builds fastest"
+  - "How insulation is installed to cut heating bills by 60 percent"
+  - "The reveal — empty plot to finished family home"
+
+topic_boosters:
+  - house construction time-lapse
+  - foundation to finish build
+  - self build home
+  - construction documentary
+  - how house is built
+  - building site progression
+  - architecture construction process
+  - DIY house build
+
+# ─────────────────────────────────────────────────────────────────
+# VISUAL KEYWORDS (for Pexels fallback)
+# ─────────────────────────────────────────────────────────────────
+visual_keywords:
+  - construction site workers
+  - concrete foundation pouring
+  - brick wall laying
+  - roof truss installation
+  - scaffolding building exterior
+  - electrician wiring interior
+  - plumber pipe installation
+  - plasterer smooth wall
+  - tile floor installation
+  - kitchen cabinet fitting
+  - house exterior render
+  - aerial drone construction site
+  - excavator breaking ground
+  - architect blueprint planning
+  - finished modern house exterior
+
+visual_style: cinematic documentary
+use_text_to_video: true
+
+# ─────────────────────────────────────────────────────────────────
+# HOOK WEIGHTS — satisfaction and curiosity drive this niche
+# ─────────────────────────────────────────────────────────────────
+hook_weights:
+  specificity: 2.0        # exact dimensions, costs, timelines
+  open_loop: 1.8          # "here is what happens next"
+  loss_aversion: 1.4      # "most self-builders make this mistake"
+  urgency: 1.2
+  social_proof_inverse: 1.3
+
+retention_weights:
+  open_loops: 2.0
+  specificity_numbers: 2.0
+  pattern_interrupts: 1.5
+  emotional_escalation: 1.3
+  loop_closures: 1.8
+
+upload_schedule:
+  - weekday: saturday
+    hour: 10
+  - weekday: sunday
+    hour: 11
+  - weekday: wednesday
+    hour: 18
+
+default_category_id: "26"   # Howto & Style
+default_tags:
+  - house building
+  - construction time-lapse
+  - self build
+  - how to build a house
+  - foundation
+  - construction documentary
+  - architecture
+  - build from scratch
+  - home construction
+  - building process
+
+entropy_min_score: 0.65
+entropy_scene_repeat_threshold: 0.90
+shorts_target_duration: 58
+shorts_hook_max_words: 8
