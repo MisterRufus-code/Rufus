@@ -267,11 +267,14 @@ def research_topic(
     Returns:
         Formatted research block: "FACT 1: ...\\nSOURCE: ...\\n\\nFACT 2: ..."
     """
-    # Build query variants to widen the net
+    # Build query variants — short queries get better DDG results
+    # Strip long niche-specific prefixes down to the core factual claim
+    core = re.sub(r"^[^—–:-]{0,30}[—–:-]\s*", "", topic).strip() or topic
     queries = [
         topic,
-        f"{topic} statistics",
-        f"{topic} study report",
+        core,
+        f"{core} statistics data",
+        f"{core} report 2024 2025",
     ]
 
     snippets: list[ResearchSnippet] = []
@@ -280,14 +283,20 @@ def research_topic(
     for q in queries[:2]:
         snippets.extend(_brave_search(q, count=5))
 
-    # DDG as backup (always run — costs nothing)
-    if len(snippets) < SOURCES_PER_TOPIC:
-        for q in queries[:2]:
-            snippets.extend(_ddg_search(q, count=5))
+    # DDG — try all query variants until we have enough
+    for q in queries:
+        if len(snippets) >= SOURCES_PER_TOPIC:
+            break
+        snippets.extend(_ddg_search(q, count=5))
 
-    # Wikipedia for evergreen anchoring
+    # Wikipedia for evergreen anchoring — always try
     if include_wikipedia:
-        snippets.extend(_wiki_summary(topic))
+        snippets.extend(_wiki_summary(core))
+        if len(snippets) < 3:
+            # Fallback: try first 3 words of topic
+            short = " ".join(core.split()[:3])
+            if short and short != core:
+                snippets.extend(_wiki_summary(short))
 
     # Dedup, score, sort
     snippets = _dedup_snippets(snippets)

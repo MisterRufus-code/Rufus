@@ -19,7 +19,8 @@ YOUTUBE_SCOPES = [
 ]
 
 # --- Vector DB (Qdrant) ---
-QDRANT_HOST = os.getenv("QDRANT_HOST", "localhost")
+# Empty string means "skip Qdrant, use FAISS". Default is localhost.
+QDRANT_HOST = os.getenv("QDRANT_HOST", "localhost") or ""
 QDRANT_PORT = int(os.getenv("QDRANT_PORT", "6333"))
 QDRANT_COLLECTION = os.getenv("QDRANT_COLLECTION", "rufus_media")
 CLIP_EMBEDDING_DIM = 512          # CLIP ViT-B/32 output dimension
