@@ -30,11 +30,11 @@ _FILLER_CHECK = re.compile(
     re.IGNORECASE,
 )
 
-# Thresholds
-WARN_WORDS_PER_SECTION = 60
-FAIL_WORDS_PER_SECTION = 25
-WARN_TOTAL_WORDS = 350
-FAIL_TOTAL_WORDS = 150
+# Thresholds — a 5-min video needs ~650 words; sections must carry real content
+WARN_WORDS_PER_SECTION = 120
+FAIL_WORDS_PER_SECTION = 80
+WARN_TOTAL_WORDS = 650
+FAIL_TOTAL_WORDS = 400
 WARN_FOOTAGE_RATIO = 0.70   # footage_seconds / audio_seconds
 WARN_HOOK_VIRAL = 5.5
 MIN_CLIPS = 3

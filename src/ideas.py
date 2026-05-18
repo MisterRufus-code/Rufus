@@ -458,7 +458,10 @@ BANNED PHRASES — never write any of these:
 - "This changes everything" / "And that changes everything"
 - "Stay tuned" / "Keep watching" / "Let that sink in"
 - "In today's video" / "In this video we will"
+- "Visit our website" / "Follow us on social media" / "Like and subscribe"
+- "We must not repeat this mistake" / "We can't let this happen" / "We need to act"
 Any sentence that delays the point rather than making it is FORBIDDEN.
+Any generic social media CTA is FORBIDDEN — the CTA must name a specific skill, asset, or awareness the viewer should build.
 """
 
 
@@ -613,7 +616,8 @@ def generate_script_from_media(
     model: str = DEFAULT_MODEL,
     ml_prefix: str = "",
     niche_system_prompt: str = "",
-    research_context: str = "",  # NEW: factual context from research.py
+    research_context: str = "",
+    niche: str = "general",
 ) -> "VideoScript":
     """Generate a viral script with sections that map to the available media clips.
 
@@ -646,10 +650,15 @@ Return a JSON object with exactly these keys:
 - title: video title under 70 characters, include a specific number or year
 - hook: first spoken sentence — one verified fact that immediately reframes the topic, 2-3 sentences max
 - sections: array of 5-7 objects with "heading", "script", and "clip_hint" keys.
-  CRITICAL: each "script" MUST be at least 120 words of full spoken narration.
-  Write real paragraphs with specific events, institutions, numbers, and consequences.
+  MANDATORY: each "script" value MUST be at minimum 150 words of spoken narration.
+  That means at least 10 full sentences per section. Count your words before outputting.
+  Each section must include: a named institution or person, a specific statistic with source,
+  a historical parallel or consequence, and a direct implication for the viewer.
+  Sections under 150 words will be REJECTED. Write long, dense, factual paragraphs.
   "clip_hint" = short visual description matching available footage above.
-- call_to_action: specific action the viewer can take right now, minimum 60 words spoken
+- call_to_action: 80+ words. Name a specific skill to build, asset class to research,
+  or community to join. NEVER say "visit our website" or "follow us on social media".
+  Tell the viewer exactly what to DO with this information right now.
 - description: YouTube description with keywords
 - tags: list of 15 SEO tags
 
@@ -675,7 +684,7 @@ Return ONLY the JSON object, no explanation."""
         description=_clean_str(data.get("description", "")),
         tags=data.get("tags", []) or [],
     )
-    _log_script(script, niche=getattr(idea, "niche", "unknown"), topic=idea.title)
+    _log_script(script, niche=niche, topic=idea.title)
     return script
 
 
@@ -766,10 +775,14 @@ Return a JSON object with exactly these keys:
 - title: the video title (under 70 characters, include a specific number or year)
 - hook: first spoken sentence — one verified fact that reframes the topic, 2-3 sentences max
 - sections: array of 5-7 objects with "heading" and "script" keys.
-  CRITICAL: each "script" value MUST be at least 120 words of spoken narration.
-  Write full paragraphs — specific events, real institutions, real numbers, real consequences.
-  Do NOT write bullet points. Do NOT write filler. Every sentence must add information.
-- call_to_action: final spoken CTA — specific action the viewer can take right now, minimum 60 words
+  MANDATORY: each "script" value MUST be at minimum 150 words of spoken narration.
+  That means at least 10 full sentences per section. Count your words before outputting.
+  Each section must include: a named institution or person, a specific statistic with source,
+  a historical parallel or consequence, and a direct implication for the viewer.
+  Sections under 150 words will be REJECTED. Write long, dense, factual paragraphs.
+- call_to_action: 80+ words. Name a specific skill to build, asset class to research,
+  or community to join. NEVER say "visit our website" or "follow us on social media".
+  Tell the viewer exactly what to DO with this information right now.
 - description: YouTube description with keywords
 - tags: list of 15 SEO tags
 

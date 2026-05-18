@@ -397,6 +397,7 @@ def run_pipeline(
                     ml_prefix=ml_prefix,
                     niche_system_prompt=_niche_sys_inject,
                     research_context=research_ctx,
+                    niche=niche,
                 )
         else:
             from src.ideas import generate_video_script
@@ -444,9 +445,10 @@ def run_pipeline(
                             media_captions=_strict_media,
                             duration_minutes=max(duration_minutes, 7),
                             model=ollama_model,
-                            ml_prefix=(ml_prefix or "") + "\nWARNING: PREVIOUS ATTEMPT WAS TOO SHORT. Each section MUST contain at least 150 words of full spoken narration. No section may be fewer than 150 words.",
+                            ml_prefix=(ml_prefix or "") + "\nWARNING: PREVIOUS ATTEMPT WAS REJECTED — TOO SHORT. Each section MUST contain at least 150 words of full spoken narration. Sections under 150 words will be discarded. Write at least 10 sentences per section.",
                             niche_system_prompt=_niche_sys_inject,
                             research_context=research_ctx,
+                            niche=niche,
                         )
                 else:
                     from src.ideas import generate_video_script
