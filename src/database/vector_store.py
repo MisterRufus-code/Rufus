@@ -255,7 +255,15 @@ def get_vector_store() -> QdrantStore | FaissStore:
         return _store_instance
     import time
     from rich.console import Console as _Console
+    import config as _cfg
     _con = _Console()
+
+    # If QDRANT_HOST is blank, skip straight to FAISS — no retries, no waiting.
+    if not _cfg.QDRANT_HOST:
+        _con.print("[dim]QDRANT_HOST not set — using FAISS index.[/dim]")
+        _store_instance = FaissStore()
+        return _store_instance
+
     last_exc: Exception | None = None
     for attempt in range(1, 4):  # 3 attempts: 0s, 2s, 4s
         try:
@@ -270,7 +278,7 @@ def get_vector_store() -> QdrantStore | FaissStore:
                 _con.print(f"[yellow]Qdrant not ready (attempt {attempt}/3) — retrying in {wait}s...[/yellow]")
                 time.sleep(wait)
     _con.print(
-        f"[yellow]Qdrant unavailable after 3 attempts ({last_exc}) — using in-memory FAISS fallback.[/yellow]"
+        f"[dim]Qdrant unavailable ({last_exc}) — using FAISS fallback.[/dim]"
     )
     _store_instance = FaissStore()
     return _store_instance
