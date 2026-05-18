@@ -25,9 +25,6 @@ from src.logging_config import get_logger
 from src.utils.retry import CircuitBreaker
 from src.pipeline.checkpoint import CheckpointManager, PipelineStage
 
-_ollama_cb = CircuitBreaker(threshold=5, reset_timeout=120.0)
-
-
 def _run_with_retry(fn, *args, max_attempts=3, **kwargs):
     """Run fn(*args, **kwargs) with exponential backoff. Used for Ollama/network steps."""
     for attempt in range(1, max_attempts + 1):
@@ -93,6 +90,8 @@ def run_pipeline(
             time.sleep(seconds)
 
     result = PipelineResult(topic=topic, niche=niche, dry_run=dry_run)
+    # Per-run circuit breaker so failures in niche A don't block niche B.
+    _ollama_cb = CircuitBreaker(threshold=5, reset_timeout=120.0)
     safe_topic = re.sub(r"[^\w\s-]", "", topic).strip().replace(" ", "_")[:40] or "video"
     out = Path(output_dir or config.OUTPUT_PATH) / safe_topic
     out.mkdir(parents=True, exist_ok=True)
@@ -302,6 +301,20 @@ def run_pipeline(
     console.print(f"[cyan]Top idea:[/cyan] {best_idea.title} [{best_idea.estimated_virality}]")
 
     breathe(2)
+
+    # ── Step 5b — Research Grounding ────────────────────────────────────────
+    console.print(Rule("[bold]Step 5b — Research Grounding[/bold]"))
+    research_ctx = ""
+    try:
+        from src.research import research_topic
+        research_ctx = research_topic(best_idea.title, niche=niche)
+        if research_ctx:
+            console.print(f"[green]Research:[/green] {len(research_ctx)} chars of grounding context")
+        else:
+            console.print("[dim]No research context — script will use LLM knowledge[/dim]")
+    except Exception as exc:
+        console.print(f"[yellow]Research skipped ({exc})[/yellow]")
+
     # ------------------------------------------------------------------ #
     # Step 6 — Generate script from media context (or Shorts script)
     # ------------------------------------------------------------------ #
@@ -327,6 +340,7 @@ def run_pipeline(
                     model=ollama_model,
                     ml_prefix=ml_prefix,
                     niche_system_prompt=_niche_sys_inject,
+                    research_context=research_ctx,
                 )
         else:
             from src.ideas import generate_video_script
@@ -336,6 +350,7 @@ def run_pipeline(
                     best_idea, duration_minutes=duration_minutes,
                     model=ollama_model, niche=niche,
                     niche_system_prompt=_niche_sys_inject,
+                    research_context=research_ctx,
                 )
     except Exception as exc:
         result.errors.append(f"Script generation failed: {exc}")

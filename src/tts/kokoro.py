@@ -41,22 +41,23 @@ DEFAULT_VOICE = "af_heart"
 DEFAULT_SPEED = 1.0
 SAMPLE_RATE = 24000
 
-# Model files: look in <project_root>/models/, then fall back to cwd
+import os as _os
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
-_MODELS_DIR   = _PROJECT_ROOT / "models"
+_MODELS_DIR = Path(_os.getenv("KOKORO_MODELS_DIR") or (_PROJECT_ROOT / "models"))
 
 
 def _model_path(filename: str) -> str:
-    """Return absolute path to a Kokoro model file, checking models/ first."""
-    candidate = _MODELS_DIR / filename
-    if candidate.exists():
-        return str(candidate)
-    # legacy: file placed in cwd / project root
-    cwd_candidate = _PROJECT_ROOT / filename
-    if cwd_candidate.exists():
-        return str(cwd_candidate)
-    # return models/ path so the error message is helpful
-    return str(candidate)
+    p = _MODELS_DIR / filename
+    if p.exists():
+        return str(p)
+    legacy = _PROJECT_ROOT / filename
+    if legacy.exists():
+        return str(legacy)
+    raise FileNotFoundError(
+        f"Kokoro model not found: {p}\n"
+        f"Download from https://github.com/thewh1teagle/kokoro-onnx/releases\n"
+        f"Or set KOKORO_MODELS_DIR=/path/to/models"
+    )
 
 # ---------------------------------------------------------------------------
 # Niche → voice profiles

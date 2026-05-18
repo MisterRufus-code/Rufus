@@ -1,10 +1,18 @@
-"""AI-powered video idea and script generator using Ollama (100% free, local)."""
+"""AI-powered video idea and script generator using Ollama (100% free, local).
+
+PATCHED VERSION — fixes from REVIEW.md:
+  1.1  Correct in-string escape handling in _complete_truncated_json
+  1.2  task_lock import is now optional (no crash if module missing)
+  1.4  _clean_json_str is now idempotent
+  1.11 Filler stripping uses regex patterns, not just exact strings
+"""
 
 from __future__ import annotations
 
 import json
 import re
 import subprocess
+from contextlib import nullcontext
 from dataclasses import dataclass
 from typing import Optional
 
@@ -15,6 +23,14 @@ from rich.panel import Panel
 console = Console()
 
 DEFAULT_MODEL = "mistral"   # change to "llama3.1" or "phi3" if preferred
+
+# --- task_lock: optional, no-op if missing ---------------------------------
+try:
+    from src.task_lock import task_lock  # type: ignore
+except Exception:
+    def task_lock(_name: str):  # type: ignore[misc]
+        return nullcontext()
+
 
 # Phrases the model loves to write that kill credibility and waste airtime.
 # Applied as a post-processing strip after every script generation.
@@ -59,24 +75,44 @@ _FILLER_PHRASES: list[tuple[str, str]] = [
     ("Now you understand exactly why this happens.", ""),
 ]
 
+# Regex patterns catch paraphrased filler the exact-string list misses.
+# Each pattern matches one full sentence ending with . ! or ?
+_FILLER_PATTERNS: list[re.Pattern] = [
+    re.compile(r"\bstay (?:tuned|with me)[^.!?]*[.!?]", re.IGNORECASE),
+    re.compile(r"(?:I|we)['\u2019]ll (?:tell|reveal|get to|come back to) (?:you )?(?:this|that)[^.!?]*[.!?]", re.IGNORECASE),
+    re.compile(r"\bdon['\u2019]t (?:miss|skip|go anywhere)[^.!?]*[.!?]", re.IGNORECASE),
+    re.compile(r"\bhere['\u2019]s where it gets[^.!?]*[.!?]", re.IGNORECASE),
+    re.compile(r"\bthis (?:will )?change(?:s)? everything[.!?]?", re.IGNORECASE),
+    re.compile(r"\byou['\u2019]re (?:probably )?wondering[^.!?]*[.!?]", re.IGNORECASE),
+    re.compile(r"\b(?:let me|i want to) (?:tell|show) you[^.!?]*[.!?]", re.IGNORECASE),
+    re.compile(r"\bkeep watching[^.!?]*[.!?]", re.IGNORECASE),
+    re.compile(r"\blet that sink in[.!?]?", re.IGNORECASE),
+    re.compile(r"\bin (?:today|this)['\u2019]?s video[^.!?]*[.!?]", re.IGNORECASE),
+]
+
 
 def _strip_filler(text: str) -> str:
     """Remove filler phrases and consecutive duplicate sentences from generated scripts."""
+    if not text:
+        return ""
     for phrase, replacement in _FILLER_PHRASES:
         text = text.replace(phrase, replacement)
+    for pat in _FILLER_PATTERNS:
+        text = pat.sub("", text)
     text = re.sub(r'  +', ' ', text)
     text = re.sub(r'\. \.', '.', text)
 
-    # Remove consecutive duplicate sentences (LLMs often repeat a sentence back-to-back)
+    # Remove consecutive duplicate sentences
     sentences = re.split(r'(?<=[.!?])\s+', text.strip())
     deduped: list[str] = []
     for sent in sentences:
         norm = re.sub(r'\s+', ' ', sent.lower().strip().rstrip('.!?'))
+        if not norm:
+            continue
         if not deduped:
             deduped.append(sent)
         else:
             prev_norm = re.sub(r'\s+', ' ', deduped[-1].lower().strip().rstrip('.!?'))
-            # Skip if identical or one contains the other (substring repeat)
             if norm != prev_norm and norm not in prev_norm and prev_norm not in norm:
                 deduped.append(sent)
     return ' '.join(deduped).strip()
@@ -164,7 +200,6 @@ def _ollama_generate(prompt: str, model: str = DEFAULT_MODEL, system: str = "", 
         )
 
     import httpx
-    from src.task_lock import task_lock
     payload = {
         "model": model,
         "prompt": prompt,
@@ -187,17 +222,26 @@ def _ollama_generate(prompt: str, model: str = DEFAULT_MODEL, system: str = "", 
         )
     r.raise_for_status()
     raw = r.json().get("response", "").strip()
-    # Strip emojis that the model sneaks into JSON strings — they don't break
-    # JSON but cause issues downstream and are unwanted in titles/hooks
+    # Strip emojis that the model sneaks into JSON strings
     return _strip_emojis(raw)
 
 
 def _clean_json_str(s: str) -> str:
-    """Fix common LLM JSON issues: unescaped newlines/tabs inside strings."""
+    """Fix common LLM JSON issues: unescaped newlines/tabs inside strings.
+
+    Idempotent — returns input unchanged if it's already valid JSON.
+    """
+    # Fast path: already valid? Don't touch it.
+    try:
+        json.loads(s)
+        return s
+    except json.JSONDecodeError:
+        pass
+
     def fix_string(m: re.Match) -> str:
         return m.group(0).replace("\n", "\\n").replace("\r", "\\r").replace("\t", "\\t")
     s = re.sub(r'"(?:[^"\\]|\\.)*"', fix_string, s, flags=re.DOTALL)
-    # Strip trailing commas before ] or } (invalid JSON that LLMs often emit)
+    # Strip trailing commas before ] or }
     s = re.sub(r',(\s*[}\]])', r'\1', s)
     return s
 
@@ -206,25 +250,33 @@ def _complete_truncated_json(s: str) -> str:
     """
     Walk the string tracking bracket/brace depth and whether we're inside a string.
     If the JSON is truncated, close any open strings and structures.
+
+    FIXED: escape handling now only fires while in_string is True.
     """
     stack: list[str] = []
     in_string = False
     escape = False
     for ch in s:
-        if escape:
-            escape = False
+        if in_string:
+            if escape:
+                escape = False
+                continue
+            if ch == "\\":
+                escape = True
+                continue
+            if ch == '"':
+                in_string = False
             continue
-        if ch == "\\":
-            escape = True
-            continue
+        # outside string
         if ch == '"':
-            in_string = not in_string
-        elif not in_string:
-            if ch in "[{":
-                stack.append("]" if ch == "[" else "}")
-            elif ch in "]}":
-                if stack and stack[-1] == ch:
-                    stack.pop()
+            in_string = True
+        elif ch == "[":
+            stack.append("]")
+        elif ch == "{":
+            stack.append("}")
+        elif ch in "]}":
+            if stack and stack[-1] == ch:
+                stack.pop()
 
     suffix = ""
     if in_string:
@@ -244,7 +296,6 @@ def _parse_and_validate(
     """
     Parse Ollama JSON output and validate against a Pydantic schema.
     Auto-retries up to max_retries times on validation failure.
-    Returns validated model instance or raises on exhausted retries.
     """
     from pydantic import ValidationError
     last_exc: Exception | None = None
@@ -253,7 +304,7 @@ def _parse_and_validate(
         try:
             data = _parse_json_response(current_raw)
             if isinstance(data, list) and data:
-                data = data[0]  # take first element for single-object schemas
+                data = data[0]
             return schema_cls.model_validate(data)
         except (ValidationError, ValueError, TypeError) as exc:
             last_exc = exc
@@ -281,14 +332,11 @@ def _parse_json_response(raw: str) -> list | dict:
             try:
                 return json.loads(candidate)
             except json.JSONDecodeError as _jde:
-                # "Extra data" means JSON ends before the string does — parse just the valid prefix
                 if "Extra data" in str(_jde) and _jde.pos > 0:
                     try:
                         return json.loads(candidate[:_jde.pos])
                     except json.JSONDecodeError:
                         pass
-        # Try completing a truncated string/structure, then re-clean so any
-        # literal newlines inside the newly-closed string get escaped.
         completed = _complete_truncated_json(cleaned)
         if completed != cleaned:
             for variant in (completed, _clean_json_str(completed)):
@@ -296,9 +344,6 @@ def _parse_json_response(raw: str) -> list | dict:
                     return json.loads(variant)
                 except json.JSONDecodeError:
                     pass
-        # Truncation may have happened mid-key-name (e.g. "descripti instead of
-        # "description": "...") making completion produce invalid JSON.  Fall back
-        # to salvaging all complete objects that appear before the cut.
         bracket = cleaned.find("[")
         last_brace = cleaned.rfind("}")
         if bracket != -1 and last_brace > bracket:
@@ -312,7 +357,6 @@ def _parse_json_response(raw: str) -> list | dict:
                     pass
         return None
 
-    # Strip markdown code fences
     if "```" in raw:
         for part in raw.split("```"):
             part = part.strip()
@@ -326,7 +370,6 @@ def _parse_json_response(raw: str) -> list | dict:
     if result is not None:
         return result
 
-    # Slice from first [ or {
     for start_char in ("[", "{"):
         s = raw.find(start_char)
         if s != -1:
@@ -334,25 +377,25 @@ def _parse_json_response(raw: str) -> list | dict:
             if result is not None:
                 return result
 
-    # Last-resort: extract all complete top-level {...} objects (handles flat nested)
     objects: list[dict] = []
     depth = 0
     start = -1
     in_str = False
     esc = False
     for i, ch in enumerate(raw):
-        if esc:
-            esc = False
-            continue
-        if ch == "\\":
-            esc = True
+        if in_str:
+            if esc:
+                esc = False
+                continue
+            if ch == "\\":
+                esc = True
+                continue
+            if ch == '"':
+                in_str = False
             continue
         if ch == '"':
-            in_str = not in_str
-            continue
-        if in_str:
-            continue
-        if ch == "{":
+            in_str = True
+        elif ch == "{":
             if depth == 0:
                 start = i
             depth += 1
@@ -369,7 +412,6 @@ def _parse_json_response(raw: str) -> list | dict:
     if objects:
         return objects
 
-    # Dump the full response so we can diagnose truncation/malformation
     try:
         import pathlib
         pathlib.Path("/tmp/rufus_json_fail.txt").write_text(raw, encoding="utf-8")
@@ -399,6 +441,51 @@ class VideoScript:
     call_to_action: str
     description: str
     tags: list[str]
+
+
+# ---------------------------------------------------------------------------
+# Banned phrases block (shared across script generators)
+# ---------------------------------------------------------------------------
+
+_BANNED_PHRASES_BLOCK = """
+BANNED PHRASES — never write any of these:
+- "Stay with me" / "Don't go anywhere" / "Don't miss this"
+- "I'll tell you in a moment" / "I'll reveal this later" / "We'll get to that"
+- "But first let me explain" / "Before we continue"
+- "Here's where it gets interesting" / "This is where it gets really interesting"
+- "If you're watching this" / "Since you're watching this"
+- "You're probably wondering" / "The answer might surprise you"
+- "This changes everything" / "And that changes everything"
+- "Stay tuned" / "Keep watching" / "Let that sink in"
+- "In today's video" / "In this video we will"
+Any sentence that delays the point rather than making it is FORBIDDEN.
+"""
+
+
+def _viral_script_instructions(virality: str) -> str:
+    """Return virality-level-specific writing instructions for the script prompt."""
+    base = (
+        "Structure: hook (one shocking specific fact) → problem with real numbers → "
+        "historical parallel → who controls the outcome today → what the viewer can do. "
+        "Every single sentence must deliver information, a number, a name, or a revelation. "
+        "Never stall. Never delay. Get to the point immediately."
+    )
+    extras = {
+        "Low": "Open with the most surprising verified statistic. Every sentence = one concrete fact.",
+        "Medium": "Open with a real event and its real consequence. Name the institution. Give the year.",
+        "High": (
+            "First sentence: one jaw-dropping verified number. No preamble. "
+            "Each section ends by revealing the next piece of the puzzle — not by teasing it."
+        ),
+        "Viral": (
+            "First sentence is a verified fact that reframes everything the viewer thought they knew. "
+            "Short sentences. Real names. Real numbers. Real years. "
+            "Each section answers ONE question completely, then raises the next question by "
+            "revealing a new fact — never by saying 'I'll tell you later'. "
+            "The CTA must tell the viewer exactly what awareness or action this calls for."
+        ),
+    }
+    return f"{base}\n{extras.get(virality, extras['Medium'])}"
 
 
 # ---------------------------------------------------------------------------
@@ -437,7 +524,6 @@ Return ONLY the JSON array, no explanation."""
                 return keywords
     except Exception:
         pass
-    # Fallback: derive visual search terms from topic words + niche context
     return _fallback_keywords(topic, niche, count)
 
 
@@ -456,9 +542,11 @@ def _fallback_keywords(topic: str, niche: str, count: int = 8) -> list[str]:
         "business": ["team meeting office", "entrepreneur working", "startup whiteboard",
                      "handshake deal", "growth chart success", "coffee laptop work",
                      "presentation audience", "business success"],
+        "dark_triad_ai": ["dark office boardroom", "code screen hacker", "surveillance camera city",
+                          "robot factory automation", "digital currency", "crowd protest",
+                          "powerful executive meeting", "data center server room"],
     }
     base = _NICHE_VISUALS.get(niche, _NICHE_VISUALS["business"])
-    # Mix niche visuals with topic-derived terms
     words = [w for w in topic.lower().split() if len(w) > 3]
     topic_terms = [f"{words[i]} {words[i+1]}" for i in range(min(len(words)-1, 3))] if len(words) > 1 else []
     combined = topic_terms + base
@@ -517,46 +605,6 @@ Return ONLY the JSON array, no explanation."""
     return ideas
 
 
-_BANNED_PHRASES_BLOCK = """
-BANNED PHRASES — never write any of these:
-- "Stay with me" / "Don't go anywhere" / "Don't miss this"
-- "I'll tell you in a moment" / "I'll reveal this later" / "We'll get to that"
-- "But first let me explain" / "Before we continue"
-- "Here's where it gets interesting" / "This is where it gets really interesting"
-- "If you're watching this" / "Since you're watching this"
-- "You're probably wondering" / "The answer might surprise you"
-- "This changes everything" / "And that changes everything"
-- "Stay tuned" / "Keep watching" / "Let that sink in"
-Any sentence that delays the point rather than making it is FORBIDDEN.
-"""
-
-
-def _viral_script_instructions(virality: str) -> str:
-    """Return virality-level-specific writing instructions for the script prompt."""
-    base = (
-        "Structure: hook (one shocking specific fact) → problem with real numbers → "
-        "historical parallel → who controls the outcome today → what the viewer can do. "
-        "Every single sentence must deliver information, a number, a name, or a revelation. "
-        "Never stall. Never delay. Get to the point immediately."
-    )
-    extras = {
-        "Low": "Open with the most surprising verified statistic. Every sentence = one concrete fact.",
-        "Medium": "Open with a real event and its real consequence. Name the institution. Give the year.",
-        "High": (
-            "First sentence: one jaw-dropping verified number. No preamble. "
-            "Each section ends by revealing the next piece of the puzzle — not by teasing it."
-        ),
-        "Viral": (
-            "First sentence is a verified fact that reframes everything the viewer thought they knew. "
-            "Short sentences. Real names. Real numbers. Real years. "
-            "Each section answers ONE question completely, then raises the next question by "
-            "revealing a new fact — never by saying 'I'll tell you later'. "
-            "The CTA must tell the viewer exactly what awareness or action this calls for."
-        ),
-    }
-    return f"{base}\n{extras.get(virality, extras['Medium'])}"
-
-
 def generate_script_from_media(
     idea: VideoIdea,
     media_captions: list[str],
@@ -565,11 +613,18 @@ def generate_script_from_media(
     model: str = DEFAULT_MODEL,
     ml_prefix: str = "",
     niche_system_prompt: str = "",
+    research_context: str = "",  # NEW: factual context from research.py
 ) -> "VideoScript":
-    """Generate a viral script with sections that map to the available media clips."""
+    """Generate a viral script with sections that map to the available media clips.
+
+    NEW: pass research_context with verified facts from research.py for grounded scripts.
+    """
     captions_block = "\n".join(f"footage_{i+1}: {c}" for i, c in enumerate(media_captions[:15]))
     virality = getattr(idea, "estimated_virality", "Medium")
     viral_instructions = _viral_script_instructions(virality)
+    research_block = ""
+    if research_context:
+        research_block = f"\n\nVERIFIED RESEARCH (use these facts, cite source names in the script):\n{research_context}\n"
     prompt = f"""{ml_prefix}
 Write a factual, high-retention YouTube video script on this topic.
 
@@ -583,7 +638,7 @@ Content rules:
 {viral_instructions}
 
 {_BANNED_PHRASES_BLOCK}
-
+{research_block}
 Available footage clips (MUST use these):
 {captions_block}
 
@@ -680,13 +735,9 @@ def generate_video_script(
     model: str = DEFAULT_MODEL,
     niche: str = "general",
     niche_system_prompt: str = "",
+    research_context: str = "",  # NEW
 ) -> VideoScript:
-    """Generate a full video script using a local Ollama model.
-
-    Automatically injects ViralDNA patterns and RetentionEngine requirements
-    into the prompt so every script is built for maximum watch time.
-    """
-    # ── 1. Load ViralDNA context ────────────────────────────────────────
+    """Generate a full video script using a local Ollama model."""
     dna_context = ""
     try:
         from src.viral_intelligence.dna_extractor import ViralDNA
@@ -696,9 +747,11 @@ def generate_video_script(
     except Exception:
         pass
 
-    # ── 2. Build retention-aware prompt ────────────────────────────────
     virality = getattr(idea, "estimated_virality", "High")
     viral_instructions = _viral_script_instructions(virality)
+    research_block = ""
+    if research_context:
+        research_block = f"\n\nVERIFIED RESEARCH (use these facts in the script):\n{research_context}\n"
     prompt = f"""Write a factual, high-retention YouTube video script on this topic.
 
 Title: {idea.title}
@@ -707,6 +760,7 @@ Style: {style}
 Target duration: {duration_minutes} minutes
 Niche: {niche}
 {dna_context}
+{research_block}
 
 CONTENT RULES (mandatory):
 {viral_instructions}
@@ -749,7 +803,6 @@ Return ONLY valid JSON, no explanation."""
         tags=data.get("tags", []) or [],
     )
 
-    # ── 3. Score retention (report only — no filler injection) ─────────
     try:
         from src.viral_intelligence.retention_engine import RetentionEngine
         engine = RetentionEngine()
@@ -774,38 +827,6 @@ def _inject_retention_patterns(sections: list[dict]) -> list[dict]:
         cleaned = _strip_filler(text)
         enhanced.append({**section, "script": cleaned})
     return enhanced
-
-
-# ---------------------------------------------------------------------------
-# Display helpers
-# ---------------------------------------------------------------------------
-
-def print_ideas(ideas: list[VideoIdea]) -> None:
-    virality_colors = {
-        "Low": "dim", "Medium": "yellow", "High": "green", "Viral": "bold magenta"
-    }
-    for i, idea in enumerate(ideas, 1):
-        color = virality_colors.get(idea.estimated_virality, "white")
-        console.print(
-            Panel(
-                f"[bold]{idea.title}[/bold]\n\n"
-                f"[cyan]Hook:[/cyan] {idea.hook}\n\n"
-                f"[blue]Description:[/blue] {idea.description}\n\n"
-                f"[yellow]Tags:[/yellow] {', '.join(idea.tags[:6])}...\n\n"
-                f"[{color}]Virality: {idea.estimated_virality}[/{color}]",
-                title=f"Idea #{i}",
-                border_style=color,
-            )
-        )
-
-
-def print_script(script: VideoScript) -> None:
-    md_parts = [f"# {script.title}\n", f"## Hook\n{script.hook}\n"]
-    for section in script.sections:
-        md_parts.append(f"## {section.get('heading','')}\n{section.get('script','')}\n")
-    md_parts.append(f"## Call to Action\n{script.call_to_action}\n")
-    md_parts.append(f"---\n**YouTube Description:**\n{script.description}")
-    console.print(Markdown("\n".join(md_parts)))
 
 
 def generate_shorts_script(
@@ -834,6 +855,8 @@ Topic: {idea.title}
 Hook idea: {idea.hook}
 Virality target: {virality}
 Viral writing rule: {viral_instructions}
+
+{_BANNED_PHRASES_BLOCK}
 
 Script rules:
 - Hook: ONE sentence, max 10 words, use shock or a curiosity gap
@@ -866,6 +889,38 @@ Return ONLY valid JSON, no markdown:
         description=_clean_str(data.get("description", "")),
         tags=data.get("tags", ["Shorts"]),
     )
+
+
+# ---------------------------------------------------------------------------
+# Display helpers
+# ---------------------------------------------------------------------------
+
+def print_ideas(ideas: list[VideoIdea]) -> None:
+    virality_colors = {
+        "Low": "dim", "Medium": "yellow", "High": "green", "Viral": "bold magenta"
+    }
+    for i, idea in enumerate(ideas, 1):
+        color = virality_colors.get(idea.estimated_virality, "white")
+        console.print(
+            Panel(
+                f"[bold]{idea.title}[/bold]\n\n"
+                f"[cyan]Hook:[/cyan] {idea.hook}\n\n"
+                f"[blue]Description:[/blue] {idea.description}\n\n"
+                f"[yellow]Tags:[/yellow] {', '.join(idea.tags[:6])}...\n\n"
+                f"[{color}]Virality: {idea.estimated_virality}[/{color}]",
+                title=f"Idea #{i}",
+                border_style=color,
+            )
+        )
+
+
+def print_script(script: VideoScript) -> None:
+    md_parts = [f"# {script.title}\n", f"## Hook\n{script.hook}\n"]
+    for section in script.sections:
+        md_parts.append(f"## {section.get('heading','')}\n{section.get('script','')}\n")
+    md_parts.append(f"## Call to Action\n{script.call_to_action}\n")
+    md_parts.append(f"---\n**YouTube Description:**\n{script.description}")
+    console.print(Markdown("\n".join(md_parts)))
 
 
 def check_ollama_status() -> None:

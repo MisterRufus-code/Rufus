@@ -1,15 +1,16 @@
 """
 Rufus Memory Layer — persistent intelligence across pipeline runs.
 
+PATCHED — fix 1.5 from REVIEW.md:
+  SQLite is now in WAL mode with a 30s busy timeout. This is required for
+  safe multi-process access (supervisor running niche pipelines in parallel).
+
 The system remembers every hook, script, and topic it ever generated,
 plus performance outcomes. Future runs query this memory to:
   - Avoid repeating weak hooks
   - Reuse proven phrase structures
   - Surface what worked in each niche
   - Feed the Hook Genome with fitness data
-
-Storage: SQLite (no extra packages — Python stdlib).
-Semantic search: FAISS when available, simple substring fallback otherwise.
 """
 
 from __future__ import annotations
@@ -19,8 +20,7 @@ import sqlite3
 import threading
 import time
 from contextlib import contextmanager
-from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
@@ -29,12 +29,16 @@ from rich.console import Console
 console = Console()
 
 _DB_PATH = Path("data/rufus_memory.db")
-_lock    = threading.Lock()
+_lock = threading.Lock()
+_INITIALIZED = False  # set once per process after WAL pragmas applied
 
 
-# ---------------------------------------------------------------------------
-# DB init
-# ---------------------------------------------------------------------------
+def _apply_pragmas(conn: sqlite3.Connection) -> None:
+    """One-time WAL setup. Idempotent — safe to call repeatedly."""
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA synchronous=NORMAL")
+    conn.execute("PRAGMA busy_timeout=30000")  # 30s — matches connect timeout
+
 
 def _init_db(conn: sqlite3.Connection) -> None:
     conn.executescript("""
@@ -94,18 +98,24 @@ def _init_db(conn: sqlite3.Connection) -> None:
     CREATE INDEX IF NOT EXISTS idx_scripts_niche ON scripts(niche);
     CREATE INDEX IF NOT EXISTS idx_topics_niche ON topics(niche);
     CREATE INDEX IF NOT EXISTS idx_footage_niche ON footage_hashes(niche, channel_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_topics_dedup ON topics(niche, topic);
     """)
     conn.commit()
 
 
 @contextmanager
 def _db():
+    global _INITIALIZED
     _DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     with _lock:
-        conn = sqlite3.connect(str(_DB_PATH))
+        # 30s timeout on connect; WAL allows readers while writer is active.
+        conn = sqlite3.connect(str(_DB_PATH), timeout=30.0)
         conn.row_factory = sqlite3.Row
         try:
-            _init_db(conn)
+            if not _INITIALIZED:
+                _apply_pragmas(conn)
+                _init_db(conn)
+                _INITIALIZED = True
             yield conn
             conn.commit()
         finally:
@@ -132,7 +142,6 @@ class HookMemory:
         return (time.time() - self.created_at) / 86400
 
     def fitness(self) -> float:
-        """Composite fitness score for genetic selection."""
         base = self.viral_score * 0.6 + self.retention_score * 0.4
         view_bonus = min(2.0, self.views / 5000) if self.views > 0 else 0
         recency = max(0.5, 1.0 - self.age_days() / 30)
@@ -149,7 +158,6 @@ def store_hook(
     generation: int = 0,
     genome_parent: Optional[str] = None,
 ) -> int:
-    """Persist a hook and return its row ID."""
     with _db() as conn:
         cur = conn.execute(
             """INSERT INTO hooks
@@ -168,11 +176,12 @@ def top_hooks(
     limit: int = 20,
     days: int = 90,
 ) -> list[HookMemory]:
-    """Return the best-performing hooks for a niche from the last N days."""
     since = time.time() - days * 86400
     with _db() as conn:
         rows = conn.execute(
-            """SELECT * FROM hooks
+            """SELECT id, niche, topic, hook_text, viral_score, retention_score,
+                      views, generation, created_at
+               FROM hooks
                WHERE niche = ? AND viral_score >= ? AND created_at >= ?
                ORDER BY viral_score DESC LIMIT ?""",
             (niche, min_score, since, limit),
@@ -181,7 +190,6 @@ def top_hooks(
 
 
 def update_hook_performance(hook_id: int, views: int, watch_time_pct: float) -> None:
-    """Update a hook's real-world performance after upload analytics."""
     with _db() as conn:
         conn.execute(
             "UPDATE hooks SET views=?, watch_time_pct=? WHERE id=?",
@@ -225,11 +233,20 @@ def best_scripts(niche: str, limit: int = 5) -> list[dict]:
 
 
 # ---------------------------------------------------------------------------
-# Topic memory
+# Topic memory — with dedup helper for the new trends_v2 module
 # ---------------------------------------------------------------------------
 
 def store_topic(niche: str, topic: str, source: str = "", momentum: float = 0) -> None:
     with _db() as conn:
+        # Skip duplicates within 30 days for the same niche
+        existing = conn.execute(
+            """SELECT id FROM topics
+               WHERE niche=? AND LOWER(topic)=LOWER(?)
+               AND created_at >= ?""",
+            (niche, topic, time.time() - 30 * 86400),
+        ).fetchone()
+        if existing:
+            return
         conn.execute(
             "INSERT INTO topics (niche, topic, source, momentum) VALUES (?,?,?,?)",
             (niche, topic, source, momentum),
@@ -254,16 +271,24 @@ def unused_topics(niche: str, limit: int = 10) -> list[str]:
     return [r["topic"] for r in rows]
 
 
+def was_topic_recently_used(niche: str, topic: str, days: int = 60) -> bool:
+    """Return True if this topic (case-insensitive) was used in the last N days."""
+    with _db() as conn:
+        row = conn.execute(
+            """SELECT id FROM topics
+               WHERE niche=? AND LOWER(topic)=LOWER(?) AND used=1
+               AND created_at >= ?""",
+            (niche, topic, time.time() - days * 86400),
+        ).fetchone()
+    return row is not None
+
+
 # ---------------------------------------------------------------------------
 # Intelligence queries
 # ---------------------------------------------------------------------------
 
 def memory_context(niche: str) -> str:
-    """
-    Return a natural-language summary of what has worked in this niche.
-    Used to enrich Ollama prompts with institutional memory.
-    """
-    hooks   = top_hooks(niche, min_score=7.0, limit=5)
+    hooks = top_hooks(niche, min_score=7.0, limit=5)
     scripts = best_scripts(niche, limit=3)
 
     lines = [f"=== RUFUS MEMORY: {niche.upper()} ==="]
@@ -276,9 +301,7 @@ def memory_context(niche: str) -> str:
     if scripts:
         lines.append("\nHIGH-RETENTION SCRIPT TITLES (study these structures):")
         for s in scripts:
-            lines.append(
-                f"  [ret={s['retention_score']:.0f}] {s['title']}"
-            )
+            lines.append(f"  [ret={s['retention_score']:.0f}] {s['title']}")
 
     if not hooks and not scripts:
         lines.append("(No memory yet — first run in this niche)")
@@ -288,11 +311,10 @@ def memory_context(niche: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Footage hash tracking (duplicate-content prevention)
+# Footage hash tracking
 # ---------------------------------------------------------------------------
 
 def _hash_file(path: str) -> str:
-    """Return a short MD5 of the first 1 MB of a file (fast, good enough for dedup)."""
     import hashlib
     h = hashlib.md5()
     try:
@@ -309,9 +331,7 @@ def record_footage_used(
     niche: str = "",
     channel_id: str = "",
 ) -> None:
-    """Persist URLs/file-paths used in a render so future renders can skip them."""
     import hashlib
-    from pathlib import Path
     with _db() as conn:
         for item in urls_or_paths:
             p = Path(item)
@@ -331,9 +351,7 @@ def get_recently_used_hashes(
     channel_id: str = "",
     last_n_renders: int = 3,
 ) -> set[str]:
-    """Return file-hashes used in the last N renders for this channel/niche."""
     with _db() as conn:
-        # Find the most recent N distinct render_ids
         rows = conn.execute(
             """SELECT DISTINCT render_id FROM footage_hashes
                WHERE niche=? AND channel_id=?
@@ -357,8 +375,6 @@ def is_footage_used_recently(
     channel_id: str = "",
     last_n_renders: int = 3,
 ) -> bool:
-    """Return True if this URL/file was used in the last N renders."""
-    from pathlib import Path
     import hashlib
     p = Path(url_or_path)
     file_hash = _hash_file(url_or_path) if p.exists() else hashlib.md5(url_or_path.encode()).hexdigest()
@@ -366,7 +382,6 @@ def is_footage_used_recently(
 
 
 def stats() -> dict:
-    """Return memory database statistics."""
     with _db() as conn:
         hooks_total   = conn.execute("SELECT COUNT(*) FROM hooks").fetchone()[0]
         scripts_total = conn.execute("SELECT COUNT(*) FROM scripts").fetchone()[0]

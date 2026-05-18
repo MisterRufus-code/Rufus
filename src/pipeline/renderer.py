@@ -1,10 +1,13 @@
 """
 FFmpeg video renderer.
 
+PATCHED — fix 1.3 from REVIEW.md:
+  apply_visual_mutation no longer requests atempo on silent video (was failing
+  silently, defeating anti-duplicate protection on every render).
+  Speed variation moved to setpts on the video filter chain.
+
 Assembles a list of TimelineClip objects + an audio file into a final MP4.
 100% free — FFmpeg must be installed on the system.
-
-Install: sudo apt install ffmpeg
 """
 
 from __future__ import annotations
@@ -39,7 +42,6 @@ def _has_nvenc() -> bool:
 
 
 def _video_codec_args() -> list[str]:
-    """Return the best available H.264 encoder args: NVENC if available, else libx264."""
     if _has_nvenc():
         return ["-c:v", "h264_nvenc", "-preset", "p4", "-rc", "vbr", "-cq", "23"]
     return ["-c:v", "libx264", "-preset", "fast", "-crf", "23"]
@@ -62,16 +64,10 @@ def _check_ffmpeg() -> bool:
 
 
 def _has_motion(clip: TimelineClip) -> bool:
-    """Heuristic: images and very short clips get Ken Burns; longer video clips don't need it."""
     return clip.asset.asset_type == "image" or (clip.out_point - clip.in_point) < 3.0
 
 
 def trim_clip(clip: TimelineClip, output_path: Path, ken_burns: bool = True) -> Path:
-    """
-    Trim a single asset to [in_point, out_point] and re-encode to H.264.
-    Applies a subtle Ken Burns zoom-pan to static / short clips so there's
-    always some visual motion (increases retention for talking-head-style edits).
-    """
     asset_path = clip.asset.path
     duration = clip.out_point - clip.in_point
 
@@ -79,8 +75,6 @@ def trim_clip(clip: TimelineClip, output_path: Path, ken_burns: bool = True) -> 
 
     if ken_burns and _has_motion(clip):
         frames = max(25, int(duration * 25))
-        # Start at z=1.01 (not 1.00) to stay safely inside the scaled frame and
-        # avoid the gray edge artifact caused by sub-pixel overflow at z=1.0 exactly.
         vf = (
             f"scale=3840:2160,"
             f"zoompan=z='min(1.01+({0.05}/{frames})*on,1.06)'"
@@ -105,20 +99,20 @@ def trim_clip(clip: TimelineClip, output_path: Path, ken_burns: bool = True) -> 
 def apply_visual_mutation(input_path: Path, output_path: Path, seed: int = 0) -> Path:
     """
     Apply subtle randomised visual variations so the same stock clip
-    looks different across videos (prevents YouTube duplicate-content detection).
-    Variations: micro crop offset, brightness/saturation nudge, speed micro-ramp.
-    All changes are imperceptible to humans but defeat hash-based duplicate checks.
+    looks different across videos (defeats hash-based duplicate detection).
+
+    FIXED: input is silent (trimmed with -an), so atempo is not applicable.
+    Speed micro-ramp is now done with setpts on the video stream.
     """
     import random as _rnd
     _rnd.seed(seed)
-    # Crop: randomly trim 1-3% from each edge (maintains aspect ratio)
     crop_pct = _rnd.uniform(0.01, 0.03)
-    # Brightness ±3%, saturation ±10%
     brightness = _rnd.uniform(-0.03, 0.03)
     saturation = _rnd.uniform(0.90, 1.10)
-    eq_filter = f"eq=brightness={brightness:.3f}:saturation={saturation:.2f}"
-    # Speed micro-ramp: ±1.5% so duration varies slightly
     speed = _rnd.uniform(0.985, 1.015)
+    # setpts ratio: 1/speed inverts (smaller PTS = faster playback)
+    speed_filter = f"setpts={1/speed:.4f}*PTS"
+    eq_filter = f"eq=brightness={brightness:.3f}:saturation={saturation:.2f}"
     _ffmpeg(
         "-i", str(input_path),
         "-vf",
@@ -126,17 +120,15 @@ def apply_visual_mutation(input_path: Path, output_path: Path, seed: int = 0) ->
         f"iw*{crop_pct:.4f}:ih*{crop_pct:.4f},"
         f"scale=1920:1080:force_original_aspect_ratio=decrease,"
         f"pad=1920:1080:(ow-iw)/2:(oh-ih)/2,"
-        f"{eq_filter}",
-        "-af", f"atempo={speed:.3f}",
+        f"{eq_filter},{speed_filter}",
         *_video_codec_args(),
-        "-c:a", "copy",
+        "-an",
         str(output_path),
     )
     return output_path
 
 
 def concat_clips(clip_paths: list[Path], output_path: Path) -> Path:
-    """Concatenate trimmed clips using FFmpeg concat demuxer."""
     with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False) as f:
         for p in clip_paths:
             f.write(f"file '{p.resolve()}'\n")
@@ -153,7 +145,6 @@ def concat_clips(clip_paths: list[Path], output_path: Path) -> Path:
 
 
 def _get_duration(path: Path) -> float:
-    """Get video/audio duration in seconds using ffprobe."""
     try:
         result = subprocess.run(
             ["ffprobe", "-v", "error", "-show_entries", "format=duration",
@@ -163,23 +154,6 @@ def _get_duration(path: Path) -> float:
         return float(result.stdout.strip())
     except (ValueError, FileNotFoundError, OSError):
         return 0.0
-
-
-def _loop_video_to_duration(video_path: Path, target_duration: float, output_path: Path) -> Path:
-    """Loop the video track until it covers target_duration seconds."""
-    vid_dur = _get_duration(video_path)
-    if vid_dur <= 0:
-        return video_path
-    loops = int(target_duration / vid_dur) + 2
-    _ffmpeg(
-        "-stream_loop", str(loops),
-        "-i", str(video_path),
-        "-t", str(target_duration + 0.5),   # tiny extra buffer
-        *_video_codec_args(),
-        "-an",
-        str(output_path),
-    )
-    return output_path
 
 
 def add_audio(video_path: Path, audio_path: Path, output_path: Path) -> Path:
@@ -195,7 +169,6 @@ def add_audio(video_path: Path, audio_path: Path, output_path: Path) -> Path:
         )
         looped = video_path.parent / ("_looped_" + video_path.name)
         loops = int(audio_dur / max(video_dur, 1)) + 2
-        # Re-encode the loop so there's no freeze at the seam
         _ffmpeg(
             "-stream_loop", str(loops),
             "-i", str(video_path),
@@ -225,11 +198,7 @@ def add_background_music(
     output_path: Path,
     music_volume: float = 0.12,
 ) -> Path:
-    """
-    Mix background music with sidechain ducking.
-    Music auto-lowers when the TTS voiceover is loud, rises in pauses.
-    This gives a professional "audio ducking" effect matching human editors.
-    """
+    """Mix background music with sidechain ducking."""
     _ffmpeg(
         "-i", str(video_path),
         "-stream_loop", "-1", "-i", str(music_path),
@@ -258,13 +227,7 @@ def render_video(
     music_path: Optional[Path] = None,
     tmp_dir: Optional[Path] = None,
 ) -> Path:
-    """
-    Full render pipeline:
-      1. Trim each clip to required duration
-      2. Concatenate into one video
-      3. Add voiceover audio
-      4. Optionally mix in background music
-    """
+    """Full render pipeline."""
     if not _check_ffmpeg():
         raise RuntimeError(
             "FFmpeg not found.\n"
@@ -277,7 +240,6 @@ def render_video(
 
     console.print(f"[cyan]Rendering {len(clips)} clips...[/cyan]")
 
-    # Step 1: trim clips
     trimmed: list[Path] = []
     for i, clip in enumerate(clips):
         asset_path = Path(clip.asset.path)
@@ -286,7 +248,6 @@ def render_video(
             continue
         out = tmp / f"clip_{i:03d}.mp4"
         if clip.asset.asset_type == "image":
-            # Convert image to short video clip with Ken Burns zoom
             duration = clip.out_point - clip.in_point or 4.0
             frames = max(25, int(duration * 25))
             _ffmpeg(
@@ -304,24 +265,21 @@ def render_video(
         else:
             trim_clip(clip, out, ken_burns=True)
 
-        # Apply subtle visual mutation (unique per clip index) to prevent
-        # YouTube detecting reused stock footage via perceptual hashing
+        # Apply visual mutation — NOW ACTUALLY WORKS (was silently failing before)
         try:
             mutated = tmp / f"clip_{i:03d}_mut.mp4"
             apply_visual_mutation(out, mutated, seed=i)
             out = mutated
-        except Exception:
-            pass  # mutation is optional — fall back to un-mutated clip
+        except Exception as exc:
+            console.print(f"[yellow]  mutation failed on clip {i}: {exc}[/yellow]")
 
         trimmed.append(out)
         console.print(f"  [dim]trimmed clip {i + 1}/{len(clips)}[/dim]")
 
-    # Step 2: concatenate
     silent_video = tmp / "concat.mp4"
     concat_clips(trimmed, silent_video)
     console.print("[dim]clips concatenated[/dim]")
 
-    # Step 3: add voiceover
     if audio_path and audio_path.exists():
         voiced_video = tmp / "voiced.mp4"
         add_audio(silent_video, audio_path, voiced_video)
@@ -329,7 +287,6 @@ def render_video(
     else:
         voiced_video = silent_video
 
-    # Step 4: background music (optional)
     if music_path and music_path.exists():
         add_background_music(voiced_video, music_path, output_path)
         console.print("[dim]background music mixed[/dim]")

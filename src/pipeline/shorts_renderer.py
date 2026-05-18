@@ -161,9 +161,14 @@ def _speed_audio_to_fit(audio_path: Path, target_dur: float, output_path: Path) 
         f"[dim]Smart render: audio {current_dur:.1f}s > {target_dur:.0f}s"
         f" — speeding up ×{factor:.2f} (atempo)[/dim]"
     )
-    # Chain two atempo passes if factor > 2.0 (atempo limit)
     if factor > 2.0:
-        af = f"atempo=2.0,atempo={factor/2.0:.3f}"
+        parts = []
+        remaining = factor
+        while remaining > 2.0:
+            parts.append("atempo=2.0")
+            remaining /= 2.0
+        parts.append(f"atempo={remaining:.3f}")
+        af = ",".join(parts)
     else:
         af = f"atempo={factor:.3f}"
     _ffmpeg("-i", str(audio_path), "-filter:a", af, str(output_path))
