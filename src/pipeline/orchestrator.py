@@ -363,6 +363,7 @@ def run_pipeline(
     console.print(Rule("[bold]Step 6b — Psychology Hook Optimisation[/bold]"))
     _emit("pipeline.stage", stage="hook_optimisation", step=7, total=12, niche=niche)
     hook_exp_variant = None
+    best_hook_score = None
     try:
         from src.experiments.engine import get_engine as _get_exp_engine
         hook_exp_variant = _get_exp_engine().assign_variant("hook_style")
@@ -696,7 +697,7 @@ def run_pipeline(
             try:
                 from src.experiments.engine import get_engine as _get_exp_engine
                 _get_exp_engine().record_outcome(
-                    "hook_style", hook_exp_variant, result.entropy_score
+                    "hook_style", hook_exp_variant, best_hook_score.viral_score if best_hook_score is not None else 0.5
                 )
             except Exception:
                 pass

@@ -397,7 +397,11 @@ def pipeline_cmd(topic, niche, model, voice, ideas_count, geo, no_download, uplo
             pass
     if not topic:
         console.print(f"[cyan]No topic provided — finding trending topic for '{niche}'...[/cyan]")
-        topic = get_trending_topic(niche=niche, geo=geo, model=model)
+        try:
+            from src.trends_v2 import pick_top_topic as _pick_trend
+            topic = _pick_trend(niche=niche) or get_trending_topic(niche=niche, geo=geo, model=model)
+        except Exception:
+            topic = get_trending_topic(niche=niche, geo=geo, model=model)
 
     if both_formats:
         # Run long form then Shorts

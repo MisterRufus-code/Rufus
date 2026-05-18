@@ -622,9 +622,7 @@ def generate_script_from_media(
     captions_block = "\n".join(f"footage_{i+1}: {c}" for i, c in enumerate(media_captions[:15]))
     virality = getattr(idea, "estimated_virality", "Medium")
     viral_instructions = _viral_script_instructions(virality)
-    research_block = ""
-    if research_context:
-        research_block = f"\n\nVERIFIED RESEARCH (use these facts, cite source names in the script):\n{research_context}\n"
+    research_block = f"\nCURRENT RESEARCH CONTEXT (use these facts — they are real and current):\n{research_context}\n" if research_context else ""
     prompt = f"""{ml_prefix}
 Write a factual, high-retention YouTube video script on this topic.
 
@@ -637,8 +635,8 @@ Target duration: {duration_minutes} minutes
 Content rules:
 {viral_instructions}
 
-{_BANNED_PHRASES_BLOCK}
-{research_block}
+{research_block}{_BANNED_PHRASES_BLOCK}
+
 Available footage clips (MUST use these):
 {captions_block}
 
@@ -749,9 +747,7 @@ def generate_video_script(
 
     virality = getattr(idea, "estimated_virality", "High")
     viral_instructions = _viral_script_instructions(virality)
-    research_block = ""
-    if research_context:
-        research_block = f"\n\nVERIFIED RESEARCH (use these facts in the script):\n{research_context}\n"
+    research_block = f"\nCURRENT RESEARCH CONTEXT (use these facts — they are real and current):\n{research_context}\n" if research_context else ""
     prompt = f"""Write a factual, high-retention YouTube video script on this topic.
 
 Title: {idea.title}
@@ -760,12 +756,11 @@ Style: {style}
 Target duration: {duration_minutes} minutes
 Niche: {niche}
 {dna_context}
-{research_block}
 
 CONTENT RULES (mandatory):
 {viral_instructions}
 
-{_BANNED_PHRASES_BLOCK}
+{research_block}{_BANNED_PHRASES_BLOCK}
 
 Return a JSON object with exactly these keys:
 - title: the video title (under 70 characters, include a specific number or year)
