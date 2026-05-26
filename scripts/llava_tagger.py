@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
 llava_tagger.py
-Extracts frames from videos and sends them to LLaVA (via Ollama) for scene descriptions.
-Includes multi-candidate selection: describe all, GPT picks best.
+Extracts frames from videos and sends them to GPT-4o Vision for scene descriptions.
+Includes multi-candidate selection: describe all 5, GPT picks the most viral one.
 """
 
 import base64
@@ -13,12 +13,17 @@ import sys
 import tempfile
 from pathlib import Path
 
-import requests
 from openai import OpenAI
 
-OLLAMA_URL  = "http://localhost:11434/api/generate"
-LLAVA_MODEL = "llava"
-CONFIG_DIR  = Path(__file__).parent.parent / "config"
+CONFIG_DIR = Path(__file__).parent.parent / "config"
+
+
+def _load_client() -> OpenAI:
+    keys = json.loads((CONFIG_DIR / "keys.json").read_text())
+    key  = keys.get("openai", "")
+    if not key or key.startswith("YOUR_"):
+        raise ValueError("OpenAI key not set in config/keys.json")
+    return OpenAI(api_key=key)
 
 
 def extract_frame(video_path: Path) -> Path:
@@ -43,39 +48,38 @@ def image_to_base64(image_path: Path) -> str:
     return base64.b64encode(image_path.read_bytes()).decode("utf-8")
 
 
-def describe_frame(image_b64: str, context_prompt: str) -> str:
-    payload = {
-        "model":   LLAVA_MODEL,
-        "prompt":  context_prompt,
-        "images":  [image_b64],
-        "stream":  False,
-        "options": {"temperature": 0.3, "num_predict": 200},
-    }
-    # First call may be slow due to model cold-start – allow up to 3 minutes
-    for attempt in range(1, 3):
-        try:
-            resp = requests.post(OLLAMA_URL, json=payload, timeout=180)
-            resp.raise_for_status()
-            result = resp.json().get("response", "").strip()
-            if not result:
-                raise ValueError("LLaVA returned empty response")
-            return result
-        except requests.exceptions.Timeout:
-            if attempt < 2:
-                print("[llava] timeout – retrying (model may still be loading)...")
-            else:
-                raise
+def describe_frame(image_b64: str, context_prompt: str, client: OpenAI) -> str:
+    resp = client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": [
+            {"type": "text",      "text": context_prompt},
+            {"type": "image_url", "image_url": {
+                "url":    f"data:image/jpeg;base64,{image_b64}",
+                "detail": "low",   # ~$0.0004/image – sufficient for scene ID
+            }},
+        ]}],
+        max_tokens=200,
+        temperature=0.3,
+    )
+    result = resp.choices[0].message.content.strip()
+    if not result:
+        raise ValueError("GPT-4o Vision returned empty response")
+    return result
 
 
-def tag_video(video_path: Path, llava_context: str) -> str:
-    print(f"[llava] extracting frame from {video_path.name}...")
+def tag_video(video_path: Path, llava_context: str, client: OpenAI = None) -> str:
+    """Extract one frame and describe it with GPT-4o Vision."""
+    if client is None:
+        client = _load_client()
+
+    print(f"[vision] extracting frame from {video_path.name}...")
     frame_path = extract_frame(video_path)
     try:
-        print("[llava] sending to Ollama...")
+        print("[vision] describing with GPT-4o...")
         image_b64   = image_to_base64(frame_path)
-        description = describe_frame(image_b64, llava_context)
+        description = describe_frame(image_b64, llava_context, client)
         short       = description[:120] + "..." if len(description) > 120 else description
-        print(f"[llava] {short}")
+        print(f"[vision] {short}")
         return description
     finally:
         try:
@@ -86,15 +90,11 @@ def tag_video(video_path: Path, llava_context: str) -> str:
 
 def pick_best_video(candidates: list[Path], llava_context: str) -> tuple[Path, str]:
     """
-    Describe all candidate videos with LLaVA, ask GPT which is most viral.
+    Describe all candidate videos, ask GPT which is most viral.
     Returns (chosen_path, scene_description).
     """
-    keys      = json.loads((CONFIG_DIR / "keys.json").read_text())
-    openai_key = keys.get("openai", "")
-    if not openai_key or openai_key.startswith("YOUR_"):
-        raise ValueError("OpenAI key not set")
+    client = _load_client()
 
-    client     = OpenAI(api_key=openai_key)
     niches     = json.loads((CONFIG_DIR / "niches.json").read_text())
     active     = niches["active"]
     niche_name = niches["niches"][active]["display_name"]
@@ -104,15 +104,15 @@ def pick_best_video(candidates: list[Path], llava_context: str) -> tuple[Path, s
 
     for i, path in enumerate(candidates):
         try:
-            print(f"[llava] candidate {i+1}/{len(candidates)}")
-            desc = tag_video(path, llava_context)
+            print(f"[vision] candidate {i+1}/{len(candidates)}")
+            desc = tag_video(path, llava_context, client=client)
             descriptions.append(desc)
             valid_paths.append(path)
         except Exception as e:
-            print(f"[llava] candidate {i+1} skipped: {e}")
+            print(f"[vision] candidate {i+1} skipped: {e}")
 
     if not descriptions:
-        raise RuntimeError("LLaVA failed to describe any candidate")
+        raise RuntimeError("GPT-4o Vision failed to describe any candidate")
 
     if len(descriptions) == 1:
         return valid_paths[0], descriptions[0]
