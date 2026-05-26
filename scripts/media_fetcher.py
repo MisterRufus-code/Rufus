@@ -185,7 +185,7 @@ def _archive(query: str, _keys: dict) -> str:
 
 
 SOURCES = [
-    ("pixabay", _pixabay),
+    # ("pixabay", _pixabay),  # re-enable once Pixabay API key is set
     ("pexels",  _pexels),
     ("vimeo",   _vimeo),
     ("coverr",  _coverr),
