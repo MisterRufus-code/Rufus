@@ -41,7 +41,8 @@ def write_script(scene_description: str) -> str:
 
     user_prompt = f"""Scene in the video: {scene_description}
 
-Write a 30-40 second Shorts script based on what you see in this scene.
+Write a 20-25 second Shorts script based on what you see in this scene.
+Maximum 40 words total. Short punchy sentences. No commas.
 End with this call to action: "{cta}"
 Output ONLY the script. No labels, no quotes, no explanation."""
 

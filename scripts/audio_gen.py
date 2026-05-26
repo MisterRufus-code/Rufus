@@ -25,17 +25,18 @@ import edge_tts
 from faster_whisper import WhisperModel
 
 # ── Config ─────────────────────────────────────────────────────────────────────
-VOICE = "en-US-ChristopherNeural"   # Deep male voice; swap to taste
-FONT_NAME = "Arial Bold"
-FONT_SIZE = 22                      # ASS points; scales to ~180px on 1080p
+VOICE = "en-US-ChristopherNeural"
+FONT_NAME = "Arial"
+FONT_SIZE = 100                     # ASS points at PlayResY=1920 → big centred text
 W, H = 1080, 1920
 FPS = 30
+MAX_DUR = 57.0                      # YouTube Shorts hard limit
 
 # Word-level colour cycling (Hormozi palette)
 WORD_COLOURS = ["&H00FFFFFF", "&H0000FFFF", "&H0000FF00"]  # white / yellow / green
 PRIMARY_COLOUR = "&H00FFFFFF"
 OUTLINE_COLOUR = "&H00000000"
-BACK_COLOUR = "&H80000000"          # semi-transparent drop-shadow backing
+BACK_COLOUR = "&H00000000"
 
 
 # ── ASS subtitle builder ────────────────────────────────────────────────────────
@@ -61,7 +62,7 @@ Collisions: Normal
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Default,{FONT_NAME},{FONT_SIZE},{PRIMARY_COLOUR},&H000000FF,{OUTLINE_COLOUR},{BACK_COLOUR},-1,0,0,0,100,100,0,0,1,4,2,5,60,60,100,1
+Style: Default,{FONT_NAME},{FONT_SIZE},{PRIMARY_COLOUR},&H000000FF,{OUTLINE_COLOUR},{BACK_COLOUR},-1,0,0,0,100,100,0,0,1,5,3,5,60,60,960,1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -116,17 +117,18 @@ def render(script: str, bg_path: Path, out_dir: Path) -> Path:
     # 4. FFmpeg render
     print("[4/4] Rendering video…")
     audio_dur = sum(w.end for seg in segments for w in seg.words)
-    # Tiny padding so last word doesn't clip
-    audio_dur = max(audio_dur + 0.3, 1.0)
+    audio_dur = min(max(audio_dur + 0.3, 1.0), MAX_DUR)
+
+    # Escape backslashes and colons in path for libass on Linux
+    ass_escaped = str(ass).replace("\\", "/").replace(":", "\\:")
 
     ffmpeg_cmd = (
-        f'ffmpeg -y '
-        f'-stream_loop -1 -i "{bg_path}" '   # loop bg if shorter than audio
+        f'ffmpeg -y -loglevel error '
+        f'-stream_loop -1 -i "{bg_path}" '
         f'-i "{mp3}" '
         f'-t {audio_dur:.3f} '
-        f'-vf "scale={W}:{H}:force_original_aspect_ratio=decrease,'
-        f'pad={W}:{H}:(ow-iw)/2:(oh-ih)/2,'
-        f"ass='{ass}'\""
+        f'-vf "scale={W}:{H}:flags=lanczos,setsar=1,'
+        f"ass='{ass_escaped}'\""
         f' -c:v libx264 -preset fast -crf 20 '
         f'-c:a aac -b:a 128k '
         f'-r {FPS} -pix_fmt yuv420p '
