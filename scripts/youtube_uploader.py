@@ -113,7 +113,7 @@ def upload(video_path: Path, script: str) -> str:
                 "categoryId":  metadata["categoryId"],
             },
             "status": {
-                "privacyStatus":           "public",
+                "privacyStatus":           "private",
                 "selfDeclaredMadeForKids": False,
             },
         },
