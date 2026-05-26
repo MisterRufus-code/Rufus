@@ -28,7 +28,7 @@ from faster_whisper import WhisperModel
 VOICE = "en-US-ChristopherNeural"   # Deep male voice; swap to taste
 FONT_NAME = "Arial Bold"
 FONT_SIZE = 22                      # ASS points; scales to ~180px on 1080p
-RESOLUTION = "1080x1920"
+W, H = 1080, 1920
 FPS = 30
 
 # Word-level colour cycling (Hormozi palette)
@@ -124,8 +124,8 @@ def render(script: str, bg_path: Path, out_dir: Path) -> Path:
         f'-stream_loop -1 -i "{bg_path}" '   # loop bg if shorter than audio
         f'-i "{mp3}" '
         f'-t {audio_dur:.3f} '
-        f'-vf "scale={RESOLUTION}:force_original_aspect_ratio=decrease,'
-        f'pad={RESOLUTION}:(ow-iw)/2:(oh-ih)/2,'
+        f'-vf "scale={W}:{H}:force_original_aspect_ratio=decrease,'
+        f'pad={W}:{H}:(ow-iw)/2:(oh-ih)/2,'
         f"ass='{ass}'\""
         f' -c:v libx264 -preset fast -crf 20 '
         f'-c:a aac -b:a 128k '
