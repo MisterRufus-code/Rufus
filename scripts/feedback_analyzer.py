@@ -36,9 +36,11 @@ def analyze():
             ORDER BY v.id DESC
         """).fetchall()
 
-    if len(rows) < 5:
-        print(f"Not enough data ({len(rows)} videos with metrics). Need at least 5.")
+    if len(rows) < 3:
+        print(f"Not enough data ({len(rows)} videos with metrics). Need at least 3.")
         return
+    if len(rows) < 5:
+        print(f"[feedback] ⚠ small sample ({len(rows)} videos) – patterns may be noisy")
 
     # Engagement score = CTR × watch_pct × log(likes+2)
     scored = []

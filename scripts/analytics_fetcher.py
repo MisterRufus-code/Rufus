@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
 """
 analytics_fetcher.py
-Pulls YouTube Analytics for each tracked video and saves metrics to SQLite.
+Pulls YouTube Analytics for recently uploaded videos and saves metrics to SQLite.
 
 Run daily via cron:
     0 10 * * * cd ~/Rufus && venv/bin/python scripts/analytics_fetcher.py
 """
 
 import sys
+from datetime import date, timedelta
 from pathlib import Path
 
 from google.auth.transport.requests import Request
@@ -16,7 +17,7 @@ from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 
 sys.path.insert(0, str(Path(__file__).parent))
-from db_manager import get_untracked_videos, save_metrics
+from db_manager import get_recent_tracked_videos, save_metrics
 
 CONFIG_DIR     = Path(__file__).parent.parent / "config"
 CLIENT_SECRETS = CONFIG_DIR / "client_secrets.json"
@@ -26,6 +27,9 @@ SCOPES = [
     "https://www.googleapis.com/auth/youtube.upload",
     "https://www.googleapis.com/auth/yt-analytics.readonly",
 ]
+
+# Only fetch metrics for videos uploaded in the last N days.
+RECENT_WINDOW_DAYS = 60
 
 
 def _auth() -> Credentials:
@@ -47,18 +51,20 @@ def fetch_analytics():
     yt       = build("youtube",          "v3", credentials=creds)
     yt_analy = build("youtubeAnalytics", "v2", credentials=creds)
 
-    videos = get_untracked_videos()
+    videos = get_recent_tracked_videos(days=RECENT_WINDOW_DAYS)
     if not videos:
-        print("No tracked videos found.")
+        print(f"No videos uploaded in last {RECENT_WINDOW_DAYS} days.")
         return
 
-    print(f"Fetching analytics for {len(videos)} videos...")
+    print(f"Fetching analytics for {len(videos)} recent videos...")
+
+    today_str   = date.today().strftime("%Y-%m-%d")
+    earliest    = (date.today() - timedelta(days=365)).strftime("%Y-%m-%d")
 
     for row in videos:
         vid_id = row["youtube_id"]
         db_id  = row["id"]
         try:
-            # Basic stats from Data API
             resp  = yt.videos().list(part="statistics", id=vid_id).execute()
             items = resp.get("items", [])
             if not items:
@@ -68,11 +74,10 @@ def fetch_analytics():
             views = int(stats.get("viewCount", 0))
             likes = int(stats.get("likeCount", 0))
 
-            # Detailed analytics (watch %, CTR) from Analytics API
             analy = yt_analy.reports().query(
                 ids="channel==MINE",
-                startDate="2020-01-01",
-                endDate="2099-12-31",
+                startDate=earliest,
+                endDate=today_str,
                 metrics="views,averageViewPercentage,annotationClickThroughRate",
                 filters=f"video=={vid_id}",
             ).execute()

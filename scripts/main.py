@@ -3,12 +3,14 @@
 main.py – Runs the full Rufus pipeline end to end.
 
 Steps:
-    1. Fetch 5 candidate videos
-    2. LLaVA describes all → GPT picks the best
-    3. Write script with GPT + scorer loop (score ≥ 7, max 3 attempts)
-    4. Render: TTS + subtitles + FFmpeg → 1080x1920 mp4
+    1. Fetch 5 candidate videos (parallel)
+    2. GPT-4o Vision describes all → GPT picks the best
+    3. Write script with GPT + scorer loop + banned-phrase filter
+    4. Render: TTS + Whisper + FFmpeg → 1080x1920 mp4
     5. Save to local SQLite DB
-    6. Upload to YouTube
+    6. Upload to YouTube (private)
+
+stdout is also tee'd to logs/rufus_YYYYMMDD.log so cron runs leave an audit trail.
 
 Usage:
     python main.py                  # full run
@@ -26,6 +28,31 @@ ROOT        = Path(__file__).parent.parent
 CONFIG_DIR  = ROOT / "config"
 NICHES_FILE = CONFIG_DIR / "niches.json"
 OUTPUT_DIR  = ROOT / "media_library" / "output"
+LOG_DIR     = ROOT / "logs"
+
+
+# ── Tee stdout/stderr to a daily log file ───────────────────────────────────────
+
+class _Tee:
+    def __init__(self, *streams):
+        self.streams = streams
+    def write(self, data):
+        for s in self.streams:
+            s.write(data)
+            s.flush()
+    def flush(self):
+        for s in self.streams:
+            s.flush()
+
+
+def _enable_file_logging():
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
+    log_path = LOG_DIR / f"rufus_{time.strftime('%Y%m%d')}.log"
+    log_fp   = open(log_path, "a", encoding="utf-8", buffering=1)
+    sys.stdout = _Tee(sys.__stdout__, log_fp)
+    sys.stderr = _Tee(sys.__stderr__, log_fp)
+    return log_path
+
 
 sys.path.insert(0, str(Path(__file__).parent))
 from media_fetcher import fetch_candidates
@@ -48,17 +75,19 @@ def load_niche_cfg(override: str = None):
 
 
 def run(skip_upload: bool = False, niche_override: str = None):
-    start = time.time()
+    log_path = _enable_file_logging()
+    start    = time.time()
     niche_cfg, active = load_niche_cfg(niche_override)
 
     print(f"\n{'='*52}")
-    print(f"  RUFUS  |  niche: {active}")
+    print(f"  RUFUS  |  niche: {active}  |  {time.strftime('%Y-%m-%d %H:%M:%S')}")
+    print(f"  log:   {log_path}")
     print(f"{'='*52}\n")
 
     init_db()
 
-    # ── Step 1: Fetch candidate videos ─────────────────────────────────────────
-    print("[ 1 / 6 ]  Fetching candidate videos...")
+    # ── Step 1: Fetch candidate videos (parallel) ──────────────────────────────
+    print("[ 1 / 6 ]  Fetching candidate videos (parallel)...")
     try:
         candidates = fetch_candidates(n=5)
         print(f"           → {len(candidates)} candidates downloaded\n")
@@ -125,11 +154,10 @@ def run(skip_upload: bool = False, niche_override: str = None):
         print("[ 6 / 6 ]  Uploading to YouTube...")
         try:
             from youtube_uploader import upload
-            yt_url = upload(output_path, script)
+            yt_url, yt_id = upload(output_path, script)
             print(f"           → {yt_url}\n")
 
-            if db_id and yt_url:
-                yt_id = yt_url.rstrip("/").split("/")[-1]
+            if db_id and yt_id:
                 update_youtube_id(db_id, yt_id)
         except Exception as e:
             print(f"           ✗ Upload failed: {e}\n")

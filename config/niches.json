@@ -4,67 +4,77 @@
     "finance": {
       "display_name": "Finance & Wealth",
       "video_keywords": [
-        "stock market", "trading", "city skyline night", "businessman walking",
-        "money", "luxury car", "office skyscraper", "crypto", "wall street"
+        "trading screen", "stock market chart", "city skyline night", "businessman walking",
+        "money counting", "luxury car", "office skyscraper", "crypto", "wall street",
+        "private jet interior", "yacht aerial"
       ],
       "pixabay_categories": ["business", "industry"],
       "llava_context": "Describe this scene focusing on business, wealth, money, or financial themes. Be specific about what you see.",
       "gpt_system": "You write viral YouTube Shorts scripts for a finance audience. Style inspired by Alex Hormozi. Rules: no commas, sentences max 5 words, shocking stats or counterintuitive truths, hook in first 2 seconds. Write like a real person talking to a friend. Raw. Direct. No corporate speak. Output ONLY the script text, nothing else.",
       "hook_styles": ["shocking_stat", "counterintuitive", "warning"],
       "cta": "Follow for daily wealth tactics.",
-      "ffmpeg_eq": "eq=contrast=1.15:saturation=0.85:gamma=1.05"
+      "ffmpeg_eq": "eq=contrast=1.15:saturation=0.85:gamma=1.05",
+      "youtube_category_id": "25"
     },
     "motivation": {
       "display_name": "Motivation & Grind",
       "video_keywords": [
         "athlete training", "runner sunrise", "champion trophy", "boxing gym",
-        "mountain peak", "discipline workout", "winner podium", "hustle night"
+        "mountain peak", "discipline workout", "winner podium", "hustle night",
+        "weightlifter heavy", "warrior training"
       ],
       "pixabay_categories": ["sports", "people"],
       "llava_context": "Describe this scene focusing on effort, struggle, achievement, or physical challenge. Be specific.",
       "gpt_system": "You write intense motivational Shorts scripts. Style: David Goggins meets Alex Hormozi. No commas. Max 5 words per sentence. Challenge the viewer personally. Make them feel called out. Write like a real person, raw and direct, not an AI. Output ONLY the script text.",
       "hook_styles": ["personal_challenge", "hard_truth"],
       "cta": "Save this. Watch it when you want to quit.",
-      "ffmpeg_eq": "eq=contrast=1.2:brightness=0.03:saturation=1.4:gamma=0.9"
+      "ffmpeg_eq": "eq=contrast=1.2:brightness=0.03:saturation=1.4:gamma=0.9",
+      "youtube_category_id": "22"
     },
     "mindset": {
       "display_name": "Mindset & Psychology",
       "video_keywords": [
         "meditation calm", "brain neuron", "thinking person", "focus concentration",
-        "sunrise reflection", "chess strategy", "reading books", "silence nature"
+        "sunrise reflection", "chess strategy", "reading books", "silence nature",
+        "alone window rain", "philosopher pose"
       ],
       "pixabay_categories": ["people", "nature"],
       "llava_context": "Describe this scene focusing on human thinking, mental states, focus, or self-reflection.",
       "gpt_system": "You write mind-bending psychology Shorts. Reveal hidden truths about human behavior and thinking. Make viewers say 'I never thought of it that way.' No commas. Short punchy sentences. Sound like a real person, not an AI. Output ONLY the script text.",
       "hook_styles": ["counterintuitive", "psychology_fact"],
       "cta": "This is why 1% think differently.",
-      "ffmpeg_eq": "eq=contrast=1.05:saturation=0.75:gamma=1.1"
+      "ffmpeg_eq": "eq=contrast=1.05:saturation=0.75:gamma=1.1",
+      "youtube_category_id": "27"
     },
     "business": {
       "display_name": "Business & Entrepreneurship",
       "video_keywords": [
         "startup office", "entrepreneur laptop", "team meeting", "product launch",
-        "business growth chart", "CEO presentation", "e-commerce", "hustle desk"
+        "business growth chart", "CEO presentation", "e-commerce", "hustle desk",
+        "warehouse shipping", "co-working space"
       ],
       "pixabay_categories": ["business", "computer"],
       "llava_context": "Describe this scene in a business, startup, or entrepreneurial context.",
       "gpt_system": "You write viral business Shorts. Real tactics only. No theory. What actually works. Be specific and bold. No commas. Max 5 words per sentence. Talk like a real person, not an AI assistant. Output ONLY the script text.",
       "hook_styles": ["tactical_insight", "mistake_warning"],
       "cta": "Save this. Build something.",
-      "ffmpeg_eq": "eq=contrast=1.1:saturation=1.0"
+      "ffmpeg_eq": "eq=contrast=1.1:saturation=1.0",
+      "youtube_category_id": "27"
     },
     "personal_development": {
       "display_name": "Personal Development",
       "video_keywords": [
         "morning routine", "journal writing", "cold shower", "reading habit",
-        "goal setting", "self improvement", "confidence posture", "growth mindset"
+        "goal setting", "self improvement", "confidence posture", "growth mindset",
+        "running morning", "gym discipline"
       ],
       "pixabay_categories": ["people", "sports"],
       "llava_context": "Describe this scene in the context of self-improvement, habits, or personal growth.",
       "gpt_system": "You write practical self-improvement Shorts. Give one actionable insight per video. Make it feel urgent and personal. No commas. Max 5 words per sentence. Sound like a real human, direct and raw. Output ONLY the script text.",
       "hook_styles": ["habit_hack", "identity_shift"],
       "cta": "Do this tomorrow morning.",
-      "ffmpeg_eq": "eq=contrast=1.08:saturation=1.1:gamma=1.0"
+      "ffmpeg_eq": "eq=contrast=1.08:saturation=1.1:gamma=1.0",
+      "youtube_category_id": "27"
     }
   }
 }

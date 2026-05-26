@@ -16,7 +16,6 @@ Usage:
 """
 
 import json
-import os
 import sys
 from pathlib import Path
 
@@ -33,12 +32,20 @@ TOKEN_FILE      = CONFIG_DIR / "youtube_token.json"
 
 SCOPES = ["https://www.googleapis.com/auth/youtube.upload"]
 
-# Niche-specific hashtags
+# YouTube category IDs by niche (overridable via niches.json "youtube_category_id")
+DEFAULT_CATEGORIES = {
+    "finance":              "25",   # News & Politics
+    "motivation":           "22",   # People & Blogs
+    "mindset":              "27",   # Education
+    "business":             "27",   # Education
+    "personal_development": "27",   # Education
+}
+
 NICHE_HASHTAGS = {
-    "finance":            ["#finance", "#investing", "#wealth", "#money", "#stockmarket", "#Shorts"],
-    "motivation":         ["#motivation", "#mindset", "#grind", "#discipline", "#success", "#Shorts"],
-    "mindset":            ["#mindset", "#psychology", "#selfimprovement", "#mentalhealth", "#Shorts"],
-    "business":           ["#business", "#entrepreneur", "#startup", "#hustle", "#success", "#Shorts"],
+    "finance":              ["#finance", "#investing", "#wealth", "#money", "#stockmarket", "#Shorts"],
+    "motivation":           ["#motivation", "#mindset", "#grind", "#discipline", "#success", "#Shorts"],
+    "mindset":              ["#mindset", "#psychology", "#selfimprovement", "#mentalhealth", "#Shorts"],
+    "business":             ["#business", "#entrepreneur", "#startup", "#hustle", "#success", "#Shorts"],
     "personal_development": ["#personaldevelopment", "#habits", "#growth", "#selfimprovement", "#Shorts"],
 }
 
@@ -75,7 +82,6 @@ def load_niche():
 
 def build_metadata(script: str, niche_name: str, niche_cfg: dict) -> dict:
     hashtags   = " ".join(NICHE_HASHTAGS.get(niche_name, ["#Shorts"]))
-    # Title: first sentence of script, max 80 chars
     first_line = script.strip().split("\n")[0][:80]
     title      = first_line if first_line else "Daily Short"
 
@@ -85,23 +91,25 @@ def build_metadata(script: str, niche_name: str, niche_cfg: dict) -> dict:
         f"{niche_cfg.get('cta', '')}"
     )
 
-    tags = [t.lstrip("#") for t in NICHE_HASHTAGS.get(niche_name, [])]
+    tags     = [t.lstrip("#") for t in NICHE_HASHTAGS.get(niche_name, [])]
+    category = niche_cfg.get("youtube_category_id") or DEFAULT_CATEGORIES.get(niche_name, "22")
 
     return {
         "title":       title,
         "description": description,
         "tags":        tags,
-        "categoryId":  "22",        # People & Blogs (works for all our niches)
+        "categoryId":  category,
     }
 
 
-def upload(video_path: Path, script: str) -> str:
+def upload(video_path: Path, script: str) -> tuple[str, str]:
+    """Upload video; return (video_url, video_id)."""
     niche_cfg, niche_name = load_niche()
     youtube               = get_authenticated_service()
     metadata              = build_metadata(script, niche_name, niche_cfg)
 
     print(f"[youtube] uploading: {video_path.name}")
-    print(f"[youtube] title: {metadata['title']}")
+    print(f"[youtube] title: {metadata['title']}  category: {metadata['categoryId']}")
 
     request = youtube.videos().insert(
         part="snippet,status",
@@ -121,7 +129,7 @@ def upload(video_path: Path, script: str) -> str:
             str(video_path),
             mimetype="video/mp4",
             resumable=True,
-            chunksize=1024 * 1024,    # 1MB chunks
+            chunksize=1024 * 1024,
         ),
     )
 
@@ -135,7 +143,7 @@ def upload(video_path: Path, script: str) -> str:
     video_id  = response["id"]
     video_url = f"https://youtube.com/shorts/{video_id}"
     print(f"[youtube] uploaded → {video_url}")
-    return video_url
+    return video_url, video_id
 
 
 if __name__ == "__main__":
@@ -145,5 +153,5 @@ if __name__ == "__main__":
 
     path   = Path(sys.argv[1])
     script = sys.argv[2]
-    url    = upload(path, script)
+    url, _ = upload(path, script)
     print(f"\nYOUTUBE_URL={url}")

@@ -2,6 +2,9 @@
 """
 db_manager.py
 SQLite helpers for tracking produced videos and their analytics.
+- WAL mode for concurrent-safe reads while writing
+- Incremental fetch helper (get_recent_tracked_videos) so analytics_fetcher
+  doesn't re-pull metrics for the entire history every day
 """
 
 import sqlite3
@@ -12,7 +15,10 @@ DB_FILE = ROOT / "rufus.db"
 
 
 def _conn():
-    return sqlite3.connect(str(DB_FILE))
+    c = sqlite3.connect(str(DB_FILE))
+    c.execute("PRAGMA journal_mode=WAL")
+    c.execute("PRAGMA synchronous=NORMAL")
+    return c
 
 
 def init_db():
@@ -40,6 +46,8 @@ def init_db():
                 fetched_at TEXT    DEFAULT (datetime('now'))
             )
         """)
+        c.execute("CREATE INDEX IF NOT EXISTS idx_metrics_video ON metrics(video_id)")
+        c.execute("CREATE INDEX IF NOT EXISTS idx_videos_yt    ON videos(youtube_id)")
 
 
 def save_video(niche: str, script_hook: str, scene_desc: str,
@@ -58,12 +66,21 @@ def update_youtube_id(video_id: int, youtube_id: str):
         c.execute("UPDATE videos SET youtube_id=? WHERE id=?", (youtube_id, video_id))
 
 
-def get_untracked_videos() -> list[dict]:
+def get_recent_tracked_videos(days: int = 30) -> list[dict]:
+    """Return videos uploaded in last N days that have a youtube_id."""
     with _conn() as c:
         rows = c.execute(
-            "SELECT id, youtube_id FROM videos WHERE youtube_id IS NOT NULL"
+            "SELECT id, youtube_id FROM videos "
+            "WHERE youtube_id IS NOT NULL "
+            "  AND upload_date >= date('now', ?)",
+            (f"-{days} days",),
         ).fetchall()
     return [{"id": r[0], "youtube_id": r[1]} for r in rows]
+
+
+# Back-compat alias (old name was misleading – it never returned "untracked").
+def get_untracked_videos() -> list[dict]:
+    return get_recent_tracked_videos(days=365)
 
 
 def save_metrics(video_id: int, views: int, watch_pct: float,

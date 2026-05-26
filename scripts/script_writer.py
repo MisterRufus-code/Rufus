@@ -2,30 +2,35 @@
 """
 script_writer.py
 Writes a viral Shorts script from a scene description.
-Includes scorer loop (max 3 attempts) and human-style guardrails.
+- Post-generation banned-phrase filter (rejects + re-rolls instead of just prompting)
+- Scorer uses a different model (gpt-4o) to reduce self-grading bias
+- Max 3 attempts, keeps best
 """
 
 import json
+import re
 import sys
 from pathlib import Path
 
 from openai import OpenAI
 
-CONFIG_DIR    = Path(__file__).parent.parent / "config"
-NICHES_FILE   = CONFIG_DIR / "niches.json"
-KEYS_FILE     = CONFIG_DIR / "keys.json"
+CONFIG_DIR     = Path(__file__).parent.parent / "config"
+NICHES_FILE    = CONFIG_DIR / "niches.json"
+KEYS_FILE      = CONFIG_DIR / "keys.json"
 BLACKLIST_FILE = CONFIG_DIR / "blacklist.json"
 LEARNINGS_FILE = CONFIG_DIR / "learnings.json"
 
-BANNED = (
-    "buckle up, let's dive in, game-changer, unlock, skyrocket, leverage, "
-    "dive deep, delve, it's important to note, in today's world, the truth is, "
-    "here's the thing, at the end of the day, paradigm, disrupt, journey, "
-    "navigating, landscape, crucial, vital, actionable, revolutionize, "
-    "groundbreaking, cutting-edge, seamlessly, robust, empower, synergy"
-)
+BANNED_PHRASES = [
+    "buckle up", "let's dive in", "game-changer", "game changer", "unlock",
+    "skyrocket", "leverage", "dive deep", "delve", "it's important to note",
+    "in today's world", "the truth is", "here's the thing",
+    "at the end of the day", "paradigm", "disrupt", "journey",
+    "navigating", "landscape", "crucial", "vital", "actionable",
+    "revolutionize", "groundbreaking", "cutting-edge", "seamlessly",
+    "robust", "empower", "synergy",
+]
 
-SCORE_MIN = 7
+SCORE_MIN    = 7
 MAX_ATTEMPTS = 3
 
 
@@ -62,7 +67,18 @@ def _generate(client: OpenAI, system: str, user: str) -> str:
     return resp.choices[0].message.content.strip()
 
 
+def _find_banned(script: str) -> str | None:
+    """Return first banned phrase found (whole-word match), else None."""
+    text = script.lower()
+    for phrase in BANNED_PHRASES:
+        pattern = r"\b" + re.escape(phrase.lower()) + r"\b"
+        if re.search(pattern, text):
+            return phrase
+    return None
+
+
 def _score(client: OpenAI, script: str) -> int:
+    """Score with gpt-4o (different model class than writer → less self-bias)."""
     prompt = (
         f"Score this YouTube Shorts script 1-10:\n\n\"{script}\"\n\n"
         "Criteria:\n"
@@ -74,31 +90,32 @@ def _score(client: OpenAI, script: str) -> int:
     )
     try:
         result = client.chat.completions.create(
-            model="gpt-4o-mini",
+            model="gpt-4o",
             messages=[{"role": "user", "content": prompt}],
             temperature=0.0,
             max_tokens=5,
         )
         return int(result.choices[0].message.content.strip().split()[0])
     except Exception:
-        return 5  # neutral score on failure
+        return 5
 
 
 def write_script(scene_description: str) -> str:
-    niche, active = _load_niche()
-    client        = OpenAI(api_key=_load_key())
-    learnings     = _load_learnings()
+    niche, _  = _load_niche()
+    client    = OpenAI(api_key=_load_key())
+    learnings = _load_learnings()
 
+    # Banned list NOT injected into prompt (listing forbidden words primes the model).
+    # Filtered post-generation instead.
     system = (
         niche["gpt_system"] + "\n\n"
-        f"BANNED WORDS/PHRASES (never use): {BANNED}.\n"
-        "Write like a real person talking to a friend. Raw. Direct. No corporate speak.\n"
+        "Write like a real person talking to a friend. Raw. Direct. "
+        "No corporate speak. No AI tone.\n"
         "Every sentence must earn its place. If a word can be cut, cut it."
     )
 
-    # Inject proven winning hooks from analytics feedback loop
     winning_hooks = learnings.get("winning_hooks", [])[:3]
-    avoid_hooks   = learnings.get("losing_hooks", [])[:3]
+    avoid_hooks   = learnings.get("losing_hooks",  [])[:3]
     hook_hint     = ""
     if winning_hooks:
         hook_hint += f"\nHooks that performed well: {winning_hooks}"
@@ -118,11 +135,19 @@ def write_script(scene_description: str) -> str:
 
     best_script = ""
     best_score  = 0
+    last_script = ""
 
     for attempt in range(1, MAX_ATTEMPTS + 1):
-        variation  = "" if attempt == 1 else f" (attempt {attempt} – be bolder and more surprising)"
-        script     = _generate(client, system, base_usr + variation)
-        score      = _score(client, script)
+        variation   = "" if attempt == 1 else f" (attempt {attempt} – be bolder, fewer clichés)"
+        script      = _generate(client, system, base_usr + variation)
+        last_script = script
+
+        banned = _find_banned(script)
+        if banned:
+            print(f"[gpt] attempt {attempt}/3 – rejected ('{banned}' detected)")
+            continue
+
+        score = _score(client, script)
         print(f"[gpt] attempt {attempt}/3 – score: {score}/10 – {len(script.split())} words")
 
         if score > best_score:
@@ -131,6 +156,10 @@ def write_script(scene_description: str) -> str:
 
         if score >= SCORE_MIN:
             break
+
+    if not best_script:
+        print(f"[gpt] ⚠ all {MAX_ATTEMPTS} attempts had banned phrases – using last")
+        best_script = last_script
 
     if best_score < SCORE_MIN:
         print(f"[gpt] ⚠ best score {best_score}/10 – using best attempt anyway")

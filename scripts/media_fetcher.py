@@ -2,12 +2,14 @@
 """
 media_fetcher.py
 Downloads background videos for the active niche.
-Supports single fetch or multi-candidate fetch (for AI selection).
+- Single fetch (fetch_video) or multi-candidate parallel fetch (fetch_candidates).
+- NASA removed from default sources – returns space content for every query.
 """
 
 import json
 import random
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 import requests
@@ -104,11 +106,9 @@ def _vimeo(query: str, keys: dict) -> str:
 
     random.shuffle(data)
     for video in data[:10]:
-        # Vimeo returns quality label instead of width in some endpoints
         for dl in video.get("download", []) + video.get("files", []):
             if not dl.get("link"):
                 continue
-            # Accept by quality label OR by width
             quality = dl.get("quality", "")
             width   = dl.get("width", 0)
             if quality in ("hd", "1080", "720") or width >= 720:
@@ -136,29 +136,6 @@ def _coverr(_query: str, _keys: dict) -> str:
     raise ValueError("Coverr: no URL field found")
 
 
-def _nasa(query: str, _keys: dict) -> str:
-    r = requests.get(
-        "https://images.nasa.gov/api/v1/search",
-        params={"q": query, "media_type": "video", "page_size": 20},
-        timeout=10,
-    )
-    r.raise_for_status()
-    items = r.json().get("collection", {}).get("items", [])
-    if not items:
-        raise ValueError(f"NASA: no results for '{query}'")
-
-    item         = random.choice(items[:10])
-    manifest_url = item.get("href")
-    if not manifest_url:
-        raise ValueError("NASA: no manifest href")
-
-    manifest = requests.get(manifest_url, timeout=10).json()
-    mp4s     = [u for u in manifest if u.endswith(".mp4")]
-    if not mp4s:
-        raise ValueError("NASA: no mp4 in manifest")
-    return mp4s[0]
-
-
 def _archive(query: str, _keys: dict) -> str:
     r = requests.get(
         "https://archive.org/advancedsearch.php",
@@ -184,19 +161,20 @@ def _archive(query: str, _keys: dict) -> str:
     return f"https://archive.org/download/{identifier}/{mp4s[0]['name']}"
 
 
+# NASA removed from default chain – it returns space content for every query,
+# which is off-topic for finance/motivation/mindset/business niches.
 SOURCES = [
     # ("pixabay", _pixabay),  # re-enable once Pixabay API key is set
     ("pexels",  _pexels),
     ("vimeo",   _vimeo),
     ("coverr",  _coverr),
-    ("nasa",    _nasa),
     ("archive", _archive),
 ]
 
 
 # ── Downloader ──────────────────────────────────────────────────────────────────
 
-def _download(url: str, dest: Path, retries: int = 3) -> Path:
+def _download(url: str, dest: Path, retries: int = 3, quiet: bool = False) -> Path:
     for attempt in range(1, retries + 1):
         try:
             r = requests.get(url, stream=True, timeout=120)
@@ -207,10 +185,11 @@ def _download(url: str, dest: Path, retries: int = 3) -> Path:
                 for chunk in r.iter_content(chunk_size=16_384):
                     f.write(chunk)
                     received += len(chunk)
-                    if total:
+                    if total and not quiet:
                         print(f"\r  {received/total*100:.0f}% ({received//1024} KB)",
                               end="", flush=True)
-            print()
+            if not quiet:
+                print()
             if dest.stat().st_size < MIN_FILE_SIZE:
                 dest.unlink(missing_ok=True)
                 raise ValueError(f"Downloaded file too small: {dest.stat().st_size} bytes")
@@ -235,7 +214,7 @@ def fetch_video() -> Path:
     cache_dir.mkdir(parents=True, exist_ok=True)
 
     ordered = SOURCES[:]
-    random.shuffle(ordered[:2])   # randomise between pixabay/pexels
+    random.shuffle(ordered[:2])
 
     for name, fetcher in ordered:
         try:
@@ -252,9 +231,26 @@ def fetch_video() -> Path:
     raise RuntimeError("All video sources failed – check keys and network.")
 
 
+def _fetch_one_candidate(idx: int, n: int, query: str, sources: list,
+                         keys: dict, cand_dir: Path) -> Path | None:
+    """Try each source in order for one candidate slot. Returns Path or None."""
+    for name, fetcher in sources:
+        try:
+            url  = fetcher(query, keys)
+            dest = cand_dir / f"cand_{idx+1}_{name}_{int(time.time()*1000) % 100000}.mp4"
+            print(f"[candidate {idx+1}/{n}][{name}] query='{query}'")
+            _download(url, dest, quiet=True)
+            print(f"[candidate {idx+1}/{n}][{name}] ✓")
+            return dest
+        except Exception as e:
+            print(f"[candidate {idx+1}/{n}][{name}] failed: {e}")
+    print(f"[candidate {idx+1}/{n}] all sources failed for '{query}'")
+    return None
+
+
 def fetch_candidates(n: int = 5) -> list[Path]:
     """
-    Fetch n different candidate videos using different queries.
+    Fetch n different candidate videos in PARALLEL using different queries.
     Returns list of local paths for AI selection.
     """
     niche_cfg, active = _load_niche()
@@ -272,28 +268,20 @@ def fetch_candidates(n: int = 5) -> list[Path]:
         except Exception:
             pass
 
-    candidates = []
-    ordered    = SOURCES[:]
+    ordered = SOURCES[:]
     random.shuffle(ordered[:2])
 
-    for i in range(n):
-        query = keywords[i % len(keywords)]
-        fetched = False
-
-        for name, fetcher in ordered:
-            try:
-                url  = fetcher(query, keys)
-                dest = cand_dir / f"cand_{i+1}_{name}.mp4"
-                print(f"[candidate {i+1}/{n}][{name}] query='{query}'")
-                _download(url, dest)
-                candidates.append(dest)
-                fetched = True
-                break
-            except Exception as e:
-                print(f"[candidate {i+1}/{n}][{name}] failed: {e}")
-
-        if not fetched:
-            print(f"[candidate {i+1}/{n}] skipped – all sources failed for '{query}'")
+    candidates: list[Path] = []
+    with ThreadPoolExecutor(max_workers=n) as ex:
+        futures = [
+            ex.submit(_fetch_one_candidate, i, n, keywords[i % len(keywords)],
+                      ordered, keys, cand_dir)
+            for i in range(n)
+        ]
+        for fut in as_completed(futures):
+            result = fut.result()
+            if result:
+                candidates.append(result)
 
     if not candidates:
         raise RuntimeError("Could not fetch any candidate videos.")

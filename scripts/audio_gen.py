@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Rufus – Autonomous Shorts Renderer (v2)"""
+"""Rufus – Autonomous Shorts Renderer (v2.1)"""
 
 import argparse
 import asyncio
@@ -24,8 +24,20 @@ CLUSTER_SIZE = 2        # words per subtitle cluster
 # Hormozi palette: white → yellow → green
 COLOURS  = ["&H00FFFFFF", "&H0000FFFF", "&H0000FF00"]
 FONT     = "Arial"
-FONTSIZE = 90           # PlayResY=1920 → large, readable
+FONTSIZE = 90
 MARGIN_V = 734          # golden ratio from bottom: 1920/1.618 ≈ 734
+
+
+# ── Whisper singleton ───────────────────────────────────────────────────────────
+
+_whisper_model = None
+
+def _whisper() -> WhisperModel:
+    """Lazy-init Whisper once per process — saves 5-10s per render."""
+    global _whisper_model
+    if _whisper_model is None:
+        _whisper_model = WhisperModel("base", device="cpu", compute_type="int8")
+    return _whisper_model
 
 
 # ── Config ─────────────────────────────────────────────────────────────────────
@@ -45,18 +57,24 @@ def _ts(sec: float) -> str:
     return f"{h}:{m:02d}:{s:05.2f}"
 
 
-def _cluster_words(segments):
+def _cluster_words(segments, audio_dur: float):
+    """Yield (start, end, text) clusters, clipped to audio_dur."""
     words = [w for seg in segments for w in seg.words]
     for i in range(0, len(words), CLUSTER_SIZE):
         group = words[i:i + CLUSTER_SIZE]
+        start = group[0].start
+        end   = group[-1].end
+        if start >= audio_dur:
+            break
+        end = min(end, audio_dur)
         yield (
-            group[0].start,
-            group[-1].end,
+            start,
+            end,
             " ".join(w.word.strip().upper() for w in group),
         )
 
 
-def build_ass(segments, ass_path: Path) -> None:
+def build_ass(segments, ass_path: Path, audio_dur: float) -> None:
     header = (
         "[Script Info]\n"
         "ScriptType: v4.00+\n"
@@ -74,7 +92,7 @@ def build_ass(segments, ass_path: Path) -> None:
     )
     lines      = []
     colour_idx = 0
-    for start, end, text in _cluster_words(segments):
+    for start, end, text in _cluster_words(segments, audio_dur):
         c       = COLOURS[colour_idx % len(COLOURS)]
         colour_idx += 1
         # Pop-in animation: scale 120→100 over 80ms + colour
@@ -131,17 +149,16 @@ def render(script: str, bg_path: Path, out_dir: Path) -> Path:
     mix       = tmp_dir / f"{stamp}_mix.mp3"
     ass       = tmp_dir / f"{stamp}.ass"
     out       = out_dir / f"short_{stamp}.mp4"
-    audio_src = mp3     # may be replaced by riser mix
+    audio_src = mp3
 
     try:
         # 1. TTS
         print("[1/4] Generating voice…")
         asyncio.run(_tts(script, mp3))
 
-        # 2. Whisper transcription
+        # 2. Whisper transcription (cached model)
         print("[2/4] Transcribing…")
-        model    = WhisperModel("base", device="cpu", compute_type="int8")
-        segs, _  = model.transcribe(str(mp3), word_timestamps=True)
+        segs, _  = _whisper().transcribe(str(mp3), word_timestamps=True)
         segments = list(segs)
         if not segments:
             raise RuntimeError("Whisper produced no segments")
@@ -149,11 +166,11 @@ def render(script: str, bg_path: Path, out_dir: Path) -> Path:
         audio_dur = max((w.end for seg in segments for w in seg.words), default=0)
         audio_dur = min(max(audio_dur + 0.3, 1.0), MAX_DUR)
 
-        # 3. Subtitles
+        # 3. Subtitles (clipped to audio_dur)
         print("[3/4] Building subtitles…")
-        build_ass(segments, ass)
+        build_ass(segments, ass, audio_dur)
 
-        # Riser (non-fatal if FFmpeg lavfi unavailable)
+        # Riser (non-fatal)
         try:
             mix       = _add_riser(mp3, audio_dur)
             audio_src = mix
@@ -164,7 +181,6 @@ def render(script: str, bg_path: Path, out_dir: Path) -> Path:
         # 4. FFmpeg render
         print("[4/4] Rendering video…")
 
-        # Ken Burns: scale 10% larger, slow left-to-right pan
         over_w    = int(W * 1.10)
         over_h    = int(H * 1.10)
         pad_y     = (over_h - H) // 2

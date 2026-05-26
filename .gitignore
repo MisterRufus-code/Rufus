@@ -6,6 +6,11 @@ media_library/cache/
 media_library/output/
 media_library/temp/
 
+# Runtime logs and database
+logs/
+rufus.db
+rufus.db-*
+
 # Python
 __pycache__/
 *.pyc
