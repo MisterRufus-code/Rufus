@@ -2,5 +2,9 @@ edge-tts>=6.1.9
 faster-whisper>=1.0.3
 openai>=1.30.0
 requests>=2.31.0
-# ffmpeg must be installed system-wide (apt install ffmpeg)
-# ollama must be running locally (ollama serve)
+google-auth>=2.30.0
+google-auth-oauthlib>=1.2.0
+google-api-python-client>=2.140.0
+pytest>=8.0.0
+# ffmpeg + ffprobe must be installed system-wide (apt install ffmpeg)
+# Bold fonts required for thumbnails: apt install fonts-dejavu-core

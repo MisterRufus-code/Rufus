@@ -21,11 +21,8 @@ import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from google.auth.transport.requests import Request
-from google.oauth2.credentials import Credentials
-from google_auth_oauthlib.flow import InstalledAppFlow
-from googleapiclient.discovery import build
-from googleapiclient.http import MediaFileUpload
+# Google libs are imported lazily inside the functions that need them so unit
+# tests can import this module without requiring the full Google auth stack.
 
 CONFIG_DIR      = Path(__file__).parent.parent / "config"
 NICHES_FILE     = CONFIG_DIR / "niches.json"
@@ -72,6 +69,11 @@ def _next_peak_utc() -> str:
 
 
 def get_authenticated_service():
+    from google.auth.transport.requests import Request
+    from google.oauth2.credentials import Credentials
+    from google_auth_oauthlib.flow import InstalledAppFlow
+    from googleapiclient.discovery import build
+
     creds = None
 
     if TOKEN_FILE.exists():
@@ -123,8 +125,10 @@ def build_metadata(script: str, niche_name: str, niche_cfg: dict) -> dict:
     }
 
 
-def upload(video_path: Path, script: str) -> tuple[str, str]:
-    """Upload video; return (video_url, video_id)."""
+def upload(video_path: Path, script: str, thumbnail_path: Path = None) -> tuple[str, str]:
+    """Upload video (+ optional thumbnail); return (video_url, video_id)."""
+    from googleapiclient.http import MediaFileUpload
+
     niche_cfg, niche_name = load_niche()
     youtube               = get_authenticated_service()
     metadata              = build_metadata(script, niche_name, niche_cfg)
@@ -167,6 +171,18 @@ def upload(video_path: Path, script: str) -> tuple[str, str]:
     video_id  = response["id"]
     video_url = f"https://youtube.com/shorts/{video_id}"
     print(f"[youtube] uploaded → {video_url}")
+
+    if thumbnail_path and Path(thumbnail_path).exists():
+        try:
+            from googleapiclient.http import MediaFileUpload as _MFU
+            youtube.thumbnails().set(
+                videoId=video_id,
+                media_body=_MFU(str(thumbnail_path), mimetype="image/jpeg"),
+            ).execute()
+            print(f"[youtube] custom thumbnail uploaded")
+        except Exception as e:
+            print(f"[youtube] thumbnail upload skipped: {e}")
+
     return video_url, video_id
 
 

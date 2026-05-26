@@ -147,15 +147,24 @@ def run(skip_upload: bool = False, niche_override: str = None):
     except Exception as e:
         print(f"           ⚠ DB save failed (non-fatal): {e}\n")
 
-    # ── Step 6: Upload ──────────────────────────────────────────────────────────
+    # ── Step 6: Upload (with custom thumbnail) ─────────────────────────────────
     yt_url = None
     if skip_upload:
         print("[ 6 / 6 ]  Upload skipped (--skip-upload)\n")
     else:
-        print("[ 6 / 6 ]  Uploading to YouTube...")
+        print("[ 6 / 6 ]  Generating thumbnail + uploading to YouTube...")
         try:
+            from thumbnail_gen   import make_thumbnail
             from youtube_uploader import upload
-            yt_url, yt_id = upload(output_path, script)
+
+            thumb = None
+            try:
+                thumb = make_thumbnail(output_path, script)
+                print(f"           thumbnail: {thumb.name}")
+            except Exception as e:
+                print(f"           ⚠ thumbnail generation skipped: {e}")
+
+            yt_url, yt_id = upload(output_path, script, thumbnail_path=thumb)
             print(f"           → {yt_url}\n")
 
             if db_id and yt_id:
