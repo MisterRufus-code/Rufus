@@ -51,12 +51,20 @@ def describe_frame(image_b64: str, context_prompt: str) -> str:
         "stream":  False,
         "options": {"temperature": 0.3, "num_predict": 200},
     }
-    resp = requests.post(OLLAMA_URL, json=payload, timeout=60)
-    resp.raise_for_status()
-    result = resp.json().get("response", "").strip()
-    if not result:
-        raise ValueError("LLaVA returned empty response")
-    return result
+    # First call may be slow due to model cold-start – allow up to 3 minutes
+    for attempt in range(1, 3):
+        try:
+            resp = requests.post(OLLAMA_URL, json=payload, timeout=180)
+            resp.raise_for_status()
+            result = resp.json().get("response", "").strip()
+            if not result:
+                raise ValueError("LLaVA returned empty response")
+            return result
+        except requests.exceptions.Timeout:
+            if attempt < 2:
+                print("[llava] timeout – retrying (model may still be loading)...")
+            else:
+                raise
 
 
 def tag_video(video_path: Path, llava_context: str) -> str:
