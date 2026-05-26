@@ -1,3 +1,6 @@
 edge-tts>=6.1.9
 faster-whisper>=1.0.3
+openai>=1.30.0
+requests>=2.31.0
 # ffmpeg must be installed system-wide (apt install ffmpeg)
+# ollama must be running locally (ollama serve)

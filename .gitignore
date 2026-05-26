@@ -1,0 +1,18 @@
+# API keys – never commit these
+config/keys.json
+
+# Generated media
+media_library/cache/
+media_library/output/
+media_library/temp/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# OS
+.DS_Store
+Thumbs.db
