@@ -18,6 +18,10 @@ from openai import OpenAI
 CONFIG_DIR = Path(__file__).parent.parent / "config"
 
 
+def _active_niche(data: dict) -> str:
+    return os.environ.get("RUFUS_NICHE_OVERRIDE") or data["active"]
+
+
 def _load_client() -> OpenAI:
     keys = json.loads((CONFIG_DIR / "keys.json").read_text())
     key  = keys.get("openai", "")
@@ -27,6 +31,7 @@ def _load_client() -> OpenAI:
 
 
 def extract_frame(video_path: Path) -> Path:
+    """Single-frame fallback: try t=3s, t=1s, t=0s."""
     tmp = tempfile.NamedTemporaryFile(suffix=".jpg", delete=False)
     tmp.close()
 
@@ -44,21 +49,74 @@ def extract_frame(video_path: Path) -> Path:
     raise RuntimeError(f"ffmpeg frame extract failed for {video_path.name}")
 
 
+def extract_frames(video_path: Path, count: int = 3) -> list[Path]:
+    """Extract `count` frames at 20/50/80% of the video's duration."""
+    probe = subprocess.run(
+        ["ffprobe", "-v", "quiet", "-print_format", "json", "-show_streams", str(video_path)],
+        capture_output=True, text=True,
+    )
+    duration = 15.0
+    try:
+        info = json.loads(probe.stdout)
+        for stream in info.get("streams", []):
+            if stream.get("codec_type") == "video":
+                d = float(stream.get("duration", 0))
+                if d > 0:
+                    duration = d
+                    break
+    except Exception:
+        pass
+
+    fractions = [0.2, 0.5, 0.8][:count]
+    frames: list[Path] = []
+    for frac in fractions:
+        ts  = max(0.5, duration * frac)
+        tmp = tempfile.NamedTemporaryFile(suffix=".jpg", delete=False)
+        tmp.close()
+        cmd = [
+            "ffmpeg", "-y", "-ss", f"{ts:.2f}",
+            "-i", str(video_path),
+            "-frames:v", "1", "-q:v", "2",
+            tmp.name,
+        ]
+        result = subprocess.run(cmd, capture_output=True)
+        if result.returncode == 0 and Path(tmp.name).stat().st_size > 1000:
+            frames.append(Path(tmp.name))
+
+    if not frames:
+        frames.append(extract_frame(video_path))
+
+    return frames
+
+
 def image_to_base64(image_path: Path) -> str:
     return base64.b64encode(image_path.read_bytes()).decode("utf-8")
 
 
 def describe_frame(image_b64: str, context_prompt: str, client: OpenAI) -> str:
+    """Single-frame describe (kept for backward compatibility)."""
+    return describe_frames([image_b64], context_prompt, client)
+
+
+def describe_frames(image_b64_list: list[str], context_prompt: str, client: OpenAI) -> str:
+    """Describe multiple frames in one Vision call for richer scene understanding."""
+    n       = len(image_b64_list)
+    prefix  = (
+        f"{context_prompt}\n\n"
+        f"You are seeing {n} frame{'s' if n > 1 else ''} from this video"
+        + (": beginning, middle, and end. Synthesize all frames into one description." if n > 1 else ".")
+    )
+    content = [{"type": "text", "text": prefix}]
+    for b64 in image_b64_list:
+        content.append({"type": "image_url", "image_url": {
+            "url":    f"data:image/jpeg;base64,{b64}",
+            "detail": "low",
+        }})
+
     resp = client.chat.completions.create(
         model="gpt-4o-mini",
-        messages=[{"role": "user", "content": [
-            {"type": "text",      "text": context_prompt},
-            {"type": "image_url", "image_url": {
-                "url":    f"data:image/jpeg;base64,{image_b64}",
-                "detail": "low",   # ~$0.0004/image – sufficient for scene ID
-            }},
-        ]}],
-        max_tokens=200,
+        messages=[{"role": "user", "content": content}],
+        max_tokens=250,
         temperature=0.3,
     )
     result = resp.choices[0].message.content.strip()
@@ -68,24 +126,25 @@ def describe_frame(image_b64: str, context_prompt: str, client: OpenAI) -> str:
 
 
 def tag_video(video_path: Path, llava_context: str, client: OpenAI = None) -> str:
-    """Extract one frame and describe it with GPT-4o Vision."""
+    """Extract 3 frames and describe them with GPT-4o Vision."""
     if client is None:
         client = _load_client()
 
-    print(f"[vision] extracting frame from {video_path.name}...")
-    frame_path = extract_frame(video_path)
+    print(f"[vision] extracting frames from {video_path.name}...")
+    frames = extract_frames(video_path)
     try:
-        print("[vision] describing with GPT-4o...")
-        image_b64   = image_to_base64(frame_path)
-        description = describe_frame(image_b64, llava_context, client)
+        print(f"[vision] describing {len(frames)} frames with GPT-4o...")
+        b64_list    = [image_to_base64(f) for f in frames]
+        description = describe_frames(b64_list, llava_context, client)
         short       = description[:120] + "..." if len(description) > 120 else description
         print(f"[vision] {short}")
         return description
     finally:
-        try:
-            os.unlink(frame_path)
-        except Exception:
-            pass
+        for f in frames:
+            try:
+                os.unlink(f)
+            except Exception:
+                pass
 
 
 def pick_best_video(candidates: list[Path], llava_context: str) -> tuple[Path, str]:
@@ -96,7 +155,7 @@ def pick_best_video(candidates: list[Path], llava_context: str) -> tuple[Path, s
     client = _load_client()
 
     niches     = json.loads((CONFIG_DIR / "niches.json").read_text())
-    active     = niches["active"]
+    active     = _active_niche(niches)
     niche_name = niches["niches"][active]["display_name"]
 
     descriptions: list[str] = []
@@ -145,7 +204,7 @@ def pick_best_video(candidates: list[Path], llava_context: str) -> tuple[Path, s
 
 def load_niche_context() -> str:
     niches = json.loads((CONFIG_DIR / "niches.json").read_text())
-    active = niches["active"]
+    active = _active_niche(niches)
     return niches["niches"][active]["llava_context"]
 
 

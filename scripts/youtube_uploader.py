@@ -16,7 +16,9 @@ Usage:
 """
 
 import json
+import os
 import sys
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from google.auth.transport.requests import Request
@@ -41,6 +43,9 @@ DEFAULT_CATEGORIES = {
     "personal_development": "27",   # Education
 }
 
+PEAK_HOURS_ET = [8, 12, 17, 20]  # US Eastern hours; EDT = UTC-4 (most of the year)
+ET_UTC_DELTA  = timedelta(hours=4)   # UTC = ET + 4 (EDT). Switch to 5 during EST winter.
+
 NICHE_HASHTAGS = {
     "finance":              ["#finance", "#investing", "#wealth", "#money", "#stockmarket", "#Shorts"],
     "motivation":           ["#motivation", "#mindset", "#grind", "#discipline", "#success", "#Shorts"],
@@ -48,6 +53,22 @@ NICHE_HASHTAGS = {
     "business":             ["#business", "#entrepreneur", "#startup", "#hustle", "#success", "#Shorts"],
     "personal_development": ["#personaldevelopment", "#habits", "#growth", "#selfimprovement", "#Shorts"],
 }
+
+
+def _next_peak_utc() -> str:
+    """Return ISO 8601 UTC timestamp for the next US-ET peak hour, ≥5 min from now."""
+    now_utc = datetime.now(tz=timezone.utc)
+    now_et  = now_utc - ET_UTC_DELTA   # ET = UTC - 4
+
+    for day_delta in range(3):
+        day = now_et.date() + timedelta(days=day_delta)
+        for hour in PEAK_HOURS_ET:
+            et_naive  = datetime(day.year, day.month, day.day, hour, 0, 0)
+            utc_aware = (et_naive + ET_UTC_DELTA).replace(tzinfo=timezone.utc)
+            if utc_aware > now_utc + timedelta(minutes=5):
+                return utc_aware.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    return (now_utc + timedelta(hours=24)).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def get_authenticated_service():
@@ -76,7 +97,7 @@ def get_authenticated_service():
 
 def load_niche():
     niches = json.loads(NICHES_FILE.read_text())
-    active = niches["active"]
+    active = os.environ.get("RUFUS_NICHE_OVERRIDE") or niches["active"]
     return niches["niches"][active], active
 
 
@@ -108,8 +129,10 @@ def upload(video_path: Path, script: str) -> tuple[str, str]:
     youtube               = get_authenticated_service()
     metadata              = build_metadata(script, niche_name, niche_cfg)
 
+    publish_at = _next_peak_utc()
     print(f"[youtube] uploading: {video_path.name}")
     print(f"[youtube] title: {metadata['title']}  category: {metadata['categoryId']}")
+    print(f"[youtube] scheduled: publish at {publish_at} UTC")
 
     request = youtube.videos().insert(
         part="snippet,status",
@@ -122,6 +145,7 @@ def upload(video_path: Path, script: str) -> tuple[str, str]:
             },
             "status": {
                 "privacyStatus":           "private",
+                "publishAt":               publish_at,
                 "selfDeclaredMadeForKids": False,
             },
         },

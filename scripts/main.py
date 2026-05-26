@@ -20,6 +20,7 @@ Usage:
 
 import argparse
 import json
+import os
 import sys
 import time
 from pathlib import Path
@@ -68,9 +69,9 @@ def load_niche_cfg(override: str = None):
         if override not in data["niches"]:
             print(f"Unknown niche '{override}'. Available: {list(data['niches'])}")
             sys.exit(1)
-        data["active"] = override
-        NICHES_FILE.write_text(json.dumps(data, indent=2))
-    active = data["active"]
+        # Set env var so all sub-modules pick it up without touching the file on disk.
+        os.environ["RUFUS_NICHE_OVERRIDE"] = override
+    active = os.environ.get("RUFUS_NICHE_OVERRIDE") or data["active"]
     return data["niches"][active], active
 
 

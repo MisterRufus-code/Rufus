@@ -4,6 +4,8 @@
 import argparse
 import asyncio
 import json
+import os
+import random
 import subprocess
 import sys
 import time
@@ -14,6 +16,15 @@ from faster_whisper import WhisperModel
 
 ROOT       = Path(__file__).parent.parent
 CONFIG_DIR = ROOT / "config"
+
+_RISER_TEMPLATES = [
+    # Standard: sine sweep 180→500 Hz
+    "aevalsrc=sin(2*PI*(180+320*t/{dur:.3f})*t)*0.20*(t/{dur:.3f}):s=44100:d={dur:.3f}",
+    # Tension: 120→400 Hz, non-linear amplitude build
+    "aevalsrc=sin(2*PI*(120+280*t/{dur:.3f})*t)*0.18*(t/{dur:.3f})^1.5:s=44100:d={dur:.3f}",
+    # High-energy: 220→700 Hz with a harmonic overtone
+    "aevalsrc=(sin(2*PI*(220+480*t/{dur:.3f})*t)+0.25*sin(4*PI*(220+480*t/{dur:.3f})*t))*0.14*(t/{dur:.3f}):s=44100:d={dur:.3f}",
+]
 
 VOICE        = "en-US-ChristopherNeural"
 W, H         = 1080, 1920
@@ -44,7 +55,7 @@ def _whisper() -> WhisperModel:
 
 def _load_niche() -> dict:
     data   = json.loads((CONFIG_DIR / "niches.json").read_text())
-    active = data["active"]
+    active = os.environ.get("RUFUS_NICHE_OVERRIDE") or data["active"]
     return data["niches"][active]
 
 
@@ -112,12 +123,9 @@ async def _tts(script: str, mp3_path: Path) -> None:
 # ── Riser SFX ───────────────────────────────────────────────────────────────────
 
 def _add_riser(mp3_path: Path, duration: float) -> Path:
-    out = mp3_path.with_name(mp3_path.stem + "_mix.mp3")
-    # Sine wave rising 180 Hz → 500 Hz, amplitude builds 0→20%
-    riser = (
-        f"aevalsrc=sin(2*PI*(180+320*t/{duration:.3f})*t)"
-        f"*0.20*(t/{duration:.3f}):s=44100:d={duration:.3f}"
-    )
+    out      = mp3_path.with_name(mp3_path.stem + "_mix.mp3")
+    template = random.choice(_RISER_TEMPLATES)
+    riser    = template.format(dur=duration)
     subprocess.run(
         [
             "ffmpeg", "-y", "-loglevel", "error",

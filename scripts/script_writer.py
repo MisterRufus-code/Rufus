@@ -8,6 +8,7 @@ Writes a viral Shorts script from a scene description.
 """
 
 import json
+import os
 import re
 import sys
 from pathlib import Path
@@ -36,7 +37,7 @@ MAX_ATTEMPTS = 3
 
 def _load_niche():
     data   = json.loads(NICHES_FILE.read_text())
-    active = data["active"]
+    active = os.environ.get("RUFUS_NICHE_OVERRIDE") or data["active"]
     return data["niches"][active], active
 
 
@@ -52,6 +53,27 @@ def _load_learnings() -> dict:
     if LEARNINGS_FILE.exists():
         return json.loads(LEARNINGS_FILE.read_text())
     return {}
+
+
+def _ideate_angle(client: OpenAI, niche_name: str, scene: str) -> str:
+    """Generate one contrarian insight before writing the script."""
+    prompt = (
+        f"Background scene: {scene}\n"
+        f"Niche: {niche_name}\n\n"
+        "Give me ONE counterintuitive insight about this scene that would surprise someone "
+        "in this niche. Challenge a common assumption. Create a curiosity gap.\n"
+        "Reply with ONLY the insight in one sentence, max 15 words. No label. No intro."
+    )
+    try:
+        resp = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.85,
+            max_tokens=35,
+        )
+        return resp.choices[0].message.content.strip()
+    except Exception:
+        return ""
 
 
 def _generate(client: OpenAI, system: str, user: str) -> str:
@@ -101,9 +123,13 @@ def _score(client: OpenAI, script: str) -> int:
 
 
 def write_script(scene_description: str) -> str:
-    niche, _  = _load_niche()
-    client    = OpenAI(api_key=_load_key())
-    learnings = _load_learnings()
+    niche, active = _load_niche()
+    client        = OpenAI(api_key=_load_key())
+    learnings     = _load_learnings()
+
+    angle = _ideate_angle(client, active, scene_description)
+    if angle:
+        print(f"[gpt] angle: {angle}")
 
     # Banned list NOT injected into prompt (listing forbidden words primes the model).
     # Filtered post-generation instead.
@@ -122,9 +148,11 @@ def write_script(scene_description: str) -> str:
     if avoid_hooks:
         hook_hint += f"\nAvoid hooks like: {avoid_hooks}"
 
-    cta      = niche["cta"]
-    base_usr = (
-        f"Scene in the video: {scene_description}\n\n"
+    cta        = niche["cta"]
+    angle_line = f"Core insight to build the script around: {angle}\n" if angle else ""
+    base_usr   = (
+        f"Scene in the video: {scene_description}\n"
+        f"{angle_line}\n"
         f"Write a 20-25 second Shorts script. MAX 35 words total.\n"
         f"First line: hook under 5 words that creates a curiosity gap.\n"
         f"Last line: \"{cta}\"\n"
