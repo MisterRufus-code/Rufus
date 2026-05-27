@@ -4,17 +4,19 @@ research.py – Returns real source material the script writer compresses into a
 
 Strategy:
     1. Try Reddit hot/top posts from niche-specific subreddits
-    2. Filter aggressively for substance (score, body length, no rage-bait)
-    3. If nothing passes, fall back to a curated wisdom quote pool
+    2. Try Hacker News "Ask HN" posts (finance/business/mindset niches)
+    3. If nothing passes quality filters, fall back to a curated wisdom quote pool
 
 A Seed dict is returned with keys:
-    - type:    "reddit" | "wisdom"
+    - type:    "reddit" | "hackernews" | "wisdom"
     - content: the substantive text (story or quote)
-    - source:  subreddit name OR author name
-    - title:   reddit post title (empty for wisdom)
-    - url:     reddit permalink (empty for wisdom)
+    - source:  subreddit name | "Hacker News" | author name
+    - title:   post title (empty for wisdom)
+    - url:     post permalink (empty for wisdom)
 """
 
+import hashlib
+import html as html_module
 import json
 import os
 import random
@@ -77,6 +79,24 @@ TITLE_STORY_RE = re.compile(
     re.IGNORECASE,
 )
 
+# ── Hacker News config ───────────────────────────────────────────────────────────
+
+HN_TIMEOUT      = 10.0
+HN_MIN_POINTS   = 300
+HN_MIN_COMMENTS = 50
+HN_MIN_TEXT_LEN = 200
+HN_MAX_TEXT_LEN = 3000
+
+# Niches that map well to HN's intellectual, founder-heavy audience.
+# None = skip HN for that niche (motivation content doesn't resonate there).
+HN_NICHE_QUERIES = {
+    "finance":             "money investing wealth financial independence early retirement",
+    "business":            "startup founder entrepreneur lessons learned failure",
+    "mindset":             "productivity learning psychology mental models thinking",
+    "personal_development": "habits productivity self improvement learning",
+    "motivation":          None,
+}
+
 
 def _load_niche():
     data   = json.loads(NICHES_FILE.read_text())
@@ -86,15 +106,16 @@ def _load_niche():
 
 # ── Seed deduplication ──────────────────────────────────────────────────────────
 
-import hashlib
-
 def _seed_id(seed: dict) -> str:
     """Stable unique ID for a seed so we don't reuse the same source twice."""
     if not seed:
         return ""
-    if seed.get("type") == "reddit":
+    t = seed.get("type")
+    if t == "reddit":
         return "reddit:" + (seed.get("url") or seed.get("title", ""))
-    if seed.get("type") == "wisdom":
+    if t == "hackernews":
+        return "hn:" + (seed.get("url") or seed.get("title", ""))
+    if t == "wisdom":
         text = (seed.get("content") or "").strip().lower()
         return "wisdom:" + hashlib.sha1(text.encode("utf-8")).hexdigest()[:16]
     return ""
@@ -117,7 +138,7 @@ def _mark_seed_used(seed: dict) -> None:
     if sid in used:
         used.remove(sid)        # move to end (most-recent-used at tail)
     used.append(sid)
-    used = used[-MAX_USED_HISTORY:]  # keep last N
+    used = used[-MAX_USED_HISTORY:]
     USED_SEEDS_FILE.parent.mkdir(parents=True, exist_ok=True)
     USED_SEEDS_FILE.write_text(json.dumps(used, indent=2))
 
@@ -137,11 +158,19 @@ def _clean_text(text: str) -> str:
     text = re.sub(r"&amp;", "&", text)
     text = re.sub(r"&lt;", "<", text)
     text = re.sub(r"&gt;", ">", text)
-    text = re.sub(r"http\S+", "", text)         # urls
-    text = re.sub(r"\*+", "", text)             # bold/italic markdown
-    text = re.sub(r"^>\s*", "", text, flags=re.MULTILINE)  # blockquote markers
+    text = re.sub(r"http\S+", "", text)
+    text = re.sub(r"\*+", "", text)
+    text = re.sub(r"^>\s*", "", text, flags=re.MULTILINE)
     text = re.sub(r"\s+", " ", text).strip()
     return text
+
+
+def _strip_html(text: str) -> str:
+    """Remove HTML tags from Ask HN posts (which use <p>, <i>, <br> tags)."""
+    text = re.sub(r"<br\s*/?>", "\n", text, flags=re.IGNORECASE)
+    text = re.sub(r"<p>", "\n", text, flags=re.IGNORECASE)
+    text = re.sub(r"<[^>]+>", "", text)
+    return html_module.unescape(text).strip()
 
 
 def _passes_quality_filter(post: dict) -> bool:
@@ -170,16 +199,12 @@ def _passes_quality_filter(post: dict) -> bool:
     if TITLE_DISCUSSION_RE.search(title):
         return False
     if not TITLE_STORY_RE.search(title):
-        # Title has no number, no past-tense action — almost certainly opinion/question
         return False
     return True
 
 
 def fetch_reddit_story(subreddit: str, limit: int = 50, used_ids: set | None = None) -> dict | None:
-    """Fetch the first quality-filtered hot post from a subreddit, skipping seen IDs.
-
-    Larger default limit (50) gives more candidates after the used-filter prunes the list.
-    """
+    """Fetch the first quality-filtered hot post from a subreddit, skipping seen IDs."""
     if used_ids is None:
         used_ids = set()
 
@@ -201,7 +226,6 @@ def fetch_reddit_story(subreddit: str, limit: int = 50, used_ids: set | None = N
         return None
 
     posts = data.get("data", {}).get("children", [])
-    # Quality filter first, then drop anything we've already used
     quality = [
         p for p in posts
         if _passes_quality_filter(p)
@@ -210,7 +234,7 @@ def fetch_reddit_story(subreddit: str, limit: int = 50, used_ids: set | None = N
     if not quality:
         return None
 
-    chosen = random.choice(quality[:8])  # randomize among top 8 unused quality posts
+    chosen = random.choice(quality[:8])
     d = chosen["data"]
     return {
         "type":    "reddit",
@@ -218,6 +242,73 @@ def fetch_reddit_story(subreddit: str, limit: int = 50, used_ids: set | None = N
         "title":   d.get("title", ""),
         "content": _clean_text(d.get("selftext", "")),
         "url":     f"https://reddit.com{d.get('permalink', '')}",
+    }
+
+
+def fetch_hackernews_story(niche_name: str, used_ids: set | None = None) -> dict | None:
+    """Fetch a substantive Ask HN post relevant to the niche, skipping seen IDs.
+
+    Uses the public HN Algolia API (no auth required). Only returns posts where
+    story_text is present — that means Ask HN posts and self-posts with real content.
+    """
+    if used_ids is None:
+        used_ids = set()
+
+    query = HN_NICHE_QUERIES.get(niche_name)
+    if not query:
+        return None
+
+    q_enc = query.replace(" ", "+")
+    numeric = f"points>{HN_MIN_POINTS},num_comments>{HN_MIN_COMMENTS}"
+    endpoints = [
+        f"https://hn.algolia.com/api/v1/search?tags=ask_hn&query={q_enc}&numericFilters={numeric}&hitsPerPage=40",
+        f"https://hn.algolia.com/api/v1/search?tags=story&query={q_enc}&numericFilters={numeric}&hitsPerPage=40",
+    ]
+
+    all_hits: list = []
+    for url in endpoints:
+        try:
+            r = httpx.get(url, headers=REDDIT_HEADERS, timeout=HN_TIMEOUT, follow_redirects=True)
+            r.raise_for_status()
+            all_hits.extend(r.json().get("hits", []))
+        except Exception as e:
+            print(f"[research] HN fetch error: {e}")
+
+    if not all_hits:
+        return None
+
+    def _hn_url(hit: dict) -> str:
+        return f"https://news.ycombinator.com/item?id={hit.get('objectID', '')}"
+
+    def _hn_item_id(hit: dict) -> str:
+        return "hn:" + _hn_url(hit)
+
+    # Filter: must have enough real text content, must not be already used
+    quality = [
+        h for h in all_hits
+        if h.get("story_text")
+        and HN_MIN_TEXT_LEN <= len(h.get("story_text", "")) <= HN_MAX_TEXT_LEN
+        and _hn_item_id(h) not in used_ids
+    ]
+    if not quality:
+        return None
+
+    # Deduplicate by objectID (both endpoints can return same story)
+    seen_oids: set = set()
+    unique = []
+    for h in quality:
+        oid = h.get("objectID")
+        if oid not in seen_oids:
+            seen_oids.add(oid)
+            unique.append(h)
+
+    chosen = random.choice(unique[:8])
+    return {
+        "type":    "hackernews",
+        "source":  "Hacker News",
+        "title":   chosen.get("title", ""),
+        "content": _clean_text(_strip_html(chosen.get("story_text", ""))),
+        "url":     _hn_url(chosen),
     }
 
 
@@ -248,8 +339,9 @@ def pick_wisdom_quote(niche_name: str, used_ids: set | None = None) -> dict | No
 def get_seed(niche_name: str | None = None) -> dict:
     """Get a seed for the script writer. Tracks history so seeds never repeat.
 
-    Order: Reddit-first (story-filtered), wisdom fallback. Both skip anything
-    already in used_seeds.json (last MAX_USED_HISTORY items).
+    Order: Reddit-first (story-filtered), Hacker News second (intellectual niches),
+    wisdom fallback. All sources skip anything already in used_seeds.json
+    (last MAX_USED_HISTORY items).
     """
     niche, active = _load_niche()
     name      = niche_name or active
@@ -268,7 +360,14 @@ def get_seed(niche_name: str | None = None) -> dict:
             _mark_seed_used(seed)
             return seed
 
-    # No Reddit story passed filters — fall back to wisdom
+    # Try Hacker News for niches that align with its intellectual/founder audience
+    seed = fetch_hackernews_story(name, used_ids=used_set)
+    if seed:
+        print(f"[research] using HN story: \"{seed['title'][:60]}\"")
+        _mark_seed_used(seed)
+        return seed
+
+    # No live story passed filters — fall back to wisdom quote pool
     seed = pick_wisdom_quote(name, used_ids=used_set)
     if seed:
         print(f"[research] using wisdom quote from {seed['source']}")

@@ -11,6 +11,9 @@ logs/
 rufus.db
 rufus.db-*
 
+# Seed deduplication history (runtime state, not source code)
+config/used_seeds.json
+
 # Python
 __pycache__/
 *.pyc
