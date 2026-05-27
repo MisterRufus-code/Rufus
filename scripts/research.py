@@ -45,11 +45,33 @@ MIN_BODY_LEN      = 300
 MIN_COMMENTS      = 50
 MAX_BODY_LEN      = 3000  # too long = won't fit a 35-50s Short
 
-# Title patterns that signal low-substance content
+# Title patterns that signal low-substance content (rage, drama, mod posts)
 TITLE_BAD_RE = re.compile(
     r"\b(aita|am i the|rant|vent|meta|update|edit|removed|deleted|"
     r"\[meta\]|\[mod\]|\[removed\]|\[deleted\]|"
     r"help|advice needed|question|what should i do)\b",
+    re.IGNORECASE,
+)
+
+# Title patterns that signal a DISCUSSION (no story arc, no payoff — bad for Shorts)
+TITLE_DISCUSSION_RE = re.compile(
+    r"\b(thoughts on|anyone else|opinion on|worth it|should i|"
+    r"is it worth|are you|do you|how do you|what do you|"
+    r"discussion|debate|poll|survey|"
+    r"competitiveness|alternatives|recommendations)\b",
+    re.IGNORECASE,
+)
+
+# Title patterns that signal a STORY (concrete event, gold for Shorts).
+# A post must match at least one of these to pass quality filter.
+TITLE_STORY_RE = re.compile(
+    r"(\$|\d|"                                 # any dollar sign or digit
+    r"\bsaved\b|\bmade\b|\blost\b|\bpaid\b|"
+    r"\bearned\b|\bspent\b|\bquit\b|\bfired\b|"
+    r"\bstarted\b|\blearned\b|\bbought\b|\bsold\b|"
+    r"\bbuilt\b|\bfailed\b|\bretired\b|\bescaped\b|"
+    r"\bturned\b|\bwent\b|\btook\b|\bfound\b|"
+    r"\byears? ago\b|\blast year\b|\blast month\b)",
     re.IGNORECASE,
 )
 
@@ -73,7 +95,15 @@ def _clean_text(text: str) -> str:
 
 
 def _passes_quality_filter(post: dict) -> bool:
-    """Return True if a Reddit post has enough substance to be worth using."""
+    """Return True if a Reddit post has enough substance to be worth using.
+
+    Requirements:
+      - Engagement: score >= MIN_SCORE, num_comments >= MIN_COMMENTS
+      - Substance: body length within MIN_BODY_LEN..MAX_BODY_LEN
+      - Title contains a STORY signal (dollar sign, number, or past-tense action verb)
+      - Title does NOT match BAD patterns (rage/drama/mod)
+      - Title does NOT match DISCUSSION patterns (no story arc — bad for Shorts)
+    """
     d = post.get("data", {})
     if d.get("stickied") or d.get("over_18") or d.get("removed_by_category"):
         return False
@@ -86,6 +116,11 @@ def _passes_quality_filter(post: dict) -> bool:
         return False
     title = d.get("title", "")
     if TITLE_BAD_RE.search(title):
+        return False
+    if TITLE_DISCUSSION_RE.search(title):
+        return False
+    if not TITLE_STORY_RE.search(title):
+        # Title has no number, no past-tense action — almost certainly opinion/question
         return False
     return True
 
