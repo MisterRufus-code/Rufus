@@ -1,14 +1,13 @@
 #!/usr/bin/env python3
 """
 script_writer.py
-Writes a value-focused Shorts script from a seed (real source material) + scene description.
+Writes a value-focused Shorts script from real seed material + scene description.
 
-Key differences from previous version:
-- Takes a `seed` dict with REAL source material (Reddit story or curated quote)
-- Target 35-50s (80-130 words) — long enough for real value
-- System prompt rewritten: tired expert tone, no viral-creator clichés
-- Scorer weights "substance" highest (uses specifics from source)
-- max_tokens raised to 250
+Architecture:
+  1. Pre-analysis pass (gpt-4o-mini, 120 tokens) — identifies hook angle, core claim, loop line
+  2. Write pass (gpt-4o, 300 tokens) — full script using analysis + gold examples + niche context
+  3. Scorer (gpt-4o, chain-of-thought) — 5-criterion rubric with hard disqualifiers
+  4. Up to 4 attempts, keep best ≥ 8/10
 """
 
 import json
@@ -19,38 +18,42 @@ from pathlib import Path
 
 from openai import OpenAI
 
-CONFIG_DIR     = Path(__file__).parent.parent / "config"
-NICHES_FILE    = CONFIG_DIR / "niches.json"
-KEYS_FILE      = CONFIG_DIR / "keys.json"
-BLACKLIST_FILE = CONFIG_DIR / "blacklist.json"
-LEARNINGS_FILE = CONFIG_DIR / "learnings.json"
+CONFIG_DIR          = Path(__file__).parent.parent / "config"
+NICHES_FILE         = CONFIG_DIR / "niches.json"
+KEYS_FILE           = CONFIG_DIR / "keys.json"
+BLACKLIST_FILE      = CONFIG_DIR / "blacklist.json"
+LEARNINGS_FILE      = CONFIG_DIR / "learnings.json"
+GOLD_EXAMPLES_FILE  = CONFIG_DIR / "gold_examples.json"
 
-# Phrases that flag AI-generated content. Filtered post-generation (not in prompt).
 BANNED_PHRASES = [
-    # AI-creator slop
+    # Creator-slop openers
     "buckle up", "let's dive in", "let me tell you", "imagine this", "picture this",
     "here's the thing", "here's why", "the truth is", "let's talk about",
     "in this video", "in today's video", "in today's world",
-    # Generic motivational filler
+    "did you know", "have you ever", "what if i told you",
+    "most people don't know", "nobody talks about", "the secret is",
+    "one simple trick", "this changes everything",
+    # Motivational filler
     "game-changer", "game changer", "unlock", "skyrocket", "leverage",
     "dive deep", "delve", "revolutionize", "groundbreaking", "cutting-edge",
-    "seamlessly", "robust", "empower", "synergy",
+    "seamlessly", "robust", "empower", "synergy", "hustle harder",
     # Corporate buzzwords
     "it's important to note", "at the end of the day", "paradigm", "disrupt",
     "journey", "navigating", "landscape", "crucial", "vital", "actionable",
-    # Hedging that kills authority
-    "in many ways", "in some sense", "you could argue", "some say",
+    # Hedging
+    "in many ways", "in some sense", "you could argue",
     # AI essay structure
     "first and foremost", "moreover", "furthermore", "in conclusion",
-    "to sum up", "all in all",
+    "to sum up", "all in all", "having said that",
+    # Moralizing openers
+    "remember", "always remember", "never forget",
 ]
 
-SCORE_MIN     = 7
-MAX_ATTEMPTS  = 3
-
-# Target script length (35-50s spoken @ ~150 wpm = 80-130 words)
-MIN_WORDS     = 80
-MAX_WORDS     = 130
+SCORE_MIN    = 8     # ruthless — only genuinely strong scripts pass
+MAX_ATTEMPTS = 4
+MIN_WORDS    = 80    # 35-50s at ~150wpm
+MAX_WORDS    = 130
+HOOK_MAX_WORDS = 10  # hooks over 10 words are rejected before scoring
 
 
 def _load_niche():
@@ -73,41 +76,124 @@ def _load_learnings() -> dict:
     return {}
 
 
+def _load_gold_examples(niche_name: str) -> list[dict]:
+    if not GOLD_EXAMPLES_FILE.exists():
+        return []
+    data = json.loads(GOLD_EXAMPLES_FILE.read_text())
+    return data.get(niche_name, [])
+
+
 def _seed_block(seed: dict) -> str:
-    """Format the seed as a clearly-delimited block for the writer."""
     if not seed:
         return ""
     if seed.get("type") == "reddit":
         return (
-            "REAL SOURCE MATERIAL (Reddit story):\n"
+            "SOURCE MATERIAL (real Reddit story):\n"
             f"Subreddit: {seed.get('source', '')}\n"
             f"Title:     {seed.get('title', '')}\n"
             f"Story:     {seed.get('content', '')}\n"
         )
     if seed.get("type") == "wisdom":
         return (
-            "REAL SOURCE MATERIAL (quote):\n"
-            f"Quote:  \"{seed.get('content', '')}\"\n"
-            f"Author: {seed.get('source', 'Unknown')}\n"
+            "SOURCE MATERIAL (real quote):\n"
+            f"\"{seed.get('content', '')}\"\n"
+            f"— {seed.get('source', 'Unknown')}\n"
         )
     return ""
 
 
+def _build_gold_block(examples: list[dict]) -> str:
+    if not examples:
+        return ""
+    lines = ["\n── GOLD STANDARD EXAMPLES ── Study these. This is the exact level required.\n"]
+    for i, ex in enumerate(examples[:2], 1):
+        src = f"{ex.get('seed_type', 'source')}: \"{ex.get('seed_content', '')[:120]}\" — {ex.get('seed_source', '')}"
+        lines.append(f"Example {i} | {src}\n")
+        lines.append(ex.get("script", ""))
+        lines.append("")
+    lines.append("── END EXAMPLES ──")
+    return "\n".join(lines)
+
+
+def _build_system(niche_cfg: dict, niche_name: str) -> str:
+    gold_examples = _load_gold_examples(niche_name)
+    gold_block    = _build_gold_block(gold_examples)
+    cta           = niche_cfg.get("cta", "Follow for more.")
+    niche_context = niche_cfg.get("gpt_system", "")
+
+    return f"""You are the most exacting short-form script writer working today.
+Your standard: if a line does not earn its place, cut it. If a word is vague, replace it with something specific. If the hook doesn't create a cognitive itch the brain cannot ignore, rewrite it.
+
+NICHE:
+{niche_context}
+
+YOUR JOB:
+You are given REAL source material. Your job is to compress and sharpen it into a 35-50 second YouTube Short. You do not invent. You do not generalize. You use what is in the source.
+
+VOICE:
+- Sound like someone who has been in this field for 20 years and is slightly impatient with people who haven't figured this out yet.
+- Specific always beats vague. A name beats "someone". A number beats "many". A year beats "recently".
+- Short sentences — but not robotic fragments. Vary rhythm deliberately to create punch.
+- Never moralize. Never summarize. Never explain the point. Trust the audience.
+- Attribution is natural: not "Buffett said 'price is what you pay'" but "Buffett has owned Coca-Cola since 1988."
+
+STRUCTURE — NON-NEGOTIABLE:
+LINE 1 (HOOK): ≤{HOOK_MAX_WORDS} words. Creates a cognitive open loop — a question the brain cannot rest until it answers. Anchors on a specific person, number, or verifiable fact. No setup. No "did you know". No "I want to talk about". No "have you ever".
+BODY: Every sentence either adds evidence or builds tension. Nothing can be cut without losing meaning. If the source has a name, number, date, or direct fact — it belongs in the body.
+SECOND-TO-LAST LINE (LOOP): A question or reframing that makes the viewer want to go back to line 1. This is what drives replays.
+LAST LINE (CTA): Always exactly this, on its own line: "{cta}"
+
+HARD RULES:
+- {MIN_WORDS}-{MAX_WORDS} words total
+- Real attribution when source is a quote: weave the author into the body naturally
+- Never use: "here's why", "the truth is", "let me tell you", "imagine this", "in this video", "did you know", "what if I told you", "most people don't know", "nobody talks about"
+- Never invent a statistic, number, or quote not in the source
+- Output ONLY the script text. No labels. No "Here is the script:". No quotes around it.
+{gold_block}"""
+
+
+def _pre_analyze(client: OpenAI, seed: dict, scene: str) -> str:
+    """Fast pre-pass: identify hook angle, core claim, and loop line before writing.
+
+    Cheap call (gpt-4o-mini, 120 tokens). Injects the result into the writer prompt
+    so the model doesn't have to do structural thinking AND prose writing simultaneously.
+    """
+    seed_blk = _seed_block(seed) if seed else f"Scene description: {scene}"
+    prompt = (
+        f"{seed_blk}\n"
+        f"Background scene: {scene}\n\n"
+        "Before writing the script, extract three things from the source:\n"
+        "1. HOOK: The single most specific detail (name + year, or number, or surprising reversal) that should anchor line 1. Write it as a complete sentence ≤10 words.\n"
+        "2. CORE: The one insight this source proves. One sentence. Specific and bold.\n"
+        "3. LOOP: A question or restatement of the hook that the second-to-last line should deliver. One sentence.\n\n"
+        "Reply with ONLY these 3 numbered items. Use concrete details from the source. Do not write the full script."
+    )
+    try:
+        resp = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.3,
+            max_tokens=120,
+        )
+        return resp.choices[0].message.content.strip()
+    except Exception:
+        return ""
+
+
 def _generate(client: OpenAI, system: str, user: str) -> str:
     resp = client.chat.completions.create(
-        model="gpt-4o-mini",
+        model="gpt-4o",
         messages=[
             {"role": "system", "content": system},
             {"role": "user",   "content": user},
         ],
-        temperature=0.85,
-        max_tokens=250,
+        temperature=0.9,
+        max_tokens=300,
     )
     return resp.choices[0].message.content.strip()
 
 
 def _find_banned(script: str) -> str | None:
-    """Return first banned phrase found (whole-word match), else None."""
     text = script.lower()
     for phrase in BANNED_PHRASES:
         pattern = r"\b" + re.escape(phrase.lower()) + r"\b"
@@ -116,55 +202,60 @@ def _find_banned(script: str) -> str | None:
     return None
 
 
-def _score(client: OpenAI, script: str, seed: dict) -> int:
-    """Score with gpt-4o (different model class → less self-bias)."""
-    seed_text = seed.get("content", "") if seed else ""
+def _hook_too_long(script: str) -> bool:
+    """Return True if the first line exceeds HOOK_MAX_WORDS."""
+    first_line = script.strip().split("\n")[0]
+    return len(first_line.split()) > HOOK_MAX_WORDS
+
+
+def _score(client: OpenAI, script: str, seed: dict) -> tuple[int, str]:
+    """Chain-of-thought scoring with hard disqualifiers. Returns (score, reasoning).
+
+    Uses gpt-4o — different model class from writer (gpt-4o is same family but this
+    forces structured evaluation; scorer temperature is 0.0 to eliminate guessing).
+    """
+    seed_text = (seed.get("content", "") or "")[:500] if seed else ""
     prompt = (
-        f"Score this YouTube Shorts script 1-10:\n\n"
-        f"SCRIPT:\n\"{script}\"\n\n"
+        f"SCRIPT TO EVALUATE:\n\"{script}\"\n\n"
         f"SOURCE IT WAS BASED ON:\n\"{seed_text}\"\n\n"
-        "Criteria:\n"
-        "- Substance (uses specifics from source — names, numbers, story details): /3\n"
-        "- Hook (first line is short, curiosity gap, no setup): /2\n"
-        "- Punch (no filler, every word earns its place): /2\n"
-        "- Loop (ending pulls viewer back to start): /2\n"
-        "- Human (sounds like tired expert, zero AI clichés): /1\n\n"
-        "Reply with ONLY a single integer 1-10."
+        "You are a ruthless short-form content editor. Protect the audience from mediocre content.\n\n"
+        "STEP 1 — AUTOMATIC DISQUALIFIERS (any one = final score ≤ 4, stop evaluating further):\n"
+        f"□ Hook (first line) is longer than {HOOK_MAX_WORDS} words\n"
+        "□ Hook starts with: Did you know / Have you ever / I want to / Let me / Imagine / What if\n"
+        "□ Script contains banned phrases: 'here's why', 'the truth is', 'let me tell you', 'most people', 'nobody talks about', 'what if I told you'\n"
+        "□ Script invents a fact, number, or quote not present in the source material\n"
+        "□ Script contains zero specifics (no name, number, date, or verbatim detail from source)\n\n"
+        "STEP 2 — SCORE EACH CRITERION (only if no disqualifiers):\n"
+        "SPECIFICITY 0-3: Does the script use real details from source (names, numbers, dates, direct facts)? 0=invented/vague, 1=one weak specific, 2=several, 3=every claim grounded in source\n"
+        "HOOK 0-2: First line ≤10 words? Creates a question the brain cannot answer without watching? Uses a specific? 0=generic/setup, 1=decent, 2=irresistible\n"
+        "COMPRESSION 0-2: Every sentence earns its place. No filler, no hedging, no setup. 0=padded, 1=mostly tight, 2=every word counts\n"
+        "LOOP 0-2: Second-to-last line connects back to hook, makes viewer want to replay from start. 0=absent/weak, 1=decent, 2=precise and powerful\n"
+        "HUMAN 0-1: Sounds like a real expert with opinions, not AI narration or generic motivation. 0=AI/generic, 1=genuine voice\n\n"
+        "STEP 3 — REPLY IN THIS EXACT FORMAT:\n"
+        "DISQUALIFIERS: [list any triggered, or 'none']\n"
+        "SPECIFICITY: [0-3]/3 — [one sentence explanation]\n"
+        "HOOK: [0-2]/2 — [quote the hook, explain why it works or fails]\n"
+        "COMPRESSION: [0-2]/2 — [identify any padded line, or confirm tight]\n"
+        "LOOP: [0-2]/2 — [quote the loop line, explain]\n"
+        "HUMAN: [0-1]/1 — [explain]\n"
+        "TOTAL: [sum]/10"
     )
     try:
         result = client.chat.completions.create(
             model="gpt-4o",
             messages=[{"role": "user", "content": prompt}],
             temperature=0.0,
-            max_tokens=5,
+            max_tokens=400,
         )
-        return int(result.choices[0].message.content.strip().split()[0])
-    except Exception:
-        return 5
-
-
-def _build_system(niche_cfg: dict) -> str:
-    return (
-        "You are an experienced writer in this niche. You compose 35-50 second YouTube "
-        "Shorts based on REAL source material provided by the user. Your job is to "
-        "compress and sharpen, never to invent.\n\n"
-        "VOICE:\n"
-        "- Talk like a tired expert who has seen this 100 times. Not a viral creator.\n"
-        "- Specific over generic. If the source has a name, number, or detail — USE IT.\n"
-        "- Short, conversational sentences. The reader should hear a real human, not narration.\n"
-        "- Never moralize. Never summarize. Never invent stats. Tell the actual story.\n\n"
-        "STRUCTURE:\n"
-        "- Line 1: Hook under 8 words. Concrete curiosity gap. No setup. No throat-clearing.\n"
-        "- Body: Tell the story or unpack the quote using SPECIFICS from the source.\n"
-        "- Final line: A loop line that makes the viewer want to replay from the start.\n\n"
-        "RULES:\n"
-        f"- {MIN_WORDS}-{MAX_WORDS} words total (35-50 seconds when spoken).\n"
-        "- No phrases like 'here's why', 'the truth is', 'let me tell you', 'imagine this'.\n"
-        "- No AI essay structure (first, moreover, in conclusion, etc.).\n"
-        "- No corporate buzzwords (leverage, unlock, journey, paradigm, etc.).\n"
-        "- If the source is a quote, attribute it briefly in the body ('Buffett said...').\n"
-        "- Output ONLY the script text. No labels. No quotation marks around it."
-    )
+        reasoning = result.choices[0].message.content.strip()
+        for line in reasoning.splitlines():
+            stripped = line.strip()
+            if stripped.upper().startswith("TOTAL:"):
+                score_str = stripped.split(":")[-1].strip().split("/")[0].strip()
+                return int(score_str), reasoning
+        return 5, reasoning
+    except Exception as e:
+        return 5, f"scorer error: {e}"
 
 
 def write_script(scene_description: str, seed: dict | None = None) -> str:
@@ -173,67 +264,88 @@ def write_script(scene_description: str, seed: dict | None = None) -> str:
     learnings     = _load_learnings()
 
     if seed:
-        if seed.get("type") == "reddit":
-            print(f"[gpt] seed: Reddit story from {seed.get('source', '')}")
-        else:
-            print(f"[gpt] seed: quote — {seed.get('source', 'Unknown')}")
+        tag = f"r/{seed.get('source', '')}" if seed.get("type") == "reddit" else seed.get("source", "Unknown")
+        print(f"[gpt] seed: {seed.get('type', '?')} from {tag}")
 
-    system = _build_system(niche)
+    # Pre-analysis: extract hook angle, core claim, loop line before writing
+    analysis = _pre_analyze(client, seed, scene_description)
+    if analysis:
+        print(f"[gpt] analysis:\n{analysis}")
+
+    system = _build_system(niche, active)
 
     winning_hooks = learnings.get("winning_hooks", [])[:3]
     avoid_hooks   = learnings.get("losing_hooks",  [])[:3]
     hook_hint     = ""
     if winning_hooks:
-        hook_hint += f"\n\nHook patterns that previously worked: {winning_hooks}"
+        hook_hint += f"\n\nHook patterns that previously worked well: {winning_hooks}"
     if avoid_hooks:
-        hook_hint += f"\nAvoid hook patterns like: {avoid_hooks}"
+        hook_hint += f"\nHook patterns to avoid: {avoid_hooks}"
 
-    cta       = niche["cta"]
-    seed_blk  = _seed_block(seed) if seed else ""
-    base_usr  = (
+    cta      = niche["cta"]
+    seed_blk = _seed_block(seed) if seed else ""
+    base_usr = (
         f"{seed_blk}\n"
-        f"Background scene in the video: {scene_description}\n\n"
-        f"Write the Short script now. Compress the source into {MIN_WORDS}-{MAX_WORDS} words. "
-        f"End with this exact CTA on its own line: \"{cta}\"\n"
-        f"The line before the CTA should be a loop line that pulls the viewer back to the hook."
+        f"Background scene: {scene_description}\n\n"
+        f"PRE-ANALYSIS (use this as your structural guide):\n{analysis}\n\n"
+        f"Now write the script. {MIN_WORDS}-{MAX_WORDS} words. "
+        f"End with this exact line: \"{cta}\"\n"
+        f"The line before the CTA must be the loop line from your analysis."
         f"{hook_hint}"
     )
 
-    best_script = ""
-    best_score  = 0
-    last_script = ""
+    best_script   = ""
+    best_score    = 0
+    best_reasoning = ""
+    last_script   = ""
 
     for attempt in range(1, MAX_ATTEMPTS + 1):
-        variation   = "" if attempt == 1 else f"\n\nAttempt {attempt}: be more specific, fewer clichés, more concrete details from the source."
-        script      = _generate(client, system, base_usr + variation)
+        push = "" if attempt == 1 else (
+            f"\n\nAttempt {attempt}: Previous version scored {best_score}/10. "
+            "Be MORE specific — use more concrete details from the source. "
+            "Make the hook shorter and harder. Cut every sentence that could be removed."
+        )
+        script      = _generate(client, system, base_usr + push)
         last_script = script
 
+        # Hard pre-score rejections (no API call needed)
         banned = _find_banned(script)
         if banned:
-            print(f"[gpt] attempt {attempt}/3 – rejected ('{banned}' detected)")
+            print(f"[gpt] attempt {attempt}/{MAX_ATTEMPTS} – rejected (banned: '{banned}')")
             continue
 
         word_count = len(script.split())
         if word_count < MIN_WORDS:
-            print(f"[gpt] attempt {attempt}/3 – too short ({word_count} words, need {MIN_WORDS}+)")
+            print(f"[gpt] attempt {attempt}/{MAX_ATTEMPTS} – too short ({word_count} words, need ≥{MIN_WORDS})")
             continue
 
-        score = _score(client, script, seed)
-        print(f"[gpt] attempt {attempt}/3 – score: {score}/10 – {word_count} words")
+        if _hook_too_long(script):
+            hook_text = script.strip().split("\n")[0]
+            print(f"[gpt] attempt {attempt}/{MAX_ATTEMPTS} – hook too long: \"{hook_text}\"")
+            continue
+
+        # Chain-of-thought scoring
+        score, reasoning = _score(client, script, seed)
+        print(f"[gpt] attempt {attempt}/{MAX_ATTEMPTS} – score: {score}/10 – {word_count} words")
+        # Print the key scoring lines for debugging
+        for line in reasoning.splitlines():
+            if any(line.strip().startswith(k) for k in ("DISQUALIFIERS:", "HOOK:", "TOTAL:")):
+                print(f"      {line.strip()}")
 
         if score > best_score:
-            best_score  = score
-            best_script = script
+            best_score    = score
+            best_script   = script
+            best_reasoning = reasoning
 
         if score >= SCORE_MIN:
             break
 
     if not best_script:
-        print(f"[gpt] ⚠ no attempt passed filters – using last")
+        print(f"[gpt] ⚠ no attempt passed all filters – using last output")
         best_script = last_script
 
     if best_score < SCORE_MIN:
-        print(f"[gpt] ⚠ best score {best_score}/10 – using best attempt anyway")
+        print(f"[gpt] ⚠ best score was {best_score}/10 (target ≥{SCORE_MIN}) – using best attempt")
 
     return best_script
 
@@ -267,4 +379,4 @@ if __name__ == "__main__":
         sys.exit(1)
     desc   = " ".join(sys.argv[1:])
     script = write_script(desc)
-    print(f"\nSCRIPT={script}")
+    print(f"\n{'='*60}\nSCRIPT:\n{script}\n{'='*60}")
