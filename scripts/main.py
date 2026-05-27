@@ -77,6 +77,26 @@ def load_niche_cfg(override: str = None):
     return data["niches"][active], active
 
 
+def _todays_niche() -> str:
+    """Pick today's niche from config schedule. Day-of-year mod schedule length."""
+    from datetime import datetime
+    data     = json.loads(NICHES_FILE.read_text())
+    schedule = data.get("schedule") or [data.get("active", "finance")]
+    doy      = datetime.now().timetuple().tm_yday   # 1-366
+    return schedule[(doy - 1) % len(schedule)]
+
+
+def _all_scheduled_niches() -> list[str]:
+    """Return unique niches present in schedule, preserving order."""
+    data     = json.loads(NICHES_FILE.read_text())
+    schedule = data.get("schedule") or [data.get("active", "finance")]
+    seen     = []
+    for n in schedule:
+        if n not in seen:
+            seen.append(n)
+    return seen
+
+
 def run(skip_upload: bool = False, niche_override: str = None):
     log_path = _enable_file_logging()
     start    = time.time()
@@ -203,8 +223,27 @@ def run(skip_upload: bool = False, niche_override: str = None):
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(description="Rufus pipeline runner")
     parser.add_argument("--skip-upload", action="store_true", help="Render only, skip YouTube upload")
-    parser.add_argument("--niche",       type=str,            help="Override active niche for this run")
+    parser.add_argument("--niche",       type=str,            help="Override niche (e.g. finance, motivation, mindset)")
+    parser.add_argument("--scheduled",   action="store_true", help="Use today's niche from config schedule (for cron)")
+    parser.add_argument("--rotate",      action="store_true", help="Run one video per unique niche in the schedule")
     args = parser.parse_args()
-    run(skip_upload=args.skip_upload, niche_override=args.niche)
+
+    if sum(bool(x) for x in (args.niche, args.scheduled, args.rotate)) > 1:
+        print("Use only one of --niche, --scheduled, --rotate")
+        sys.exit(1)
+
+    if args.rotate:
+        niches = _all_scheduled_niches()
+        print(f"\n[rotate] producing {len(niches)} video(s): {niches}\n")
+        for n in niches:
+            # Clear any prior env override so each iteration starts clean
+            os.environ.pop("RUFUS_NICHE_OVERRIDE", None)
+            run(skip_upload=args.skip_upload, niche_override=n)
+    elif args.scheduled:
+        n = _todays_niche()
+        print(f"\n[scheduled] today's niche: {n}\n")
+        run(skip_upload=args.skip_upload, niche_override=n)
+    else:
+        run(skip_upload=args.skip_upload, niche_override=args.niche)

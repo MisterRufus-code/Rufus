@@ -1,5 +1,7 @@
 {
   "active": "finance",
+  "schedule": ["finance", "motivation", "mindset", "finance", "motivation", "mindset", "finance"],
+  "schedule_note": "Day-of-year index modulo length. Default: finance/motivation/mindset rotating 7 days (finance gets 3/week, others 2/week each). Edit this list to change rotation.",
   "niches": {
     "finance": {
       "display_name": "Finance & Wealth",
