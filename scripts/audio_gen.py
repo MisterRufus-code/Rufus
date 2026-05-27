@@ -112,9 +112,31 @@ async def _tts(script: str, mp3_path: Path) -> None:
 
 # ── Renderer ────────────────────────────────────────────────────────────────────
 
-def render(script: str, bg_path: Path, out_dir: Path) -> Path:
-    if not Path(bg_path).exists():
-        raise FileNotFoundError(f"Background video not found: {bg_path}")
+def _video_filter_complex(
+    n: int, over_w: int, over_h: int, pad_y: int,
+    seg_dur: float, eq_filter: str, ass_esc: str,
+) -> str:
+    """Build FFmpeg filter_complex for N clips: Ken Burns per clip → concat → grade → subtitles."""
+    parts = []
+    for i in range(n):
+        parts.append(
+            f"[{i}:v]scale={over_w}:{over_h}:force_original_aspect_ratio=increase,"
+            f"crop={W}:{H}:({over_w}-{W})*t/{seg_dur:.3f}:{pad_y},"
+            f"setsar=1[v{i}]"
+        )
+    concat_inputs = "".join(f"[v{i}]" for i in range(n))
+    parts.append(f"{concat_inputs}concat=n={n}:v=1:a=0[vraw]")
+    parts.append(f"[vraw]{eq_filter},vignette=PI/4,ass='{ass_esc}'[vout]")
+    return ";\n".join(parts)
+
+
+def render(script: str, bg_paths: "Path | list[Path]", out_dir: Path) -> Path:
+    # Accept a single path or a list
+    if isinstance(bg_paths, Path):
+        bg_paths = [bg_paths]
+    bg_paths = [Path(p) for p in bg_paths if Path(p).exists()]
+    if not bg_paths:
+        raise FileNotFoundError("No valid background video files found")
 
     niche_cfg = _load_niche()
     eq_filter = niche_cfg.get("ffmpeg_eq", "eq=contrast=1.1:saturation=1.0")
@@ -148,37 +170,32 @@ def render(script: str, bg_path: Path, out_dir: Path) -> Path:
         print("[3/4] Building subtitles…")
         build_ass(segments, ass, audio_dur)
 
-        # 4. FFmpeg render
-        print("[4/4] Rendering video…")
+        # 4. FFmpeg render — multi-clip concat
+        n        = len(bg_paths)
+        seg_dur  = audio_dur / n
+        over_w   = int(W * 1.10)
+        over_h   = int(H * 1.10)
+        pad_y    = (over_h - H) // 2
+        ass_esc  = str(ass).replace("\\", "/")
+        print(f"[4/4] Rendering {n} clip{'s' if n > 1 else ''} → {audio_dur:.1f}s ({seg_dur:.1f}s each)…")
 
-        over_w    = int(W * 1.10)
-        over_h    = int(H * 1.10)
-        pad_y     = (over_h - H) // 2
-        ass_esc   = str(ass).replace("\\", "/")
+        fc = _video_filter_complex(n, over_w, over_h, pad_y, seg_dur, eq_filter, ass_esc)
 
-        vf = (
-            f"scale={over_w}:{over_h}:force_original_aspect_ratio=increase,"
-            f"crop={W}:{H}:({over_w}-{W})*t/{audio_dur:.3f}:{pad_y},"
-            f"setsar=1,"
-            f"{eq_filter},"
-            f"vignette=PI/4,"
-            f"ass='{ass_esc}'"
-        )
-
-        subprocess.run(
-            [
-                "ffmpeg", "-y", "-loglevel", "error",
-                "-stream_loop", "-1", "-i", str(bg_path),
-                "-i", str(audio_src),
-                "-t", f"{audio_dur:.3f}",
-                "-vf", vf,
-                "-c:v", "libx264", "-preset", "fast", "-crf", "20",
-                "-c:a", "aac", "-b:a", "128k",
-                "-r", str(FPS), "-pix_fmt", "yuv420p",
-                str(out),
-            ],
-            check=True,
-        )
+        cmd = ["ffmpeg", "-y", "-loglevel", "error"]
+        for bg in bg_paths:
+            cmd += ["-stream_loop", "-1", "-t", f"{seg_dur:.3f}", "-i", str(bg)]
+        cmd += ["-i", str(audio_src)]
+        cmd += [
+            "-filter_complex", fc,
+            "-map", "[vout]",
+            "-map", f"{n}:a",
+            "-t", f"{audio_dur:.3f}",
+            "-c:v", "libx264", "-preset", "fast", "-crf", "20",
+            "-c:a", "aac", "-b:a", "128k",
+            "-r", str(FPS), "-pix_fmt", "yuv420p",
+            str(out),
+        ]
+        subprocess.run(cmd, check=True)
 
     finally:
         for f in (mp3, ass):
