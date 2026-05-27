@@ -153,10 +153,30 @@ ANTI-HALLUCINATION (HARD RULE):
 Never invent: a person's first name, a dollar amount, a percentage, a date, a company-specific event, or a quote that is not in the source material. If the source is only a scene description with no concrete facts, restrict yourself to well-documented historical truths (e.g. "the S&P 500 has never been negative over any 20-year rolling period") or to widely-attributed quotes from named historical figures you are 100% certain said them. When uncertain, remove the specific. Vague-but-true is always better than specific-and-invented.
 
 NARRATION VOICE (HARD RULE):
-The script will be voiced by a creator who is NOT the person in the source material. Narrate in THIRD person, always.
-- For Reddit stories: "A Reddit user in r/FIRE saved $2.4 million by 38…" or "Someone on r/personalfinance just shared…" — never "I saved" or "my portfolio".
-- For quotes: refer to the named author. "Buffett has owned Coca-Cola since 1988…" not "I bought Coca-Cola…".
-- The viewer must always understand: the creator is REPORTING the story, not confessing it. Never put words in the creator's mouth.
+The script will be voiced by a creator who is NOT the person in the source material.
+- HOOK (line 1 ONLY): can be a punchy fact-led fragment. NO explicit attribution needed. Examples: "$2.4 million by 38. Still scared to retire." or "He ran 100 miles on two broken feet." The "who" is revealed in line 2 or 3.
+- BODY (line 2+): third person, with clear attribution by line 3 at latest. "A Reddit user on r/FIRE broke down their portfolio…" Never first-person impersonation.
+- The viewer must understand by line 3 that this is a real person's story being reported, not the creator's confession.
+
+HOOK STRENGTH — what separates a 2/2 hook from a 1/2 hook:
+The weak version reports the FACT. The strong version reveals the CONTRADICTION inside the fact. The brain ignores facts. It cannot ignore a contradiction.
+
+Weak (1/2): "A Reddit user saved $2.4 million by 38."
+Strong (2/2): "$2.4 million by 38. Still scared to retire."
+
+Weak: "Buffett has owned Coca-Cola since 1988."
+Strong: "Buffett's worst trade made him $25 billion."
+
+Weak: "Seneca wrote about anxiety 2000 years ago."
+Strong: "Seneca solved your anxiety 2000 years ago."
+
+Weak: "Goggins ran a hundred miles."
+Strong: "He ran 100 miles on two broken feet."
+
+Weak: "Jung studied projection."
+Strong: "Your loudest opinions are confessions in disguise."
+
+Build the hook around the SHARPEST contradiction in the source. If the source has no contradiction, find the unexpected number, the unexpected pairing, or the gap between expectation and reality.
 
 HARD RULES:
 - {MIN_WORDS}-{MAX_WORDS} words total
@@ -177,11 +197,17 @@ def _pre_analyze(client: OpenAI, seed: dict, scene: str) -> str:
     prompt = (
         f"{seed_blk}\n"
         f"Background scene: {scene}\n\n"
-        "Before writing the script, extract three things from the source:\n"
-        "1. HOOK: The single most specific detail (name + year, or number, or surprising reversal) that should anchor line 1. Write it as a complete sentence ≤10 words.\n"
-        "2. CORE: The one insight this source proves. One sentence. Specific and bold.\n"
-        "3. LOOP: A question or restatement of the hook that the second-to-last line should deliver. One sentence.\n\n"
-        "Reply with ONLY these 3 numbered items. Use concrete details from the source. Do not write the full script."
+        "Before writing the script, find these four things in the source. Use REAL details from the source — no invention.\n\n"
+        "1. CONTRADICTION: What is the surprising contradiction, paradox, or unexpected pairing in this source? "
+        "(e.g. 'rich but scared', 'worst trade made him richest', 'survived camps by finding meaning, not strength'). "
+        "One sentence. This is what makes the story worth watching.\n"
+        "2. HOOK: Write line 1 as a punchy fact-led fragment ≤10 words that surfaces the contradiction. "
+        "DO NOT start with 'A Reddit user' or 'Someone'. Lead with the number/name/contradiction. "
+        "Example weak: 'A Reddit user saved $2.4 million by 38.' "
+        "Example strong: '$2.4 million by 38. Still scared to retire.'\n"
+        "3. CORE: The one insight this source proves. One sentence. Specific and bold.\n"
+        "4. LOOP: A question or restatement of the hook for the second-to-last line. One sentence.\n\n"
+        "Reply with ONLY these 4 numbered items. Do not write the full script."
     )
     try:
         resp = client.chat.completions.create(
@@ -195,14 +221,14 @@ def _pre_analyze(client: OpenAI, seed: dict, scene: str) -> str:
         return ""
 
 
-def _generate(client: OpenAI, system: str, user: str) -> str:
+def _generate(client: OpenAI, system: str, user: str, temperature: float = 0.9) -> str:
     resp = client.chat.completions.create(
         model="gpt-4o",
         messages=[
             {"role": "system", "content": system},
             {"role": "user",   "content": user},
         ],
-        temperature=0.9,
+        temperature=temperature,
         max_tokens=300,
     )
     return resp.choices[0].message.content.strip()
@@ -319,13 +345,18 @@ def write_script(scene_description: str, seed: dict | None = None) -> str:
     best_reasoning = ""
     last_script   = ""
 
+    # Climb temperature across attempts: faithful first, more creative on retries
+    temps = [0.7, 0.9, 1.05, 1.15]
+
     for attempt in range(1, MAX_ATTEMPTS + 1):
         push = "" if attempt == 1 else (
-            f"\n\nAttempt {attempt}: Previous version scored {best_score}/10. "
-            "Be MORE specific — use more concrete details from the source. "
-            "Make the hook shorter and harder. Cut every sentence that could be removed."
+            f"\n\nAttempt {attempt}: Previous score {best_score}/10. "
+            "The hook is too safe. Lead with the CONTRADICTION, not the fact. "
+            "Cut any sentence that just reports — keep only the ones that reveal. "
+            "Make the hook ≤8 words and surface the paradox in the source."
         )
-        script      = _generate(client, system, base_usr + push)
+        temp        = temps[min(attempt - 1, len(temps) - 1)]
+        script      = _generate(client, system, base_usr + push, temperature=temp)
         last_script = script
 
         # Hard pre-score rejections (no API call needed)

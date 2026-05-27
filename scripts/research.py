@@ -24,9 +24,11 @@ from pathlib import Path
 
 import httpx
 
-CONFIG_DIR    = Path(__file__).parent.parent / "config"
-NICHES_FILE   = CONFIG_DIR / "niches.json"
-WISDOM_DIR    = CONFIG_DIR / "wisdom"
+CONFIG_DIR       = Path(__file__).parent.parent / "config"
+NICHES_FILE      = CONFIG_DIR / "niches.json"
+WISDOM_DIR       = CONFIG_DIR / "wisdom"
+USED_SEEDS_FILE  = CONFIG_DIR / "used_seeds.json"
+MAX_USED_HISTORY = 500  # cap to avoid unbounded growth
 
 REDDIT_HEADERS = {
     "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) Gecko/20100101 Firefox/123.0 rufus-research/1.0",
@@ -82,6 +84,54 @@ def _load_niche():
     return data["niches"][active], active
 
 
+# ── Seed deduplication ──────────────────────────────────────────────────────────
+
+import hashlib
+
+def _seed_id(seed: dict) -> str:
+    """Stable unique ID for a seed so we don't reuse the same source twice."""
+    if not seed:
+        return ""
+    if seed.get("type") == "reddit":
+        return "reddit:" + (seed.get("url") or seed.get("title", ""))
+    if seed.get("type") == "wisdom":
+        text = (seed.get("content") or "").strip().lower()
+        return "wisdom:" + hashlib.sha1(text.encode("utf-8")).hexdigest()[:16]
+    return ""
+
+
+def _load_used_seeds() -> list:
+    if not USED_SEEDS_FILE.exists():
+        return []
+    try:
+        return json.loads(USED_SEEDS_FILE.read_text())
+    except Exception:
+        return []
+
+
+def _mark_seed_used(seed: dict) -> None:
+    sid = _seed_id(seed)
+    if not sid:
+        return
+    used = _load_used_seeds()
+    if sid in used:
+        used.remove(sid)        # move to end (most-recent-used at tail)
+    used.append(sid)
+    used = used[-MAX_USED_HISTORY:]  # keep last N
+    USED_SEEDS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    USED_SEEDS_FILE.write_text(json.dumps(used, indent=2))
+
+
+def _post_seed_id(post_data: dict) -> str:
+    permalink = post_data.get("permalink", "")
+    return "reddit:" + (f"https://reddit.com{permalink}" if permalink else post_data.get("title", ""))
+
+
+def _quote_seed_id(quote: dict) -> str:
+    text = (quote.get("text") or "").strip().lower()
+    return "wisdom:" + hashlib.sha1(text.encode("utf-8")).hexdigest()[:16]
+
+
 def _clean_text(text: str) -> str:
     """Strip markdown, URLs, and excessive whitespace so it reads as plain prose."""
     text = re.sub(r"&amp;", "&", text)
@@ -125,8 +175,14 @@ def _passes_quality_filter(post: dict) -> bool:
     return True
 
 
-def fetch_reddit_story(subreddit: str, limit: int = 25) -> dict | None:
-    """Fetch the first quality-filtered hot post from a subreddit. Return None if none pass."""
+def fetch_reddit_story(subreddit: str, limit: int = 50, used_ids: set | None = None) -> dict | None:
+    """Fetch the first quality-filtered hot post from a subreddit, skipping seen IDs.
+
+    Larger default limit (50) gives more candidates after the used-filter prunes the list.
+    """
+    if used_ids is None:
+        used_ids = set()
+
     data = None
     last_err = None
     for template in REDDIT_ENDPOINTS:
@@ -145,11 +201,16 @@ def fetch_reddit_story(subreddit: str, limit: int = 25) -> dict | None:
         return None
 
     posts = data.get("data", {}).get("children", [])
-    quality = [p for p in posts if _passes_quality_filter(p)]
+    # Quality filter first, then drop anything we've already used
+    quality = [
+        p for p in posts
+        if _passes_quality_filter(p)
+        and _post_seed_id(p.get("data", {})) not in used_ids
+    ]
     if not quality:
         return None
 
-    chosen = random.choice(quality[:5])  # randomize among top 5 quality posts
+    chosen = random.choice(quality[:8])  # randomize among top 8 unused quality posts
     d = chosen["data"]
     return {
         "type":    "reddit",
@@ -160,8 +221,10 @@ def fetch_reddit_story(subreddit: str, limit: int = 25) -> dict | None:
     }
 
 
-def pick_wisdom_quote(niche_name: str) -> dict | None:
-    """Pick one random quote from the niche's curated pool."""
+def pick_wisdom_quote(niche_name: str, used_ids: set | None = None) -> dict | None:
+    """Pick one random quote from the niche's curated pool, skipping seen ones."""
+    if used_ids is None:
+        used_ids = set()
     f = WISDOM_DIR / f"{niche_name}.json"
     if not f.exists():
         return None
@@ -169,7 +232,10 @@ def pick_wisdom_quote(niche_name: str) -> dict | None:
     quotes = data.get("quotes", [])
     if not quotes:
         return None
-    q = random.choice(quotes)
+    # Prefer unused quotes; if all used (rare), fall back to full pool
+    fresh = [q for q in quotes if _quote_seed_id(q) not in used_ids]
+    pool  = fresh if fresh else quotes
+    q     = random.choice(pool)
     return {
         "type":    "wisdom",
         "source":  q.get("author", "Unknown"),
@@ -180,34 +246,46 @@ def pick_wisdom_quote(niche_name: str) -> dict | None:
 
 
 def get_seed(niche_name: str | None = None) -> dict:
-    """Get a seed for the script writer. Reddit-first, wisdom fallback."""
+    """Get a seed for the script writer. Tracks history so seeds never repeat.
+
+    Order: Reddit-first (story-filtered), wisdom fallback. Both skip anything
+    already in used_seeds.json (last MAX_USED_HISTORY items).
+    """
     niche, active = _load_niche()
-    name = niche_name or active
+    name      = niche_name or active
+    used_list = _load_used_seeds()
+    used_set  = set(used_list)
+
+    print(f"[research] history: {len(used_list)} prior seeds will be skipped")
 
     subreddits = list(niche.get("subreddits", []))
     random.shuffle(subreddits)
 
     for sub in subreddits:
-        seed = fetch_reddit_story(sub)
+        seed = fetch_reddit_story(sub, used_ids=used_set)
         if seed:
             print(f"[research] using Reddit story from {seed['source']}: \"{seed['title'][:60]}\"")
+            _mark_seed_used(seed)
             return seed
 
     # No Reddit story passed filters — fall back to wisdom
-    seed = pick_wisdom_quote(name)
+    seed = pick_wisdom_quote(name, used_ids=used_set)
     if seed:
         print(f"[research] using wisdom quote from {seed['source']}")
+        _mark_seed_used(seed)
         return seed
 
-    # Last resort — no wisdom pool either (shouldn't happen with bundled JSONs)
+    # Last resort
     print(f"[research] WARNING: no seed found for niche '{name}'")
-    return {
+    fallback = {
         "type":    "wisdom",
         "source":  "Marcus Aurelius",
         "content": "What stands in the way becomes the way.",
         "title":   "",
         "url":     "",
     }
+    _mark_seed_used(fallback)
+    return fallback
 
 
 if __name__ == "__main__":
