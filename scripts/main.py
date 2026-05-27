@@ -142,6 +142,7 @@ def run(skip_upload: bool = False, niche_override: str = None):
             script_hook=hook,
             scene_desc=scene[:500],
             video_file=str(output_path),
+            script_full=script,
         )
         print(f"           → saved (id={db_id})\n")
     except Exception as e:
