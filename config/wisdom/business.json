@@ -1,0 +1,30 @@
+{
+  "description": "Real attributed quotes from founders, CEOs, and operators.",
+  "quotes": [
+    {"text": "Your margin is my opportunity.", "author": "Jeff Bezos"},
+    {"text": "If you double the number of experiments you do per year, you are going to double your inventiveness.", "author": "Jeff Bezos"},
+    {"text": "Stay hungry. Stay foolish.", "author": "Steve Jobs"},
+    {"text": "Innovation distinguishes between a leader and a follower.", "author": "Steve Jobs"},
+    {"text": "Quality is more important than quantity. One home run is much better than two doubles.", "author": "Steve Jobs"},
+    {"text": "When something is important enough, you do it even if the odds are not in your favor.", "author": "Elon Musk"},
+    {"text": "The first step is to establish that something is possible. Then probability will occur.", "author": "Elon Musk"},
+    {"text": "If you are not embarrassed by the first version of your product, you have launched too late.", "author": "Reid Hoffman"},
+    {"text": "Make something people want.", "author": "Paul Graham"},
+    {"text": "Startups don't usually die because they run out of money. They die because they run out of momentum.", "author": "Paul Graham"},
+    {"text": "Culture eats strategy for breakfast.", "author": "Peter Drucker"},
+    {"text": "If you can't measure it, you can't improve it.", "author": "Peter Drucker"},
+    {"text": "The best way to predict the future is to create it.", "author": "Peter Drucker"},
+    {"text": "Don't be intimidated by what you don't know. That can be your greatest strength.", "author": "Sara Blakely"},
+    {"text": "Train people well enough so they can leave. Treat them well enough so they don't want to.", "author": "Richard Branson"},
+    {"text": "Competition is for losers.", "author": "Peter Thiel"},
+    {"text": "The best entrepreneurs know this: every great business is built around a secret hidden from the outside.", "author": "Peter Thiel"},
+    {"text": "Only the paranoid survive.", "author": "Andy Grove"},
+    {"text": "Volume negates luck.", "author": "Alex Hormozi"},
+    {"text": "The skill that makes you successful is not the skill that makes you wealthy.", "author": "Alex Hormozi"},
+    {"text": "A journey of a thousand miles begins with a single step.", "author": "Lao Tzu"},
+    {"text": "The most successful CEOs are the most boring.", "author": "Naval Ravikant"},
+    {"text": "There is no recipe for really complicated, dynamic situations.", "author": "Ben Horowitz"},
+    {"text": "Hire slow. Fire fast.", "author": "Jack Welch"},
+    {"text": "If you don't have a competitive advantage, don't compete.", "author": "Jack Welch"}
+  ]
+}

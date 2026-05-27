@@ -1,0 +1,30 @@
+{
+  "description": "Real quotes from real investors and financial thinkers. Used as seed material for scripts.",
+  "quotes": [
+    {"text": "Be fearful when others are greedy, and greedy when others are fearful.", "author": "Warren Buffett"},
+    {"text": "Price is what you pay. Value is what you get.", "author": "Warren Buffett"},
+    {"text": "Rule No. 1: Never lose money. Rule No. 2: Never forget Rule No. 1.", "author": "Warren Buffett"},
+    {"text": "The stock market is a device for transferring money from the impatient to the patient.", "author": "Warren Buffett"},
+    {"text": "Risk comes from not knowing what you are doing.", "author": "Warren Buffett"},
+    {"text": "It is only when the tide goes out that you discover who has been swimming naked.", "author": "Warren Buffett"},
+    {"text": "The first rule of compounding: Never interrupt it unnecessarily.", "author": "Charlie Munger"},
+    {"text": "Show me the incentive and I will show you the outcome.", "author": "Charlie Munger"},
+    {"text": "It is remarkable how much long-term advantage people like us have gotten by trying to be consistently not stupid, instead of trying to be very intelligent.", "author": "Charlie Munger"},
+    {"text": "Earn with your mind, not your time.", "author": "Naval Ravikant"},
+    {"text": "You are not going to get rich renting out your time.", "author": "Naval Ravikant"},
+    {"text": "All the returns in life come from compound interest. Whether in money, relationships, or knowledge.", "author": "Naval Ravikant"},
+    {"text": "He who lives by the crystal ball will eat shattered glass.", "author": "Ray Dalio"},
+    {"text": "Cash is the worst investment over time.", "author": "Ray Dalio"},
+    {"text": "The biggest mistake investors make is to believe that what happened in the recent past is likely to persist.", "author": "Ray Dalio"},
+    {"text": "Do not look for the needle in the haystack. Just buy the haystack.", "author": "Jack Bogle"},
+    {"text": "The single greatest edge an investor can have is a long-term orientation.", "author": "Seth Klarman"},
+    {"text": "Know what you own, and know why you own it.", "author": "Peter Lynch"},
+    {"text": "More money has been lost trying to anticipate corrections than in corrections themselves.", "author": "Peter Lynch"},
+    {"text": "It is not whether you are right or wrong, but how much money you make when you are right and how much you lose when you are wrong.", "author": "George Soros"},
+    {"text": "The four most expensive words in the English language are: this time it is different.", "author": "John Templeton"},
+    {"text": "The investor's chief problem, and even his worst enemy, is likely to be himself.", "author": "Benjamin Graham"},
+    {"text": "Being too far ahead of your time is indistinguishable from being wrong.", "author": "Howard Marks"},
+    {"text": "Never invest in the present. The present is well known. You have to look two years ahead.", "author": "Stanley Druckenmiller"},
+    {"text": "The most important investment you can make is in yourself.", "author": "Warren Buffett"}
+  ]
+}

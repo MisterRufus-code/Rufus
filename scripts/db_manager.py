@@ -25,16 +25,31 @@ def init_db():
     with _conn() as c:
         c.execute("""
             CREATE TABLE IF NOT EXISTS videos (
-                id          INTEGER PRIMARY KEY AUTOINCREMENT,
-                upload_date TEXT    DEFAULT (date('now')),
-                niche       TEXT,
-                script_hook TEXT,
-                scene_desc  TEXT,
-                youtube_id  TEXT,
-                video_file  TEXT,
-                score       INTEGER DEFAULT 0
+                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                upload_date  TEXT    DEFAULT (date('now')),
+                niche        TEXT,
+                script_hook  TEXT,
+                script_full  TEXT,
+                scene_desc   TEXT,
+                seed_type    TEXT,
+                seed_source  TEXT,
+                seed_content TEXT,
+                youtube_id   TEXT,
+                video_file   TEXT,
+                score        INTEGER DEFAULT 0
             )
         """)
+        # Idempotent migration for older DBs missing the new columns
+        for ddl in (
+            "ALTER TABLE videos ADD COLUMN script_full TEXT",
+            "ALTER TABLE videos ADD COLUMN seed_type TEXT",
+            "ALTER TABLE videos ADD COLUMN seed_source TEXT",
+            "ALTER TABLE videos ADD COLUMN seed_content TEXT",
+        ):
+            try:
+                c.execute(ddl)
+            except Exception:
+                pass  # column already exists
         c.execute("""
             CREATE TABLE IF NOT EXISTS metrics (
                 id         INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -51,12 +66,20 @@ def init_db():
 
 
 def save_video(niche: str, script_hook: str, scene_desc: str,
-               video_file: str, youtube_id: str = None, score: int = 0) -> int:
+               video_file: str, youtube_id: str = None, score: int = 0,
+               script_full: str = None,
+               seed_type: str = None, seed_source: str = None,
+               seed_content: str = None) -> int:
     with _conn() as c:
         cur = c.execute(
-            "INSERT INTO videos (niche, script_hook, scene_desc, youtube_id, video_file, score) "
-            "VALUES (?,?,?,?,?,?)",
-            (niche, script_hook, scene_desc, youtube_id, video_file, score),
+            "INSERT INTO videos "
+            "(niche, script_hook, script_full, scene_desc, "
+            " seed_type, seed_source, seed_content, "
+            " youtube_id, video_file, score) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?)",
+            (niche, script_hook, script_full, scene_desc,
+             seed_type, seed_source, seed_content,
+             youtube_id, video_file, score),
         )
         return cur.lastrowid
 

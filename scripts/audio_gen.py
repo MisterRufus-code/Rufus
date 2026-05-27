@@ -1,11 +1,17 @@
 #!/usr/bin/env python3
-"""Rufus – Autonomous Shorts Renderer (v2.1)"""
+"""Rufus – Autonomous Shorts Renderer (v2.2)
+
+Changes from v2.1:
+- No riser SFX (sounded like a siren)
+- 1 word per subtitle cluster (Hormozi style)
+- Multi-clip rendering: all candidate videos cut together inside one Short
+- MAX_DUR raised to 60.0 (YouTube Shorts hard cap) — value content needs the room
+"""
 
 import argparse
 import asyncio
 import json
 import os
-import random
 import subprocess
 import sys
 import time
@@ -17,20 +23,12 @@ from faster_whisper import WhisperModel
 ROOT       = Path(__file__).parent.parent
 CONFIG_DIR = ROOT / "config"
 
-_RISER_TEMPLATES = [
-    # Standard: sine sweep 180→500 Hz
-    "aevalsrc=sin(2*PI*(180+320*t/{dur:.3f})*t)*0.20*(t/{dur:.3f}):s=44100:d={dur:.3f}",
-    # Tension: 120→400 Hz, non-linear amplitude build
-    "aevalsrc=sin(2*PI*(120+280*t/{dur:.3f})*t)*0.18*(t/{dur:.3f})^1.5:s=44100:d={dur:.3f}",
-    # High-energy: 220→700 Hz with a harmonic overtone
-    "aevalsrc=(sin(2*PI*(220+480*t/{dur:.3f})*t)+0.25*sin(4*PI*(220+480*t/{dur:.3f})*t))*0.14*(t/{dur:.3f}):s=44100:d={dur:.3f}",
-]
-
 VOICE        = "en-US-ChristopherNeural"
 W, H         = 1080, 1920
 FPS          = 30
-MAX_DUR      = 57.0
-CLUSTER_SIZE = 2        # words per subtitle cluster
+MAX_DUR      = 60.0     # YouTube Shorts hard cap
+MIN_DUR      = 30.0     # below this, value content feels rushed
+CLUSTER_SIZE = 1        # 1 word at a time — Hormozi style
 
 # Hormozi palette: white → yellow → green
 COLOURS  = ["&H00FFFFFF", "&H0000FFFF", "&H0000FF00"]
@@ -120,30 +118,33 @@ async def _tts(script: str, mp3_path: Path) -> None:
     await comm.save(str(mp3_path))
 
 
-# ── Riser SFX ───────────────────────────────────────────────────────────────────
-
-def _add_riser(mp3_path: Path, duration: float) -> Path:
-    out      = mp3_path.with_name(mp3_path.stem + "_mix.mp3")
-    template = random.choice(_RISER_TEMPLATES)
-    riser    = template.format(dur=duration)
-    subprocess.run(
-        [
-            "ffmpeg", "-y", "-loglevel", "error",
-            "-i", str(mp3_path),
-            "-f", "lavfi", "-i", riser,
-            "-filter_complex", "[0][1]amix=inputs=2:duration=first:weights=1 0.3",
-            str(out),
-        ],
-        check=True,
-    )
-    return out
-
-
 # ── Renderer ────────────────────────────────────────────────────────────────────
 
-def render(script: str, bg_path: Path, out_dir: Path) -> Path:
-    if not Path(bg_path).exists():
-        raise FileNotFoundError(f"Background video not found: {bg_path}")
+def _video_filter_complex(
+    n: int, over_w: int, over_h: int, pad_y: int,
+    seg_dur: float, eq_filter: str, ass_esc: str,
+) -> str:
+    """Build FFmpeg filter_complex for N clips: Ken Burns per clip → concat → grade → subtitles."""
+    parts = []
+    for i in range(n):
+        parts.append(
+            f"[{i}:v]scale={over_w}:{over_h}:force_original_aspect_ratio=increase,"
+            f"crop={W}:{H}:({over_w}-{W})*t/{seg_dur:.3f}:{pad_y},"
+            f"setsar=1[v{i}]"
+        )
+    concat_inputs = "".join(f"[v{i}]" for i in range(n))
+    parts.append(f"{concat_inputs}concat=n={n}:v=1:a=0[vraw]")
+    parts.append(f"[vraw]{eq_filter},vignette=PI/4,ass='{ass_esc}'[vout]")
+    return ";\n".join(parts)
+
+
+def render(script: str, bg_paths: "Path | list[Path]", out_dir: Path) -> Path:
+    # Accept a single path or a list
+    if isinstance(bg_paths, Path):
+        bg_paths = [bg_paths]
+    bg_paths = [Path(p) for p in bg_paths if Path(p).exists()]
+    if not bg_paths:
+        raise FileNotFoundError("No valid background video files found")
 
     niche_cfg = _load_niche()
     eq_filter = niche_cfg.get("ffmpeg_eq", "eq=contrast=1.1:saturation=1.0")
@@ -154,7 +155,6 @@ def render(script: str, bg_path: Path, out_dir: Path) -> Path:
 
     stamp     = int(time.time())
     mp3       = tmp_dir / f"{stamp}.mp3"
-    mix       = tmp_dir / f"{stamp}_mix.mp3"
     ass       = tmp_dir / f"{stamp}.ass"
     out       = out_dir / f"short_{stamp}.mp4"
     audio_src = mp3
@@ -173,53 +173,42 @@ def render(script: str, bg_path: Path, out_dir: Path) -> Path:
 
         audio_dur = max((w.end for seg in segments for w in seg.words), default=0)
         audio_dur = min(max(audio_dur + 0.3, 1.0), MAX_DUR)
+        if audio_dur < MIN_DUR:
+            print(f"      ⚠ audio is only {audio_dur:.1f}s — value content target is ≥{MIN_DUR:.0f}s")
 
         # 3. Subtitles (clipped to audio_dur)
         print("[3/4] Building subtitles…")
         build_ass(segments, ass, audio_dur)
 
-        # Riser (non-fatal)
-        try:
-            mix       = _add_riser(mp3, audio_dur)
-            audio_src = mix
-            print("      Riser SFX added ✓")
-        except Exception as e:
-            print(f"      Riser skipped ({e})")
+        # 4. FFmpeg render — multi-clip concat
+        n        = len(bg_paths)
+        seg_dur  = audio_dur / n
+        over_w   = int(W * 1.10)
+        over_h   = int(H * 1.10)
+        pad_y    = (over_h - H) // 2
+        ass_esc  = str(ass).replace("\\", "/")
+        print(f"[4/4] Rendering {n} clip{'s' if n > 1 else ''} → {audio_dur:.1f}s ({seg_dur:.1f}s each)…")
 
-        # 4. FFmpeg render
-        print("[4/4] Rendering video…")
+        fc = _video_filter_complex(n, over_w, over_h, pad_y, seg_dur, eq_filter, ass_esc)
 
-        over_w    = int(W * 1.10)
-        over_h    = int(H * 1.10)
-        pad_y     = (over_h - H) // 2
-        ass_esc   = str(ass).replace("\\", "/")
-
-        vf = (
-            f"scale={over_w}:{over_h}:force_original_aspect_ratio=increase,"
-            f"crop={W}:{H}:({over_w}-{W})*t/{audio_dur:.3f}:{pad_y},"
-            f"setsar=1,"
-            f"{eq_filter},"
-            f"vignette=PI/4,"
-            f"ass='{ass_esc}'"
-        )
-
-        subprocess.run(
-            [
-                "ffmpeg", "-y", "-loglevel", "error",
-                "-stream_loop", "-1", "-i", str(bg_path),
-                "-i", str(audio_src),
-                "-t", f"{audio_dur:.3f}",
-                "-vf", vf,
-                "-c:v", "libx264", "-preset", "fast", "-crf", "20",
-                "-c:a", "aac", "-b:a", "128k",
-                "-r", str(FPS), "-pix_fmt", "yuv420p",
-                str(out),
-            ],
-            check=True,
-        )
+        cmd = ["ffmpeg", "-y", "-loglevel", "error"]
+        for bg in bg_paths:
+            cmd += ["-stream_loop", "-1", "-t", f"{seg_dur:.3f}", "-i", str(bg)]
+        cmd += ["-i", str(audio_src)]
+        cmd += [
+            "-filter_complex", fc,
+            "-map", "[vout]",
+            "-map", f"{n}:a",
+            "-t", f"{audio_dur:.3f}",
+            "-c:v", "libx264", "-preset", "fast", "-crf", "20",
+            "-c:a", "aac", "-b:a", "128k",
+            "-r", str(FPS), "-pix_fmt", "yuv420p",
+            str(out),
+        ]
+        subprocess.run(cmd, check=True)
 
     finally:
-        for f in (mp3, mix, ass):
+        for f in (mp3, ass):
             try:
                 Path(f).unlink(missing_ok=True)
             except Exception:
