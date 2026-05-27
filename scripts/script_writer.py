@@ -12,6 +12,7 @@ Architecture:
 
 import json
 import os
+import random
 import re
 import sys
 from pathlib import Path
@@ -83,6 +84,12 @@ def _load_gold_examples(niche_name: str) -> list[dict]:
     return data.get(niche_name, [])
 
 
+def _pick_cta(niche_cfg: dict) -> str:
+    """Pick a random CTA from the niche's cta_pool so videos don't all end identically."""
+    pool = niche_cfg.get("cta_pool") or [niche_cfg.get("cta", "Follow for more.")]
+    return random.choice(pool)
+
+
 def _seed_block(seed: dict) -> str:
     if not seed:
         return ""
@@ -115,10 +122,9 @@ def _build_gold_block(examples: list[dict]) -> str:
     return "\n".join(lines)
 
 
-def _build_system(niche_cfg: dict, niche_name: str) -> str:
+def _build_system(niche_cfg: dict, niche_name: str, cta: str) -> str:
     gold_examples = _load_gold_examples(niche_name)
     gold_block    = _build_gold_block(gold_examples)
-    cta           = niche_cfg.get("cta", "Follow for more.")
     niche_context = niche_cfg.get("gpt_system", "")
 
     return f"""You are the most exacting short-form script writer working today.
@@ -143,11 +149,14 @@ BODY: Every sentence either adds evidence or builds tension. Nothing can be cut 
 SECOND-TO-LAST LINE (LOOP): A question or reframing that makes the viewer want to go back to line 1. This is what drives replays.
 LAST LINE (CTA): Always exactly this, on its own line: "{cta}"
 
+ANTI-HALLUCINATION (HARD RULE):
+Never invent: a person's first name, a dollar amount, a percentage, a date, a company-specific event, or a quote that is not in the source material. If the source is only a scene description with no concrete facts, restrict yourself to well-documented historical truths (e.g. "the S&P 500 has never been negative over any 20-year rolling period") or to widely-attributed quotes from named historical figures you are 100% certain said them. When uncertain, remove the specific. Vague-but-true is always better than specific-and-invented.
+
 HARD RULES:
 - {MIN_WORDS}-{MAX_WORDS} words total
 - Real attribution when source is a quote: weave the author into the body naturally
 - Never use: "here's why", "the truth is", "let me tell you", "imagine this", "in this video", "did you know", "what if I told you", "most people don't know", "nobody talks about"
-- Never invent a statistic, number, or quote not in the source
+- Never use placeholder names (John, Sarah, Mike, Alex) as if they were real people
 - Output ONLY the script text. No labels. No "Here is the script:". No quotes around it.
 {gold_block}"""
 
@@ -223,7 +232,8 @@ def _score(client: OpenAI, script: str, seed: dict) -> tuple[int, str]:
         f"□ Hook (first line) is longer than {HOOK_MAX_WORDS} words\n"
         "□ Hook starts with: Did you know / Have you ever / I want to / Let me / Imagine / What if\n"
         "□ Script contains banned phrases: 'here's why', 'the truth is', 'let me tell you', 'most people', 'nobody talks about', 'what if I told you'\n"
-        "□ Script invents a fact, number, or quote not present in the source material\n"
+        "□ Script invents a person, dollar amount, percentage, or date not present in the source material\n"
+        "□ Script uses a placeholder name (John/Sarah/Mike/Alex) as if it were a real person\n"
         "□ Script contains zero specifics (no name, number, date, or verbatim detail from source)\n\n"
         "STEP 2 — SCORE EACH CRITERION (only if no disqualifiers):\n"
         "SPECIFICITY 0-3: Does the script use real details from source (names, numbers, dates, direct facts)? 0=invented/vague, 1=one weak specific, 2=several, 3=every claim grounded in source\n"
@@ -272,7 +282,11 @@ def write_script(scene_description: str, seed: dict | None = None) -> str:
     if analysis:
         print(f"[gpt] analysis:\n{analysis}")
 
-    system = _build_system(niche, active)
+    # Random CTA from the niche's pool — picked once, used by all attempts
+    cta = _pick_cta(niche)
+    print(f"[gpt] cta: {cta}")
+
+    system = _build_system(niche, active, cta)
 
     winning_hooks = learnings.get("winning_hooks", [])[:3]
     avoid_hooks   = learnings.get("losing_hooks",  [])[:3]
@@ -282,7 +296,6 @@ def write_script(scene_description: str, seed: dict | None = None) -> str:
     if avoid_hooks:
         hook_hint += f"\nHook patterns to avoid: {avoid_hooks}"
 
-    cta      = niche["cta"]
     seed_blk = _seed_block(seed) if seed else ""
     base_usr = (
         f"{seed_blk}\n"
@@ -377,6 +390,14 @@ if __name__ == "__main__":
     if len(sys.argv) < 2:
         print("Usage: python script_writer.py '<scene description>'")
         sys.exit(1)
-    desc   = " ".join(sys.argv[1:])
-    script = write_script(desc)
+    desc = " ".join(sys.argv[1:])
+
+    # CLI mode auto-fetches a real seed so the writer never hallucinates from
+    # an empty source (which is how invented people like "John lost $50k" appear).
+    sys.path.insert(0, str(Path(__file__).parent))
+    from research import get_seed
+    print("[cli] fetching real seed (Reddit first, wisdom fallback)...")
+    seed = get_seed()
+
+    script = write_script(desc, seed=seed)
     print(f"\n{'='*60}\nSCRIPT:\n{script}\n{'='*60}")

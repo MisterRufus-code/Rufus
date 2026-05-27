@@ -14,6 +14,15 @@
       "gpt_system": "You write finance YouTube Shorts that deliver real value. Audience: people who want to build wealth, not get-rich-quick types. Tone: tired expert who has seen the same mistakes for decades. Quote real investors when relevant (Buffett, Munger, Bogle, Lynch). Use specific numbers and historical examples. No motivational fluff.",
       "hook_styles": ["shocking_stat", "counterintuitive", "warning"],
       "cta": "Follow for daily wealth tactics.",
+      "cta_pool": [
+        "Follow for daily wealth tactics.",
+        "Save this. Re-read in five years.",
+        "Send this to someone still picking stocks.",
+        "Follow if you actually want to be early.",
+        "Save this for the next dip.",
+        "More finance reality next post.",
+        "Save this before the next crash."
+      ],
       "ffmpeg_eq": "eq=contrast=1.15:saturation=0.85:gamma=1.05",
       "youtube_category_id": "25"
     },
@@ -30,6 +39,15 @@
       "gpt_system": "You write motivational Shorts grounded in real philosophy and real stories. Audience: people who are tired of empty motivation. Reference Stoics (Marcus Aurelius, Seneca, Epictetus) or operators (Goggins, Jocko, athletes) when the source supports it. No generic 'never give up' lines. The viewer should feel called out, not pumped up.",
       "hook_styles": ["personal_challenge", "hard_truth"],
       "cta": "Save this. Watch it when you want to quit.",
+      "cta_pool": [
+        "Save this. Watch it when you want to quit.",
+        "Read this when the work feels pointless.",
+        "Send this to someone who needs it.",
+        "Follow if you are not done yet.",
+        "Save this for the next 4am alarm.",
+        "Save it. Use it when you want to stop.",
+        "Send this to the person grinding alone."
+      ],
       "ffmpeg_eq": "eq=contrast=1.2:brightness=0.03:saturation=1.4:gamma=0.9",
       "youtube_category_id": "22"
     },
@@ -46,6 +64,15 @@
       "gpt_system": "You write psychology Shorts that reveal real insights about how minds work. Audience: people who think. Reference real thinkers (Jung, Frankl, Kahneman, Marcus Aurelius) and real studies. Make viewers reconsider an assumption they've held. No generic 'mindset' fluff.",
       "hook_styles": ["counterintuitive", "psychology_fact"],
       "cta": "This is why 1% think differently.",
+      "cta_pool": [
+        "This is why 1% think differently.",
+        "Follow if you read between lines.",
+        "Save this for the next argument with yourself.",
+        "Share this with someone who overthinks.",
+        "Save it. Re-read in a month.",
+        "Follow for ideas worth sitting with.",
+        "Send this to someone still asleep."
+      ],
       "ffmpeg_eq": "eq=contrast=1.05:saturation=0.75:gamma=1.1",
       "youtube_category_id": "27"
     },
@@ -62,6 +89,15 @@
       "gpt_system": "You write business Shorts for operators who have actually run a business. Tactics over theory. Real examples from real founders (Bezos, Jobs, Hormozi, Thiel, Graham) when the source supports it. Specific numbers, real failures, real lessons. No 'mindset' fluff.",
       "hook_styles": ["tactical_insight", "mistake_warning"],
       "cta": "Save this. Build something.",
+      "cta_pool": [
+        "Save this. Build something.",
+        "Follow for the next playbook.",
+        "Send this to your co-founder.",
+        "Save this before your next product decision.",
+        "Follow if you actually ship.",
+        "Save it. Re-read before launch.",
+        "Send this to someone still planning."
+      ],
       "ffmpeg_eq": "eq=contrast=1.1:saturation=1.0",
       "youtube_category_id": "27"
     },
@@ -78,6 +114,15 @@
       "gpt_system": "You write personal-development Shorts grounded in real systems. Audience: people who already read James Clear, Cal Newport, Naval. One concrete idea per video, with a specific action the viewer can take today. Reference real authors when the source supports it. No generic self-help speak.",
       "hook_styles": ["habit_hack", "identity_shift"],
       "cta": "Do this tomorrow morning.",
+      "cta_pool": [
+        "Do this tomorrow morning.",
+        "Save this. Try it for seven days.",
+        "Follow for one habit a day.",
+        "Send this to someone starting over.",
+        "Save this for Monday morning.",
+        "Pick one thing. Do it tomorrow.",
+        "Save it. Re-read when you slip."
+      ],
       "ffmpeg_eq": "eq=contrast=1.08:saturation=1.1:gamma=1.0",
       "youtube_category_id": "27"
     }
