@@ -152,6 +152,12 @@ LAST LINE (CTA): Always exactly this, on its own line: "{cta}"
 ANTI-HALLUCINATION (HARD RULE):
 Never invent: a person's first name, a dollar amount, a percentage, a date, a company-specific event, or a quote that is not in the source material. If the source is only a scene description with no concrete facts, restrict yourself to well-documented historical truths (e.g. "the S&P 500 has never been negative over any 20-year rolling period") or to widely-attributed quotes from named historical figures you are 100% certain said them. When uncertain, remove the specific. Vague-but-true is always better than specific-and-invented.
 
+NARRATION VOICE (HARD RULE):
+The script will be voiced by a creator who is NOT the person in the source material. Narrate in THIRD person, always.
+- For Reddit stories: "A Reddit user in r/FIRE saved $2.4 million by 38…" or "Someone on r/personalfinance just shared…" — never "I saved" or "my portfolio".
+- For quotes: refer to the named author. "Buffett has owned Coca-Cola since 1988…" not "I bought Coca-Cola…".
+- The viewer must always understand: the creator is REPORTING the story, not confessing it. Never put words in the creator's mouth.
+
 HARD RULES:
 - {MIN_WORDS}-{MAX_WORDS} words total
 - Real attribution when source is a quote: weave the author into the body naturally
@@ -234,6 +240,7 @@ def _score(client: OpenAI, script: str, seed: dict) -> tuple[int, str]:
         "□ Script contains banned phrases: 'here's why', 'the truth is', 'let me tell you', 'most people', 'nobody talks about', 'what if I told you'\n"
         "□ Script invents a person, dollar amount, percentage, or date not present in the source material\n"
         "□ Script uses a placeholder name (John/Sarah/Mike/Alex) as if it were a real person\n"
+        "□ Script adopts first-person voice of someone in the source (e.g. 'I saved', 'my portfolio') when the source is a Reddit story or someone else's quote — the creator is reporting, not confessing\n"
         "□ Script contains zero specifics (no name, number, date, or verbatim detail from source)\n\n"
         "STEP 2 — SCORE EACH CRITERION (only if no disqualifiers):\n"
         "SPECIFICITY 0-3: Does the script use real details from source (names, numbers, dates, direct facts)? 0=invented/vague, 1=one weak specific, 2=several, 3=every claim grounded in source\n"
@@ -274,8 +281,8 @@ def write_script(scene_description: str, seed: dict | None = None) -> str:
     learnings     = _load_learnings()
 
     if seed:
-        tag = f"r/{seed.get('source', '')}" if seed.get("type") == "reddit" else seed.get("source", "Unknown")
-        print(f"[gpt] seed: {seed.get('type', '?')} from {tag}")
+        # seed['source'] already includes the "r/" prefix for reddit type
+        print(f"[gpt] seed: {seed.get('type', '?')} from {seed.get('source', 'Unknown')}")
 
     # Pre-analysis: extract hook angle, core claim, loop line before writing
     analysis = _pre_analyze(client, seed, scene_description)
