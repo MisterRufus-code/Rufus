@@ -91,7 +91,7 @@ class TestSynthesizeSections:
     def test_sections_synthesized_in_order(self, tmp_path):
         from src.tts import kokoro
         calls = []
-        def fake_synth(text, path, voice, speed):
+        def fake_synth(text, path, voice, speed, **kwargs):
             calls.append(text)
             path.write_bytes(b"x")
             return path

@@ -44,9 +44,9 @@ class TestFetchRedditHot:
         from src.trends import fetch_reddit_hot
         fake_json = {
             "data": {"children": [
-                {"data": {"title": "How I saved $10k in one year"}},
-                {"data": {"title": "[Meta] moderator post"}},  # should be skipped
-                {"data": {"title": "Best passive income strategies 2024"}},
+                {"data": {"title": "How I saved $10k in one year", "score": 100}},
+                {"data": {"title": "[Meta] moderator post", "score": 50}},  # should be skipped
+                {"data": {"title": "Best passive income strategies 2024", "score": 200}},
             ]}
         }
         mock_resp = MagicMock()

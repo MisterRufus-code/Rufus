@@ -44,7 +44,9 @@ class TestAssetPointId:
 
 class TestFaissStore:
     @pytest.fixture
-    def store(self):
+    def store(self, tmp_path, monkeypatch):
+        # Redirect to an empty temp dir so tests don't touch the production index
+        monkeypatch.setattr(FaissStore, "_STORE_DIR", str(tmp_path / "faiss_store"))
         return FaissStore()
 
     def test_empty_search_returns_empty(self, store):
