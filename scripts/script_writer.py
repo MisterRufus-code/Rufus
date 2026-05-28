@@ -729,9 +729,10 @@ def write_script(scene_description: str, seed: dict | None = None) -> dict:
         f"{seed_blk}\n"
         f"Background scene: {scene_description}\n\n"
         f"PRE-ANALYSIS:\n{analysis}\n\n"
-        f"WINNING HOOK (line 1 must be this exact line): \"{winning_hook}\"\n\n"
-        f"Write the body. Word count: {std['body']['min_words']}-{std['body']['max_words']} words total. "
-        f"End with this exact line: \"{cta}\""
+        f"Write the COMPLETE SCRIPT — all lines from hook through CTA.\n"
+        f"Line 1 must be exactly: {winning_hook}\n"
+        f"Total word count: {std['body']['min_words']}-{std['body']['max_words']} words.\n"
+        f"Last line must be exactly: {cta}"
     )
 
     temps = std["scoring"]["body_temperatures"]
@@ -745,22 +746,65 @@ def write_script(scene_description: str, seed: dict | None = None) -> dict:
     for attempt in range(1, max_attempts + 1):
         temp = temps[min(attempt - 1, len(temps) - 1)]
 
-        # Retry pressure
-        push = "" if attempt == 1 else (
-            f"\n\nAttempt {attempt}: Previous score {best['score']}/10. "
-            "Cut every sentence that only reports. Keep only sentences that reveal a contradiction, "
-            "name a specific, or build tension. The loop line MUST share a content word with the hook."
-        )
+        # Retry pressure — escalate based on what failed
+        if attempt == 1:
+            push = ""
+        else:
+            last_reject = ""  # populated below if prior attempt was pre-rejected
+            crit_note = (
+                f" (prev score {best['score']}/10 — "
+                f"spec={best['crits'].get('specificity','?')}, "
+                f"hook={best['crits'].get('hook','?')}, "
+                f"loop={best['crits'].get('loop','?')})"
+                if best["score"] > 0 else ""
+            )
+            push = (
+                f"\n\nAttempt {attempt}{crit_note}. "
+                "Cut every sentence that only reports. Keep only sentences that REVEAL, NAME A SPECIFIC, or BUILD TENSION. "
+                "The second-to-last line MUST echo a word from the hook. "
+                "The COMPLETE SCRIPT is required — hook on line 1, body, then CTA on the last line."
+            )
 
         script, c, ms, p_toks, c_toks = _generate(client, system, base_usr + push,
                                                   model=body_model, temperature=temp)
         total_cost += c
 
-        # Force the hook onto line 1 (LLMs occasionally rephrase despite the rule)
+        # Detect echo-only: model returned only the hook line (or nothing)
+        # This happens when an imperative hook word ("Stop scrolling!") causes early stop
+        # or the model misreads "write the body" as "write the non-hook portion only".
+        hook_words_n = len(winning_hook.split())
+        if len(script.split()) <= hook_words_n + 3:
+            echo_push = (
+                "\n\nCRITICAL: You must output AT LEAST 80 words. "
+                "Write the COMPLETE SCRIPT — hook as line 1, then body sentences, then CTA. "
+                "Do not output only the first line."
+            )
+            print(f"[gpt] attempt {attempt}/{max_attempts} – echo-only ({len(script.split())} words), forcing full script")
+            log_attempt({
+                "run_id": run_id, "niche": active,
+                "seed_type": seed.get("type") if seed else None,
+                "phase": "body_gen", "attempt_n": attempt,
+                "model": body_model, "temperature": temp,
+                "hook": winning_hook, "body": script,
+                "rejected_reason": f"echo-only ({len(script.split())} words)",
+                "accepted": False, "cost_usd": c, "ms": ms,
+            })
+            # Retry immediately with forced instruction (same attempt slot, higher temp)
+            script, c2, ms2, p_toks, c_toks = _generate(
+                client, system, base_usr + echo_push, model=body_model,
+                temperature=min(temp + 0.2, 1.2))
+            total_cost += c2
+            ms += ms2
+            c  += c2
+
+        # Ensure hook is on line 1 — INSERT if missing (don't replace a body line)
         lines = [l.strip() for l in script.split("\n") if l.strip()]
-        if lines and lines[0].strip().strip('"').strip("'") != winning_hook.strip().strip('"').strip("'"):
-            lines[0] = winning_hook
-            script = "\n".join(lines)
+        if lines:
+            hook_clean = winning_hook.strip().strip('"').strip("'")
+            if lines[0].strip().strip('"').strip("'") != hook_clean:
+                # Hook not on line 1: insert at top (body-only output or rephrase)
+                lines.insert(0, winning_hook)
+                script = "\n".join(lines)
 
         # Pre-score regex rejections (cheap)
         rejection = _find_banned(script) and f"banned phrase: '{_find_banned(script)}'"
