@@ -33,14 +33,20 @@ USED_SEEDS_FILE  = CONFIG_DIR / "used_seeds.json"
 MAX_USED_HISTORY = 500  # cap to avoid unbounded growth
 
 REDDIT_HEADERS = {
-    "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) Gecko/20100101 Firefox/123.0 rufus-research/1.0",
-    "Accept":     "application/json",
+    "User-Agent":      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+    "Accept":          "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Accept-Encoding": "gzip, deflate, br",
+    "Cache-Control":   "no-cache",
+    "DNT":             "1",
 }
 REDDIT_TIMEOUT  = 10.0
+# old.reddit.com .json is the most permissive endpoint for cloud IPs.
+# www.reddit.com .json sometimes works; api.reddit.com is the most aggressive blocker.
 REDDIT_ENDPOINTS = [
-    "https://www.reddit.com/r/{sub}/hot.json?limit={lim}",
-    "https://old.reddit.com/r/{sub}/hot.json?limit={lim}",
-    "https://api.reddit.com/r/{sub}/hot?limit={lim}",
+    "https://old.reddit.com/r/{sub}/hot.json?limit={lim}&raw_json=1",
+    "https://www.reddit.com/r/{sub}/hot.json?limit={lim}&raw_json=1",
+    "https://old.reddit.com/r/{sub}/top.json?limit={lim}&t=week&raw_json=1",
 ]
 
 # Quality thresholds for Reddit posts
@@ -66,6 +72,19 @@ TITLE_DISCUSSION_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Title patterns that signal off-topic content regardless of niche.
+# Dating/relationship/food/parenting posts slip through story filters via past-tense verbs
+# ("learned", "discovered") but have no niche-relevant content.
+TITLE_OFFTOPIC_RE = re.compile(
+    r"\b(dating|relationship|boyfriend|girlfriend|romance|"
+    r"marriage|divorce|breakup|hookup|tinder|crush|"
+    r"recipe|cooking|baking|meal|diet|nutrition|weight loss|"
+    r"fashion|beauty|makeup|skincare|"
+    r"pregnancy|parenting|baby|toddler|kids|"
+    r"pets|dog|cat|hamster|gaming|minecraft|fortnite)\b",
+    re.IGNORECASE,
+)
+
 # Title patterns that signal a STORY (concrete event, gold for Shorts).
 # A post must match at least one of these to pass quality filter.
 TITLE_STORY_RE = re.compile(
@@ -82,9 +101,9 @@ TITLE_STORY_RE = re.compile(
 # ── Hacker News config ───────────────────────────────────────────────────────────
 
 HN_TIMEOUT      = 10.0
-HN_MIN_POINTS   = 300
-HN_MIN_COMMENTS = 50
-HN_MIN_TEXT_LEN = 200
+HN_MIN_POINTS   = 100   # lowered – HN posts compete with each other, 100+ is solid
+HN_MIN_COMMENTS = 20    # lowered – many great Ask HN posts have 20-50 comments
+HN_MIN_TEXT_LEN = 150   # lowered – some HN posts are short but punchy
 HN_MAX_TEXT_LEN = 3000
 
 # Niches that map well to HN's intellectual, founder-heavy audience.
@@ -198,6 +217,8 @@ def _passes_quality_filter(post: dict) -> bool:
         return False
     if TITLE_DISCUSSION_RE.search(title):
         return False
+    if TITLE_OFFTOPIC_RE.search(title):
+        return False
     if not TITLE_STORY_RE.search(title):
         return False
     return True
@@ -275,6 +296,7 @@ def fetch_hackernews_story(niche_name: str, used_ids: set | None = None) -> dict
             print(f"[research] HN fetch error: {e}")
 
     if not all_hits:
+        print(f"[research] HN: no hits returned for niche '{niche_name}'")
         return None
 
     def _hn_url(hit: dict) -> str:
@@ -291,6 +313,7 @@ def fetch_hackernews_story(niche_name: str, used_ids: set | None = None) -> dict
         and _hn_item_id(h) not in used_ids
     ]
     if not quality:
+        print(f"[research] HN: {len(all_hits)} hits but none passed quality filter (points>{HN_MIN_POINTS}, comments>{HN_MIN_COMMENTS}, text {HN_MIN_TEXT_LEN}-{HN_MAX_TEXT_LEN} chars, not already used)")
         return None
 
     # Deduplicate by objectID (both endpoints can return same story)
@@ -319,7 +342,11 @@ def pick_wisdom_quote(niche_name: str, used_ids: set | None = None) -> dict | No
     f = WISDOM_DIR / f"{niche_name}.json"
     if not f.exists():
         return None
-    data = json.loads(f.read_text())
+    try:
+        data = json.loads(f.read_text())
+    except Exception as e:
+        print(f"[research] WARNING: could not parse {f.name}: {e}")
+        return None
     quotes = data.get("quotes", [])
     if not quotes:
         return None

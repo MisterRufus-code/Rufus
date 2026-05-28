@@ -7,6 +7,7 @@ Downloads background videos for the active niche.
 """
 
 import json
+import os
 import random
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -27,7 +28,7 @@ MIN_FILE_SIZE = 100_000   # 100 KB minimum – reject corrupt/tiny downloads
 
 def _load_niche():
     data   = json.loads(NICHES_FILE.read_text())
-    active = data["active"]
+    active = os.environ.get("RUFUS_NICHE_OVERRIDE") or data["active"]
     return data["niches"][active], active
 
 
@@ -284,7 +285,13 @@ def fetch_candidates(n: int = 5) -> list[Path]:
                 candidates.append(result)
 
     if not candidates:
-        raise RuntimeError("Could not fetch any candidate videos.")
+        # Fallback: reuse any mp4 already in the niche cache rather than hard-crashing.
+        cached = sorted((CACHE_DIR / active).glob("*.mp4"), key=lambda p: p.stat().st_mtime, reverse=True)
+        cached = [p for p in cached if p.stat().st_size >= MIN_FILE_SIZE]
+        if cached:
+            print(f"[media] all sources failed — reusing {min(n, len(cached))} cached video(s)")
+            return cached[:n]
+        raise RuntimeError("Could not fetch any candidate videos and no cache available.")
 
     return candidates
 

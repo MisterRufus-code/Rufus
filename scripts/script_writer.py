@@ -181,7 +181,8 @@ Build the hook around the SHARPEST contradiction in the source. If the source ha
 HARD RULES:
 - {MIN_WORDS}-{MAX_WORDS} words total
 - Real attribution when source is a quote: weave the author into the body naturally
-- Never use: "here's why", "the truth is", "let me tell you", "imagine this", "in this video", "did you know", "what if I told you", "most people don't know", "nobody talks about"
+- HOOK must NOT open with "A Reddit user", "Someone", "A person" — lead with the number, name, or contradiction itself. Wrong: "A Reddit user saved $2.4M." Right: "$2.4M by 38. Still scared to retire."
+- Never use: "picture this", "here's why", "the truth is", "let me tell you", "imagine this", "in this video", "did you know", "what if I told you", "most people don't know", "nobody talks about", "buckle up", "let's dive in", "game-changer", "unlock", "skyrocket", "leverage", "delve", "dive deep", "paradigm", "journey", "landscape", "crucial", "vital", "actionable"
 - Never use placeholder names (John, Sarah, Mike, Alex) as if they were real people
 - Output ONLY the script text. No labels. No "Here is the script:". No quotes around it.
 {gold_block}"""
@@ -256,20 +257,43 @@ def _score(client: OpenAI, script: str, seed: dict) -> tuple[int, str]:
     forces structured evaluation; scorer temperature is 0.0 to eliminate guessing).
     """
     seed_text = (seed.get("content", "") or "")[:500] if seed else ""
+    seed_type = (seed.get("type") or "unknown") if seed else "unknown"
+    is_wisdom = seed_type in ("wisdom",)
+
+    # Wisdom seeds are abstract quotes — the writer MUST add historical context.
+    # Penalizing that context as "invented" destroys the score unfairly.
+    invented_disqualifier = (
+        "□ Script invents fictional characters or made-up people not verifiable as real historical figures\n"
+        "   NOTE: For this quote-based seed, well-documented historical facts (market returns, verified dates,\n"
+        "   real investor track records) are EXPECTED and are NOT invented — only flag made-up people or fake events.\n"
+        if is_wisdom else
+        "□ Script invents a person, dollar amount, percentage, or date not present in the source material\n"
+    )
+
+    specificity_criterion = (
+        "SPECIFICITY 0-3: Does the script ground claims in real, verifiable history? "
+        "For a quote-based seed, well-documented facts (e.g. S&P 500 returns, historical crashes, "
+        "verified investor records, named authors' biographies) ARE the specifics — they illustrate the quote. "
+        "0=vague generalities only, 1=one real historical fact, 2=several verifiable facts, 3=every claim historically grounded\n"
+        if is_wisdom else
+        "SPECIFICITY 0-3: Does the script use real details from source (names, numbers, dates, direct facts)? "
+        "0=invented/vague, 1=one weak specific, 2=several, 3=every claim grounded in source\n"
+    )
+
     prompt = (
         f"SCRIPT TO EVALUATE:\n\"{script}\"\n\n"
-        f"SOURCE IT WAS BASED ON:\n\"{seed_text}\"\n\n"
+        f"SOURCE IT WAS BASED ON ({seed_type} seed):\n\"{seed_text}\"\n\n"
         "You are a ruthless short-form content editor. Protect the audience from mediocre content.\n\n"
         "STEP 1 — AUTOMATIC DISQUALIFIERS (any one = final score ≤ 4, stop evaluating further):\n"
         f"□ Hook (first line) is longer than {HOOK_MAX_WORDS} words\n"
-        "□ Hook starts with: Did you know / Have you ever / I want to / Let me / Imagine / What if\n"
-        "□ Script contains banned phrases: 'here's why', 'the truth is', 'let me tell you', 'most people', 'nobody talks about', 'what if I told you'\n"
-        "□ Script invents a person, dollar amount, percentage, or date not present in the source material\n"
+        "□ Hook starts with: Did you know / Have you ever / I want to / Let me / Imagine / Picture this / What if / A Reddit user / Someone\n"
+        "□ Script contains banned phrases: 'picture this', 'here's why', 'the truth is', 'let me tell you', 'most people', 'nobody talks about', 'what if I told you', 'buckle up', 'game-changer', 'paradigm', 'journey'\n"
+        + invented_disqualifier +
         "□ Script uses a placeholder name (John/Sarah/Mike/Alex) as if it were a real person\n"
         "□ Script adopts first-person voice of someone in the source (e.g. 'I saved', 'my portfolio') when the source is a Reddit story or someone else's quote — the creator is reporting, not confessing\n"
-        "□ Script contains zero specifics (no name, number, date, or verbatim detail from source)\n\n"
+        "□ Script contains zero specifics (no name, number, date, or verbatim detail from source or history)\n\n"
         "STEP 2 — SCORE EACH CRITERION (only if no disqualifiers):\n"
-        "SPECIFICITY 0-3: Does the script use real details from source (names, numbers, dates, direct facts)? 0=invented/vague, 1=one weak specific, 2=several, 3=every claim grounded in source\n"
+        + specificity_criterion +
         "HOOK 0-2: First line ≤10 words? Creates a question the brain cannot answer without watching? Uses a specific? 0=generic/setup, 1=decent, 2=irresistible\n"
         "COMPRESSION 0-2: Every sentence earns its place. No filler, no hedging, no setup. 0=padded, 1=mostly tight, 2=every word counts\n"
         "LOOP 0-2: Second-to-last line connects back to hook, makes viewer want to replay from start. 0=absent/weak, 1=decent, 2=precise and powerful\n"

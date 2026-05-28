@@ -12,6 +12,7 @@ import argparse
 import asyncio
 import json
 import os
+import random
 import subprocess
 import sys
 import time
@@ -125,11 +126,18 @@ def _video_filter_complex(
     seg_dur: float, eq_filter: str, ass_esc: str,
 ) -> str:
     """Build FFmpeg filter_complex for N clips: Ken Burns per clip → concat → grade → subtitles."""
+    # Ken Burns directions: alternate between 4 motion types so consecutive clips look different.
+    # x_exprs: left→right, right→left
+    # y_exprs: fixed center, slow tilt down, slow tilt up
+    x_exprs = [f"({over_w}-{W})*t/{seg_dur:.3f}", f"({over_w}-{W})*(1-t/{seg_dur:.3f})"]
+    y_exprs = [str(pad_y), f"({over_h}-{H})*t/{seg_dur:.3f}", f"({over_h}-{H})*(1-t/{seg_dur:.3f})"]
     parts = []
     for i in range(n):
+        pan_x = x_exprs[i % len(x_exprs)]           # alternates L→R, R→L per clip
+        pan_y = y_exprs[i % len(y_exprs)]            # cycles center, down, up per clip
         parts.append(
             f"[{i}:v]scale={over_w}:{over_h}:force_original_aspect_ratio=increase,"
-            f"crop={W}:{H}:({over_w}-{W})*t/{seg_dur:.3f}:{pad_y},"
+            f"crop={W}:{H}:{pan_x}:{pan_y},"
             f"setsar=1[v{i}]"
         )
     concat_inputs = "".join(f"[v{i}]" for i in range(n))
