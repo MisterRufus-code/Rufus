@@ -494,7 +494,9 @@ def _build_system(niche_cfg: dict, niche_name: str, cta: str, hook: str) -> str:
     niche_context = niche_cfg.get("gpt_system", "")
     std           = _standards()
     body          = std["body"]
-    banned_short  = ", ".join(f"'{p}'" for p in std["banned_phrases"][:20])
+    banned_all    = ", ".join(f"'{p}'" for p in std["banned_phrases"])
+    opinion_all   = ", ".join(std["opinion_pool"])
+    hedging_all   = ", ".join(std["hedging_words"])
 
     return f"""You are the most exacting short-form script writer working today.
 Your standard: if a line does not earn its place, cut it. If a word is vague, replace it with something specific.
@@ -518,7 +520,7 @@ LINE 1 (HOOK): USE EXACTLY THIS LINE, DO NOT REWRITE OR REPHRASE IT:
 BODY ({body['min_words']}-{body['max_words']} words total including hook and CTA):
 - Every sentence either adds evidence or builds tension. No filler.
 - Use specific names, numbers, dates, dollar amounts. At least one specific per 25 words.
-- Include at least one strong opinion word (worst/wrong/smartest/scared/ruined/broken/secret/lie/etc.).
+- OPINION WORD (required): body must contain at least one of these exact words: {opinion_all}
 
 SECOND-TO-LAST LINE (LOOP):
 A question or restatement that SHARES AT LEAST ONE CONTENT WORD with the hook. This drives replays.
@@ -529,10 +531,10 @@ LAST LINE (CTA): Always exactly this, on its own line:
 ANTI-HALLUCINATION:
 Never invent: a person's first name, dollar amount, percentage, date, or company event not in the source. For wisdom seeds, well-documented historical facts (S&P returns, named historical figures' biographies) ARE allowed — they illustrate the quote.
 
-BANNED PHRASES — automatic rejection if any appear:
-{banned_short} (and others — never use motivational filler or AI-essay openers)
+BANNED PHRASES — every one of these causes automatic rejection, no exceptions:
+{banned_all}
 
-HEDGING — never use: maybe, perhaps, could be, might be, kind of, sort of, possibly, probably.
+HEDGING — never use any of: {hedging_all}
 
 Output ONLY the script text. No labels. No "Here is the script:". No quotes around it.
 {gold_block}"""
@@ -724,7 +726,10 @@ def write_script(scene_description: str, seed: dict | None = None) -> dict:
 
     # ── Phase C: body generation ──────────────────────────────────────────────
     system = _build_system(niche, active, cta, winning_hook)
-    seed_blk = _seed_block(seed) if seed else ""
+    seed_blk       = _seed_block(seed) if seed else ""
+    hook_tokens    = _content_tokens(winning_hook)
+    hook_token_str = ", ".join(sorted(hook_tokens)) or "(none)"
+    opinion_all    = ", ".join(std["opinion_pool"])
     base_usr = (
         f"{seed_blk}\n"
         f"Background scene: {scene_description}\n\n"
@@ -732,13 +737,16 @@ def write_script(scene_description: str, seed: dict | None = None) -> dict:
         f"Write the COMPLETE SCRIPT — all lines from hook through CTA.\n"
         f"Line 1 must be exactly: {winning_hook}\n"
         f"Total word count: {std['body']['min_words']}-{std['body']['max_words']} words.\n"
+        f"Second-to-last line (LOOP) must contain at least one of these words from the hook: {hook_token_str}\n"
+        f"Body must contain at least one of these opinion words: {opinion_all}\n"
         f"Last line must be exactly: {cta}"
     )
 
     temps = std["scoring"]["body_temperatures"]
-    max_attempts = std["scoring"]["max_body_attempts"]
-    score_min    = std["scoring"]["score_min"]
-    body_model   = std["models"]["body_gen"]
+    max_attempts  = std["scoring"]["max_body_attempts"]
+    score_min     = std["scoring"]["score_min"]
+    body_model    = std["models"]["body_gen"]
+    last_rejection = ""  # tracks what failed in the previous attempt
 
     best = {"script": "", "score": 0, "crits": {}, "reasoning": "",
             "temperature": temps[0], "attempt_n": 0}
@@ -750,7 +758,6 @@ def write_script(scene_description: str, seed: dict | None = None) -> dict:
         if attempt == 1:
             push = ""
         else:
-            last_reject = ""  # populated below if prior attempt was pre-rejected
             crit_note = (
                 f" (prev score {best['score']}/10 — "
                 f"spec={best['crits'].get('specificity','?')}, "
@@ -758,10 +765,31 @@ def write_script(scene_description: str, seed: dict | None = None) -> dict:
                 f"loop={best['crits'].get('loop','?')})"
                 if best["score"] > 0 else ""
             )
+            # Specific correction based on exactly what failed last time
+            specific_fix = ""
+            if last_rejection.startswith("banned"):
+                bad_phrase = last_rejection.split("'")[1] if "'" in last_rejection else ""
+                specific_fix = (
+                    f" CRITICAL: Your previous script used '{bad_phrase}' — that phrase is BANNED."
+                    f" Do not use it or any variation of it."
+                )
+            elif "loop no echo" in last_rejection:
+                specific_fix = (
+                    f" CRITICAL: Your second-to-last line must contain at least one of: {hook_token_str}."
+                    f" Quote or echo a word from the hook: '{winning_hook}'"
+                )
+            elif "opinion word" in last_rejection:
+                specific_fix = (
+                    f" CRITICAL: Your body had no opinion word. Use at least one of: {opinion_all}."
+                )
+            elif "hedging" in last_rejection:
+                bad_hedge = last_rejection.split("'")[1] if "'" in last_rejection else ""
+                specific_fix = f" CRITICAL: Remove '{bad_hedge}' — no hedging language allowed."
+            elif "too short" in last_rejection:
+                specific_fix = f" CRITICAL: Write at least {std['body']['min_words']} words total."
             push = (
-                f"\n\nAttempt {attempt}{crit_note}. "
-                "Cut every sentence that only reports. Keep only sentences that REVEAL, NAME A SPECIFIC, or BUILD TENSION. "
-                "The second-to-last line MUST echo a word from the hook. "
+                f"\n\nAttempt {attempt}{crit_note}.{specific_fix} "
+                "Keep only sentences that REVEAL, NAME A SPECIFIC, or BUILD TENSION. "
                 "The COMPLETE SCRIPT is required — hook on line 1, body, then CTA on the last line."
             )
 
@@ -812,6 +840,7 @@ def write_script(scene_description: str, seed: dict | None = None) -> dict:
             rejection = _body_pre_check(script)
 
         if rejection:
+            last_rejection = rejection  # carry forward to next attempt's push
             print(f"[gpt] attempt {attempt}/{max_attempts} – rejected ({rejection})")
             save_attempt(run_id=run_id, niche=active,
                          seed_type=seed.get("type") if seed else None,
@@ -831,6 +860,7 @@ def write_script(scene_description: str, seed: dict | None = None) -> dict:
             })
             continue
 
+        last_rejection = ""  # passed pre-filter
         # LLM scoring
         total, crits, reasoning, sc_cost, sc_ms = _score(
             client, script, seed, winning_hook, run_id, active)
