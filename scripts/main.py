@@ -146,15 +146,19 @@ def run(skip_upload: bool = False, niche_override: str = None):
     # ── Step 4: Write script from seed + scene ─────────────────────────────────
     print("[ 4 / 7 ]  Writing script with GPT...")
     try:
-        script = write_script(scene, seed=seed)
+        result = write_script(scene, seed=seed)
+        script = result["script"]
 
         if check_blacklist(script):
             print("           ⚠ Similar script already used – regenerating...")
-            script = write_script(scene + " (make it different from previous versions)", seed=seed)
+            result = write_script(scene + " (make it different from previous versions)", seed=seed)
+            script = result["script"]
 
         add_to_blacklist(script)
         preview = script[:100] + "..." if len(script) > 100 else script
-        print(f"           → {preview}\n")
+        print(f"           → {preview}")
+        print(f"           → score {result['score']}/10  attempts={result['attempts_used']}  "
+              f"cost=${result['cost_usd']:.4f}\n")
     except Exception as e:
         print(f"           ✗ Step 4 failed: {e}")
         sys.exit(1)
@@ -182,6 +186,12 @@ def run(skip_upload: bool = False, niche_override: str = None):
             seed_type=seed.get("type"),
             seed_source=seed.get("source"),
             seed_content=(seed.get("content", "") or "")[:1000],
+            run_id=result.get("run_id"),
+            score=result.get("score", 0),
+            criterion_scores=result.get("criterion_scores"),
+            attempts_used=result.get("attempts_used"),
+            final_temperature=result.get("final_temperature"),
+            score_reasoning=(result.get("reasoning") or "")[:2000],
         )
         print(f"           → saved (id={db_id})\n")
     except Exception as e:

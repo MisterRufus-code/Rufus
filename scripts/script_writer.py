@@ -1,13 +1,16 @@
 #!/usr/bin/env python3
 """
-script_writer.py
-Writes a value-focused Shorts script from real seed material + scene description.
+script_writer.py — Hook-first Shorts script writer.
 
-Architecture:
-  1. Pre-analysis pass (gpt-4o-mini, 120 tokens) — identifies hook angle, core claim, loop line
-  2. Write pass (gpt-4o, 300 tokens) — full script using analysis + gold examples + niche context
-  3. Scorer (gpt-4o, chain-of-thought) — 5-criterion rubric with hard disqualifiers
-  4. Up to 4 attempts, keep best ≥ 8/10
+Three-phase architecture:
+  A. Hook factory   — 8 hook candidates (gpt-4o-mini, temp 1.0)
+  B. Hook scorer    — regex pre-filter + LLM scoring → pick winner
+  C. Body generator — gpt-4o conditioned on the winning hook, up to 3 attempts
+
+Standards live in config/script_standards.json (single source of truth).
+Every attempt is logged: logs/scripts/YYYYMMDD.jsonl + script_attempts table.
+
+Returns: (script, run_id, score, criterion_scores, attempts_used, final_temperature, reasoning)
 """
 
 import json
@@ -15,9 +18,15 @@ import os
 import random
 import re
 import sys
+import time
 from pathlib import Path
 
 from openai import OpenAI
+
+# Local imports
+sys.path.insert(0, str(Path(__file__).parent))
+from script_logger import new_run_id, log_attempt, estimate_cost
+from db_manager    import save_attempt
 
 CONFIG_DIR          = Path(__file__).parent.parent / "config"
 NICHES_FILE         = CONFIG_DIR / "niches.json"
@@ -25,36 +34,18 @@ KEYS_FILE           = CONFIG_DIR / "keys.json"
 BLACKLIST_FILE      = CONFIG_DIR / "blacklist.json"
 LEARNINGS_FILE      = CONFIG_DIR / "learnings.json"
 GOLD_EXAMPLES_FILE  = CONFIG_DIR / "gold_examples.json"
+STANDARDS_FILE      = CONFIG_DIR / "script_standards.json"
 
-BANNED_PHRASES = [
-    # Creator-slop openers
-    "buckle up", "let's dive in", "let me tell you", "imagine this", "picture this",
-    "here's the thing", "here's why", "the truth is", "let's talk about",
-    "in this video", "in today's video", "in today's world",
-    "did you know", "have you ever", "what if i told you",
-    "most people don't know", "nobody talks about", "the secret is",
-    "one simple trick", "this changes everything",
-    # Motivational filler
-    "game-changer", "game changer", "unlock", "skyrocket", "leverage",
-    "dive deep", "delve", "revolutionize", "groundbreaking", "cutting-edge",
-    "seamlessly", "robust", "empower", "synergy", "hustle harder",
-    # Corporate buzzwords
-    "it's important to note", "at the end of the day", "paradigm", "disrupt",
-    "journey", "navigating", "landscape", "crucial", "vital", "actionable",
-    # Hedging
-    "in many ways", "in some sense", "you could argue",
-    # AI essay structure
-    "first and foremost", "moreover", "furthermore", "in conclusion",
-    "to sum up", "all in all", "having said that",
-    # Moralizing openers
-    "remember", "always remember", "never forget",
-]
 
-SCORE_MIN    = 8     # ruthless — only genuinely strong scripts pass
-MAX_ATTEMPTS = 4
-MIN_WORDS    = 80    # 35-50s at ~150wpm
-MAX_WORDS    = 130
-HOOK_MAX_WORDS = 10  # hooks over 10 words are rejected before scoring
+# ── Standards loader ────────────────────────────────────────────────────────────
+
+_standards_cache: dict | None = None
+
+def _standards() -> dict:
+    global _standards_cache
+    if _standards_cache is None:
+        _standards_cache = json.loads(STANDARDS_FILE.read_text())
+    return _standards_cache
 
 
 def _load_niche():
@@ -85,7 +76,6 @@ def _load_gold_examples(niche_name: str) -> list[dict]:
 
 
 def _pick_cta(niche_cfg: dict) -> str:
-    """Pick a random CTA from the niche's cta_pool so videos don't all end identically."""
     pool = niche_cfg.get("cta_pool") or [niche_cfg.get("cta", "Follow for more.")]
     return random.choice(pool)
 
@@ -99,6 +89,12 @@ def _seed_block(seed: dict) -> str:
             f"Subreddit: {seed.get('source', '')}\n"
             f"Title:     {seed.get('title', '')}\n"
             f"Story:     {seed.get('content', '')}\n"
+        )
+    if seed.get("type") == "hackernews":
+        return (
+            "SOURCE MATERIAL (real Hacker News post):\n"
+            f"Title:     {seed.get('title', '')}\n"
+            f"Body:      {seed.get('content', '')}\n"
         )
     if seed.get("type") == "wisdom":
         return (
@@ -122,352 +118,747 @@ def _build_gold_block(examples: list[dict]) -> str:
     return "\n".join(lines)
 
 
-def _build_system(niche_cfg: dict, niche_name: str, cta: str) -> str:
-    gold_examples = _load_gold_examples(niche_name)
-    gold_block    = _build_gold_block(gold_examples)
-    niche_context = niche_cfg.get("gpt_system", "")
+# ── Regex pre-filters (deterministic, free) ─────────────────────────────────────
 
-    return f"""You are the most exacting short-form script writer working today.
-Your standard: if a line does not earn its place, cut it. If a word is vague, replace it with something specific. If the hook doesn't create a cognitive itch the brain cannot ignore, rewrite it.
-
-NICHE:
-{niche_context}
-
-YOUR JOB:
-You are given REAL source material. Your job is to compress and sharpen it into a 35-50 second YouTube Short. You do not invent. You do not generalize. You use what is in the source.
-
-VOICE:
-- Sound like someone who has been in this field for 20 years and is slightly impatient with people who haven't figured this out yet.
-- Specific always beats vague. A name beats "someone". A number beats "many". A year beats "recently".
-- Short sentences — but not robotic fragments. Vary rhythm deliberately to create punch.
-- Never moralize. Never summarize. Never explain the point. Trust the audience.
-- Attribution is natural: not "Buffett said 'price is what you pay'" but "Buffett has owned Coca-Cola since 1988."
-
-STRUCTURE — NON-NEGOTIABLE:
-LINE 1 (HOOK): ≤{HOOK_MAX_WORDS} words. Creates a cognitive open loop — a question the brain cannot rest until it answers. Anchors on a specific person, number, or verifiable fact. No setup. No "did you know". No "I want to talk about". No "have you ever".
-BODY: Every sentence either adds evidence or builds tension. Nothing can be cut without losing meaning. If the source has a name, number, date, or direct fact — it belongs in the body.
-SECOND-TO-LAST LINE (LOOP): A question or reframing that makes the viewer want to go back to line 1. This is what drives replays.
-LAST LINE (CTA): Always exactly this, on its own line: "{cta}"
-
-ANTI-HALLUCINATION (HARD RULE):
-Never invent: a person's first name, a dollar amount, a percentage, a date, a company-specific event, or a quote that is not in the source material. If the source is only a scene description with no concrete facts, restrict yourself to well-documented historical truths (e.g. "the S&P 500 has never been negative over any 20-year rolling period") or to widely-attributed quotes from named historical figures you are 100% certain said them. When uncertain, remove the specific. Vague-but-true is always better than specific-and-invented.
-
-NARRATION VOICE (HARD RULE):
-The script will be voiced by a creator who is NOT the person in the source material.
-- HOOK (line 1 ONLY): can be a punchy fact-led fragment. NO explicit attribution needed. Examples: "$2.4 million by 38. Still scared to retire." or "He ran 100 miles on two broken feet." The "who" is revealed in line 2 or 3.
-- BODY (line 2+): third person, with clear attribution by line 3 at latest. "A Reddit user on r/FIRE broke down their portfolio…" Never first-person impersonation.
-- The viewer must understand by line 3 that this is a real person's story being reported, not the creator's confession.
-
-HOOK STRENGTH — what separates a 2/2 hook from a 1/2 hook:
-The weak version reports the FACT. The strong version reveals the CONTRADICTION inside the fact. The brain ignores facts. It cannot ignore a contradiction.
-
-Weak (1/2): "A Reddit user saved $2.4 million by 38."
-Strong (2/2): "$2.4 million by 38. Still scared to retire."
-
-Weak: "Buffett has owned Coca-Cola since 1988."
-Strong: "Buffett's worst trade made him $25 billion."
-
-Weak: "Seneca wrote about anxiety 2000 years ago."
-Strong: "Seneca solved your anxiety 2000 years ago."
-
-Weak: "Goggins ran a hundred miles."
-Strong: "He ran 100 miles on two broken feet."
-
-Weak: "Jung studied projection."
-Strong: "Your loudest opinions are confessions in disguise."
-
-Build the hook around the SHARPEST contradiction in the source. If the source has no contradiction, find the unexpected number, the unexpected pairing, or the gap between expectation and reality.
-
-HARD RULES:
-- {MIN_WORDS}-{MAX_WORDS} words total
-- Real attribution when source is a quote: weave the author into the body naturally
-- HOOK must NOT open with "A Reddit user", "Someone", "A person" — lead with the number, name, or contradiction itself. Wrong: "A Reddit user saved $2.4M." Right: "$2.4M by 38. Still scared to retire."
-- Never use: "picture this", "here's why", "the truth is", "let me tell you", "imagine this", "in this video", "did you know", "what if I told you", "most people don't know", "nobody talks about", "buckle up", "let's dive in", "game-changer", "unlock", "skyrocket", "leverage", "delve", "dive deep", "paradigm", "journey", "landscape", "crucial", "vital", "actionable"
-- Never use placeholder names (John, Sarah, Mike, Alex) as if they were real people
-- Output ONLY the script text. No labels. No "Here is the script:". No quotes around it.
-{gold_block}"""
+# Match a "specific": digit-run, dollar amount, year, or proper noun (capitalized
+# word not at sentence start). We approximate by matching any CapWord — the LLM
+# rubric still judges authenticity.
+_SPECIFIC_RE = re.compile(r"\$[\d,]+|\d+|\b[A-Z][a-z]+")
+_SENTENCE_RE = re.compile(r"[^.!?]+[.!?]")
 
 
-def _pre_analyze(client: OpenAI, seed: dict, scene: str) -> str:
-    """Fast pre-pass: identify hook angle, core claim, and loop line before writing.
+def _word_tokens(text: str) -> list[str]:
+    return re.findall(r"[A-Za-z']+", text.lower())
 
-    Wisdom seeds get a biographical-research prompt (220 tokens) — they need real
-    facts from the author's life, not abstract contradiction-spotting.
-    Reddit/HN seeds use the original fact-extraction prompt (120 tokens).
-    """
+
+def _content_tokens(text: str) -> set[str]:
+    stopwords = set(_standards()["stopwords"])
+    return {w for w in _word_tokens(text) if w not in stopwords and len(w) > 2}
+
+
+def _find_banned(script: str) -> str | None:
+    text = script.lower()
+    for phrase in _standards()["banned_phrases"]:
+        if re.search(r"\b" + re.escape(phrase.lower()) + r"\b", text):
+            return phrase
+    return None
+
+
+def _find_hedging(script: str) -> str | None:
+    text = script.lower()
+    for phrase in _standards()["hedging_words"]:
+        if re.search(r"\b" + re.escape(phrase.lower()) + r"\b", text):
+            return phrase
+    return None
+
+
+def _hook_pre_check(hook: str) -> str | None:
+    """Return rejection reason or None. Deterministic gate before LLM scoring."""
+    h     = hook.strip().strip('"').strip("'")
+    h_low = h.lower()
+    n     = len(h.split())
+    hs    = _standards()["hook"]
+    if n < hs["min_words"]:
+        return f"hook too short ({n} words, need ≥{hs['min_words']})"
+    if n > hs["hard_max_words"]:
+        return f"hook too long ({n} words, hard cap {hs['hard_max_words']})"
+    for bad in hs["forbidden_openers"]:
+        if h_low.startswith(bad):
+            return f"forbidden opener: '{bad}'"
+    if (b := _find_banned(h)):
+        return f"banned phrase in hook: '{b}'"
+    return None
+
+
+def _specificity_density(text: str) -> float:
+    """Specifics per 25 words. ≥1.0 means the body is grounded."""
+    words = len(_word_tokens(text))
+    if words == 0:
+        return 0.0
+    specs = len(_SPECIFIC_RE.findall(text))
+    return specs / max(words / 25.0, 1.0)
+
+
+def _sentence_stats(text: str) -> tuple[float, int]:
+    """Return (avg_words_per_sentence, num_sentences)."""
+    sentences = [s.strip() for s in _SENTENCE_RE.findall(text) if s.strip()]
+    if not sentences:
+        return 0.0, 0
+    word_counts = [len(s.split()) for s in sentences]
+    return sum(word_counts) / len(sentences), len(sentences)
+
+
+def _loop_echoes_hook(script: str) -> tuple[bool, set[str]]:
+    """Return (echoes, shared_content_tokens). Loop = second-to-last non-empty line."""
+    lines = [l.strip() for l in script.strip().split("\n") if l.strip()]
+    if len(lines) < 3:
+        return False, set()
+    hook_tokens = _content_tokens(lines[0])
+    loop_tokens = _content_tokens(lines[-2])  # second-to-last (last is CTA)
+    shared = hook_tokens & loop_tokens
+    needed = _standards()["loop"]["min_shared_content_tokens"]
+    return len(shared) >= needed, shared
+
+
+def _has_opinion_word(text: str) -> bool:
+    text_lower = text.lower()
+    return any(re.search(r"\b" + re.escape(w) + r"\b", text_lower)
+               for w in _standards()["opinion_pool"])
+
+
+def _body_pre_check(script: str) -> str | None:
+    """Return rejection reason or None for the full body. Runs AFTER banned check."""
+    body = _standards()["body"]
+    words = len(script.split())
+    if words < body["min_words"]:
+        return f"too short ({words} words, need ≥{body['min_words']})"
+    if words > body["max_words"]:
+        return f"too long ({words} words, cap {body['max_words']})"
+
+    density = _specificity_density(script)
+    if density < body["specificity_per_25_words"]:
+        return f"low specificity ({density:.2f}/25w, need ≥{body['specificity_per_25_words']})"
+
+    avg, n = _sentence_stats(script)
+    if n < 3:
+        return f"too few sentences ({n})"
+    if avg > body["max_avg_sentence_words"]:
+        return f"sentences too long (avg {avg:.1f} words, cap {body['max_avg_sentence_words']})"
+    if avg < body["min_avg_sentence_words"]:
+        return f"sentences too short (avg {avg:.1f} words, floor {body['min_avg_sentence_words']})"
+
+    echoes, _ = _loop_echoes_hook(script)
+    if not echoes:
+        return "loop no echo (second-to-last line shares no content tokens with hook)"
+
+    if not _has_opinion_word(script):
+        return "no opinion word (need ≥1 from opinion_pool)"
+
+    if (h := _find_hedging(script)):
+        return f"hedging word: '{h}'"
+
+    return None
+
+
+# ── Pre-analysis ────────────────────────────────────────────────────────────────
+
+def _pre_analyze(client: OpenAI, seed: dict, scene: str, run_id: str,
+                 niche: str) -> tuple[str, float]:
+    """Cheap pre-pass: extract hook angle + structural cues. Returns (text, cost)."""
     is_wisdom = seed and seed.get("type") == "wisdom"
+    model     = _standards()["models"]["pre_analyze"]
 
     if is_wisdom:
         quote  = seed.get("content", "")
         author = seed.get("source", "Unknown")
         prompt = (
-            f"QUOTE: \"{quote}\"\n"
-            f"AUTHOR: {author}\n\n"
+            f"QUOTE: \"{quote}\"\nAUTHOR: {author}\n\n"
             "You are a historical researcher finding hook material for a 40-second YouTube Short.\n\n"
             "1. BIOGRAPHICAL FACT: One real, verifiable fact about this person's life that PROVES the quote through their actions. "
-            "Must be concrete — include a number, year, event, or documented outcome. "
-            "Example for Aurelius 'Be one': 'Governed 50 million people for 19 years. Meditations were private notes — never meant for publication.'\n"
-            "2. BEHAVIOR CONDEMNED: What specific thing do most people do that this quote calls wrong? One sentence. Be precise.\n"
-            "3. PARADOX: Format as 'Most people [X]. This quote reveals [Y instead].' Must be counterintuitive.\n"
-            "4. HOOK LINE: ≤10 words. Lead with the BIOGRAPHICAL FACT — not the quote text itself. "
-            "Strong: 'He governed 50 million people. Left zero published philosophy.' "
-            "Weak: 'A Stoic philosopher said something about virtue.'\n"
-            "5. LOOP LINE: One question for the second-to-last line that makes viewers want to replay from line 1.\n\n"
+            "Must be concrete — include a number, year, event, or documented outcome.\n"
+            "2. BEHAVIOR CONDEMNED: What specific thing do most people do that this quote calls wrong? One sentence.\n"
+            "3. PARADOX: 'Most people [X]. This quote reveals [Y instead].' Must be counterintuitive.\n"
+            "4. HOOK ANGLE: One ≤8-word seed phrase that leads with the BIOGRAPHICAL FACT — not the quote text.\n"
+            "5. LOOP ANGLE: One question for the second-to-last line that makes viewers want to replay from line 1.\n\n"
             "Reply ONLY with these 5 numbered items. No full script."
         )
         max_toks = 220
     else:
         seed_blk = _seed_block(seed) if seed else f"Scene description: {scene}"
         prompt = (
-            f"{seed_blk}\n"
-            f"Background scene: {scene}\n\n"
-            "Before writing the script, find these four things in the source. Use REAL details from the source — no invention.\n\n"
-            "1. CONTRADICTION: What is the surprising contradiction, paradox, or unexpected pairing in this source? "
-            "(e.g. 'rich but scared', 'worst trade made him richest'). "
-            "One sentence. This is what makes the story worth watching.\n"
-            "2. HOOK: Write line 1 as a punchy fact-led fragment ≤10 words that surfaces the contradiction. "
-            "DO NOT start with 'A Reddit user' or 'Someone'. Lead with the number/name/contradiction. "
-            "Example weak: 'A Reddit user saved $2.4 million by 38.' "
-            "Example strong: '$2.4 million by 38. Still scared to retire.'\n"
-            "3. CORE: The one insight this source proves. One sentence. Specific and bold.\n"
-            "4. LOOP: A question or restatement of the hook for the second-to-last line. One sentence.\n\n"
-            "Reply with ONLY these 4 numbered items. Do not write the full script."
+            f"{seed_blk}\nBackground scene: {scene}\n\n"
+            "Before writing the script, find these four things in the source. Use REAL details — no invention.\n\n"
+            "1. CONTRADICTION: One sentence — the surprising paradox in this source.\n"
+            "2. HOOK ANGLE: One ≤8-word seed phrase. Lead with the number/name/contradiction. "
+            "Wrong: 'A Reddit user saved $2.4M.' Right: '$2.4M by 38. Still scared to retire.'\n"
+            "3. CORE: One sentence — the insight this source proves.\n"
+            "4. LOOP ANGLE: One question for the second-to-last line.\n\n"
+            "Reply with ONLY these 4 numbered items. No full script."
         )
-        max_toks = 120
+        max_toks = 140
 
     try:
+        t0 = time.time()
         resp = client.chat.completions.create(
-            model="gpt-4o-mini",
+            model=model,
             messages=[{"role": "user", "content": prompt}],
             temperature=0.3,
             max_tokens=max_toks,
         )
-        return resp.choices[0].message.content.strip()
-    except Exception:
-        return ""
+        ms = int((time.time() - t0) * 1000)
+        usage = resp.usage
+        cost = estimate_cost(model, usage.prompt_tokens, usage.completion_tokens)
+        text = resp.choices[0].message.content.strip()
+        log_attempt({
+            "run_id": run_id, "niche": niche,
+            "seed_type": seed.get("type") if seed else None,
+            "phase": "pre_analyze", "attempt_n": 0,
+            "model": model, "temperature": 0.3,
+            "prompt_tokens": usage.prompt_tokens,
+            "completion_tokens": usage.completion_tokens,
+            "cost_usd": cost, "ms": ms, "body": text, "accepted": True,
+        })
+        return text, cost
+    except Exception as e:
+        print(f"[gpt] pre-analyze failed: {e}")
+        return "", 0.0
 
 
-def _generate(client: OpenAI, system: str, user: str, temperature: float = 0.9) -> str:
+# ── Phase A: Hook factory ───────────────────────────────────────────────────────
+
+def _hook_factory(client: OpenAI, seed: dict, analysis: str, niche_name: str,
+                  niche_cfg: dict, run_id: str, temperature: float = None,
+                  model: str = None) -> tuple[list[str], float]:
+    """Generate N hook candidates as a numbered list. Returns (hooks, cost_usd)."""
+    std       = _standards()
+    n_hooks   = std["scoring"]["hook_candidates"]
+    temperature = temperature if temperature is not None else std["scoring"]["hook_temperature"]
+    model     = model or std["models"]["hook_gen"]
+    hs        = std["hook"]
+    seed_blk  = _seed_block(seed) if seed else ""
+
+    forbidden_str = ", ".join(f"'{x}'" for x in hs["forbidden_openers"][:8])
+
+    prompt = (
+        f"{seed_blk}\n"
+        f"NICHE: {niche_name}\n"
+        f"PRE-ANALYSIS:\n{analysis}\n\n"
+        f"Generate exactly {n_hooks} numbered HOOK LINES for a YouTube Short.\n\n"
+        f"HOOK RULES — every line must obey ALL of these:\n"
+        f"- Length: {hs['min_words']}–{hs['max_words']} words (HARD CAP {hs['hard_max_words']})\n"
+        f"- Must contain at least one of: a number, a dollar amount, a proper noun (real person/place), or a year\n"
+        f"- Must surface a contradiction, paradox, or pattern interrupt — not a report\n"
+        f"- Must NOT start with any of: {forbidden_str}\n"
+        f"- Must NOT use vague generalities — every word earns its place\n\n"
+        f"Each of the {n_hooks} hooks should attack the source from a DIFFERENT angle:\n"
+        "1. Number-first  (e.g. '$2.4M by 38. Still scared to retire.')\n"
+        "2. Name-first    (e.g. 'Buffett's worst trade made him $25B.')\n"
+        "3. Time-first    (e.g. '2,000 years ago, Seneca solved your anxiety.')\n"
+        "4. Identity hit  (e.g. 'You're not disciplined. You're scared.')\n"
+        "5. Counter-claim (e.g. 'The richest investors never beat the market.')\n"
+        "6. Pattern break (e.g. 'Stop scrolling. This is the trade that broke Buffett.')\n"
+        "7. Question      (e.g. 'Why do most lottery winners go broke?')\n"
+        "8. Confession    (e.g. 'I made $2.4M and still cried at night.')\n\n"
+        f"Output FORMAT — exactly one hook per line, numbered 1-{n_hooks}, no commentary:\n"
+        f"1. <hook>\n2. <hook>\n...\n{n_hooks}. <hook>"
+    )
+
+    t0 = time.time()
     resp = client.chat.completions.create(
-        model="gpt-4o",
+        model=model,
+        messages=[{"role": "user", "content": prompt}],
+        temperature=temperature,
+        max_tokens=400,
+    )
+    ms    = int((time.time() - t0) * 1000)
+    usage = resp.usage
+    cost  = estimate_cost(model, usage.prompt_tokens, usage.completion_tokens)
+    raw   = resp.choices[0].message.content.strip()
+
+    hooks: list[str] = []
+    for line in raw.split("\n"):
+        m = re.match(r"^\s*(\d+)[.):]\s*(.+)$", line.strip())
+        if m:
+            hook = m.group(2).strip().strip('"').strip("'")
+            if hook:
+                hooks.append(hook)
+
+    log_attempt({
+        "run_id": run_id, "niche": niche_name,
+        "seed_type": seed.get("type") if seed else None,
+        "phase": "hook_gen", "attempt_n": 1,
+        "model": model, "temperature": temperature,
+        "prompt_tokens": usage.prompt_tokens,
+        "completion_tokens": usage.completion_tokens,
+        "cost_usd": cost, "ms": ms,
+        "body": raw, "n_hooks_parsed": len(hooks),
+    })
+    return hooks, cost
+
+
+# ── Phase B: Hook scorer ────────────────────────────────────────────────────────
+
+def _hook_scorer(client: OpenAI, hooks: list[str], seed: dict, niche_name: str,
+                 run_id: str) -> tuple[int, float, str, float]:
+    """Score hooks (regex pre-filter then LLM). Returns (winner_idx, score, reason, cost)."""
+    std       = _standards()
+    model     = std["models"]["hook_score"]
+    seed_text = (seed.get("content") or "")[:300] if seed else ""
+
+    # 1. Regex pre-filter
+    survivors: list[tuple[int, str]] = []
+    for i, h in enumerate(hooks):
+        reason = _hook_pre_check(h)
+        if reason:
+            save_attempt(run_id=run_id, niche=niche_name,
+                         seed_type=seed.get("type") if seed else None,
+                         phase="hook_gen", attempt_n=i + 1,
+                         hook=h, rejected_reason=reason, accepted=False)
+            log_attempt({
+                "run_id": run_id, "niche": niche_name, "phase": "hook_filter",
+                "attempt_n": i + 1, "hook": h, "rejected_reason": reason,
+                "accepted": False,
+            })
+        else:
+            survivors.append((i, h))
+
+    if len(survivors) < std["scoring"]["min_surviving_hooks"]:
+        return -1, 0, f"only {len(survivors)} hook(s) passed regex pre-filter", 0.0
+
+    # 2. LLM scoring (one call, JSON return)
+    numbered = "\n".join(f"{i+1}. {h}" for i, (_, h) in enumerate(survivors))
+    prompt = (
+        f"You are a viral YouTube Shorts editor. Score these hook candidates 0-10 each.\n\n"
+        f"SOURCE: \"{seed_text}\"\n\n"
+        f"HOOKS:\n{numbered}\n\n"
+        "SCORING CRITERIA (0-10 total):\n"
+        "- Pattern interrupt (does it stop the scroll?): 0-3\n"
+        "- Specificity (real number/name/year that creates credibility): 0-3\n"
+        "- Contradiction strength (cognitive gap the brain can't ignore): 0-3\n"
+        "- Brevity & punch (every word earns its place): 0-1\n\n"
+        "Reply ONLY with this JSON array, one object per hook, in order:\n"
+        '[{"i": 1, "score": 0-10, "reason": "one-sentence why"}, ...]'
+    )
+
+    t0 = time.time()
+    resp = client.chat.completions.create(
+        model=model,
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0.0,
+        max_tokens=600,
+        response_format={"type": "json_object"} if False else None,  # JSON array — not object
+    )
+    ms    = int((time.time() - t0) * 1000)
+    usage = resp.usage
+    cost  = estimate_cost(model, usage.prompt_tokens, usage.completion_tokens)
+    raw   = resp.choices[0].message.content.strip()
+
+    # Tolerant JSON parse (model sometimes wraps in code fences)
+    raw_clean = re.sub(r"^```(?:json)?|```$", "", raw, flags=re.MULTILINE).strip()
+    try:
+        scores = json.loads(raw_clean)
+        if isinstance(scores, dict):  # tolerate {"results": [...]}
+            scores = scores.get("results") or scores.get("hooks") or list(scores.values())[0]
+    except Exception as e:
+        print(f"[hook_score] JSON parse failed: {e} — raw: {raw[:200]}")
+        scores = []
+
+    log_attempt({
+        "run_id": run_id, "niche": niche_name,
+        "seed_type": seed.get("type") if seed else None,
+        "phase": "hook_score", "attempt_n": 1,
+        "model": model, "temperature": 0.0,
+        "prompt_tokens": usage.prompt_tokens,
+        "completion_tokens": usage.completion_tokens,
+        "cost_usd": cost, "ms": ms,
+        "body": raw, "n_scored": len(scores),
+    })
+
+    # Map back to original index
+    best_score = -1
+    best_idx   = -1
+    best_reason = ""
+    for entry in scores:
+        try:
+            s     = int(entry.get("score", 0))
+            i_rel = int(entry.get("i", 0)) - 1
+            if 0 <= i_rel < len(survivors):
+                orig_i, hook_text = survivors[i_rel]
+                save_attempt(run_id=run_id, niche=niche_name,
+                             seed_type=seed.get("type") if seed else None,
+                             phase="hook_score", attempt_n=orig_i + 1,
+                             hook=hook_text, total_score=s,
+                             rejected_reason=None,
+                             accepted=False, cost_usd=cost / max(len(scores), 1))
+                if s > best_score:
+                    best_score = s
+                    best_idx   = orig_i
+                    best_reason = str(entry.get("reason", ""))[:200]
+        except Exception:
+            continue
+
+    if best_idx == -1:
+        # Fallback: pick first surviving hook
+        best_idx   = survivors[0][0]
+        best_score = 0
+        best_reason = "all scoring entries malformed — fell back to first survivor"
+
+    return best_idx, best_score, best_reason, cost
+
+
+# ── Phase C: Body generator ─────────────────────────────────────────────────────
+
+def _build_system(niche_cfg: dict, niche_name: str, cta: str, hook: str) -> str:
+    gold_examples = _load_gold_examples(niche_name)
+    gold_block    = _build_gold_block(gold_examples)
+    niche_context = niche_cfg.get("gpt_system", "")
+    std           = _standards()
+    body          = std["body"]
+    banned_short  = ", ".join(f"'{p}'" for p in std["banned_phrases"][:20])
+
+    return f"""You are the most exacting short-form script writer working today.
+Your standard: if a line does not earn its place, cut it. If a word is vague, replace it with something specific.
+
+NICHE:
+{niche_context}
+
+YOUR JOB:
+You are given REAL source material and a HOOK that has already been chosen. Write the body of a 35-50 second YouTube Short that delivers on the hook.
+
+VOICE:
+- Sound like someone who has been in this field for 20 years and is slightly impatient with people who haven't figured this out.
+- Specific always beats vague. A name beats "someone". A number beats "many". A year beats "recently".
+- Short sentences ({body['min_avg_sentence_words']}-{body['max_avg_sentence_words']} words avg). Vary rhythm deliberately.
+- Never moralize. Never summarize. Trust the audience.
+
+STRUCTURE — NON-NEGOTIABLE:
+LINE 1 (HOOK): USE EXACTLY THIS LINE, DO NOT REWRITE OR REPHRASE IT:
+"{hook}"
+
+BODY ({body['min_words']}-{body['max_words']} words total including hook and CTA):
+- Every sentence either adds evidence or builds tension. No filler.
+- Use specific names, numbers, dates, dollar amounts. At least one specific per 25 words.
+- Include at least one strong opinion word (worst/wrong/smartest/scared/ruined/broken/secret/lie/etc.).
+
+SECOND-TO-LAST LINE (LOOP):
+A question or restatement that SHARES AT LEAST ONE CONTENT WORD with the hook. This drives replays.
+
+LAST LINE (CTA): Always exactly this, on its own line:
+"{cta}"
+
+ANTI-HALLUCINATION:
+Never invent: a person's first name, dollar amount, percentage, date, or company event not in the source. For wisdom seeds, well-documented historical facts (S&P returns, named historical figures' biographies) ARE allowed — they illustrate the quote.
+
+BANNED PHRASES — automatic rejection if any appear:
+{banned_short} (and others — never use motivational filler or AI-essay openers)
+
+HEDGING — never use: maybe, perhaps, could be, might be, kind of, sort of, possibly, probably.
+
+Output ONLY the script text. No labels. No "Here is the script:". No quotes around it.
+{gold_block}"""
+
+
+def _generate(client: OpenAI, system: str, user: str, model: str,
+              temperature: float) -> tuple[str, float, int, int, int]:
+    """Returns (text, cost, ms, prompt_toks, completion_toks)."""
+    t0 = time.time()
+    resp = client.chat.completions.create(
+        model=model,
         messages=[
             {"role": "system", "content": system},
             {"role": "user",   "content": user},
         ],
         temperature=temperature,
-        max_tokens=300,
+        max_tokens=350,
     )
-    return resp.choices[0].message.content.strip()
+    ms    = int((time.time() - t0) * 1000)
+    usage = resp.usage
+    cost  = estimate_cost(model, usage.prompt_tokens, usage.completion_tokens)
+    return resp.choices[0].message.content.strip(), cost, ms, usage.prompt_tokens, usage.completion_tokens
 
 
-def _find_banned(script: str) -> str | None:
-    text = script.lower()
-    for phrase in BANNED_PHRASES:
-        pattern = r"\b" + re.escape(phrase.lower()) + r"\b"
-        if re.search(pattern, text):
-            return phrase
-    return None
+# ── Body scorer ─────────────────────────────────────────────────────────────────
+
+_CRIT_RE = re.compile(
+    r"^(SPECIFICITY|HOOK|COMPRESSION|LOOP|HUMAN|TOTAL):\s*(\d+)",
+    re.MULTILINE | re.IGNORECASE,
+)
 
 
-def _hook_too_long(script: str) -> bool:
-    """Return True if the first line exceeds HOOK_MAX_WORDS."""
-    first_line = script.strip().split("\n")[0]
-    return len(first_line.split()) > HOOK_MAX_WORDS
-
-
-def _score(client: OpenAI, script: str, seed: dict) -> tuple[int, str]:
-    """Chain-of-thought scoring with hard disqualifiers. Returns (score, reasoning).
-
-    Uses gpt-4o — different model class from writer (gpt-4o is same family but this
-    forces structured evaluation; scorer temperature is 0.0 to eliminate guessing).
-    """
+def _score(client: OpenAI, script: str, seed: dict, hook: str, run_id: str,
+           niche: str) -> tuple[int, dict, str, float, int]:
+    """LLM rubric scoring. Returns (total, crits_dict, reasoning, cost, ms)."""
+    std       = _standards()
+    model     = std["models"]["body_score"]
     seed_text = (seed.get("content", "") or "")[:500] if seed else ""
     seed_type = (seed.get("type") or "unknown") if seed else "unknown"
-    is_wisdom = seed_type in ("wisdom",)
+    is_wisdom = seed_type == "wisdom"
 
-    # Wisdom seeds are abstract quotes — the writer MUST add historical context.
-    # Penalizing that context as "invented" destroys the score unfairly.
     invented_disqualifier = (
         "□ Script invents fictional characters or made-up people not verifiable as real historical figures\n"
-        "   NOTE: For this quote-based seed, well-documented historical facts (market returns, verified dates,\n"
-        "   real investor track records) are EXPECTED and are NOT invented — only flag made-up people or fake events.\n"
+        "   (For this quote-based seed, well-documented historical facts are EXPECTED.)\n"
         if is_wisdom else
         "□ Script invents a person, dollar amount, percentage, or date not present in the source material\n"
     )
-
     specificity_criterion = (
         "SPECIFICITY 0-3: Does the script ground claims in real, verifiable history? "
-        "For a quote-based seed, well-documented facts (e.g. S&P 500 returns, historical crashes, "
-        "verified investor records, named authors' biographies) ARE the specifics — they illustrate the quote. "
-        "0=vague generalities only, 1=one real historical fact, 2=several verifiable facts, 3=every claim historically grounded\n"
+        "Well-documented facts ARE the specifics. 0=vague, 1=one fact, 2=several, 3=every claim grounded.\n"
         if is_wisdom else
-        "SPECIFICITY 0-3: Does the script use real details from source (names, numbers, dates, direct facts)? "
-        "0=invented/vague, 1=one weak specific, 2=several, 3=every claim grounded in source\n"
+        "SPECIFICITY 0-3: Does the script use real details from source? "
+        "0=invented/vague, 1=one specific, 2=several, 3=every claim grounded.\n"
     )
 
     prompt = (
-        f"SCRIPT TO EVALUATE:\n\"{script}\"\n\n"
-        f"SOURCE IT WAS BASED ON ({seed_type} seed):\n\"{seed_text}\"\n\n"
-        "You are a ruthless short-form content editor. Protect the audience from mediocre content.\n\n"
-        "STEP 1 — AUTOMATIC DISQUALIFIERS (any one = final score ≤ 4, stop evaluating further):\n"
-        f"□ Hook (first line) is longer than {HOOK_MAX_WORDS} words\n"
-        "□ Hook starts with: Did you know / Have you ever / I want to / Let me / Imagine / Picture this / What if / A Reddit user / Someone\n"
-        "□ Script contains banned phrases: 'picture this', 'here's why', 'the truth is', 'let me tell you', 'most people', 'nobody talks about', 'what if I told you', 'buckle up', 'game-changer', 'paradigm', 'journey'\n"
+        f"SCRIPT:\n\"{script}\"\n\n"
+        f"FIXED HOOK (line 1): \"{hook}\"\n"
+        f"SOURCE ({seed_type} seed): \"{seed_text}\"\n\n"
+        "You are a ruthless short-form editor. Score the SCRIPT BODY (the hook is pre-vetted).\n\n"
+        "STEP 1 — DISQUALIFIERS (any one → final ≤4):\n"
         + invented_disqualifier +
-        "□ Script uses a placeholder name (John/Sarah/Mike/Alex) as if it were a real person\n"
-        "□ Script adopts first-person voice of someone in the source (e.g. 'I saved', 'my portfolio') when the source is a Reddit story or someone else's quote — the creator is reporting, not confessing\n"
-        "□ Script contains zero specifics (no name, number, date, or verbatim detail from source or history)\n\n"
-        "STEP 2 — SCORE EACH CRITERION (only if no disqualifiers):\n"
+        "□ Script uses placeholder names (John/Sarah/Mike/Alex) as if real\n"
+        "□ Script adopts first-person voice of someone in the source\n"
+        "□ Script has zero specifics (no number, name, date, or verbatim detail)\n"
+        "□ Loop line (second-to-last) shares zero content words with the hook\n\n"
+        "STEP 2 — SCORE EACH (only if no disqualifiers):\n"
         + specificity_criterion +
-        "HOOK 0-2: First line ≤10 words? Creates a question the brain cannot answer without watching? Uses a specific? 0=generic/setup, 1=decent, 2=irresistible\n"
-        "COMPRESSION 0-2: Every sentence earns its place. No filler, no hedging, no setup. 0=padded, 1=mostly tight, 2=every word counts\n"
-        "LOOP 0-2: Second-to-last line connects back to hook, makes viewer want to replay from start. 0=absent/weak, 1=decent, 2=precise and powerful\n"
-        "HUMAN 0-1: Sounds like a real expert with opinions, not AI narration or generic motivation. 0=AI/generic, 1=genuine voice\n\n"
-        "STEP 3 — REPLY IN THIS EXACT FORMAT:\n"
-        "DISQUALIFIERS: [list any triggered, or 'none']\n"
-        "SPECIFICITY: [0-3]/3 — [one sentence explanation]\n"
-        "HOOK: [0-2]/2 — [quote the hook, explain why it works or fails]\n"
-        "COMPRESSION: [0-2]/2 — [identify any padded line, or confirm tight]\n"
-        "LOOP: [0-2]/2 — [quote the loop line, explain]\n"
+        "HOOK 0-2: Does the body deliver on the cognitive itch the hook opened? 0=unanswered, 1=partial, 2=paid off in loop.\n"
+        "COMPRESSION 0-2: Every sentence earns its place. Penalize avg sentence >12 words and hedging (maybe/perhaps/could/might). 0=padded, 1=mostly tight, 2=every word counts.\n"
+        "LOOP 0-2: Does the second-to-last line mirror the hook's structure or pose the question the hook answered? Token-echo required. 0=no echo, 1=thematic only, 2=structural mirror.\n"
+        "HUMAN 0-1: Sounds like a real expert with opinions. Reward opinion words (worst/wrong/smartest/scared). Penalize neutral description. 0=AI/generic, 1=genuine voice.\n\n"
+        "STEP 3 — REPLY EXACTLY:\n"
+        "DISQUALIFIERS: [list, or 'none']\n"
+        "SPECIFICITY: [0-3]/3 — [explain]\n"
+        "HOOK: [0-2]/2 — [explain]\n"
+        "COMPRESSION: [0-2]/2 — [explain]\n"
+        "LOOP: [0-2]/2 — [quote the loop line, explain echo]\n"
         "HUMAN: [0-1]/1 — [explain]\n"
         "TOTAL: [sum]/10"
     )
+
     try:
-        result = client.chat.completions.create(
-            model="gpt-4o",
+        t0 = time.time()
+        resp = client.chat.completions.create(
+            model=model,
             messages=[{"role": "user", "content": prompt}],
             temperature=0.0,
-            max_tokens=400,
+            max_tokens=450,
         )
-        reasoning = result.choices[0].message.content.strip()
-        for line in reasoning.splitlines():
-            stripped = line.strip()
-            if stripped.upper().startswith("TOTAL:"):
-                score_str = stripped.split(":")[-1].strip().split("/")[0].strip()
-                return int(score_str), reasoning
-        return 5, reasoning
+        ms       = int((time.time() - t0) * 1000)
+        usage    = resp.usage
+        cost     = estimate_cost(model, usage.prompt_tokens, usage.completion_tokens)
+        reasoning = resp.choices[0].message.content.strip()
+
+        crits: dict = {}
+        total = None
+        for m in _CRIT_RE.finditer(reasoning):
+            key = m.group(1).lower()
+            val = int(m.group(2))
+            if key == "total":
+                total = val
+            else:
+                crits[key] = val
+        if total is None:
+            total = sum(crits.values()) if crits else 5
+        return total, crits, reasoning, cost, ms
     except Exception as e:
-        return 5, f"scorer error: {e}"
+        return 5, {}, f"scorer error: {e}", 0.0, 0
 
 
-def write_script(scene_description: str, seed: dict | None = None) -> str:
-    niche, active = _load_niche()
-    client        = OpenAI(api_key=_load_key())
-    learnings     = _load_learnings()
+# ── Public API ──────────────────────────────────────────────────────────────────
+
+def write_script(scene_description: str, seed: dict | None = None) -> dict:
+    """Three-phase hook-first script writer. Returns dict with full metadata.
+
+    Return shape:
+        {
+          "script": str,
+          "run_id": str,
+          "score": int,
+          "criterion_scores": dict,
+          "attempts_used": int,
+          "final_temperature": float,
+          "reasoning": str,
+          "cost_usd": float,
+        }
+    """
+    std            = _standards()
+    niche, active  = _load_niche()
+    client         = OpenAI(api_key=_load_key())
+    run_id         = new_run_id()
+    total_cost     = 0.0
 
     if seed:
-        # seed['source'] already includes the "r/" prefix for reddit type
-        print(f"[gpt] seed: {seed.get('type', '?')} from {seed.get('source', 'Unknown')}")
+        print(f"[gpt] run_id={run_id} seed: {seed.get('type', '?')} from {seed.get('source', 'Unknown')}")
 
-    # Pre-analysis: extract hook angle, core claim, loop line before writing
-    analysis = _pre_analyze(client, seed, scene_description)
+    # Pre-analysis
+    analysis, cost = _pre_analyze(client, seed, scene_description, run_id, active)
+    total_cost += cost
     if analysis:
         print(f"[gpt] analysis:\n{analysis}")
 
-    # Random CTA from the niche's pool — picked once, used by all attempts
+    # CTA
     cta = _pick_cta(niche)
     print(f"[gpt] cta: {cta}")
 
-    system = _build_system(niche, active, cta)
+    # ── Phase A + B: get a winning hook (1 retry allowed) ─────────────────────
+    winning_hook = None
+    winning_hook_score = 0
+    for hook_attempt in range(1, 3):  # max 2 tries at hook factory
+        temp = (std["scoring"]["hook_temperature"]
+                if hook_attempt == 1
+                else std["scoring"]["hook_retry_temperature"])
+        hook_model = (std["models"]["hook_gen"]
+                      if hook_attempt == 1
+                      else std["models"]["hook_gen_escalation"])
 
-    winning_hooks = learnings.get("winning_hooks", [])[:3]
-    avoid_hooks   = learnings.get("losing_hooks",  [])[:3]
-    hook_hint     = ""
-    if winning_hooks:
-        hook_hint += f"\n\nHook patterns that previously worked well: {winning_hooks}"
-    if avoid_hooks:
-        hook_hint += f"\nHook patterns to avoid: {avoid_hooks}"
+        print(f"[gpt] Phase A: hook factory ({hook_model}, temp={temp})")
+        hooks, c = _hook_factory(client, seed, analysis, active, niche,
+                                 run_id, temperature=temp, model=hook_model)
+        total_cost += c
+        print(f"[gpt] generated {len(hooks)} hook candidates")
 
-    is_wisdom_seed = seed and seed.get("type") == "wisdom"
-    wisdom_note    = (
-        "\nIMPORTANT: This is a wisdom/quote seed. The BIOGRAPHICAL FACTS from the pre-analysis ARE your source material — "
-        "treat them exactly as you would treat specific numbers from a Reddit post. "
-        "Use the concrete facts, dates, and outcomes from the analysis in the script body. "
-        "Do NOT write philosophical generalities. Every claim must be grounded in verifiable historical facts.\n"
-        if is_wisdom_seed else ""
-    )
+        if len(hooks) < std["scoring"]["min_surviving_hooks"]:
+            print(f"[gpt] only {len(hooks)} parsed — retrying" if hook_attempt == 1 else "[gpt] ⚠ still too few hooks")
+            continue
 
+        idx, score, reason, c = _hook_scorer(client, hooks, seed, active, run_id)
+        total_cost += c
+        if idx < 0:
+            print(f"[gpt] Phase B: {reason}")
+            continue
+
+        winning_hook = hooks[idx]
+        winning_hook_score = score
+        print(f"[gpt] Phase B winner ({score}/10): {winning_hook}")
+        print(f"[gpt]   reason: {reason}")
+        break
+
+    if not winning_hook:
+        # Last-resort: take whatever hook we have, even if weak
+        if hooks:
+            winning_hook = hooks[0]
+            winning_hook_score = 0
+            print(f"[gpt] ⚠ fallback hook (no candidate passed filter): {winning_hook}")
+        else:
+            raise RuntimeError("Hook factory produced zero parseable hooks across 2 attempts")
+
+    # ── Phase C: body generation ──────────────────────────────────────────────
+    system = _build_system(niche, active, cta, winning_hook)
     seed_blk = _seed_block(seed) if seed else ""
     base_usr = (
         f"{seed_blk}\n"
         f"Background scene: {scene_description}\n\n"
-        f"PRE-ANALYSIS (use this as your structural guide):\n{analysis}\n\n"
-        f"{wisdom_note}"
-        f"Now write the script. {MIN_WORDS}-{MAX_WORDS} words. "
-        f"End with this exact line: \"{cta}\"\n"
-        f"The line before the CTA must be the loop line from your analysis."
-        f"{hook_hint}"
+        f"PRE-ANALYSIS:\n{analysis}\n\n"
+        f"WINNING HOOK (line 1 must be this exact line): \"{winning_hook}\"\n\n"
+        f"Write the body. Word count: {std['body']['min_words']}-{std['body']['max_words']} words total. "
+        f"End with this exact line: \"{cta}\""
     )
 
-    best_script    = ""
-    best_score     = 0
-    best_reasoning = ""
-    last_script    = ""
+    temps = std["scoring"]["body_temperatures"]
+    max_attempts = std["scoring"]["max_body_attempts"]
+    score_min    = std["scoring"]["score_min"]
+    body_model   = std["models"]["body_gen"]
 
-    # Climb temperature across attempts: faithful first, more creative on retries
-    temps = [0.7, 0.9, 1.05, 1.15]
+    best = {"script": "", "score": 0, "crits": {}, "reasoning": "",
+            "temperature": temps[0], "attempt_n": 0}
 
-    for attempt in range(1, MAX_ATTEMPTS + 1):
-        if attempt == 1:
-            push = ""
-        elif is_wisdom_seed:
-            push = (
-                f"\n\nAttempt {attempt}: Previous score {best_score}/10. "
-                "Your hook is too philosophical. Use the BIOGRAPHICAL FACT from the pre-analysis as the hook — "
-                "a specific number, year, or documented event. "
-                "Cut all philosophical language. Every sentence must point to a verifiable fact about this person's life."
-            )
-        else:
-            push = (
-                f"\n\nAttempt {attempt}: Previous score {best_score}/10. "
-                "The hook is too safe. Lead with the CONTRADICTION, not the fact. "
-                "Cut any sentence that just reports — keep only the ones that reveal. "
-                "Make the hook ≤8 words and surface the paradox in the source."
-            )
-        temp        = temps[min(attempt - 1, len(temps) - 1)]
-        script      = _generate(client, system, base_usr + push, temperature=temp)
-        last_script = script
+    for attempt in range(1, max_attempts + 1):
+        temp = temps[min(attempt - 1, len(temps) - 1)]
 
-        # Hard pre-score rejections (no API call needed)
-        banned = _find_banned(script)
-        if banned:
-            print(f"[gpt] attempt {attempt}/{MAX_ATTEMPTS} – rejected (banned: '{banned}')")
+        # Retry pressure
+        push = "" if attempt == 1 else (
+            f"\n\nAttempt {attempt}: Previous score {best['score']}/10. "
+            "Cut every sentence that only reports. Keep only sentences that reveal a contradiction, "
+            "name a specific, or build tension. The loop line MUST share a content word with the hook."
+        )
+
+        script, c, ms, p_toks, c_toks = _generate(client, system, base_usr + push,
+                                                  model=body_model, temperature=temp)
+        total_cost += c
+
+        # Force the hook onto line 1 (LLMs occasionally rephrase despite the rule)
+        lines = [l.strip() for l in script.split("\n") if l.strip()]
+        if lines and lines[0].strip().strip('"').strip("'") != winning_hook.strip().strip('"').strip("'"):
+            lines[0] = winning_hook
+            script = "\n".join(lines)
+
+        # Pre-score regex rejections (cheap)
+        rejection = _find_banned(script) and f"banned phrase: '{_find_banned(script)}'"
+        if not rejection:
+            rejection = _body_pre_check(script)
+
+        if rejection:
+            print(f"[gpt] attempt {attempt}/{max_attempts} – rejected ({rejection})")
+            save_attempt(run_id=run_id, niche=active,
+                         seed_type=seed.get("type") if seed else None,
+                         phase="body_gen", attempt_n=attempt,
+                         hook=winning_hook, body=script, temperature=temp,
+                         rejected_reason=rejection, accepted=False,
+                         cost_usd=c, ms=ms)
+            log_attempt({
+                "run_id": run_id, "niche": active,
+                "seed_type": seed.get("type") if seed else None,
+                "phase": "body_gen", "attempt_n": attempt,
+                "model": body_model, "temperature": temp,
+                "prompt_tokens": p_toks, "completion_tokens": c_toks,
+                "cost_usd": c, "ms": ms,
+                "hook": winning_hook, "body": script,
+                "rejected_reason": rejection, "accepted": False,
+            })
             continue
+
+        # LLM scoring
+        total, crits, reasoning, sc_cost, sc_ms = _score(
+            client, script, seed, winning_hook, run_id, active)
+        total_cost += sc_cost
 
         word_count = len(script.split())
-        if word_count < MIN_WORDS:
-            print(f"[gpt] attempt {attempt}/{MAX_ATTEMPTS} – too short ({word_count} words, need ≥{MIN_WORDS})")
-            continue
+        print(f"[gpt] attempt {attempt}/{max_attempts} – score: {total}/10 – {word_count} words "
+              f"(spec={crits.get('specificity', '?')}, "
+              f"hook={crits.get('hook', '?')}, "
+              f"comp={crits.get('compression', '?')}, "
+              f"loop={crits.get('loop', '?')}, "
+              f"human={crits.get('human', '?')})")
 
-        if _hook_too_long(script):
-            hook_text = script.strip().split("\n")[0]
-            print(f"[gpt] attempt {attempt}/{MAX_ATTEMPTS} – hook too long: \"{hook_text}\"")
-            continue
+        save_attempt(run_id=run_id, niche=active,
+                     seed_type=seed.get("type") if seed else None,
+                     phase="body_gen", attempt_n=attempt,
+                     hook=winning_hook, body=script, temperature=temp,
+                     total_score=total, criterion_scores=crits,
+                     accepted=(total >= score_min),
+                     cost_usd=c + sc_cost, ms=ms + sc_ms)
+        log_attempt({
+            "run_id": run_id, "niche": active,
+            "seed_type": seed.get("type") if seed else None,
+            "phase": "body_gen", "attempt_n": attempt,
+            "model": body_model, "temperature": temp,
+            "prompt_tokens": p_toks, "completion_tokens": c_toks,
+            "cost_usd": c + sc_cost, "ms": ms + sc_ms,
+            "hook": winning_hook, "body": script,
+            "total_score": total, "criterion_scores": crits,
+            "reasoning": reasoning, "accepted": (total >= score_min),
+        })
 
-        # Chain-of-thought scoring
-        score, reasoning = _score(client, script, seed)
-        print(f"[gpt] attempt {attempt}/{MAX_ATTEMPTS} – score: {score}/10 – {word_count} words")
-        # Print the key scoring lines for debugging
-        for line in reasoning.splitlines():
-            if any(line.strip().startswith(k) for k in ("DISQUALIFIERS:", "HOOK:", "TOTAL:")):
-                print(f"      {line.strip()}")
+        if total > best["score"]:
+            best.update(script=script, score=total, crits=crits,
+                        reasoning=reasoning, temperature=temp, attempt_n=attempt)
 
-        if score > best_score:
-            best_score    = score
-            best_script   = script
-            best_reasoning = reasoning
-
-        if score >= SCORE_MIN:
+        if total >= score_min:
             break
 
-    if not best_script:
-        print(f"[gpt] ⚠ no attempt passed all filters – using last output")
-        best_script = last_script
+    if not best["script"]:
+        print(f"[gpt] ⚠ no body attempt produced output — using last raw script")
+        best["script"] = script
+        best["attempt_n"] = max_attempts
 
-    if best_score < SCORE_MIN:
-        print(f"[gpt] ⚠ best score was {best_score}/10 (target ≥{SCORE_MIN}) – using best attempt")
+    if best["score"] < score_min:
+        print(f"[gpt] ⚠ best score was {best['score']}/10 (target ≥{score_min}) — using best attempt")
 
-    return best_script
+    # Final log row
+    log_attempt({
+        "run_id": run_id, "niche": active,
+        "seed_type": seed.get("type") if seed else None,
+        "phase": "final", "attempt_n": best["attempt_n"],
+        "hook": winning_hook,
+        "winning_hook_score": winning_hook_score,
+        "body": best["script"], "total_score": best["score"],
+        "criterion_scores": best["crits"], "reasoning": best["reasoning"],
+        "temperature": best["temperature"], "cost_usd": total_cost,
+        "accepted": True,
+    })
+    print(f"[gpt] final: {best['score']}/10 @ temp={best['temperature']} "
+          f"(attempts={best['attempt_n']}, cost=${total_cost:.4f})")
+
+    return {
+        "script": best["script"],
+        "run_id": run_id,
+        "score": best["score"],
+        "criterion_scores": best["crits"],
+        "attempts_used": best["attempt_n"],
+        "final_temperature": best["temperature"],
+        "reasoning": best["reasoning"],
+        "cost_usd": total_cost,
+    }
 
 
 # ── Blacklist ───────────────────────────────────────────────────────────────────
@@ -480,8 +871,7 @@ def check_blacklist(script: str) -> bool:
     if not BLACKLIST_FILE.exists():
         return False
     items = json.loads(BLACKLIST_FILE.read_text())
-    key   = _blacklist_key(script)
-    return key in items
+    return _blacklist_key(script) in items
 
 
 def add_to_blacklist(script: str) -> None:
@@ -499,12 +889,10 @@ if __name__ == "__main__":
         sys.exit(1)
     desc = " ".join(sys.argv[1:])
 
-    # CLI mode auto-fetches a real seed so the writer never hallucinates from
-    # an empty source (which is how invented people like "John lost $50k" appear).
-    sys.path.insert(0, str(Path(__file__).parent))
     from research import get_seed
-    print("[cli] fetching real seed (Reddit first, wisdom fallback)...")
+    print("[cli] fetching real seed...")
     seed = get_seed()
 
-    script = write_script(desc, seed=seed)
-    print(f"\n{'='*60}\nSCRIPT:\n{script}\n{'='*60}")
+    result = write_script(desc, seed=seed)
+    print(f"\n{'='*60}\nSCRIPT (score {result['score']}/10):\n{result['script']}\n{'='*60}")
+    print(f"run_id={result['run_id']}  cost=${result['cost_usd']:.4f}  attempts={result['attempts_used']}")

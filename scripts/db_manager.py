@@ -45,6 +45,16 @@ def init_db():
             "ALTER TABLE videos ADD COLUMN seed_type TEXT",
             "ALTER TABLE videos ADD COLUMN seed_source TEXT",
             "ALTER TABLE videos ADD COLUMN seed_content TEXT",
+            # Script-quality columns added in the standards/logging rework
+            "ALTER TABLE videos ADD COLUMN run_id TEXT",
+            "ALTER TABLE videos ADD COLUMN score_specificity INTEGER",
+            "ALTER TABLE videos ADD COLUMN score_hook INTEGER",
+            "ALTER TABLE videos ADD COLUMN score_compression INTEGER",
+            "ALTER TABLE videos ADD COLUMN score_loop INTEGER",
+            "ALTER TABLE videos ADD COLUMN score_human INTEGER",
+            "ALTER TABLE videos ADD COLUMN attempts_used INTEGER",
+            "ALTER TABLE videos ADD COLUMN final_temperature REAL",
+            "ALTER TABLE videos ADD COLUMN score_reasoning TEXT",
         ):
             try:
                 c.execute(ddl)
@@ -61,25 +71,84 @@ def init_db():
                 fetched_at TEXT    DEFAULT (datetime('now'))
             )
         """)
-        c.execute("CREATE INDEX IF NOT EXISTS idx_metrics_video ON metrics(video_id)")
-        c.execute("CREATE INDEX IF NOT EXISTS idx_videos_yt    ON videos(youtube_id)")
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS script_attempts (
+                id                INTEGER PRIMARY KEY AUTOINCREMENT,
+                run_id            TEXT,
+                ts                TEXT DEFAULT (datetime('now')),
+                niche             TEXT,
+                seed_type         TEXT,
+                phase             TEXT,
+                attempt_n         INTEGER,
+                hook              TEXT,
+                body              TEXT,
+                temperature       REAL,
+                total_score       INTEGER,
+                criterion_scores  TEXT,
+                rejected_reason   TEXT,
+                accepted          INTEGER,
+                cost_usd          REAL,
+                ms                INTEGER
+            )
+        """)
+        c.execute("CREATE INDEX IF NOT EXISTS idx_metrics_video    ON metrics(video_id)")
+        c.execute("CREATE INDEX IF NOT EXISTS idx_videos_yt        ON videos(youtube_id)")
+        c.execute("CREATE INDEX IF NOT EXISTS idx_attempts_run     ON script_attempts(run_id)")
+        c.execute("CREATE INDEX IF NOT EXISTS idx_attempts_niche   ON script_attempts(niche)")
+        c.execute("CREATE INDEX IF NOT EXISTS idx_attempts_phase   ON script_attempts(phase)")
 
 
 def save_video(niche: str, script_hook: str, scene_desc: str,
                video_file: str, youtube_id: str = None, score: int = 0,
                script_full: str = None,
                seed_type: str = None, seed_source: str = None,
-               seed_content: str = None) -> int:
+               seed_content: str = None,
+               run_id: str = None,
+               criterion_scores: dict = None,
+               attempts_used: int = None,
+               final_temperature: float = None,
+               score_reasoning: str = None) -> int:
+    crits = criterion_scores or {}
     with _conn() as c:
         cur = c.execute(
             "INSERT INTO videos "
             "(niche, script_hook, script_full, scene_desc, "
             " seed_type, seed_source, seed_content, "
-            " youtube_id, video_file, score) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?)",
+            " youtube_id, video_file, score, "
+            " run_id, score_specificity, score_hook, score_compression, "
+            " score_loop, score_human, attempts_used, final_temperature, "
+            " score_reasoning) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (niche, script_hook, script_full, scene_desc,
              seed_type, seed_source, seed_content,
-             youtube_id, video_file, score),
+             youtube_id, video_file, score,
+             run_id,
+             crits.get("specificity"), crits.get("hook"),
+             crits.get("compression"), crits.get("loop"), crits.get("human"),
+             attempts_used, final_temperature, score_reasoning),
+        )
+        return cur.lastrowid
+
+
+def save_attempt(*, run_id: str, niche: str, seed_type: str, phase: str,
+                 attempt_n: int, hook: str = None, body: str = None,
+                 temperature: float = None, total_score: int = None,
+                 criterion_scores: dict = None, rejected_reason: str = None,
+                 accepted: bool = False, cost_usd: float = 0.0,
+                 ms: int = 0) -> int:
+    """Persist one script-writer attempt for offline analysis."""
+    import json as _json
+    with _conn() as c:
+        cur = c.execute(
+            "INSERT INTO script_attempts "
+            "(run_id, niche, seed_type, phase, attempt_n, hook, body, "
+            " temperature, total_score, criterion_scores, "
+            " rejected_reason, accepted, cost_usd, ms) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (run_id, niche, seed_type, phase, attempt_n, hook, body,
+             temperature, total_score,
+             _json.dumps(criterion_scores) if criterion_scores else None,
+             rejected_reason, 1 if accepted else 0, cost_usd, ms),
         )
         return cur.lastrowid
 
