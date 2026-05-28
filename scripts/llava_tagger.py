@@ -147,9 +147,10 @@ def tag_video(video_path: Path, llava_context: str, client: OpenAI = None) -> st
                 pass
 
 
-def pick_best_video(candidates: list[Path], llava_context: str) -> tuple[Path, str]:
+def pick_best_video(candidates: list[Path], llava_context: str,
+                    seed: dict = None) -> tuple[Path, str]:
     """
-    Describe all candidate videos, ask GPT which is most viral.
+    Describe all candidate videos, ask GPT which best matches the script topic.
     Returns (chosen_path, scene_description).
     """
     client = _load_client()
@@ -176,12 +177,32 @@ def pick_best_video(candidates: list[Path], llava_context: str) -> tuple[Path, s
     if len(descriptions) == 1:
         return valid_paths[0], descriptions[0]
 
+    # Build seed context so the picker matches video to actual script topic
+    seed_ctx = ""
+    if seed:
+        stype = seed.get("type", "")
+        if stype == "reddit":
+            seed_ctx = (
+                f"\nSCRIPT TOPIC: \"{seed.get('title', '')}\"\n"
+                f"{(seed.get('content') or '')[:250]}"
+            )
+        elif stype == "wisdom":
+            seed_ctx = (
+                f"\nSCRIPT TOPIC: Quote from {seed.get('source', 'Unknown')}:\n"
+                f"\"{(seed.get('content') or '')[:200]}\""
+            )
+        elif stype == "hackernews":
+            seed_ctx = f"\nSCRIPT TOPIC: \"{seed.get('title', '')}\""
+
     numbered = "\n".join(f"{i+1}. {d}" for i, d in enumerate(descriptions))
     prompt   = (
-        f"You are choosing the best background video for a viral {niche_name} YouTube Short.\n\n"
-        f"Here are {len(descriptions)} video scene descriptions:\n{numbered}\n\n"
-        "Which would make the most engaging, viral Short for this niche?\n"
-        "Reply with ONLY: NUMBER|REASON (e.g. '3|Trading screen – creates instant tension')"
+        f"You are choosing the best background video for a viral {niche_name} YouTube Short.\n"
+        f"{seed_ctx}\n\n"
+        f"VIDEO OPTIONS:\n{numbered}\n\n"
+        "Pick the video whose MOOD and VISUAL ENERGY best match the script topic above. "
+        "A script about a financial crisis needs tension, not a yacht. "
+        "A script about discipline needs physical struggle, not a boardroom.\n"
+        "Reply with ONLY: NUMBER|REASON (e.g. '3|Trading screen – matches the market crash story')"
     )
 
     resp = client.chat.completions.create(

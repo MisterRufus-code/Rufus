@@ -13,6 +13,7 @@ import asyncio
 import json
 import os
 import random
+import re
 import subprocess
 import sys
 import time
@@ -32,8 +33,12 @@ MAX_DUR      = 60.0     # YouTube Shorts hard cap
 MIN_DUR      = 30.0     # below this, value content feels rushed
 CLUSTER_SIZE = 1        # 1 word at a time — Hormozi style
 
-# Hormozi palette: white → yellow → green
-COLOURS  = ["&H00FFFFFF", "&H0000FFFF", "&H0000FF00"]
+# Subtitle palette: white for normal words, green for numbers/amounts/percentages
+WHITE = "&H00FFFFFF"
+GREEN = "&H0000FF00"
+
+_HIGHLIGHT_RE = re.compile(r'[\d$%]')
+
 FONT     = "Arial"
 FONTSIZE = 90
 MARGIN_V = 734          # golden ratio from bottom: 1920/1.618 ≈ 734
@@ -101,13 +106,11 @@ def build_ass(segments, ass_path: Path, audio_dur: float) -> None:
         "[Events]\n"
         "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"
     )
-    lines      = []
-    colour_idx = 0
+    lines = []
     for start, end, text in _cluster_words(segments, audio_dur):
-        c       = COLOURS[colour_idx % len(COLOURS)]
-        colour_idx += 1
-        # Pop-in animation: scale 120→100 over 80ms + colour
-        styled  = f"{{\\c{c}\\fscx120\\fscy120\\t(0,80,\\fscx100\\fscy100)}}{text}"
+        # Green for numbers, dollar amounts, percentages — white for everything else
+        c      = GREEN if _HIGHLIGHT_RE.search(text) else WHITE
+        styled = f"{{\\c{c}\\fscx120\\fscy120\\t(0,80,\\fscx100\\fscy100)}}{text}"
         lines.append(f"Dialogue: 0,{_ts(start)},{_ts(end)},Default,,0,0,0,,{styled}")
 
     ass_path.write_text(header + "\n".join(lines), encoding="utf-8")

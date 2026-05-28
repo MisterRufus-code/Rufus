@@ -136,7 +136,7 @@ def run(skip_upload: bool = False, niche_override: str = None, output_dir: Path 
     # ── Step 3: AI picks best video ─────────────────────────────────────────────
     print("[ 3 / 7 ]  AI selecting best video...")
     try:
-        video_path, scene = pick_best_video(candidates, niche_cfg["llava_context"])
+        video_path, scene = pick_best_video(candidates, niche_cfg["llava_context"], seed=seed)
         print(f"           → selected: {video_path.name}")
         short = scene[:120] + "..." if len(scene) > 120 else scene
         print(f"           → {short}\n")
