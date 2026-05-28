@@ -29,7 +29,7 @@ from pathlib import Path
 ROOT        = Path(__file__).parent.parent
 CONFIG_DIR  = ROOT / "config"
 NICHES_FILE = CONFIG_DIR / "niches.json"
-OUTPUT_DIR  = ROOT / "media_library" / "output"
+OUTPUT_DIR  = Path(os.environ.get("RUFUS_OUTPUT_DIR", ROOT / "media_library" / "output"))
 LOG_DIR     = ROOT / "logs"
 
 
@@ -97,10 +97,11 @@ def _all_scheduled_niches() -> list[str]:
     return seen
 
 
-def run(skip_upload: bool = False, niche_override: str = None):
+def run(skip_upload: bool = False, niche_override: str = None, output_dir: Path = None):
     log_path = _enable_file_logging()
     start    = time.time()
     niche_cfg, active = load_niche_cfg(niche_override)
+    out_dir  = output_dir or OUTPUT_DIR
 
     print(f"\n{'='*52}")
     print(f"  RUFUS  |  niche: {active}  |  {time.strftime('%Y-%m-%d %H:%M:%S')}")
@@ -166,7 +167,7 @@ def run(skip_upload: bool = False, niche_override: str = None):
     # ── Step 5: Render (all clips cut together) ─────────────────────────────────
     print("[ 5 / 7 ]  Rendering Short...")
     try:
-        output_path = render(script, candidates, OUTPUT_DIR)
+        output_path = render(script, candidates, out_dir)
         print(f"           → {output_path}\n")
     except Exception as e:
         print(f"           ✗ Step 5 failed: {e}")
@@ -240,11 +241,14 @@ if __name__ == "__main__":
     parser.add_argument("--niche",       type=str,            help="Override niche (e.g. finance, motivation, mindset)")
     parser.add_argument("--scheduled",   action="store_true", help="Use today's niche from config schedule (for cron)")
     parser.add_argument("--rotate",      action="store_true", help="Run one video per unique niche in the schedule")
+    parser.add_argument("--output-dir",  type=str,            help="Directory to write rendered mp4 files (overrides RUFUS_OUTPUT_DIR env var)")
     args = parser.parse_args()
 
     if sum(bool(x) for x in (args.niche, args.scheduled, args.rotate)) > 1:
         print("Use only one of --niche, --scheduled, --rotate")
         sys.exit(1)
+
+    out_dir_arg = Path(args.output_dir) if args.output_dir else None
 
     if args.rotate:
         niches = _all_scheduled_niches()
@@ -252,10 +256,10 @@ if __name__ == "__main__":
         for n in niches:
             # Clear any prior env override so each iteration starts clean
             os.environ.pop("RUFUS_NICHE_OVERRIDE", None)
-            run(skip_upload=args.skip_upload, niche_override=n)
+            run(skip_upload=args.skip_upload, niche_override=n, output_dir=out_dir_arg)
     elif args.scheduled:
         n = _todays_niche()
         print(f"\n[scheduled] today's niche: {n}\n")
-        run(skip_upload=args.skip_upload, niche_override=n)
+        run(skip_upload=args.skip_upload, niche_override=n, output_dir=out_dir_arg)
     else:
-        run(skip_upload=args.skip_upload, niche_override=args.niche)
+        run(skip_upload=args.skip_upload, niche_override=args.niche, output_dir=out_dir_arg)
