@@ -108,11 +108,12 @@ HN_MAX_TEXT_LEN = 3000
 
 # Niches that map well to HN's intellectual, founder-heavy audience.
 # None = skip HN for that niche (motivation content doesn't resonate there).
+# Terms chosen to match real Ask HN post vocabulary — keep them conversational.
 HN_NICHE_QUERIES = {
     "finance":             "money investing wealth financial independence early retirement",
     "business":            "startup founder entrepreneur lessons learned failure",
-    "mindset":             "productivity learning psychology mental models thinking",
-    "personal_development": "habits productivity self improvement learning",
+    "mindset":             "mental clarity habits decision systems focus burnout thinking",
+    "personal_development": "habits discipline self improvement learning productivity",
     "motivation":          None,
 }
 

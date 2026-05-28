@@ -191,31 +191,56 @@ HARD RULES:
 def _pre_analyze(client: OpenAI, seed: dict, scene: str) -> str:
     """Fast pre-pass: identify hook angle, core claim, and loop line before writing.
 
-    Cheap call (gpt-4o-mini, 120 tokens). Injects the result into the writer prompt
-    so the model doesn't have to do structural thinking AND prose writing simultaneously.
+    Wisdom seeds get a biographical-research prompt (220 tokens) — they need real
+    facts from the author's life, not abstract contradiction-spotting.
+    Reddit/HN seeds use the original fact-extraction prompt (120 tokens).
     """
-    seed_blk = _seed_block(seed) if seed else f"Scene description: {scene}"
-    prompt = (
-        f"{seed_blk}\n"
-        f"Background scene: {scene}\n\n"
-        "Before writing the script, find these four things in the source. Use REAL details from the source — no invention.\n\n"
-        "1. CONTRADICTION: What is the surprising contradiction, paradox, or unexpected pairing in this source? "
-        "(e.g. 'rich but scared', 'worst trade made him richest', 'survived camps by finding meaning, not strength'). "
-        "One sentence. This is what makes the story worth watching.\n"
-        "2. HOOK: Write line 1 as a punchy fact-led fragment ≤10 words that surfaces the contradiction. "
-        "DO NOT start with 'A Reddit user' or 'Someone'. Lead with the number/name/contradiction. "
-        "Example weak: 'A Reddit user saved $2.4 million by 38.' "
-        "Example strong: '$2.4 million by 38. Still scared to retire.'\n"
-        "3. CORE: The one insight this source proves. One sentence. Specific and bold.\n"
-        "4. LOOP: A question or restatement of the hook for the second-to-last line. One sentence.\n\n"
-        "Reply with ONLY these 4 numbered items. Do not write the full script."
-    )
+    is_wisdom = seed and seed.get("type") == "wisdom"
+
+    if is_wisdom:
+        quote  = seed.get("content", "")
+        author = seed.get("source", "Unknown")
+        prompt = (
+            f"QUOTE: \"{quote}\"\n"
+            f"AUTHOR: {author}\n\n"
+            "You are a historical researcher finding hook material for a 40-second YouTube Short.\n\n"
+            "1. BIOGRAPHICAL FACT: One real, verifiable fact about this person's life that PROVES the quote through their actions. "
+            "Must be concrete — include a number, year, event, or documented outcome. "
+            "Example for Aurelius 'Be one': 'Governed 50 million people for 19 years. Meditations were private notes — never meant for publication.'\n"
+            "2. BEHAVIOR CONDEMNED: What specific thing do most people do that this quote calls wrong? One sentence. Be precise.\n"
+            "3. PARADOX: Format as 'Most people [X]. This quote reveals [Y instead].' Must be counterintuitive.\n"
+            "4. HOOK LINE: ≤10 words. Lead with the BIOGRAPHICAL FACT — not the quote text itself. "
+            "Strong: 'He governed 50 million people. Left zero published philosophy.' "
+            "Weak: 'A Stoic philosopher said something about virtue.'\n"
+            "5. LOOP LINE: One question for the second-to-last line that makes viewers want to replay from line 1.\n\n"
+            "Reply ONLY with these 5 numbered items. No full script."
+        )
+        max_toks = 220
+    else:
+        seed_blk = _seed_block(seed) if seed else f"Scene description: {scene}"
+        prompt = (
+            f"{seed_blk}\n"
+            f"Background scene: {scene}\n\n"
+            "Before writing the script, find these four things in the source. Use REAL details from the source — no invention.\n\n"
+            "1. CONTRADICTION: What is the surprising contradiction, paradox, or unexpected pairing in this source? "
+            "(e.g. 'rich but scared', 'worst trade made him richest'). "
+            "One sentence. This is what makes the story worth watching.\n"
+            "2. HOOK: Write line 1 as a punchy fact-led fragment ≤10 words that surfaces the contradiction. "
+            "DO NOT start with 'A Reddit user' or 'Someone'. Lead with the number/name/contradiction. "
+            "Example weak: 'A Reddit user saved $2.4 million by 38.' "
+            "Example strong: '$2.4 million by 38. Still scared to retire.'\n"
+            "3. CORE: The one insight this source proves. One sentence. Specific and bold.\n"
+            "4. LOOP: A question or restatement of the hook for the second-to-last line. One sentence.\n\n"
+            "Reply with ONLY these 4 numbered items. Do not write the full script."
+        )
+        max_toks = 120
+
     try:
         resp = client.chat.completions.create(
             model="gpt-4o-mini",
             messages=[{"role": "user", "content": prompt}],
             temperature=0.3,
-            max_tokens=120,
+            max_tokens=max_toks,
         )
         return resp.choices[0].message.content.strip()
     except Exception:
@@ -353,32 +378,52 @@ def write_script(scene_description: str, seed: dict | None = None) -> str:
     if avoid_hooks:
         hook_hint += f"\nHook patterns to avoid: {avoid_hooks}"
 
+    is_wisdom_seed = seed and seed.get("type") == "wisdom"
+    wisdom_note    = (
+        "\nIMPORTANT: This is a wisdom/quote seed. The BIOGRAPHICAL FACTS from the pre-analysis ARE your source material — "
+        "treat them exactly as you would treat specific numbers from a Reddit post. "
+        "Use the concrete facts, dates, and outcomes from the analysis in the script body. "
+        "Do NOT write philosophical generalities. Every claim must be grounded in verifiable historical facts.\n"
+        if is_wisdom_seed else ""
+    )
+
     seed_blk = _seed_block(seed) if seed else ""
     base_usr = (
         f"{seed_blk}\n"
         f"Background scene: {scene_description}\n\n"
         f"PRE-ANALYSIS (use this as your structural guide):\n{analysis}\n\n"
+        f"{wisdom_note}"
         f"Now write the script. {MIN_WORDS}-{MAX_WORDS} words. "
         f"End with this exact line: \"{cta}\"\n"
         f"The line before the CTA must be the loop line from your analysis."
         f"{hook_hint}"
     )
 
-    best_script   = ""
-    best_score    = 0
+    best_script    = ""
+    best_score     = 0
     best_reasoning = ""
-    last_script   = ""
+    last_script    = ""
 
     # Climb temperature across attempts: faithful first, more creative on retries
     temps = [0.7, 0.9, 1.05, 1.15]
 
     for attempt in range(1, MAX_ATTEMPTS + 1):
-        push = "" if attempt == 1 else (
-            f"\n\nAttempt {attempt}: Previous score {best_score}/10. "
-            "The hook is too safe. Lead with the CONTRADICTION, not the fact. "
-            "Cut any sentence that just reports — keep only the ones that reveal. "
-            "Make the hook ≤8 words and surface the paradox in the source."
-        )
+        if attempt == 1:
+            push = ""
+        elif is_wisdom_seed:
+            push = (
+                f"\n\nAttempt {attempt}: Previous score {best_score}/10. "
+                "Your hook is too philosophical. Use the BIOGRAPHICAL FACT from the pre-analysis as the hook — "
+                "a specific number, year, or documented event. "
+                "Cut all philosophical language. Every sentence must point to a verifiable fact about this person's life."
+            )
+        else:
+            push = (
+                f"\n\nAttempt {attempt}: Previous score {best_score}/10. "
+                "The hook is too safe. Lead with the CONTRADICTION, not the fact. "
+                "Cut any sentence that just reports — keep only the ones that reveal. "
+                "Make the hook ≤8 words and surface the paradox in the source."
+            )
         temp        = temps[min(attempt - 1, len(temps) - 1)]
         script      = _generate(client, system, base_usr + push, temperature=temp)
         last_script = script
