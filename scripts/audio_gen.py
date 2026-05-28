@@ -25,6 +25,7 @@ ROOT       = Path(__file__).parent.parent
 CONFIG_DIR = ROOT / "config"
 
 VOICE        = "en-US-ChristopherNeural"
+VOICE_RATE   = "+20%"    # tighter pacing, reduces inter-sentence gaps
 W, H         = 1080, 1920
 FPS          = 30
 MAX_DUR      = 60.0     # YouTube Shorts hard cap
@@ -115,7 +116,7 @@ def build_ass(segments, ass_path: Path, audio_dur: float) -> None:
 # ── TTS ─────────────────────────────────────────────────────────────────────────
 
 async def _tts(script: str, mp3_path: Path) -> None:
-    comm = edge_tts.Communicate(script, VOICE)
+    comm = edge_tts.Communicate(script, VOICE, rate=VOICE_RATE)
     await comm.save(str(mp3_path))
 
 

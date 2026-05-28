@@ -9,19 +9,48 @@ Downloads background videos for the active niche.
 import json
 import os
 import random
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 import requests
 
-ROOT        = Path(__file__).parent.parent
-CONFIG_DIR  = ROOT / "config"
-NICHES_FILE = CONFIG_DIR / "niches.json"
-KEYS_FILE   = CONFIG_DIR / "keys.json"
-CACHE_DIR   = ROOT / "media_library" / "cache"
+ROOT             = Path(__file__).parent.parent
+CONFIG_DIR       = ROOT / "config"
+NICHES_FILE      = CONFIG_DIR / "niches.json"
+KEYS_FILE        = CONFIG_DIR / "keys.json"
+CACHE_DIR        = ROOT / "media_library" / "cache"
+USED_VIDEOS_FILE = CONFIG_DIR / "used_videos.json"
 
 MIN_FILE_SIZE = 100_000   # 100 KB minimum – reject corrupt/tiny downloads
+
+_used_lock = threading.Lock()
+
+
+def _load_used_ids(source: str) -> set:
+    with _used_lock:
+        if not USED_VIDEOS_FILE.exists():
+            return set()
+        try:
+            return set(json.loads(USED_VIDEOS_FILE.read_text()).get(source, []))
+        except Exception:
+            return set()
+
+
+def _mark_used(source: str, video_id) -> None:
+    with _used_lock:
+        data: dict = {}
+        if USED_VIDEOS_FILE.exists():
+            try:
+                data = json.loads(USED_VIDEOS_FILE.read_text())
+            except Exception:
+                pass
+        ids = data.get(source, [])
+        if video_id not in ids:
+            ids.append(video_id)
+        data[source] = ids
+        USED_VIDEOS_FILE.write_text(json.dumps(data, indent=2))
 
 
 # ── Config ──────────────────────────────────────────────────────────────────────
@@ -46,7 +75,7 @@ def _pixabay(query: str, keys: dict) -> str:
     r = requests.get(
         "https://pixabay.com/api/videos/",
         params={"key": key, "q": query, "video_type": "film",
-                "per_page": 20, "order": "popular", "min_width": 1080},
+                "per_page": 30, "order": "popular", "min_width": 1080},
         timeout=10,
     )
     r.raise_for_status()
@@ -54,10 +83,17 @@ def _pixabay(query: str, keys: dict) -> str:
     if not hits:
         raise ValueError(f"Pixabay: no results for '{query}'")
 
-    video = random.choice(hits[:10])
+    used  = _load_used_ids("pixabay")
+    fresh = [v for v in hits if v.get("id") not in used]
+    pool  = fresh[:10] if fresh else hits[:10]
+    if not fresh:
+        print(f"[pixabay] ⚠ all results for '{query}' already used — recycling")
+
+    video = random.choice(pool)
     for q in ("large", "medium", "small", "tiny"):
         url = video["videos"].get(q, {}).get("url")
         if url:
+            _mark_used("pixabay", video.get("id"))
             return url
     raise ValueError("Pixabay: no usable URL")
 
@@ -70,7 +106,7 @@ def _pexels(query: str, keys: dict) -> str:
     r = requests.get(
         "https://api.pexels.com/videos/search",
         headers={"Authorization": key},
-        params={"query": query, "per_page": 20, "min_width": 1080,
+        params={"query": query, "per_page": 30, "min_width": 1080,
                 "min_duration": 5, "max_duration": 60},
         timeout=10,
     )
@@ -79,11 +115,18 @@ def _pexels(query: str, keys: dict) -> str:
     if not videos:
         raise ValueError(f"Pexels: no results for '{query}'")
 
-    video = random.choice(videos[:10])
+    used  = _load_used_ids("pexels")
+    fresh = [v for v in videos if v.get("id") not in used]
+    pool  = fresh[:10] if fresh else videos[:10]
+    if not fresh:
+        print(f"[pexels] ⚠ all results for '{query}' already used — recycling")
+
+    video = random.choice(pool)
     files = sorted(video.get("video_files", []),
                    key=lambda x: x.get("width", 0), reverse=True)
     for f in files:
         if f.get("link") and f.get("width", 0) >= 720:
+            _mark_used("pexels", video.get("id"))
             return f["link"]
     raise ValueError("Pexels: no HD file found")
 
