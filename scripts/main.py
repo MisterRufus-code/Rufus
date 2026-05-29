@@ -65,6 +65,17 @@ from audio_gen       import render
 from db_manager      import init_db, save_video, update_youtube_id
 
 
+def _parse_video_queries(analysis: str) -> list[str]:
+    """Extract VIDEO QUERIES line from pre-analysis output."""
+    for line in (analysis or "").split("\n"):
+        if "VIDEO QUERIES" in line.upper() or "VIDEO QUERY" in line.upper():
+            parts = line.split(":", 1)
+            if len(parts) > 1:
+                queries = [q.strip().strip("'\"") for q in parts[1].split(",")]
+                return [q for q in queries if len(q) > 2][:3]
+    return []
+
+
 def load_niche_cfg(override: str = None):
     data = json.loads(NICHES_FILE.read_text())
     if override:
@@ -135,7 +146,10 @@ def run(skip_upload: bool = False, niche_override: str = None, output_dir: Path 
     # ── Step 2: Fetch candidate videos (parallel) ──────────────────────────────
     print("[ 2 / 7 ]  Fetching candidate videos (parallel)...")
     try:
-        candidates = fetch_candidates(n=5)
+        video_queries = _parse_video_queries(seed_analysis)
+        if video_queries:
+            print(f"           → script queries: {video_queries}")
+        candidates = fetch_candidates(n=5, extra_keywords=video_queries or None)
         print(f"           → {len(candidates)} candidates downloaded\n")
     except Exception as e:
         print(f"           ✗ Step 2 failed: {e}")

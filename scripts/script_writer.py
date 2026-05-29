@@ -259,23 +259,27 @@ def _pre_analyze(client: OpenAI, seed: dict, scene: str, run_id: str,
             "2. BEHAVIOR CONDEMNED: What specific thing do most people do that this quote calls wrong? One sentence.\n"
             "3. PARADOX: 'Most people [X]. This quote reveals [Y instead].' Must be counterintuitive.\n"
             "4. HOOK ANGLE: One ≤8-word seed phrase that leads with the BIOGRAPHICAL FACT — not the quote text.\n"
-            "5. LOOP ANGLE: One question for the second-to-last line that makes viewers want to replay from line 1.\n\n"
-            "Reply ONLY with these 5 numbered items. No full script."
+            "5. LOOP ANGLE: One question for the second-to-last line that makes viewers want to replay from line 1.\n"
+            "6. VIDEO QUERIES: 3 comma-separated stock footage search terms that visually match the hook angle "
+            "(e.g. for a 2008 crisis hook: 'stock market crash, trading floor panic, financial chart red').\n\n"
+            "Reply ONLY with these 6 numbered items. No full script."
         )
-        max_toks = 220
+        max_toks = 270
     else:
         seed_blk = _seed_block(seed) if seed else f"Scene description: {scene}"
         prompt = (
             f"{seed_blk}\nBackground scene: {scene}\n\n"
-            "Before writing the script, find these four things in the source. Use REAL details — no invention.\n\n"
+            "Before writing the script, find these things in the source. Use REAL details — no invention.\n\n"
             "1. CONTRADICTION: One sentence — the surprising paradox in this source.\n"
             "2. HOOK ANGLE: One ≤8-word seed phrase. Lead with the number/name/contradiction. "
             "Wrong: 'A Reddit user saved $2.4M.' Right: '$2.4M by 38. Still scared to retire.'\n"
             "3. CORE: One sentence — the insight this source proves.\n"
-            "4. LOOP ANGLE: One question for the second-to-last line.\n\n"
-            "Reply with ONLY these 4 numbered items. No full script."
+            "4. LOOP ANGLE: One question for the second-to-last line.\n"
+            "5. VIDEO QUERIES: 3 comma-separated stock footage search terms that visually match the hook angle "
+            "(e.g. for a frugal savings story: 'hardware store tools, leaky faucet repair, money saving jar').\n\n"
+            "Reply with ONLY these 5 numbered items. No full script."
         )
-        max_toks = 140
+        max_toks = 190
 
     try:
         t0 = time.time()

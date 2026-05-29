@@ -292,15 +292,29 @@ def _fetch_one_candidate(idx: int, n: int, query: str, sources: list,
     return None
 
 
-def fetch_candidates(n: int = 5) -> list[Path]:
+def _slot_sources(idx: int, sources: list) -> list:
+    """Rotate which source is tried first based on slot index.
+    Slot 0 → [pexels, vimeo, ...], slot 1 → [vimeo, coverr, ..., pexels], etc.
+    Each slot has a different primary; fallback chain always includes pexels last.
     """
-    Fetch n different candidate videos in PARALLEL using different queries.
+    n = len(sources)
+    return sources[idx % n:] + sources[:idx % n]
+
+
+def fetch_candidates(n: int = 5,
+                     extra_keywords: list[str] | None = None) -> list[Path]:
+    """
+    Fetch n candidate videos in PARALLEL using different queries and rotated sources.
+    extra_keywords are injected first (script-derived) for tighter video-script match.
     Returns list of local paths for AI selection.
     """
     niche_cfg, active = _load_niche()
     keys              = _load_keys()
-    keywords          = niche_cfg["video_keywords"].copy()
-    random.shuffle(keywords)
+
+    # Merge script-derived queries first, then shuffle niche pool
+    niche_kw  = niche_cfg["video_keywords"].copy()
+    random.shuffle(niche_kw)
+    keywords  = list(extra_keywords or []) + niche_kw
 
     cand_dir = CACHE_DIR / active / "candidates"
     cand_dir.mkdir(parents=True, exist_ok=True)
@@ -312,14 +326,13 @@ def fetch_candidates(n: int = 5) -> list[Path]:
         except Exception:
             pass
 
-    ordered = SOURCES[:]
-    random.shuffle(ordered[:2])
+    all_sources = SOURCES[:]
 
     candidates: list[Path] = []
     with ThreadPoolExecutor(max_workers=n) as ex:
         futures = [
             ex.submit(_fetch_one_candidate, i, n, keywords[i % len(keywords)],
-                      ordered, keys, cand_dir)
+                      _slot_sources(i, all_sources), keys, cand_dir)
             for i in range(n)
         ]
         for fut in as_completed(futures):
