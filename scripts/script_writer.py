@@ -648,8 +648,32 @@ def _score(client: OpenAI, script: str, seed: dict, hook: str, run_id: str,
 
 # ── Public API ──────────────────────────────────────────────────────────────────
 
-def write_script(scene_description: str, seed: dict | None = None) -> dict:
+def preanalyze(seed: dict, scene: str = "") -> tuple[str, str, float]:
+    """Run pre-analysis before video selection so the picker uses the hook angle.
+
+    Returns (analysis_text, run_id, cost_usd).
+    Call this from main.py after get_seed(), before pick_best_video().
+    Pass the returned analysis and run_id into write_script() to skip the
+    duplicate API call inside the script writer.
+    """
+    _, active = _load_niche()
+    client    = OpenAI(api_key=_load_key())
+    run_id    = new_run_id()
+    if seed:
+        print(f"[gpt] run_id={run_id} seed: {seed.get('type', '?')} from {seed.get('source', 'Unknown')}")
+    analysis, cost = _pre_analyze(client, seed, scene, run_id, active)
+    if analysis:
+        print(f"[gpt] analysis:\n{analysis}")
+    return analysis, run_id, cost
+
+
+def write_script(scene_description: str, seed: dict | None = None,
+                 precomputed_analysis: str = None, run_id: str = None) -> dict:
     """Three-phase hook-first script writer. Returns dict with full metadata.
+
+    Pass precomputed_analysis + run_id (from preanalyze()) to skip the
+    redundant pre-analysis API call when analysis was already run for video
+    selection.
 
     Return shape:
         {
@@ -666,17 +690,20 @@ def write_script(scene_description: str, seed: dict | None = None) -> dict:
     std            = _standards()
     niche, active  = _load_niche()
     client         = OpenAI(api_key=_load_key())
-    run_id         = new_run_id()
+    run_id         = run_id or new_run_id()
     total_cost     = 0.0
 
-    if seed:
+    if seed and not precomputed_analysis:
         print(f"[gpt] run_id={run_id} seed: {seed.get('type', '?')} from {seed.get('source', 'Unknown')}")
 
-    # Pre-analysis
-    analysis, cost = _pre_analyze(client, seed, scene_description, run_id, active)
-    total_cost += cost
-    if analysis:
-        print(f"[gpt] analysis:\n{analysis}")
+    # Pre-analysis — skip if already done before video selection
+    if precomputed_analysis:
+        analysis = precomputed_analysis
+    else:
+        analysis, cost = _pre_analyze(client, seed, scene_description, run_id, active)
+        total_cost += cost
+        if analysis:
+            print(f"[gpt] analysis:\n{analysis}")
 
     # CTA
     cta = _pick_cta(niche)

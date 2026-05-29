@@ -60,7 +60,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 from research        import get_seed
 from media_fetcher   import fetch_candidates
 from llava_tagger    import pick_best_video
-from script_writer   import write_script, check_blacklist, add_to_blacklist
+from script_writer   import write_script, preanalyze, check_blacklist, add_to_blacklist
 from audio_gen       import render
 from db_manager      import init_db, save_video, update_youtube_id
 
@@ -110,7 +110,7 @@ def run(skip_upload: bool = False, niche_override: str = None, output_dir: Path 
 
     init_db()
 
-    # ── Step 1: Research a real seed ───────────────────────────────────────────
+    # ── Step 1: Research seed + pre-analyse ────────────────────────────────────
     print("[ 1 / 7 ]  Researching real source material...")
     try:
         seed = get_seed(active)
@@ -124,6 +124,14 @@ def run(skip_upload: bool = False, niche_override: str = None, output_dir: Path 
         print(f"           ✗ Step 1 failed: {e}")
         sys.exit(1)
 
+    # Pre-analysis runs here so the hook angle is available for video selection
+    seed_analysis = ""
+    script_run_id = None
+    try:
+        seed_analysis, script_run_id, _ = preanalyze(seed)
+    except Exception as e:
+        print(f"           ⚠ Pre-analysis failed (non-fatal): {e}")
+
     # ── Step 2: Fetch candidate videos (parallel) ──────────────────────────────
     print("[ 2 / 7 ]  Fetching candidate videos (parallel)...")
     try:
@@ -133,10 +141,13 @@ def run(skip_upload: bool = False, niche_override: str = None, output_dir: Path 
         print(f"           ✗ Step 2 failed: {e}")
         sys.exit(1)
 
-    # ── Step 3: AI picks best video ─────────────────────────────────────────────
+    # ── Step 3: AI picks best video (using hook angle from pre-analysis) ────────
     print("[ 3 / 7 ]  AI selecting best video...")
     try:
-        video_path, scene = pick_best_video(candidates, niche_cfg["llava_context"], seed=seed)
+        video_path, scene = pick_best_video(
+            candidates, niche_cfg["llava_context"],
+            seed=seed, analysis=seed_analysis or None,
+        )
         print(f"           → selected: {video_path.name}")
         short = scene[:120] + "..." if len(scene) > 120 else scene
         print(f"           → {short}\n")
@@ -144,15 +155,18 @@ def run(skip_upload: bool = False, niche_override: str = None, output_dir: Path 
         print(f"           ✗ Step 3 failed: {e}")
         sys.exit(1)
 
-    # ── Step 4: Write script from seed + scene ─────────────────────────────────
+    # ── Step 4: Write script (reuses pre-analysis, no duplicate API call) ──────
     print("[ 4 / 7 ]  Writing script with GPT...")
     try:
-        result = write_script(scene, seed=seed)
+        result = write_script(scene, seed=seed,
+                              precomputed_analysis=seed_analysis or None,
+                              run_id=script_run_id)
         script = result["script"]
 
         if check_blacklist(script):
             print("           ⚠ Similar script already used – regenerating...")
-            result = write_script(scene + " (make it different from previous versions)", seed=seed)
+            result = write_script(scene + " (make it different from previous versions)",
+                                  seed=seed)
             script = result["script"]
 
         add_to_blacklist(script)

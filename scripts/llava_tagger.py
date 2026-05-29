@@ -148,9 +148,11 @@ def tag_video(video_path: Path, llava_context: str, client: OpenAI = None) -> st
 
 
 def pick_best_video(candidates: list[Path], llava_context: str,
-                    seed: dict = None) -> tuple[Path, str]:
+                    seed: dict = None, analysis: str = None) -> tuple[Path, str]:
     """
     Describe all candidate videos, ask GPT which best matches the script topic.
+    Pass analysis (from preanalyze()) for hook-angle-level matching; falls back
+    to raw seed content when analysis is not available.
     Returns (chosen_path, scene_description).
     """
     client = _load_client()
@@ -177,9 +179,11 @@ def pick_best_video(candidates: list[Path], llava_context: str,
     if len(descriptions) == 1:
         return valid_paths[0], descriptions[0]
 
-    # Build seed context so the picker matches video to actual script topic
-    seed_ctx = ""
-    if seed:
+    # Build context for the picker — analysis gives hook angle + biographical facts
+    # which is much more specific than raw seed title/content
+    if analysis:
+        seed_ctx = f"\nSCRIPT ANGLE (hook + core message from pre-analysis):\n{analysis[:500]}"
+    elif seed:
         stype = seed.get("type", "")
         if stype == "reddit":
             seed_ctx = (
@@ -193,15 +197,19 @@ def pick_best_video(candidates: list[Path], llava_context: str,
             )
         elif stype == "hackernews":
             seed_ctx = f"\nSCRIPT TOPIC: \"{seed.get('title', '')}\""
+        else:
+            seed_ctx = ""
+    else:
+        seed_ctx = ""
 
     numbered = "\n".join(f"{i+1}. {d}" for i, d in enumerate(descriptions))
     prompt   = (
         f"You are choosing the best background video for a viral {niche_name} YouTube Short.\n"
         f"{seed_ctx}\n\n"
         f"VIDEO OPTIONS:\n{numbered}\n\n"
-        "Pick the video whose MOOD and VISUAL ENERGY best match the script topic above. "
-        "A script about a financial crisis needs tension, not a yacht. "
-        "A script about discipline needs physical struggle, not a boardroom.\n"
+        "Pick the video whose MOOD and VISUAL ENERGY best reinforce the script angle above.\n"
+        "Examples: a crisis story → trading screen with red; a discipline story → athlete grinding; "
+        "a wealth-building story → numbers/charts, not a yacht.\n"
         "Reply with ONLY: NUMBER|REASON (e.g. '3|Trading screen – matches the market crash story')"
     )
 
