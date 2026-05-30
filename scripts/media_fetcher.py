@@ -160,26 +160,6 @@ def _vimeo(query: str, keys: dict) -> str:
     raise ValueError("Vimeo: no downloadable HD video")
 
 
-def _coverr(_query: str, _keys: dict) -> str:
-    page = random.randint(1, 40)
-    r = requests.get(
-        "https://coverr.co/api/videos/featured",
-        params={"page": page, "per_page": 10},
-        timeout=10,
-    )
-    r.raise_for_status()
-    raw   = r.json()
-    items = raw if isinstance(raw, list) else raw.get("hits", raw.get("videos", []))
-    if not items:
-        raise ValueError("Coverr: empty response")
-
-    item = random.choice(items)
-    for field in ("mp4_url", "url", "video_url", "file_url", "src"):
-        if item.get(field):
-            return item[field]
-    raise ValueError("Coverr: no URL field found")
-
-
 def _archive(query: str, _keys: dict) -> str:
     r = requests.get(
         "https://archive.org/advancedsearch.php",
@@ -205,14 +185,13 @@ def _archive(query: str, _keys: dict) -> str:
     return f"https://archive.org/download/{identifier}/{mp4s[0]['name']}"
 
 
-# NASA removed from default chain – it returns space content for every query,
-# which is off-topic for finance/motivation/mindset/business niches.
+# NASA removed – returns space content for every query.
+# Coverr removed – API returns 404 for all requests as of 2026.
 SOURCES = [
     # ("pixabay", _pixabay),  # re-enable once Pixabay API key is set
-    ("pexels",  _pexels),
-    ("vimeo",   _vimeo),
-    ("coverr",  _coverr),
-    ("archive", _archive),
+    ("pexels",   _pexels),
+    ("vimeo",    _vimeo),
+    ("archive",  _archive),
 ]
 
 

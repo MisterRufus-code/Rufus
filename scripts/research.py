@@ -26,6 +26,12 @@ from pathlib import Path
 
 import httpx
 
+try:
+    import praw as _praw_mod
+    _PRAW_AVAILABLE = True
+except ImportError:
+    _PRAW_AVAILABLE = False
+
 CONFIG_DIR       = Path(__file__).parent.parent / "config"
 NICHES_FILE      = CONFIG_DIR / "niches.json"
 WISDOM_DIR       = CONFIG_DIR / "wisdom"
@@ -225,10 +231,89 @@ def _passes_quality_filter(post: dict) -> bool:
     return True
 
 
-def fetch_reddit_story(subreddit: str, limit: int = 50, used_ids: set | None = None) -> dict | None:
-    """Fetch the first quality-filtered hot post from a subreddit, skipping seen IDs."""
+def _load_keys() -> dict:
+    keys_file = CONFIG_DIR / "keys.json"
+    if not keys_file.exists():
+        return {}
+    try:
+        return json.loads(keys_file.read_text())
+    except Exception:
+        return {}
+
+
+def _fetch_reddit_praw(subreddit: str, limit: int = 50, used_ids: set | None = None) -> dict | None:
+    """Fetch via Reddit OAuth (PRAW) — works from cloud/server IPs unlike the public JSON API.
+
+    Requires in config/keys.json:
+        "reddit_client_id":     "<your script app client_id>"
+        "reddit_client_secret": "<your script app client_secret>"
+
+    Create a free app at https://www.reddit.com/prefs/apps (choose type: script).
+    """
+    if not _PRAW_AVAILABLE:
+        return None
+    keys = _load_keys()
+    cid  = keys.get("reddit_client_id", "")
+    csec = keys.get("reddit_client_secret", "")
+    if not cid or cid.startswith("YOUR_"):
+        return None
+
     if used_ids is None:
         used_ids = set()
+    try:
+        reddit = _praw_mod.Reddit(
+            client_id=cid,
+            client_secret=csec,
+            user_agent="script:rufus.shorts:v1.0",
+        )
+        candidates = []
+        for post in reddit.subreddit(subreddit).top("week", limit=limit):
+            if post.stickied or post.over_18:
+                continue
+            if post.score < MIN_SCORE or post.num_comments < MIN_COMMENTS:
+                continue
+            body = post.selftext or ""
+            if not body or len(body) < MIN_BODY_LEN or len(body) > MAX_BODY_LEN:
+                continue
+            title = post.title
+            if TITLE_BAD_RE.search(title) or TITLE_DISCUSSION_RE.search(title):
+                continue
+            if TITLE_OFFTOPIC_RE.search(title):
+                continue
+            if not TITLE_STORY_RE.search(title):
+                continue
+            sid = "reddit:" + f"https://reddit.com{post.permalink}"
+            if sid in used_ids:
+                continue
+            candidates.append(post)
+        if not candidates:
+            return None
+        chosen = random.choice(candidates[:8])
+        return {
+            "type":    "reddit",
+            "source":  f"r/{subreddit}",
+            "title":   chosen.title,
+            "content": _clean_text(chosen.selftext),
+            "url":     f"https://reddit.com{chosen.permalink}",
+        }
+    except Exception as e:
+        print(f"[research] PRAW error for r/{subreddit}: {e}")
+        return None
+
+
+def fetch_reddit_story(subreddit: str, limit: int = 50, used_ids: set | None = None) -> dict | None:
+    """Fetch the first quality-filtered hot post from a subreddit, skipping seen IDs.
+
+    Tries PRAW (official OAuth API — works from cloud IPs) first, then falls back
+    to the public JSON endpoints (blocked by Reddit on most cloud IPs).
+    """
+    if used_ids is None:
+        used_ids = set()
+
+    # Official OAuth path — doesn't get blocked from server IPs
+    result = _fetch_reddit_praw(subreddit, limit, used_ids)
+    if result:
+        return result
 
     data = None
     last_err = None
