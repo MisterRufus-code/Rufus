@@ -1,8 +1,9 @@
 """Tests for youtube_uploader.py – peak time scheduling and metadata building."""
 
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
-from youtube_uploader import _next_peak_utc, build_metadata, PEAK_HOURS_ET, ET_UTC_DELTA
+from youtube_uploader import _next_peak_utc, build_metadata, PEAK_HOURS_ET
 
 
 def test_next_peak_is_future():
@@ -22,12 +23,11 @@ def test_next_peak_at_least_five_minutes_out():
 
 
 def test_next_peak_hour_is_in_peak_list():
-    """The hour returned must be one of the configured ET peaks (converted to UTC)."""
+    """The hour returned must be one of the configured ET peaks."""
     ts  = _next_peak_utc()
     dt  = datetime.strptime(ts, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
-    # Convert UTC hour back to ET
-    et_hour = (dt.hour - int(ET_UTC_DELTA.total_seconds() // 3600)) % 24
-    assert et_hour in PEAK_HOURS_ET
+    et  = dt.astimezone(ZoneInfo("America/New_York"))
+    assert et.hour in PEAK_HOURS_ET
 
 
 def test_build_metadata_basic():

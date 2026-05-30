@@ -988,14 +988,17 @@ def check_blacklist(script: str) -> bool:
         return False
     try:
         items = json.loads(BLACKLIST_FILE.read_text())
-    except (json.JSONDecodeError, OSError):
+    except (json.JSONDecodeError, OSError, UnicodeDecodeError, ValueError):
         return False
     return _blacklist_key(script) in items
 
 
 def add_to_blacklist(script: str) -> None:
     BLACKLIST_FILE.parent.mkdir(parents=True, exist_ok=True)
-    items = json.loads(BLACKLIST_FILE.read_text()) if BLACKLIST_FILE.exists() else []
+    try:
+        items = json.loads(BLACKLIST_FILE.read_text()) if BLACKLIST_FILE.exists() else []
+    except (json.JSONDecodeError, OSError, UnicodeDecodeError, ValueError):
+        items = []
     key   = _blacklist_key(script)
     if key not in items:
         items.append(key)

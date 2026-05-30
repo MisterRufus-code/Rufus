@@ -114,7 +114,7 @@ def _archive_music(mood: str) -> Path | None:
         r = requests.get(
             "https://archive.org/advancedsearch.php",
             params={
-                "q":      f'{mood} AND mediatype:audio AND format:mp3',
+                "q":      f'{mood} AND mediatype:audio AND format:mp3 AND licenseurl:creativecommons',
                 "fl":     "identifier",
                 "rows":   20,
                 "output": "json",

@@ -23,6 +23,18 @@ from pathlib import Path
 import edge_tts
 from faster_whisper import WhisperModel
 
+# music_fetcher lives in the same directory; import lazily so audio_gen stays
+# usable even without it (graceful voice-only fallback).
+try:
+    import sys as _sys
+    _sys.path.insert(0, str(Path(__file__).parent))
+    from music_fetcher import fetch_music as _fetch_music
+    _MUSIC_OK = True
+except Exception:
+    _MUSIC_OK = False
+    def _fetch_music(niche: str):           # type: ignore[misc]
+        return None
+
 ROOT       = Path(__file__).parent.parent
 CONFIG_DIR = ROOT / "config"
 FONTS_DIR  = ROOT / "assets" / "fonts"
@@ -180,8 +192,8 @@ def _video_filter_complex(
         total = seg_dur
         fade_out_st = max(0.0, total - FADE_EDGE)
         parts.append(
-            f"[v0]fade=t=in:st=0:d={FADE_EDGE:.3f},"
-            f"fade=t=out:st={fade_out_st:.3f}:d={FADE_EDGE:.3f}[vraw]"
+            f"[v0]fade=type=in:st=0:d={FADE_EDGE:.3f},"
+            f"fade=type=out:st={fade_out_st:.3f}:d={FADE_EDGE:.3f}[vraw]"
         )
     else:
         # Chain xfade between clips
@@ -199,8 +211,8 @@ def _video_filter_complex(
         total = n * seg_dur - (n - 1) * XFADE_DUR
         fade_out_st = max(0.0, total - FADE_EDGE)
         parts.append(
-            f"[{current}]fade=t=in:st=0:d={FADE_EDGE:.3f},"
-            f"fade=t=out:st={fade_out_st:.3f}:d={FADE_EDGE:.3f}[vraw]"
+            f"[{current}]fade=type=in:st=0:d={FADE_EDGE:.3f},"
+            f"fade=type=out:st={fade_out_st:.3f}:d={FADE_EDGE:.3f}[vraw]"
         )
 
     # fontsdir path for custom font; ASS filter uses single quotes — escape internal ones
@@ -218,8 +230,8 @@ def _audio_filter_complex(n: int, audio_dur: float, music_path: Path | None) -> 
     fade_out_st = max(0.0, audio_dur - 1.5)
     return (
         f"[{n+1}:a]volume={MUSIC_VOL},"
-        f"afade=t=in:st=0:d=1.5,"
-        f"afade=t=out:st={fade_out_st:.3f}:d=1.5[music];"
+        f"afade=type=in:st=0:d=1.5,"
+        f"afade=type=out:st={fade_out_st:.3f}:d=1.5[music];"
         f"[{n}:a][music]amix=inputs=2:duration=first:dropout_transition=1[aout]"
     )
 
@@ -245,9 +257,7 @@ def render(script: str, bg_paths: "Path | list[Path]", out_dir: Path,
     # Auto-fetch music if not provided
     if music_path is None:
         try:
-            sys.path.insert(0, str(Path(__file__).parent))
-            from music_fetcher import fetch_music
-            music_path = fetch_music(niche_name)
+            music_path = _fetch_music(niche_name)
         except Exception as e:
             print(f"[music] fetch skipped: {e}")
             music_path = None
@@ -283,7 +293,11 @@ def render(script: str, bg_paths: "Path | list[Path]", out_dir: Path,
         print("[3/4] Building subtitles…")
         build_ass(segments, ass, audio_dur, font_name=font_name)
 
-        seg_dur     = audio_dur / n
+        # seg_dur_xfade: inflate each clip so xfade overlaps sum to zero net loss.
+        # Formula: n*seg - (n-1)*xfade = audio_dur  →  seg = (audio_dur + (n-1)*xfade) / n
+        # Without this, total video duration < audio_dur → frozen last frame.
+        seg_dur_xfade  = (audio_dur + (n - 1) * XFADE_DUR) / n if n > 1 else audio_dur
+        seg_dur_concat = audio_dur / n   # hard-concat fallback needs unpadded duration
         over_w      = int(W * 1.10)
         over_h      = int(H * 1.10)
         pad_y       = (over_h - H) // 2
@@ -294,12 +308,12 @@ def render(script: str, bg_paths: "Path | list[Path]", out_dir: Path,
         print(f"[4/4] Rendering {n} clip{'s' if n > 1 else ''} → {audio_dur:.1f}s"
               f"{' + music' if has_music else ''}…")
 
-        fc_video = _video_filter_complex(n, over_w, over_h, pad_y, seg_dur,
+        fc_video = _video_filter_complex(n, over_w, over_h, pad_y, seg_dur_xfade,
                                          eq_filter, ass_esc, fonts_esc)
 
         cmd = ["ffmpeg", "-y", "-loglevel", "error"]
         for bg in bg_paths:
-            cmd += ["-stream_loop", "-1", "-t", f"{seg_dur + XFADE_DUR:.3f}", "-i", str(bg)]
+            cmd += ["-stream_loop", "-1", "-t", f"{seg_dur_xfade + XFADE_DUR:.3f}", "-i", str(bg)]
         cmd += ["-i", str(mp3)]
         if has_music:
             cmd += ["-stream_loop", "-1", "-t", f"{audio_dur:.3f}", "-i", str(music_path)]
@@ -330,11 +344,11 @@ def render(script: str, bg_paths: "Path | list[Path]", out_dir: Path,
         if result.returncode != 0:
             # xfade can fail on very short clips — retry with hard concat fallback
             print(f"[render] xfade failed ({result.stderr[-200:]}), retrying with hard concat…")
-            fc_fallback = _video_filter_complex_concat(n, over_w, over_h, pad_y, seg_dur,
+            fc_fallback = _video_filter_complex_concat(n, over_w, over_h, pad_y, seg_dur_concat,
                                                         eq_filter, ass_esc, fonts_esc)
             cmd2 = ["ffmpeg", "-y", "-loglevel", "error"]
             for bg in bg_paths:
-                cmd2 += ["-stream_loop", "-1", "-t", f"{seg_dur:.3f}", "-i", str(bg)]
+                cmd2 += ["-stream_loop", "-1", "-t", f"{seg_dur_concat:.3f}", "-i", str(bg)]
             cmd2 += ["-i", str(mp3)]
             if has_music:
                 cmd2 += ["-stream_loop", "-1", "-t", f"{audio_dur:.3f}", "-i", str(music_path)]

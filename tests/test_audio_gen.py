@@ -26,6 +26,7 @@ def _segment(words):
 
 
 def test_cluster_words_basic_pairing():
+    """CLUSTER_SIZE=1 → one word per subtitle line."""
     seg = _segment([
         _word("hello", 0.0, 0.5),
         _word("world", 0.5, 1.0),
@@ -33,9 +34,11 @@ def test_cluster_words_basic_pairing():
         _word("bar",   1.5, 2.0),
     ])
     clusters = list(_cluster_words([seg], audio_dur=5.0))
-    assert len(clusters) == 2
-    assert clusters[0] == (0.0, 1.0, "HELLO WORLD")
-    assert clusters[1] == (1.0, 2.0, "FOO BAR")
+    assert len(clusters) == 4
+    assert clusters[0] == (0.0, 0.5, "HELLO")
+    assert clusters[1] == (0.5, 1.0, "WORLD")
+    assert clusters[2] == (1.0, 1.5, "FOO")
+    assert clusters[3] == (1.5, 2.0, "BAR")
 
 
 def test_cluster_words_clips_to_audio_dur():
@@ -59,9 +62,11 @@ def test_cluster_words_empty_input():
 
 
 def test_cluster_words_strips_whitespace_in_word_text():
+    """Each word gets its own subtitle, stripped and uppercased."""
     seg = _segment([
         _word("  hi  ",  0.0, 0.3),
         _word(" there ", 0.3, 0.6),
     ])
     clusters = list(_cluster_words([seg], audio_dur=2.0))
-    assert clusters[0][2] == "HI THERE"
+    assert clusters[0][2] == "HI"
+    assert clusters[1][2] == "THERE"

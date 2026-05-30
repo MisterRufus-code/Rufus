@@ -17,7 +17,8 @@ def test_find_banned_whole_word_only():
 
 
 def test_find_banned_no_match_clean_script():
-    clean = "You're broke. Here's why. Most people save wrong. Spend on assets. Follow for more."
+    # "here's why" is a banned phrase — test must not use it
+    clean = "You're broke. Three patterns. Most people save wrong. Spend on assets. Follow for more."
     assert _find_banned(clean) is None
 
 

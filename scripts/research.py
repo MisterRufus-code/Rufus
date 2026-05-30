@@ -297,7 +297,12 @@ def _fetch_reddit_praw(subreddit: str, limit: int = 50, used_ids: set | None = N
             "url":     f"https://reddit.com{chosen.permalink}",
         }
     except Exception as e:
-        print(f"[research] PRAW error for r/{subreddit}: {e}")
+        err = str(e)
+        if "401" in err or "403" in err or "INVALID_GRANT" in err or "Unauthorized" in err:
+            print(f"[research] PRAW auth failed for r/{subreddit} — check reddit_client_id/"
+                  f"reddit_client_secret in config/keys.json: {e}")
+        else:
+            print(f"[research] PRAW error for r/{subreddit}: {e}")
         return None
 
 
