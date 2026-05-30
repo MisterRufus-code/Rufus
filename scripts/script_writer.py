@@ -258,13 +258,14 @@ def _pre_analyze(client: OpenAI, seed: dict, scene: str, run_id: str,
             "Must be concrete — include a number, year, event, or documented outcome.\n"
             "2. BEHAVIOR CONDEMNED: What specific thing do most people do that this quote calls wrong? One sentence.\n"
             "3. PARADOX: 'Most people [X]. This quote reveals [Y instead].' Must be counterintuitive.\n"
-            "4. HOOK ANGLE: One ≤8-word seed phrase that leads with the BIOGRAPHICAL FACT — not the quote text.\n"
-            "5. LOOP ANGLE: One question for the second-to-last line that makes viewers want to replay from line 1.\n"
-            "6. VIDEO QUERIES: 3 comma-separated stock footage search terms that visually match the hook angle "
+            "4. EMOTIONAL STAKES: One sentence — what does someone lose, fear, or regret if they never understand this quote?\n"
+            "5. HOOK ANGLE: One ≤8-word seed phrase that leads with the BIOGRAPHICAL FACT — not the quote text.\n"
+            "6. LOOP ANGLE: One question for the second-to-last line that makes viewers want to replay from line 1.\n"
+            "7. VIDEO QUERIES: 3 comma-separated stock footage search terms that visually match the hook angle "
             "(e.g. for a 2008 crisis hook: 'stock market crash, trading floor panic, financial chart red').\n\n"
-            "Reply ONLY with these 6 numbered items. No full script."
+            "Reply ONLY with these 7 numbered items. No full script."
         )
-        max_toks = 270
+        max_toks = 300
     else:
         seed_blk = _seed_block(seed) if seed else f"Scene description: {scene}"
         prompt = (
@@ -274,12 +275,14 @@ def _pre_analyze(client: OpenAI, seed: dict, scene: str, run_id: str,
             "2. HOOK ANGLE: One ≤8-word seed phrase. Lead with the number/name/contradiction. "
             "Wrong: 'A Reddit user saved $2.4M.' Right: '$2.4M by 38. Still scared to retire.'\n"
             "3. CORE: One sentence — the insight this source proves.\n"
-            "4. LOOP ANGLE: One question for the second-to-last line.\n"
-            "5. VIDEO QUERIES: 3 comma-separated stock footage search terms that visually match the hook angle "
+            "4. EMOTIONAL STAKES: One sentence — what does the average person lose or fear if they ignore this insight?\n"
+            "5. CONCRETE DETAIL: The single most specific, vivid detail from the source (a number, name, date, or documented outcome).\n"
+            "6. LOOP ANGLE: One question for the second-to-last line.\n"
+            "7. VIDEO QUERIES: 3 comma-separated stock footage search terms that visually match the hook angle "
             "(e.g. for a frugal savings story: 'hardware store tools, leaky faucet repair, money saving jar').\n\n"
-            "Reply with ONLY these 5 numbered items. No full script."
+            "Reply with ONLY these 7 numbered items. No full script."
         )
-        max_toks = 190
+        max_toks = 250
 
     try:
         t0 = time.time()
@@ -416,10 +419,12 @@ def _hook_scorer(client: OpenAI, hooks: list[str], seed: dict, niche_name: str,
         f"SOURCE: \"{seed_text}\"\n\n"
         f"HOOKS:\n{numbered}\n\n"
         "SCORING CRITERIA (0-10 total):\n"
-        "- Pattern interrupt (does it stop the scroll?): 0-3\n"
-        "- Specificity (real number/name/year that creates credibility): 0-3\n"
-        "- Contradiction strength (cognitive gap the brain can't ignore): 0-3\n"
-        "- Brevity & punch (every word earns its place): 0-1\n\n"
+        "- Contradiction strength (cognitive gap the brain CANNOT ignore — feels wrong, demands resolution): 0-4\n"
+        "- Pattern interrupt (stops the scroll — opens a question the viewer must answer): 0-3\n"
+        "- Specificity (real number/name/year that earns instant credibility): 0-2\n"
+        "- Brevity & punch (every word earns its place, no filler): 0-1\n\n"
+        "DISQUALIFY (score 0-3) if: hook is purely descriptive with no tension, no contradiction, "
+        "no cognitive gap — just a statement of fact or neutral observation.\n\n"
         "Reply ONLY with this JSON array, one object per hook, in order:\n"
         '[{"i": 1, "score": 0-10, "reason": "one-sentence why"}, ...]'
     )
@@ -482,7 +487,8 @@ def _hook_scorer(client: OpenAI, hooks: list[str], seed: dict, niche_name: str,
             continue
 
     if best_idx == -1:
-        # Fallback: pick first surviving hook
+        if not survivors:
+            return -1, 0, "no scoring entries and no survivors to fall back to", 0.0
         best_idx   = survivors[0][0]
         best_score = 0
         best_reason = "all scoring entries malformed — fell back to first survivor"
@@ -517,9 +523,13 @@ VOICE:
 - Short sentences ({body['min_avg_sentence_words']}-{body['max_avg_sentence_words']} words avg). Vary rhythm deliberately.
 - Never moralize. Never summarize. Trust the audience.
 
-STRUCTURE — NON-NEGOTIABLE:
+STRUCTURE — 3-BEAT ARC, NON-NEGOTIABLE:
 LINE 1 (HOOK): USE EXACTLY THIS LINE, DO NOT REWRITE OR REPHRASE IT:
 "{hook}"
+
+BEAT 1 — SETUP (lines 2-3): Ground the viewer in a specific fact. Use a number, name, or date. No vague context.
+BEAT 2 — TURN (lines 4-5): The unexpected reversal or contradiction. Start with "But" or "Until" or "Then". This is the tension that creates emotion.
+BEAT 3 — PAYOFF (lines 6-7): Name the mechanism. Reveal WHY the turn happened. No advice. Show the truth.
 
 BODY ({body['min_words']}-{body['max_words']} words total including hook and CTA):
 - Every sentence either adds evidence or builds tension. No filler.
@@ -604,7 +614,8 @@ def _score(client: OpenAI, script: str, seed: dict, hook: str, run_id: str,
         "□ Script uses placeholder names (John/Sarah/Mike/Alex) as if real\n"
         "□ Script adopts first-person voice of someone in the source\n"
         "□ Script has zero specifics (no number, name, date, or verbatim detail)\n"
-        "□ Loop line (second-to-last) shares zero content words with the hook\n\n"
+        "□ Loop line (second-to-last) shares zero content words with the hook\n"
+        "□ BORING: Body has no tension, contradiction, or turning point — reads like a neutral Wikipedia summary\n\n"
         "STEP 2 — SCORE EACH (only if no disqualifiers):\n"
         + specificity_criterion +
         "HOOK 0-2: Does the body deliver on the cognitive itch the hook opened? 0=unanswered, 1=partial, 2=paid off in loop.\n"
@@ -975,7 +986,10 @@ def _blacklist_key(script: str) -> str:
 def check_blacklist(script: str) -> bool:
     if not BLACKLIST_FILE.exists():
         return False
-    items = json.loads(BLACKLIST_FILE.read_text())
+    try:
+        items = json.loads(BLACKLIST_FILE.read_text())
+    except (json.JSONDecodeError, OSError):
+        return False
     return _blacklist_key(script) in items
 
 

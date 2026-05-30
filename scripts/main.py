@@ -66,7 +66,7 @@ from db_manager      import init_db, save_video, update_youtube_id
 
 
 def _parse_video_queries(analysis: str) -> list[str]:
-    """Extract VIDEO QUERIES line from pre-analysis output."""
+    """Extract VIDEO QUERIES line from pre-analysis output (item 7)."""
     for line in (analysis or "").split("\n"):
         if "VIDEO QUERIES" in line.upper() or "VIDEO QUERY" in line.upper():
             parts = line.split(":", 1)
@@ -149,7 +149,7 @@ def run(skip_upload: bool = False, niche_override: str = None, output_dir: Path 
         video_queries = _parse_video_queries(seed_analysis)
         if video_queries:
             print(f"           → script queries: {video_queries}")
-        candidates = fetch_candidates(n=5, extra_keywords=video_queries or None)
+        candidates = fetch_candidates(n=7, extra_keywords=video_queries or None)
         print(f"           → {len(candidates)} candidates downloaded\n")
     except Exception as e:
         print(f"           ✗ Step 2 failed: {e}")
@@ -179,9 +179,14 @@ def run(skip_upload: bool = False, niche_override: str = None, output_dir: Path 
 
         if check_blacklist(script):
             print("           ⚠ Similar script already used – regenerating...")
-            result = write_script(scene + " (make it different from previous versions)",
-                                  seed=seed)
-            script = result["script"]
+            try:
+                result = write_script(scene + " (make it different from previous versions)",
+                                      seed=seed,
+                                      precomputed_analysis=seed_analysis or None,
+                                      run_id=script_run_id)
+                script = result["script"]
+            except Exception as _regen_err:
+                print(f"           ⚠ Blacklist regen failed ({_regen_err}) — using original script")
 
         add_to_blacklist(script)
         preview = script[:100] + "..." if len(script) > 100 else script

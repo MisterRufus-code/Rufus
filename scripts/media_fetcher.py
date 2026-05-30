@@ -34,7 +34,7 @@ def _load_used_ids(source: str) -> set:
             return set()
         try:
             return set(json.loads(USED_VIDEOS_FILE.read_text()).get(source, []))
-        except Exception:
+        except (json.JSONDecodeError, OSError):
             return set()
 
 
@@ -44,7 +44,7 @@ def _mark_used(source: str, video_id) -> None:
         if USED_VIDEOS_FILE.exists():
             try:
                 data = json.loads(USED_VIDEOS_FILE.read_text())
-            except Exception:
+            except (json.JSONDecodeError, OSError):
                 pass
         ids = data.get(source, [])
         if video_id not in ids:
@@ -273,8 +273,8 @@ def _fetch_one_candidate(idx: int, n: int, query: str, sources: list,
 
 def _slot_sources(idx: int, sources: list) -> list:
     """Rotate which source is tried first based on slot index.
-    Slot 0 → [pexels, vimeo, ...], slot 1 → [vimeo, coverr, ..., pexels], etc.
-    Each slot has a different primary; fallback chain always includes pexels last.
+    Slot 0 → [pexels, vimeo, archive], slot 1 → [vimeo, archive, pexels], etc.
+    Each slot has a different primary so parallel fetches spread across providers.
     """
     n = len(sources)
     return sources[idx % n:] + sources[:idx % n]

@@ -207,10 +207,14 @@ def pick_best_video(candidates: list[Path], llava_context: str,
         f"You are choosing the best background video for a viral {niche_name} YouTube Short.\n"
         f"{seed_ctx}\n\n"
         f"VIDEO OPTIONS:\n{numbered}\n\n"
-        "Pick the video whose MOOD and VISUAL ENERGY best reinforce the script angle above.\n"
-        "Examples: a crisis story → trading screen with red; a discipline story → athlete grinding; "
-        "a wealth-building story → numbers/charts, not a yacht.\n"
-        "Reply with ONLY: NUMBER|REASON (e.g. '3|Trading screen – matches the market crash story')"
+        "SELECTION RULES — apply in order:\n"
+        "1. STORY SUBJECT first: match the specific topic, not just the niche. "
+        "A market crash story → trading screens with red; a frugality story → tools/repair work; "
+        "a discipline story → athlete grinding; a wealth trap story → bills/debt, NOT a yacht.\n"
+        "2. CONTRADICT the story if needed: a story about losing wealth should show loss, not luxury.\n"
+        "3. MOOD match: tension/conflict → darker/dramatic footage; inspiration → bright/dynamic.\n"
+        "4. REJECT any video whose visuals directly contradict the story's emotional tone.\n\n"
+        "Reply with ONLY: NUMBER|REASON (e.g. '3|Trading screens with red — matches the crash story')"
     )
 
     resp = client.chat.completions.create(

@@ -40,8 +40,7 @@ DEFAULT_CATEGORIES = {
     "personal_development": "27",   # Education
 }
 
-PEAK_HOURS_ET = [8, 12, 17, 20]  # US Eastern hours; EDT = UTC-4 (most of the year)
-ET_UTC_DELTA  = timedelta(hours=4)   # UTC = ET + 4 (EDT). Switch to 5 during EST winter.
+PEAK_HOURS_ET = [8, 12, 17, 20]  # US Eastern hours
 
 NICHE_HASHTAGS = {
     "finance":              ["#finance", "#investing", "#wealth", "#money", "#stockmarket", "#Shorts"],
@@ -53,15 +52,18 @@ NICHE_HASHTAGS = {
 
 
 def _next_peak_utc() -> str:
-    """Return ISO 8601 UTC timestamp for the next US-ET peak hour, ≥5 min from now."""
+    """Return ISO 8601 UTC timestamp for the next US-ET peak hour, ≥5 min from now.
+    Uses zoneinfo for automatic EDT/EST handling — no hardcoded UTC offset."""
+    from zoneinfo import ZoneInfo
+    tz_et   = ZoneInfo("America/New_York")
     now_utc = datetime.now(tz=timezone.utc)
-    now_et  = now_utc - ET_UTC_DELTA   # ET = UTC - 4
+    now_et  = now_utc.astimezone(tz_et)
 
     for day_delta in range(3):
         day = now_et.date() + timedelta(days=day_delta)
         for hour in PEAK_HOURS_ET:
-            et_naive  = datetime(day.year, day.month, day.day, hour, 0, 0)
-            utc_aware = (et_naive + ET_UTC_DELTA).replace(tzinfo=timezone.utc)
+            et_aware  = datetime(day.year, day.month, day.day, hour, 0, 0, tzinfo=tz_et)
+            utc_aware = et_aware.astimezone(timezone.utc)
             if utc_aware > now_utc + timedelta(minutes=5):
                 return utc_aware.strftime("%Y-%m-%dT%H:%M:%SZ")
 
