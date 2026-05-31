@@ -197,7 +197,7 @@ def _video_filter_complex(
         parts.append(
             f"[{i}:v]setpts=PTS-STARTPTS,scale={over_w}:{over_h}:force_original_aspect_ratio=increase,"
             f"crop={W}:{H}:{pan_x}:{pan_y},"
-            f"setsar=1[v{i}]"
+            f"setsar=1,fps={FPS},format=yuv420p,settb=AVTB[v{i}]"
         )
 
     if n == 1:
@@ -398,7 +398,7 @@ def _video_filter_complex_concat(
         parts.append(
             f"[{i}:v]setpts=PTS-STARTPTS,scale={over_w}:{over_h}:force_original_aspect_ratio=increase,"
             f"crop={W}:{H}:{pan_x}:{pan_y},"
-            f"setsar=1[v{i}]"
+            f"setsar=1,fps={FPS},format=yuv420p,settb=AVTB[v{i}]"
         )
     concat_inputs = "".join(f"[v{i}]" for i in range(n))
     parts.append(f"{concat_inputs}concat=n={n}:v=1:a=0[vraw]")

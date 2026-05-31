@@ -152,6 +152,42 @@ def _find_hedging(script: str) -> str | None:
     return None
 
 
+# Last-resort substitutions so a stray banned word never ships a 0/10 script.
+# Single-word swaps are grammar-safe; unmapped banned phrases are simply removed.
+_BANNED_SYNONYMS = {
+    "crucial": "key", "vital": "key", "leverage": "use", "robust": "strong",
+    "delve": "look", "actionable": "practical", "skyrocket": "soar",
+    "unlock": "reveal", "empower": "enable", "revolutionize": "transform",
+    "disrupt": "upend", "journey": "path", "navigating": "handling",
+    "landscape": "field", "synergy": "teamwork", "paradigm": "model",
+    "groundbreaking": "new", "seamlessly": "smoothly",
+    "game-changer": "turning point", "game changer": "turning point",
+    "cutting-edge": "advanced", "dive deep": "look closely",
+}
+
+
+def _repair_banned(script: str) -> str:
+    """Replace/strip banned phrases so the final script always passes the ban check.
+
+    Mapped words get a grammar-safe synonym; everything else is deleted. Used only
+    as a salvage step when the model can't produce a clean script on its own.
+    """
+    out = script
+    for phrase in _standards()["banned_phrases"]:
+        pat = re.compile(r"\b" + re.escape(phrase) + r"\b", re.IGNORECASE)
+        if not pat.search(out):
+            continue
+        repl = _BANNED_SYNONYMS.get(phrase.lower(), "")
+        out = pat.sub(repl, out)
+    # tidy artefacts left by deletions: doubled spaces, space/leading-comma, empties.
+    # Only collapse spaces/tabs — never newlines (that would merge separate lines).
+    out = re.sub(r"[ \t]{2,}", " ", out)
+    out = re.sub(r"[ \t]+([,.;:!?])", r"\1", out)
+    out = re.sub(r"^[\s,;:]+", "", out, flags=re.MULTILINE)   # drop leading punct from stripped connectors
+    out = "\n".join(ln.strip() for ln in out.splitlines() if ln.strip())
+    return out
+
+
 def _hook_pre_check(hook: str) -> str | None:
     """Return rejection reason or None. Deterministic gate before LLM scoring."""
     h     = hook.strip().strip('"').strip("'")
@@ -788,7 +824,32 @@ def write_script(scene_description: str, seed: dict | None = None,
     max_attempts  = std["scoring"]["max_body_attempts"]
     score_min     = std["scoring"]["score_min"]
     body_model    = std["models"]["body_gen"]
-    last_rejection = ""  # tracks what failed in the previous attempt
+    last_rejection = ""        # what failed in the previous attempt (for the crit note)
+    accumulated_fixes: list[str] = []   # ALL corrections so far — carried forward each retry
+    rejected_pool: list[tuple[int, str]] = []   # (word_count, script) for salvage fallback
+
+    def _fix_for(rejection: str) -> str:
+        """Map a rejection reason → a one-line CRITICAL correction for the next prompt."""
+        if rejection.startswith("banned"):
+            bad = rejection.split("'")[1] if "'" in rejection else ""
+            return (f"CRITICAL: '{bad}' is a BANNED phrase — never use it or any variation.")
+        if "loop no echo" in rejection:
+            return (f"CRITICAL: the second-to-last line must echo a word from the hook "
+                    f"({hook_token_str}).")
+        if "opinion word" in rejection:
+            return f"CRITICAL: include at least one opinion word: {opinion_all}."
+        if "hedging" in rejection:
+            bad = rejection.split("'")[1] if "'" in rejection else ""
+            return f"CRITICAL: remove '{bad}' — no hedging language."
+        if "too short" in rejection:
+            return f"CRITICAL: write at least {std['body']['min_words']} words total (aim for ~100)."
+        if "too long" in rejection:
+            return f"CRITICAL: keep it under {std['body']['max_words']} words."
+        if "specificity" in rejection:
+            return "CRITICAL: add concrete specifics — a name, year, or dollar amount per sentence."
+        if "sentences too long" in rejection:
+            return f"CRITICAL: shorten sentences (avg ≤{std['body']['max_avg_sentence_words']} words)."
+        return ""
 
     best = {"script": "", "score": 0, "crits": {}, "reasoning": "",
             "temperature": temps[0], "attempt_n": 0}
@@ -796,9 +857,14 @@ def write_script(scene_description: str, seed: dict | None = None,
     for attempt in range(1, max_attempts + 1):
         temp = temps[min(attempt - 1, len(temps) - 1)]
 
-        # Retry pressure — escalate based on what failed
-        if attempt == 1:
-            push = ""
+        # Retry pressure — carry ALL prior corrections forward so the model can't
+        # fix one constraint while regressing on another (the oscillation bug).
+        if attempt == 1 or not accumulated_fixes:
+            push = "" if attempt == 1 else (
+                f"\n\nAttempt {attempt}. Keep only sentences that REVEAL, NAME A SPECIFIC, "
+                "or BUILD TENSION. The COMPLETE SCRIPT is required — hook on line 1, body, "
+                "then CTA on the last line."
+            )
         else:
             crit_note = (
                 f" (prev score {best['score']}/10 — "
@@ -807,30 +873,10 @@ def write_script(scene_description: str, seed: dict | None = None,
                 f"loop={best['crits'].get('loop','?')})"
                 if best["score"] > 0 else ""
             )
-            # Specific correction based on exactly what failed last time
-            specific_fix = ""
-            if last_rejection.startswith("banned"):
-                bad_phrase = last_rejection.split("'")[1] if "'" in last_rejection else ""
-                specific_fix = (
-                    f" CRITICAL: Your previous script used '{bad_phrase}' — that phrase is BANNED."
-                    f" Do not use it or any variation of it."
-                )
-            elif "loop no echo" in last_rejection:
-                specific_fix = (
-                    f" CRITICAL: Your second-to-last line must contain at least one of: {hook_token_str}."
-                    f" Quote or echo a word from the hook: '{winning_hook}'"
-                )
-            elif "opinion word" in last_rejection:
-                specific_fix = (
-                    f" CRITICAL: Your body had no opinion word. Use at least one of: {opinion_all}."
-                )
-            elif "hedging" in last_rejection:
-                bad_hedge = last_rejection.split("'")[1] if "'" in last_rejection else ""
-                specific_fix = f" CRITICAL: Remove '{bad_hedge}' — no hedging language allowed."
-            elif "too short" in last_rejection:
-                specific_fix = f" CRITICAL: Write at least {std['body']['min_words']} words total."
+            fixes_blk = "\n".join(f"- {f}" for f in accumulated_fixes)
             push = (
-                f"\n\nAttempt {attempt}{crit_note}.{specific_fix} "
+                f"\n\nAttempt {attempt}{crit_note}. You MUST satisfy ALL of these "
+                f"(failures from earlier attempts — do not regress on any):\n{fixes_blk}\n"
                 "Keep only sentences that REVEAL, NAME A SPECIFIC, or BUILD TENSION. "
                 "The COMPLETE SCRIPT is required — hook on line 1, body, then CTA on the last line."
             )
@@ -883,6 +929,10 @@ def write_script(scene_description: str, seed: dict | None = None,
 
         if rejection:
             last_rejection = rejection  # carry forward to next attempt's push
+            fix = _fix_for(rejection)
+            if fix and fix not in accumulated_fixes:
+                accumulated_fixes.append(fix)   # remember it for ALL future attempts
+            rejected_pool.append((len(script.split()), script))
             print(f"[gpt] attempt {attempt}/{max_attempts} – rejected ({rejection})")
             save_attempt(run_id=run_id, niche=active,
                          seed_type=seed.get("type") if seed else None,
@@ -943,9 +993,25 @@ def write_script(scene_description: str, seed: dict | None = None,
             break
 
     if not best["script"]:
-        print(f"[gpt] ⚠ no body attempt produced output — using last raw script")
-        best["script"] = script
+        # No attempt cleared the pre-filter. Salvage the rejected attempt closest to
+        # passing (most words = nearest the length floor, usually the richest body)
+        # rather than blindly shipping whatever the last loop iteration produced.
+        if rejected_pool:
+            salvage = max(rejected_pool, key=lambda x: x[0])[1]
+        else:
+            salvage = script
+        print(f"[gpt] ⚠ no body attempt passed — salvaging closest rejected attempt")
+        best["script"] = salvage
         best["attempt_n"] = max_attempts
+
+    # Safety net: guarantee the shipped script contains no banned phrase, even if the
+    # model never produced a clean one. Mapped words → synonyms; others stripped.
+    if _find_banned(best["script"]):
+        before = _find_banned(best["script"])
+        best["script"] = _repair_banned(best["script"])
+        after = _find_banned(best["script"])
+        print(f"[gpt] repaired banned phrase '{before}'"
+              + (f" (still found '{after}')" if after else " — clean"))
 
     if best["score"] < score_min:
         print(f"[gpt] ⚠ best score was {best['score']}/10 (target ≥{score_min}) — using best attempt")
