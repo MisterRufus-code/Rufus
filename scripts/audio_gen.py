@@ -11,6 +11,7 @@ Changes from v2.2:
 
 import argparse
 import asyncio
+import functools
 import json
 import os
 import random
@@ -83,6 +84,18 @@ def _ensure_font() -> str:
         print(f"[font] Anton download failed ({e}) — using Arial")
         FONT_FILE.unlink(missing_ok=True)
     return "Arial"
+
+
+# ── FFmpeg capability detection ──────────────────────────────────────────────────
+
+@functools.lru_cache(maxsize=1)
+def _ffmpeg_has_xfade() -> bool:
+    """Return True if the installed FFmpeg includes the xfade video filter."""
+    try:
+        r = subprocess.run(["ffmpeg", "-filters"], capture_output=True, text=True, timeout=10)
+        return "xfade" in r.stdout
+    except Exception:
+        return False
 
 
 # ── Whisper singleton ────────────────────────────────────────────────────────────
@@ -182,7 +195,7 @@ def _video_filter_complex(
         pan_x = x_exprs[i % len(x_exprs)]
         pan_y = y_exprs[i % len(y_exprs)]
         parts.append(
-            f"[{i}:v]scale={over_w}:{over_h}:force_original_aspect_ratio=increase,"
+            f"[{i}:v]setpts=PTS-STARTPTS,scale={over_w}:{over_h}:force_original_aspect_ratio=increase,"
             f"crop={W}:{H}:{pan_x}:{pan_y},"
             f"setsar=1[v{i}]"
         )
@@ -305,68 +318,53 @@ def render(script: str, bg_paths: "Path | list[Path]", out_dir: Path,
         fonts_esc   = str(FONTS_DIR).replace("\\", "/").replace("'", "\\'")
         has_music   = music_path is not None and Path(music_path).exists()
 
+        use_xfade = n > 1 and _ffmpeg_has_xfade()
         print(f"[4/4] Rendering {n} clip{'s' if n > 1 else ''} → {audio_dur:.1f}s"
-              f"{' + music' if has_music else ''}…")
+              f"{' + music' if has_music else ''}"
+              f"{' [xfade]' if use_xfade else ''}…")
 
-        fc_video = _video_filter_complex(n, over_w, over_h, pad_y, seg_dur_xfade,
-                                         eq_filter, ass_esc, fonts_esc)
-
-        cmd = ["ffmpeg", "-y", "-loglevel", "error"]
-        for bg in bg_paths:
-            cmd += ["-stream_loop", "-1", "-t", f"{seg_dur_xfade + XFADE_DUR:.3f}", "-i", str(bg)]
-        cmd += ["-i", str(mp3)]
-        if has_music:
-            cmd += ["-stream_loop", "-1", "-t", f"{audio_dur:.3f}", "-i", str(music_path)]
-
-        if has_music:
-            afc = _audio_filter_complex(n, audio_dur, music_path)
-            cmd += [
-                "-filter_complex", fc_video + ";\n" + afc,
-                "-map", "[vout]",
-                "-map", "[aout]",
-            ]
-        else:
-            cmd += [
-                "-filter_complex", fc_video,
-                "-map", "[vout]",
-                "-map", f"{n}:a",
-            ]
-
-        cmd += [
-            "-t", f"{audio_dur:.3f}",
-            "-c:v", "libx264", "-preset", "fast", "-crf", "20",
-            "-c:a", "aac", "-b:a", "128k",
-            "-r", str(FPS), "-pix_fmt", "yuv420p",
-            str(out),
-        ]
-
-        result = subprocess.run(cmd, capture_output=True, text=True)
-        if result.returncode != 0:
-            # xfade can fail on very short clips — retry with hard concat fallback
-            print(f"[render] xfade failed ({result.stderr[-200:]}), retrying with hard concat…")
-            fc_fallback = _video_filter_complex_concat(n, over_w, over_h, pad_y, seg_dur_concat,
-                                                        eq_filter, ass_esc, fonts_esc)
-            cmd2 = ["ffmpeg", "-y", "-loglevel", "error"]
+        def _build_cmd(fc: str, seg_t: float) -> list:
+            c = ["ffmpeg", "-y", "-loglevel", "warning"]
             for bg in bg_paths:
-                cmd2 += ["-stream_loop", "-1", "-t", f"{seg_dur_concat:.3f}", "-i", str(bg)]
-            cmd2 += ["-i", str(mp3)]
+                c += ["-stream_loop", "-1", "-t", f"{seg_t:.3f}", "-i", str(bg)]
+            c += ["-i", str(mp3)]
             if has_music:
-                cmd2 += ["-stream_loop", "-1", "-t", f"{audio_dur:.3f}", "-i", str(music_path)]
+                c += ["-stream_loop", "-1", "-t", f"{audio_dur:.3f}", "-i", str(music_path)]
             if has_music:
-                afc2 = _audio_filter_complex(n, audio_dur, music_path)
-                cmd2 += ["-filter_complex", fc_fallback + ";\n" + afc2,
-                         "-map", "[vout]", "-map", "[aout]"]
+                afc = _audio_filter_complex(n, audio_dur, music_path)
+                c += ["-filter_complex", fc + ";\n" + afc, "-map", "[vout]", "-map", "[aout]"]
             else:
-                cmd2 += ["-filter_complex", fc_fallback,
-                         "-map", "[vout]", "-map", f"{n}:a"]
-            cmd2 += [
+                c += ["-filter_complex", fc, "-map", "[vout]", "-map", f"{n}:a"]
+            c += [
                 "-t", f"{audio_dur:.3f}",
                 "-c:v", "libx264", "-preset", "fast", "-crf", "20",
                 "-c:a", "aac", "-b:a", "128k",
                 "-r", str(FPS), "-pix_fmt", "yuv420p",
                 str(out),
             ]
-            subprocess.run(cmd2, check=True)
+            return c
+
+        used_xfade = False
+        if use_xfade:
+            fc_xfade = _video_filter_complex(n, over_w, over_h, pad_y, seg_dur_xfade,
+                                             eq_filter, ass_esc, fonts_esc)
+            r = subprocess.run(_build_cmd(fc_xfade, seg_dur_xfade + XFADE_DUR),
+                                capture_output=True, text=True)
+            if r.returncode == 0:
+                used_xfade = True
+            else:
+                print(f"[render] xfade failed (rc={r.returncode}: "
+                      f"{r.stderr[-200:].strip()}), retrying with hard concat…")
+
+        if not used_xfade:
+            fc_concat = _video_filter_complex_concat(n, over_w, over_h, pad_y, seg_dur_concat,
+                                                      eq_filter, ass_esc, fonts_esc)
+            r2 = subprocess.run(_build_cmd(fc_concat, seg_dur_concat + 0.1),
+                                 capture_output=True, text=True)
+            if r2.returncode != 0:
+                raise RuntimeError(
+                    f"FFmpeg hard-concat failed (rc={r2.returncode}):\n{r2.stderr[-600:]}"
+                )
 
     finally:
         for f in (mp3, ass):
@@ -398,7 +396,7 @@ def _video_filter_complex_concat(
         pan_x = x_exprs[i % len(x_exprs)]
         pan_y = y_exprs[i % len(y_exprs)]
         parts.append(
-            f"[{i}:v]scale={over_w}:{over_h}:force_original_aspect_ratio=increase,"
+            f"[{i}:v]setpts=PTS-STARTPTS,scale={over_w}:{over_h}:force_original_aspect_ratio=increase,"
             f"crop={W}:{H}:{pan_x}:{pan_y},"
             f"setsar=1[v{i}]"
         )
