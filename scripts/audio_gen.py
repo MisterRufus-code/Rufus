@@ -88,6 +88,11 @@ def _ensure_font() -> str:
 
 # ── FFmpeg capability detection ──────────────────────────────────────────────────
 
+# GPU mode: set RUFUS_GPU=1 on a cloud instance so Whisper uses CUDA and FFmpeg uses
+# NVENC. Defaults to CPU so the same code runs unchanged on Daniel's home machine.
+_GPU = os.environ.get("RUFUS_GPU", "").strip().lower() in ("1", "true", "yes", "on")
+
+
 @functools.lru_cache(maxsize=1)
 def _ffmpeg_has_xfade() -> bool:
     """Return True if the installed FFmpeg includes the xfade video filter."""
@@ -98,6 +103,24 @@ def _ffmpeg_has_xfade() -> bool:
         return False
 
 
+@functools.lru_cache(maxsize=1)
+def _ffmpeg_has_nvenc() -> bool:
+    """Return True if the installed FFmpeg includes the h264_nvenc encoder."""
+    try:
+        r = subprocess.run(["ffmpeg", "-hide_banner", "-encoders"],
+                           capture_output=True, text=True, timeout=10)
+        return "h264_nvenc" in r.stdout
+    except Exception:
+        return False
+
+
+def _video_encoder_args() -> list[str]:
+    """Pick the H.264 encoder: NVENC on GPU instances, libx264 on CPU."""
+    if _GPU and _ffmpeg_has_nvenc():
+        return ["-c:v", "h264_nvenc", "-preset", "p4", "-cq", "23"]
+    return ["-c:v", "libx264", "-preset", "fast", "-crf", "20"]
+
+
 # ── Whisper singleton ────────────────────────────────────────────────────────────
 
 _whisper_model = None
@@ -105,6 +128,13 @@ _whisper_model = None
 def _whisper() -> WhisperModel:
     global _whisper_model
     if _whisper_model is None:
+        if _GPU:
+            try:
+                _whisper_model = WhisperModel("base", device="cuda", compute_type="float16")
+                print("[whisper] CUDA / float16 (GPU mode)")
+                return _whisper_model
+            except Exception as e:
+                print(f"[whisper] CUDA init failed ({e}) — falling back to CPU")
         _whisper_model = WhisperModel("base", device="cpu", compute_type="int8")
     return _whisper_model
 
@@ -337,7 +367,7 @@ def render(script: str, bg_paths: "Path | list[Path]", out_dir: Path,
                 c += ["-filter_complex", fc, "-map", "[vout]", "-map", f"{n}:a"]
             c += [
                 "-t", f"{audio_dur:.3f}",
-                "-c:v", "libx264", "-preset", "fast", "-crf", "20",
+                *_video_encoder_args(),
                 "-c:a", "aac", "-b:a", "128k",
                 "-r", str(FPS), "-pix_fmt", "yuv420p",
                 str(out),

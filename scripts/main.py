@@ -143,31 +143,54 @@ def run(skip_upload: bool = False, niche_override: str = None, output_dir: Path 
     except Exception as e:
         print(f"           ⚠ Pre-analysis failed (non-fatal): {e}")
 
-    # ── Step 2: Fetch candidate videos (parallel) ──────────────────────────────
-    print("[ 2 / 7 ]  Fetching candidate videos (parallel)...")
-    try:
-        video_queries = _parse_video_queries(seed_analysis)
-        if video_queries:
-            print(f"           → script queries: {video_queries}")
-        candidates = fetch_candidates(n=7, extra_keywords=video_queries or None)
-        print(f"           → {len(candidates)} candidates downloaded\n")
-    except Exception as e:
-        print(f"           ✗ Step 2 failed: {e}")
-        sys.exit(1)
+    video_source  = os.environ.get("RUFUS_VIDEO_SOURCE", "pexels").strip().lower()
+    video_queries = _parse_video_queries(seed_analysis)
 
-    # ── Step 3: AI picks best video (using hook angle from pre-analysis) ────────
-    print("[ 3 / 7 ]  AI selecting best video...")
-    try:
-        video_path, scene = pick_best_video(
-            candidates, niche_cfg["llava_context"],
-            seed=seed, analysis=seed_analysis or None,
-        )
-        print(f"           → selected: {video_path.name}")
-        short = scene[:120] + "..." if len(scene) > 120 else scene
-        print(f"           → {short}\n")
-    except Exception as e:
-        print(f"           ✗ Step 3 failed: {e}")
-        sys.exit(1)
+    # ── Step 2: Get candidate clips — AI-generated (ComfyUI) or stock (Pexels) ──
+    candidates = []
+    scene = ""
+    if video_source == "comfy":
+        print("[ 2 / 7 ]  Generating AI clips with ComfyUI...")
+        try:
+            from comfy_client import generate_clips
+            prompts = video_queries or [niche_cfg.get("llava_context", active)]
+            candidates = generate_clips(prompts, n=int(os.environ.get("COMFY_CLIPS", "5")))
+            if candidates:
+                scene = "AI-generated footage: " + "; ".join(prompts[:3])
+                print(f"           → {len(candidates)} clips generated\n")
+        except Exception as e:
+            print(f"           ⚠ ComfyUI generation failed ({e}) — falling back to Pexels")
+        if not candidates:
+            print("           → no AI clips — falling back to Pexels stock footage")
+            video_source = "pexels"
+
+    if video_source != "comfy":
+        print("[ 2 / 7 ]  Fetching candidate videos (parallel)...")
+        try:
+            if video_queries:
+                print(f"           → script queries: {video_queries}")
+            candidates = fetch_candidates(n=7, extra_keywords=video_queries or None)
+            print(f"           → {len(candidates)} candidates downloaded\n")
+        except Exception as e:
+            print(f"           ✗ Step 2 failed: {e}")
+            sys.exit(1)
+
+    # ── Step 3: AI picks best video (stock only — generated clips are on-topic) ─
+    if scene:
+        print("[ 3 / 7 ]  Generated clips are purpose-built — skipping vision pick\n")
+    else:
+        print("[ 3 / 7 ]  AI selecting best video...")
+        try:
+            video_path, scene = pick_best_video(
+                candidates, niche_cfg["llava_context"],
+                seed=seed, analysis=seed_analysis or None,
+            )
+            print(f"           → selected: {video_path.name}")
+            short = scene[:120] + "..." if len(scene) > 120 else scene
+            print(f"           → {short}\n")
+        except Exception as e:
+            print(f"           ✗ Step 3 failed: {e}")
+            sys.exit(1)
 
     # ── Step 4: Write script (reuses pre-analysis, no duplicate API call) ──────
     print("[ 4 / 7 ]  Writing script with GPT...")
@@ -232,11 +255,18 @@ def run(skip_upload: bool = False, niche_override: str = None, output_dir: Path 
         print(f"           ⚠ DB save failed (non-fatal): {e}\n")
 
     # ── Step 7: Upload (with custom thumbnail) ─────────────────────────────────
+    # Quality gate: only auto-upload videos whose script cleared the bar. A weak
+    # script never reaches YouTube — it's saved locally for review instead.
     yt_url = None
+    min_score = int(os.environ.get("RUFUS_MIN_UPLOAD_SCORE", "8"))
+    final_score = result.get("score", 0)
     if skip_upload:
         print("[ 7 / 7 ]  Upload skipped (--skip-upload)\n")
+    elif final_score < min_score:
+        print(f"[ 7 / 7 ]  Upload held — score {final_score}/10 < {min_score}/10 threshold.")
+        print(f"           Video saved for review: {output_path}\n")
     else:
-        print("[ 7 / 7 ]  Generating thumbnail + uploading to YouTube...")
+        print(f"[ 7 / 7 ]  Score {final_score}/10 ≥ {min_score} — generating thumbnail + uploading...")
         try:
             from thumbnail_gen    import make_thumbnail
             from youtube_uploader import upload
