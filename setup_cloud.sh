@@ -51,9 +51,9 @@ if [ ! -d "$VHS_DIR" ]; then
 fi
 [ -f "$VHS_DIR/requirements.txt" ] && pip install -q -r "$VHS_DIR/requirements.txt" || true
 
-# ── 3. Wan2.1 models (1.3B — fast; ~10GB total) ──────────────────────────────
-say "Wan2.1 models (~10GB, resumable)"
-dl "$HF/diffusion_models/wan2.1_t2v_1.3B_fp16.safetensors"      "$COMFY_DIR/models/diffusion_models/wan2.1_t2v_1.3B_fp16.safetensors"
+# ── 3. Wan2.1 models (14B — better quality; ~18GB total) ──────────────────────
+say "Wan2.1 models (~18GB, resumable — 14B for better quality)"
+dl "$HF/diffusion_models/wan2.1_t2v_14B_fp16.safetensors"      "$COMFY_DIR/models/diffusion_models/wan2.1_t2v_14B_fp16.safetensors"
 dl "$HF/text_encoders/umt5_xxl_fp8_e4m3fn_scaled.safetensors"  "$COMFY_DIR/models/text_encoders/umt5_xxl_fp8_e4m3fn_scaled.safetensors"
 dl "$HF/vae/wan_2.1_vae.safetensors"                           "$COMFY_DIR/models/vae/wan_2.1_vae.safetensors"
 
