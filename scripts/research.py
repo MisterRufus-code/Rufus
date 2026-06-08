@@ -152,7 +152,8 @@ def _load_used_seeds() -> list:
         return []
     try:
         return json.loads(USED_SEEDS_FILE.read_text())
-    except Exception:
+    except (json.JSONDecodeError, OSError, UnicodeDecodeError, ValueError):
+        print("[research] ⚠ recovered from corrupted used_seeds.json — history reset")
         return []
 
 

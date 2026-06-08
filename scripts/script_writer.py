@@ -483,7 +483,7 @@ def _hook_scorer(client: OpenAI, hooks: list[str], seed: dict, niche_name: str,
     try:
         scores = json.loads(raw_clean)
         if isinstance(scores, dict):  # tolerate {"results": [...]}
-            scores = scores.get("results") or scores.get("hooks") or list(scores.values())[0]
+            scores = scores.get("results") or scores.get("hooks") or (list(scores.values())[0] if scores else [])
     except Exception as e:
         print(f"[hook_score] JSON parse failed: {e} — raw: {raw[:200]}")
         scores = []
@@ -798,7 +798,8 @@ def write_script(scene_description: str, seed: dict | None = None,
         if hooks:
             winning_hook = hooks[0]
             winning_hook_score = 0
-            print(f"[gpt] ⚠ fallback hook (no candidate passed filter): {winning_hook}")
+            print(f"[gpt] ⚠⚠⚠ shipping ZERO-SCORE hook (all {len(hooks)} candidates failed filter) — script quality unchecked")
+            print(f"[gpt]     hook: {winning_hook}")
         else:
             raise RuntimeError("Hook factory produced zero parseable hooks across 2 attempts")
 
@@ -923,7 +924,8 @@ def write_script(scene_description: str, seed: dict | None = None,
                 script = "\n".join(lines)
 
         # Pre-score regex rejections (cheap)
-        rejection = _find_banned(script) and f"banned phrase: '{_find_banned(script)}'"
+        _banned = _find_banned(script)
+        rejection = f"banned phrase: '{_banned}'" if _banned else None
         if not rejection:
             rejection = _body_pre_check(script)
 
@@ -1068,7 +1070,7 @@ def add_to_blacklist(script: str) -> None:
     key   = _blacklist_key(script)
     if key not in items:
         items.append(key)
-    BLACKLIST_FILE.write_text(json.dumps(items[-1000:], indent=2))
+    BLACKLIST_FILE.write_text(json.dumps(items[-500:], indent=2))
 
 
 if __name__ == "__main__":

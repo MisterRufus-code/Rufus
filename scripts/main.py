@@ -153,7 +153,7 @@ def run(skip_upload: bool = False, niche_override: str = None, output_dir: Path 
         print("[ 2 / 7 ]  Generating AI clips with ComfyUI...")
         try:
             from comfy_client import generate_clips
-            prompts = video_queries or [niche_cfg.get("llava_context", active)]
+            prompts = video_queries or [niche_cfg.get("llava_context", f"Describe this scene for {active} content.")]
             candidates = generate_clips(prompts, n=int(os.environ.get("COMFY_CLIPS", "5")))
             if candidates:
                 scene = "AI-generated footage: " + "; ".join(prompts[:3])
@@ -258,6 +258,7 @@ def run(skip_upload: bool = False, niche_override: str = None, output_dir: Path 
     # Quality gate: only auto-upload videos whose script cleared the bar. A weak
     # script never reaches YouTube — it's saved locally for review instead.
     yt_url = None
+    yt_id  = None   # guard: upload() may not be reached if quality gate holds
     min_score = int(os.environ.get("RUFUS_MIN_UPLOAD_SCORE", "8"))
     final_score = result.get("score", 0)
     if skip_upload:
@@ -284,6 +285,7 @@ def run(skip_upload: bool = False, niche_override: str = None, output_dir: Path 
             if db_id and yt_id:
                 update_youtube_id(db_id, yt_id)
         except Exception as e:
+            yt_url = None
             print(f"           ✗ Upload failed: {e}\n")
 
     # ── Done ────────────────────────────────────────────────────────────────────

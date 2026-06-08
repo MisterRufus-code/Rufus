@@ -290,8 +290,6 @@ def render(script: str, bg_paths: "Path | list[Path]", out_dir: Path,
         raise FileNotFoundError("No valid background video files found")
 
     n = len(bg_paths)
-    if n == 0:
-        raise FileNotFoundError("No valid background video files found")
 
     niche_cfg = _load_niche()
     niche_name = _active_niche_name()
@@ -302,8 +300,10 @@ def render(script: str, bg_paths: "Path | list[Path]", out_dir: Path,
         try:
             music_path = _fetch_music(niche_name)
         except Exception as e:
-            print(f"[music] fetch skipped: {e}")
+            print(f"[music] {niche_name} mood fetch failed: {e}")
             music_path = None
+    if music_path is None:
+        print("[audio] no music track — rendering voice-only")
 
     font_name = _ensure_font()
 

@@ -153,7 +153,8 @@ def _archive_music(mood: str) -> Path | None:
                 print(f"[music] archive.org: {identifier}/{chosen['name']}")
                 if _download(audio_url, dest):
                     return dest
-            except Exception:
+            except Exception as e:
+                print(f"[music] archive.org {identifier} failed: {e}")
                 continue
     except Exception as e:
         print(f"[music] archive.org failed: {e}")
