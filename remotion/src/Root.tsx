@@ -1,3 +1,4 @@
+import React from 'react';
 import {Composition} from 'remotion';
 import {Short, ShortProps, FPS, WIDTH, HEIGHT} from './Short';
 
