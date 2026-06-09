@@ -24,3 +24,8 @@ venv/
 # OS
 .DS_Store
 Thumbs.db
+
+# Remotion (Node render engine)
+remotion/node_modules/
+remotion/public/job_*/
+remotion/out/

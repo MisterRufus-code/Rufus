@@ -221,9 +221,21 @@ def run(skip_upload: bool = False, niche_override: str = None, output_dir: Path 
         sys.exit(1)
 
     # ── Step 5: Render (all clips cut together) ─────────────────────────────────
-    print("[ 5 / 7 ]  Rendering Short...")
+    # RUFUS_RENDERER=remotion uses the React engine (spring-pop captions, smooth
+    # crossfades, progress bar); anything else uses the FFmpeg engine. Remotion
+    # failures fall back to FFmpeg so a render always completes.
+    renderer = os.environ.get("RUFUS_RENDERER", "ffmpeg").strip().lower()
+    print(f"[ 5 / 7 ]  Rendering Short ({renderer})...")
     try:
-        output_path = render(script, candidates, out_dir)
+        if renderer == "remotion":
+            try:
+                from remotion_renderer import render as remotion_render
+                output_path = remotion_render(script, candidates, out_dir)
+            except Exception as e:
+                print(f"           ⚠ Remotion failed ({e}) — falling back to FFmpeg")
+                output_path = render(script, candidates, out_dir)
+        else:
+            output_path = render(script, candidates, out_dir)
         print(f"           → {output_path}\n")
     except Exception as e:
         print(f"           ✗ Step 5 failed: {e}")
