@@ -9,6 +9,8 @@ Covers:
 - audio_gen:     _ffmpeg_has_xfade / _ffmpeg_has_nvenc probes
 - research:      corrupted used_seeds.json recovery (no crash)
 - music_fetcher: archive.org per-identifier errors don't abort loop
+- sd_client:     returns [] when A1111 not running (no crash)
+- sd_client:     generate_clips skips failed images gracefully
 """
 
 import json
@@ -170,3 +172,53 @@ def test_fetch_music_returns_none_on_all_failures():
          patch("music_fetcher._archive_music", return_value=None):
         result = fetch_music("finance")
     assert result is None
+
+
+# ── sd_client guards ──────────────────────────────────────────────────────────
+
+def test_sd_client_returns_empty_when_unavailable():
+    """generate_clips must return [] (not raise) when A1111 is not running."""
+    from sd_client import generate_clips
+    with patch("sd_client.is_available", return_value=False):
+        result = generate_clips(["stock market"], n=2)
+    assert result == []
+
+
+def test_sd_client_skips_failed_images():
+    """generate_clips must skip a clip and continue when _generate_image fails."""
+    from sd_client import generate_clips
+    call_count = {"n": 0}
+
+    def fake_generate(prompt):
+        call_count["n"] += 1
+        return None  # always fail
+
+    with patch("sd_client.is_available", return_value=True), \
+         patch("sd_client._generate_image", side_effect=fake_generate):
+        result = generate_clips(["query1", "query2"], n=2)
+
+    assert result == []
+    assert call_count["n"] == 2   # tried both, skipped both — no exception
+
+
+def test_sd_query_to_prompt_contains_query():
+    """_query_to_prompt should embed the query and quality suffix."""
+    from sd_client import _query_to_prompt
+    prompt = _query_to_prompt("stock market crash")
+    assert "stock market crash" in prompt
+    assert "photorealistic" in prompt
+
+
+def test_sd_upscale_lanczos_fallback():
+    """_upscale_lanczos must return bytes larger than the input (2× scale)."""
+    from sd_client import _upscale_lanczos
+    from PIL import Image
+    import io
+    img = Image.new("RGB", (576, 1024), color=(128, 64, 32))
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    small = buf.getvalue()
+
+    big = _upscale_lanczos(small)
+    big_img = Image.open(io.BytesIO(big))
+    assert big_img.size == (1152, 2048)
