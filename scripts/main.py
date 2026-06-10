@@ -146,9 +146,8 @@ def run(skip_upload: bool = False, niche_override: str = None, output_dir: Path 
     video_source  = os.environ.get("RUFUS_VIDEO_SOURCE", "pexels").strip().lower()
     video_queries = _parse_video_queries(seed_analysis)
 
-    # ── Step 2: Get candidate clips — AI-generated (SD/ComfyUI) or stock (Pexels) ─
+    # ── Step 2: Get candidate clips — AI-generated (SD) or stock (Pexels) ───────
     # RUFUS_VIDEO_SOURCE=sd        → Stable Diffusion local (GTX 1060 safe, free forever)
-    # RUFUS_VIDEO_SOURCE=comfy     → ComfyUI video (needs 24GB+ VRAM, cloud GPU)
     # RUFUS_VIDEO_SOURCE=pexels    → Pexels stock footage (default)
     candidates = []
     scene = ""
@@ -168,22 +167,7 @@ def run(skip_upload: bool = False, niche_override: str = None, output_dir: Path 
             print("           → no SD clips — falling back to Pexels")
             video_source = "pexels"
 
-    elif video_source == "comfy":
-        print("[ 2 / 7 ]  Generating AI clips with ComfyUI...")
-        try:
-            from comfy_client import generate_clips
-            prompts = video_queries or [niche_cfg.get("llava_context", f"Describe this scene for {active} content.")]
-            candidates = generate_clips(prompts, n=int(os.environ.get("COMFY_CLIPS", "5")))
-            if candidates:
-                scene = "AI-generated footage: " + "; ".join(prompts[:3])
-                print(f"           → {len(candidates)} clips generated\n")
-        except Exception as e:
-            print(f"           ⚠ ComfyUI generation failed ({e}) — falling back to Pexels")
-        if not candidates:
-            print("           → no AI clips — falling back to Pexels stock footage")
-            video_source = "pexels"
-
-    if video_source not in ("sd", "comfy"):
+    if video_source != "sd":
         print("[ 2 / 7 ]  Fetching candidate videos (parallel)...")
         try:
             if video_queries:

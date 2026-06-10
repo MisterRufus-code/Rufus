@@ -15,7 +15,7 @@ python scripts/main.py --skip-upload   # render only, nothing leaves the machine
 ## Pipeline (7 steps)
 
 1. **Research** — a real seed: Reddit story → Hacker News → wisdom quote fallback.
-2. **Footage** — Pexels stock, local Stable Diffusion, or ComfyUI (see below).
+2. **Footage** — Pexels stock or local Stable Diffusion (see below).
 3. **Vision pick** — GPT-4o Vision picks the clip that matches the *story*, not just the niche.
 4. **Script** — hook-first, 3-beat arc (Setup → Turn → Payoff), scored 0–10.
 5. **Render** — TTS voice + Whisper word-captions + Ken Burns + music → 1080×1920 mp4.
@@ -49,7 +49,7 @@ Everything is free except OpenAI credits. Mix and match:
 
 | Variable | Values | Default | What it does |
 |---|---|---|---|
-| `RUFUS_VIDEO_SOURCE` | `pexels` / `sd` / `comfy` | `pexels` | Footage source (see below) |
+| `RUFUS_VIDEO_SOURCE` | `pexels` / `sd` | `pexels` | Footage source (see below) |
 | `RUFUS_RENDERER` | `ffmpeg` / `remotion` | `ffmpeg` | Render engine (see below) |
 | `RUFUS_TTS` | `edge` / `xtts` | `edge` | Voice engine (see below) |
 | `RUFUS_GPU` | `1` / unset | unset | Whisper CUDA + FFmpeg NVENC |
@@ -59,9 +59,8 @@ Everything is free except OpenAI credits. Mix and match:
 ### Footage sources
 - **`pexels`** — free stock footage, 7 candidates, GPT-4o Vision picks the best match. Needs a Pexels key.
 - **`sd`** — local Stable Diffusion (Automatic1111). Generates images matching the script, upscales 2× with Real-ESRGAN, crops to 1080×1920, animates with Ken Burns. **Free forever, runs on a GTX 1060 6GB.** Start A1111 with `./webui.sh --api --xformers --medvram`, then set `SD_HOST` if not on localhost.
-- **`comfy`** — ComfyUI AI *video* (Wan2.1). Needs 24GB+ VRAM (cloud GPU). Set `COMFY_HOST`.
 
-All three fall back to Pexels if they produce nothing, so a run never dies on footage.
+Both fall back to Pexels if they produce nothing, so a run never dies on footage.
 
 ### Render engines
 - **`ffmpeg`** — fast, stable. xfade crossfades, Ken Burns, Anton captions, ducked music, vignette.
@@ -89,8 +88,8 @@ python scripts/main.py --rotate --skip-upload
 # Cron: today's scheduled niche, auto-upload if it scores ≥8
 python scripts/main.py --scheduled
 
-# Cloud GPU instance (CUDA Whisper + NVENC + AI video)
-RUFUS_GPU=1 RUFUS_VIDEO_SOURCE=comfy python scripts/main.py
+# GPU instance (CUDA Whisper + NVENC encoding)
+RUFUS_GPU=1 python scripts/main.py
 ```
 
 ---
