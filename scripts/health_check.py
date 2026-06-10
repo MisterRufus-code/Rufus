@@ -37,30 +37,32 @@ def run() -> None:
         err_lines.append(f"  ✗  {label}: {msg}")
 
     # ── FFmpeg ──────────────────────────────────────────────────────────────────
-    r = subprocess.run(["ffmpeg", "-version"], capture_output=True)
-    if r.returncode == 0:
-        ok("FFmpeg installed")
-    else:
-        err("FFmpeg installed", "ffmpeg not found in PATH")
+    def _binary_ok(name: str) -> bool:
+        if shutil.which(name) is None:
+            return False
+        try:
+            return subprocess.run([name, "-version"], capture_output=True).returncode == 0
+        except (FileNotFoundError, OSError):
+            return False
 
-    r = subprocess.run(["ffprobe", "-version"], capture_output=True)
-    if r.returncode == 0:
-        ok("ffprobe installed")
-    else:
-        err("ffprobe installed", "ffprobe not found in PATH")
+    for binary in ("ffmpeg", "ffprobe"):
+        if _binary_ok(binary):
+            ok(f"{binary} installed")
+        else:
+            err(f"{binary} installed", f"{binary} not found in PATH — run: sudo apt install ffmpeg")
 
     # ── config/keys.json ────────────────────────────────────────────────────────
     if not KEYS_FILE.exists():
-        err("config/keys.json", "file not found – create it from config/keys.json.example")
+        err("config/keys.json", "file not found – create it from config/keys.json.template")
     else:
         ok("config/keys.json exists")
         try:
             keys = json.loads(KEYS_FILE.read_text())
             oai  = keys.get("openai", "")
-            if oai and not oai.startswith("YOUR_") and oai.startswith("sk-"):
+            if oai.startswith("sk-") and len(oai) > 20 and not oai.startswith("YOUR_"):
                 ok("OpenAI key set")
             else:
-                err("OpenAI key", "not set or invalid – must start with 'sk-'")
+                err("OpenAI key", "not set or placeholder – paste your real sk-... key into config/keys.json")
 
             pexels = keys.get("pexels", "")
             if pexels and not pexels.startswith("YOUR_"):
@@ -93,16 +95,24 @@ def run() -> None:
         err("Disk space", f"only {free_gb:.1f} GB free – need ≥1 GB")
 
     # ── Python packages ─────────────────────────────────────────────────────────
+    required = ["edge_tts", "faster_whisper", "openai", "httpx", "PIL", "google.auth"]
     missing = []
-    for pkg in ["edge_tts", "faster_whisper", "openai", "google.auth"]:
+    for pkg in required:
         try:
             __import__(pkg.replace("-", "_"))
         except ImportError:
             missing.append(pkg)
     if not missing:
-        ok("Python packages  (edge_tts, faster_whisper, openai, google-auth)")
+        ok(f"Python packages  ({', '.join(required)})")
     else:
         err("Python packages", f"missing: {', '.join(missing)}  →  pip install -r requirements.txt")
+
+    # ── Optional backends (informational) ─────────────────────────────────────────
+    try:
+        __import__("TTS")
+        ok("XTTS v2 available  (RUFUS_TTS=xtts for local voice)")
+    except ImportError:
+        warn("XTTS v2", "not installed – using Edge TTS (pip install TTS for local voice cloning)")
 
     # ── YouTube OAuth token ─────────────────────────────────────────────────────
     token = CONFIG_DIR / "youtube_token.json"

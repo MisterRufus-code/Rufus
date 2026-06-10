@@ -175,11 +175,15 @@ def _build_caption(script: str, niche_name: str, niche_cfg: dict) -> str:
 
 def upload(video_path: Path, script: str) -> str:
     """Post video to TikTok. Returns publish_id (poll status with that)."""
+    video_path = Path(video_path)
+    if not video_path.exists():
+        raise FileNotFoundError(f"TikTok upload: video file not found: {video_path}")
+
     niche_cfg, niche_name = _active_niche()
     caption = _build_caption(script, niche_name, niche_cfg)
 
     token = _access_token()
-    size  = Path(video_path).stat().st_size
+    size  = video_path.stat().st_size
     chunk = min(size, 64 * 1024 * 1024)  # ≤ 64 MB per chunk per TikTok docs
 
     init_payload = {
