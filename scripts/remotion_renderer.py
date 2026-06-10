@@ -81,8 +81,7 @@ def render(script: str, bg_paths: "Path | list[Path]", out_dir: Path,
 
     try:
         print("[1/4] Generating voice…")
-        import asyncio
-        asyncio.run(audio_gen._tts(script, mp3))
+        audio_gen._tts(script, mp3)
 
         print("[2/4] Transcribing…")
         segs, _ = audio_gen._whisper().transcribe(str(mp3), word_timestamps=True)

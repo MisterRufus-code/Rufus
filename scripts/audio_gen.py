@@ -10,7 +10,6 @@ Changes from v2.2:
 """
 
 import argparse
-import asyncio
 import functools
 import json
 import os
@@ -21,7 +20,6 @@ import sys
 import time
 from pathlib import Path
 
-import edge_tts
 from faster_whisper import WhisperModel
 
 # music_fetcher lives in the same directory; import lazily so audio_gen stays
@@ -40,8 +38,6 @@ ROOT       = Path(__file__).parent.parent
 CONFIG_DIR = ROOT / "config"
 FONTS_DIR  = ROOT / "assets" / "fonts"
 
-VOICE        = "en-US-ChristopherNeural"
-VOICE_RATE   = "+6%"       # deliberate, authoritative read
 W, H         = 1080, 1920
 FPS          = 30
 MAX_DUR      = 60.0
@@ -199,9 +195,10 @@ def build_ass(segments, ass_path: Path, audio_dur: float, font_name: str = "Aria
 
 # ── TTS ──────────────────────────────────────────────────────────────────────────
 
-async def _tts(script: str, mp3_path: Path) -> None:
-    comm = edge_tts.Communicate(script, VOICE, rate=VOICE_RATE)
-    await comm.save(str(mp3_path))
+def _tts(script: str, mp3_path: Path) -> None:
+    """Generate voice via tts_engine (Edge TTS default, XTTS v2 if RUFUS_TTS=xtts)."""
+    import tts_engine
+    tts_engine.synthesize(script, mp3_path)
 
 
 # ── FFmpeg filter_complex builders ───────────────────────────────────────────────
@@ -318,7 +315,7 @@ def render(script: str, bg_paths: "Path | list[Path]", out_dir: Path,
 
     try:
         print("[1/4] Generating voice…")
-        asyncio.run(_tts(script, mp3))
+        _tts(script, mp3)
 
         print("[2/4] Transcribing…")
         segs, _ = _whisper().transcribe(str(mp3), word_timestamps=True)
