@@ -56,8 +56,12 @@ def _hook_text(script: str, max_words: int = 3) -> str:
     # Drop trailing punctuation, keep readable
     words = first.replace(",", "").replace(".", "").split()[:max_words]
     text  = " ".join(words).upper().strip()
-    # ffmpeg drawtext: escape single quotes and colons by removing them
-    return text.replace("'", "").replace(":", "").replace("\\", "")
+    # ffmpeg drawtext: escape/remove special chars
+    # % starts expressions (%{...}) → double it; remove ' : \ which break filter syntax
+    return (text.replace("%", "%%")
+                .replace("'", "")
+                .replace(":", "")
+                .replace("\\", ""))
 
 
 def make_thumbnail(video_path: Path, script: str, out_path: Path = None) -> Path:

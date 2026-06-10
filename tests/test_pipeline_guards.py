@@ -222,3 +222,53 @@ def test_sd_upscale_lanczos_fallback():
     big = _upscale_lanczos(small)
     big_img = Image.open(io.BytesIO(big))
     assert big_img.size == (1152, 2048)
+
+
+# ── tts_engine guards ─────────────────────────────────────────────────────────
+
+def test_tts_engine_edge_backend_default():
+    """RUFUS_TTS unset → backend is 'edge'."""
+    import os
+    import tts_engine
+    old = os.environ.pop("RUFUS_TTS", None)
+    try:
+        assert tts_engine._backend() == "edge"
+    finally:
+        if old is not None:
+            os.environ["RUFUS_TTS"] = old
+
+
+def test_tts_engine_xtts_backend_when_set():
+    """RUFUS_TTS=xtts → backend is 'xtts'."""
+    import os
+    import tts_engine
+    os.environ["RUFUS_TTS"] = "xtts"
+    try:
+        assert tts_engine._backend() == "xtts"
+    finally:
+        os.environ.pop("RUFUS_TTS", None)
+
+
+def test_tts_engine_xtts_fallback_on_import_error(tmp_path):
+    """synthesize must fall back to Edge TTS when XTTS model import fails."""
+    import os
+    import tts_engine
+
+    os.environ["RUFUS_TTS"] = "xtts"
+    out = tmp_path / "voice.mp3"
+    edge_called = {"n": 0}
+
+    def fake_xtts(script, path):
+        raise ImportError("TTS package not installed")
+
+    def fake_edge(script, path):
+        edge_called["n"] += 1
+        path.write_bytes(b"\x00" * 100)  # dummy mp3
+
+    try:
+        with patch("tts_engine._xtts", side_effect=fake_xtts), \
+             patch("tts_engine._edge", side_effect=fake_edge):
+            tts_engine.synthesize("test text", out)
+        assert edge_called["n"] == 1, "Edge TTS fallback was not called"
+    finally:
+        os.environ.pop("RUFUS_TTS", None)

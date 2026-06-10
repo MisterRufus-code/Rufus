@@ -117,7 +117,7 @@ def render(script: str, bg_paths: "Path | list[Path]", out_dir: Path,
             name = f"clip_{i}{bg.suffix or '.mp4'}"
             shutil.copy2(bg, job_dir / name)
             clip_names.append(name)
-            clip_durs.append(_probe_duration(bg))
+            clip_durs.append(_probe_duration(bg) or 8.0)  # 8s fallback; None → JSON null → crash
 
         music_name = None
         if music_path and Path(music_path).exists():

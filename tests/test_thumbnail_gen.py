@@ -34,3 +34,17 @@ def test_hook_text_handles_empty_script():
 
 def test_hook_text_respects_max_words_param():
     assert _hook_text("alpha bravo charlie delta", max_words=2) == "ALPHA BRAVO"
+
+
+def test_hook_text_escapes_percent():
+    # % is the ffmpeg drawtext expression escape char — must become %%
+    result = _hook_text("24% growth record")
+    assert "%%" in result
+    assert "24%%" in result
+
+
+def test_hook_text_no_bare_percent():
+    result = _hook_text("100% free money forever")
+    # all % signs must be doubled — strip %% pairs, check nothing remains
+    assert "%" not in result.replace("%%", ""), f"bare percent in {result!r}"
+    assert "100%%" in result

@@ -25,8 +25,7 @@ from faster_whisper import WhisperModel
 # music_fetcher lives in the same directory; import lazily so audio_gen stays
 # usable even without it (graceful voice-only fallback).
 try:
-    import sys as _sys
-    _sys.path.insert(0, str(Path(__file__).parent))
+    sys.path.insert(0, str(Path(__file__).parent))
     from music_fetcher import fetch_music as _fetch_music
     _MUSIC_OK = True
 except Exception:
