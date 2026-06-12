@@ -113,14 +113,18 @@ def _ensure_font() -> str:
 _GPU = os.environ.get("RUFUS_GPU", "").strip().lower() in ("1", "true", "yes", "on")
 
 
-@functools.lru_cache(maxsize=1)
-def _ffmpeg_has_xfade() -> bool:
-    """Return True if the installed FFmpeg includes the xfade video filter."""
+@functools.lru_cache(maxsize=8)
+def _ffmpeg_has_filter(name: str) -> bool:
+    """Return True if the installed FFmpeg includes the given filter."""
     try:
         r = subprocess.run(["ffmpeg", "-filters"], capture_output=True, text=True, timeout=10)
-        return "xfade" in r.stdout
+        return name in r.stdout
     except Exception:
         return False
+
+
+def _ffmpeg_has_xfade() -> bool:
+    return _ffmpeg_has_filter("xfade")
 
 
 @functools.lru_cache(maxsize=1)
@@ -458,7 +462,7 @@ def _audio_filter_complex(n: int, audio_dur: float, has_music: bool,
     if sfx_events:
         sfx_labels = []
         for j, (delay_s, gain) in enumerate(sfx_events):
-            ms = max(1, int(delay_s * 1000))
+            ms = max(1, round(delay_s * 1000))
             parts.append(f"[{sfx_base + j}:a]volume={gain:.2f},{fmt},adelay={ms}|{ms}[s{j}]")
             sfx_labels.append(f"[s{j}]")
         if len(sfx_labels) == 1:
@@ -481,16 +485,26 @@ def _audio_filter_complex(n: int, audio_dur: float, has_music: bool,
     return ";\n".join(parts)
 
 
-def _audio_filter_simple(n: int, audio_dur: float, has_music: bool) -> str:
-    """Minimal proven mix for the fallback attempt: voice + static-volume music."""
+def _audio_filter_simple(n: int, audio_dur: float, has_music: bool,
+                         with_loudnorm: bool = False) -> str:
+    """Minimal proven mix for the fallback attempt: voice + static-volume music.
+
+    with_loudnorm keeps fallback renders at the same -14 LUFS as the full mix —
+    pass it only when the installed FFmpeg has the loudnorm filter, so the
+    fallback stays viable on minimal builds.
+    """
+    master = ",loudnorm=I=-14:TP=-1.5:LRA=11" if with_loudnorm else ""
     if not has_music:
+        if with_loudnorm:
+            return f"[{n}:a]loudnorm=I=-14:TP=-1.5:LRA=11[aout]"
         return f"[{n}:a]anull[aout]"
     fade_out_st = max(0.0, audio_dur - 1.5)
     return (
         f"[{n + 1}:a]volume={MUSIC_VOL},"
         f"afade=type=in:st=0:d=1.5,"
         f"afade=type=out:st={fade_out_st:.3f}:d=1.5[music];"
-        f"[{n}:a][music]amix=inputs=2:duration=first:dropout_transition=1[aout]"
+        f"[{n}:a][music]amix=inputs=2:duration=first:dropout_transition=1"
+        f"{master}[aout]"
     )
 
 
@@ -554,9 +568,12 @@ def render(script: str, bg_paths: "Path | list[Path]", out_dir: Path,
         build_ass(segments, ass, audio_dur, font_name=font_name, accent=accent_ass)
 
         # Sentence-aligned cut plan — scene changes land where narration breathes
+        n_supplied = n
         boundaries = _plan_cuts(_sentence_ends(segments), audio_dur, n)
         n = len(boundaries) + 1 if boundaries else 1
         bg_paths = bg_paths[:n]
+        if n < n_supplied:
+            print(f"      ⚠ using {n} of {n_supplied} clips (not enough room for more cuts)")
         if boundaries:
             print(f"      cuts at: {', '.join(f'{b:.1f}s' for b in boundaries)}")
 
@@ -633,7 +650,8 @@ def render(script: str, bg_paths: "Path | list[Path]", out_dir: Path,
                 _video_filter_complex_concat(lens_concat, audio_dur, over_w, over_h,
                                              pad_y, eq_filter, ass_esc, fonts_esc, accent_hex)
                 + ";\n"
-                + _audio_filter_simple(n, audio_dur, has_music)
+                + _audio_filter_simple(n, audio_dur, has_music,
+                                       with_loudnorm=_ffmpeg_has_filter("loudnorm"))
             )
             r2 = subprocess.run(_build_cmd(fc, lens_concat, with_sfx=False),
                                 capture_output=True, text=True)

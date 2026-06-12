@@ -31,6 +31,66 @@ CONFIG_DIR  = ROOT / "config"
 NICHES_FILE = CONFIG_DIR / "niches.json"
 OUTPUT_DIR  = Path(os.environ.get("RUFUS_OUTPUT_DIR", ROOT / "media_library" / "output"))
 LOG_DIR     = ROOT / "logs"
+LOCK_FILE   = ROOT / "rufus.lock"
+
+
+# ── Single-instance lock (cron overlap protection) ───────────────────────────────
+
+def _acquire_lock() -> None:
+    """Refuse to start if another Rufus run is alive (overlapping cron + manual
+    runs corrupt temp files and double-write the DB). Stale locks self-clear."""
+    if LOCK_FILE.exists():
+        try:
+            pid = int(LOCK_FILE.read_text().strip())
+        except (ValueError, OSError):
+            pid = -1
+        if pid > 0 and pid != os.getpid():
+            try:
+                os.kill(pid, 0)   # signal 0 = existence check only
+                print(f"ERROR: another Rufus run (pid {pid}) is in progress. "
+                      f"Wait for it, or delete {LOCK_FILE} if it crashed.")
+                sys.exit(1)
+            except ProcessLookupError:
+                pass              # stale lock from a dead process — take over
+            except PermissionError:
+                print(f"ERROR: pid {pid} exists (no permission to signal) — assuming live run.")
+                sys.exit(1)
+    LOCK_FILE.write_text(str(os.getpid()))
+
+
+def _release_lock() -> None:
+    try:
+        if LOCK_FILE.exists() and LOCK_FILE.read_text().strip() == str(os.getpid()):
+            LOCK_FILE.unlink()
+    except OSError:
+        pass
+
+
+# ── Housekeeping (disk + logs never grow unbounded) ──────────────────────────────
+
+def _housekeeping(max_log_days: int = 90, max_cache_days: int = 14) -> None:
+    """Delete old logs and stale cache/temp media. Cheap, runs every start."""
+    cutoff_logs  = time.time() - max_log_days * 86400
+    cutoff_cache = time.time() - max_cache_days * 86400
+    removed = 0
+    for d, cutoff in (
+        (LOG_DIR, cutoff_logs),
+        (LOG_DIR / "scripts", cutoff_logs),
+        (ROOT / "media_library" / "cache", cutoff_cache),
+        (ROOT / "media_library" / "temp", cutoff_cache),
+        (ROOT / "media_library" / "music", cutoff_cache),
+    ):
+        if not d.exists():
+            continue
+        for f in d.rglob("*"):
+            try:
+                if f.is_file() and f.stat().st_mtime < cutoff:
+                    f.unlink()
+                    removed += 1
+            except OSError:
+                continue
+    if removed:
+        print(f"[maint] cleaned {removed} stale file(s)")
 
 
 # ── Tee stdout/stderr to a daily log file ───────────────────────────────────────
@@ -195,7 +255,12 @@ def _all_scheduled_niches() -> list[str]:
 
 
 def run(skip_upload: bool = False, niche_override: str = None, output_dir: Path = None):
+    _acquire_lock()
+    import atexit
+    atexit.register(_release_lock)   # release on any exit path (idempotent)
+
     log_path = _enable_file_logging()
+    _housekeeping()
     start    = time.time()
     niche_cfg, active = load_niche_cfg(niche_override)
     out_dir  = output_dir or OUTPUT_DIR
@@ -406,10 +471,21 @@ def run(skip_upload: bool = False, niche_override: str = None, output_dir: Path 
             print(f"           → {yt_url}\n")
 
             if db_id and yt_id:
-                update_youtube_id(db_id, yt_id)
+                try:
+                    update_youtube_id(db_id, yt_id)
+                except Exception as e:
+                    print(f"           ⚠ DB youtube_id update failed (video IS uploaded): {e}")
         except Exception as e:
             yt_url = None
-            print(f"           ✗ Upload failed: {e}\n")
+            print(f"           ✗ Upload failed: {e}")
+            print(f"           Video saved locally: {output_path} — check YouTube "
+                  f"Studio before re-uploading (may have partially gone through)\n")
+            if db_id:
+                try:
+                    from db_manager import mark_upload_failed
+                    mark_upload_failed(db_id, str(e))
+                except Exception:
+                    pass
 
     # ── Done ────────────────────────────────────────────────────────────────────
     elapsed = time.time() - start

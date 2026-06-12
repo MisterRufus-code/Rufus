@@ -64,8 +64,99 @@ def _load_key() -> str:
 
 def _load_learnings() -> dict:
     if LEARNINGS_FILE.exists():
-        return json.loads(LEARNINGS_FILE.read_text())
+        try:
+            return json.loads(LEARNINGS_FILE.read_text())
+        except (json.JSONDecodeError, OSError):
+            return {}
     return {}
+
+
+def _recent_video_rows(niche_name: str, limit: int = 12) -> list[tuple[str, str]]:
+    """(script_hook, script_full) of the most recent videos in this niche.
+
+    Read-only peek at rufus.db — returns [] on any failure so generation
+    never depends on the DB being present.
+    """
+    try:
+        import sqlite3
+        db = Path(__file__).parent.parent / "rufus.db"
+        if not db.exists():
+            return []
+        with sqlite3.connect(str(db)) as c:
+            rows = c.execute(
+                "SELECT script_hook, script_full FROM videos "
+                "WHERE niche=? ORDER BY id DESC LIMIT ?",
+                (niche_name, limit),
+            ).fetchall()
+        return [(r[0] or "", r[1] or "") for r in rows]
+    except Exception:
+        return []
+
+
+def _novelty_block(niche_name: str) -> str:
+    """Prompt block: recent hooks to avoid + analytics winners/losers to learn from.
+
+    This is the anti-repetition memory — without it every video is a cold
+    start and GPT converges on its favorite structures.
+    """
+    parts = []
+
+    recent = [h for h, _ in _recent_video_rows(niche_name) if h]
+    if recent:
+        listed = "\n".join(f"- {h}" for h in recent[:10])
+        parts.append(
+            "ALREADY PUBLISHED — your hooks must NOT resemble these in topic, "
+            f"structure, or rhythm (write something a returning viewer would see as NEW):\n{listed}"
+        )
+
+    learnings = _load_learnings()
+    winners = learnings.get("winning_hooks") or []
+    losers  = learnings.get("losing_hooks") or []
+    if winners:
+        listed = "\n".join(f"- {h}" for h in winners[:3])
+        parts.append(
+            f"ANALYTICS WINNERS — these hook styles held viewers; channel that energy "
+            f"(do NOT copy the wording):\n{listed}"
+        )
+    if losers:
+        listed = "\n".join(f"- {h}" for h in losers[:3])
+        parts.append(f"ANALYTICS LOSERS — these styles lost viewers; avoid their patterns:\n{listed}")
+
+    return ("\n\n".join(parts) + "\n\n") if parts else ""
+
+
+def _hook_shape(h: str) -> str:
+    """Coarse structural signature of a hook, for de-duplicating same-shaped hooks."""
+    h = h.strip()
+    if re.match(r"^[\$\d]", h):
+        kind = "number"
+    elif h.endswith("?"):
+        kind = "question"
+    elif re.match(r"^(You|You're|Your)\b", h, re.IGNORECASE):
+        kind = "identity"
+    elif re.match(r"^I\b", h):
+        kind = "confession"
+    elif re.match(r"^[A-Z][a-z]+(?:'s)?\s", h):
+        kind = "name"
+    else:
+        kind = "other"
+    first_two = " ".join(re.sub(r"[^\w\s$]", "", h).lower().split()[:2])
+    return f"{kind}:{first_two}"
+
+
+def _dedupe_similar_hooks(hooks: list[str]) -> list[str]:
+    """Drop hooks that share the same structural shape AND opening words —
+    the scorer should choose between genuinely different angles, not 8
+    variations of one idea."""
+    seen: set[str] = set()
+    out = []
+    for h in hooks:
+        sig = _hook_shape(h)
+        if sig in seen:
+            continue
+        seen.add(sig)
+        out.append(h)
+    return out
 
 
 def _load_gold_examples(niche_name: str) -> list[dict]:
@@ -75,8 +166,18 @@ def _load_gold_examples(niche_name: str) -> list[dict]:
     return data.get(niche_name, [])
 
 
-def _pick_cta(niche_cfg: dict) -> str:
+def _pick_cta(niche_cfg: dict, niche_name: str = "") -> str:
+    """Pick a CTA, avoiding the ones used in the last few videos of this niche
+    (a CTA the viewer saw yesterday reads as a template, not a sign-off)."""
     pool = niche_cfg.get("cta_pool") or [niche_cfg.get("cta", "Follow for more.")]
+    if niche_name and len(pool) > 1:
+        recent_last_lines = {
+            full.strip().splitlines()[-1].strip()
+            for _, full in _recent_video_rows(niche_name, limit=4) if full.strip()
+        }
+        fresh = [c for c in pool if c not in recent_last_lines]
+        if fresh:
+            pool = fresh
     return random.choice(pool)
 
 
@@ -368,11 +469,13 @@ def _hook_factory(client: OpenAI, seed: dict, analysis: str, niche_name: str,
     seed_blk  = _seed_block(seed) if seed else ""
 
     forbidden_str = ", ".join(f"'{x}'" for x in hs["forbidden_openers"][:8])
+    novelty_blk   = _novelty_block(niche_name)
 
     prompt = (
         f"{seed_blk}\n"
         f"NICHE: {niche_name}\n"
         f"PRE-ANALYSIS:\n{analysis}\n\n"
+        f"{novelty_blk}"
         f"Generate exactly {n_hooks} numbered HOOK LINES for a YouTube Short.\n\n"
         f"HOOK RULES — every line must obey ALL of these:\n"
         f"- Length: {hs['min_words']}–{hs['max_words']} words (HARD CAP {hs['hard_max_words']})\n"
@@ -412,6 +515,13 @@ def _hook_factory(client: OpenAI, seed: dict, analysis: str, niche_name: str,
             hook = m.group(2).strip().strip('"').strip("'")
             if hook:
                 hooks.append(hook)
+
+    # GPT often ignores the "different angle" instruction and writes 8 variants
+    # of one idea — collapse same-shaped hooks so the scorer sees real variety.
+    before = len(hooks)
+    hooks  = _dedupe_similar_hooks(hooks)
+    if len(hooks) < before:
+        print(f"[hook] deduped {before - len(hooks)} same-shaped hook(s) → {len(hooks)} distinct")
 
     log_attempt({
         "run_id": run_id, "niche": niche_name,
@@ -478,7 +588,6 @@ def _hook_scorer(client: OpenAI, hooks: list[str], seed: dict, niche_name: str,
         messages=[{"role": "user", "content": prompt}],
         temperature=0.0,
         max_tokens=600,
-        response_format={"type": "json_object"} if False else None,  # JSON array — not object
     )
     ms    = int((time.time() - t0) * 1000)
     usage = resp.usage
@@ -532,9 +641,11 @@ def _hook_scorer(client: OpenAI, hooks: list[str], seed: dict, niche_name: str,
     if best_idx == -1:
         if not survivors:
             return -1, 0, "no scoring entries and no survivors to fall back to", 0.0
-        best_idx   = survivors[0][0]
+        # Random survivor, not survivors[0] — a deterministic fallback would
+        # systematically bias toward whichever hook shape passes regex first.
+        best_idx   = random.choice(survivors)[0]
         best_score = 0
-        best_reason = "all scoring entries malformed — fell back to first survivor"
+        best_reason = "all scoring entries malformed — fell back to random survivor"
 
     return best_idx, best_score, best_reason, cost
 
@@ -764,7 +875,7 @@ def write_script(scene_description: str, seed: dict | None = None,
             print(f"[gpt] analysis:\n{analysis}")
 
     # CTA
-    cta = _pick_cta(niche)
+    cta = _pick_cta(niche, active)
     print(f"[gpt] cta: {cta}")
 
     # ── Phase A + B: get a winning hook (1 retry allowed) ─────────────────────

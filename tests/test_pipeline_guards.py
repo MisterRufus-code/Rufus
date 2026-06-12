@@ -323,3 +323,74 @@ def test_stackexchange_unreachable_returns_none(capsys):
 def test_stackexchange_skips_unmapped_niches():
     import research
     assert research.fetch_stackexchange_story("motivation") is None
+
+
+# ── anti-repetition machinery ─────────────────────────────────────────────────
+
+def test_dedupe_similar_hooks_collapses_same_shape():
+    from script_writer import _dedupe_similar_hooks
+    hooks = [
+        "$2.4M by 38. Still scared to retire.",
+        "$500K saved. Still renting on purpose.",   # number-shape, different opener → kept
+        "$2.4M by 40. Still terrified to quit.",    # number-shape, same opener "$2.4m by" → dropped
+        "Why do lottery winners go broke?",
+        "Buffett's worst trade made him $25B.",
+    ]
+    out = _dedupe_similar_hooks(hooks)
+    assert "$2.4M by 38. Still scared to retire." in out
+    assert "$2.4M by 40. Still terrified to quit." not in out
+    assert len(out) == 4
+
+
+def test_novelty_block_empty_without_db_or_learnings(tmp_path, monkeypatch):
+    import script_writer
+    monkeypatch.setattr(script_writer, "_recent_video_rows", lambda n, limit=12: [])
+    monkeypatch.setattr(script_writer, "_load_learnings", lambda: {})
+    assert script_writer._novelty_block("finance") == ""
+
+
+def test_novelty_block_lists_recent_hooks_and_learnings(monkeypatch):
+    import script_writer
+    monkeypatch.setattr(script_writer, "_recent_video_rows",
+                        lambda n, limit=12: [("Old hook one", "body"), ("Old hook two", "body")])
+    monkeypatch.setattr(script_writer, "_load_learnings",
+                        lambda: {"winning_hooks": ["Winner A"], "losing_hooks": ["Loser B"]})
+    blk = script_writer._novelty_block("finance")
+    assert "Old hook one" in blk and "ALREADY PUBLISHED" in blk
+    assert "Winner A" in blk and "WINNERS" in blk
+    assert "Loser B" in blk and "LOSERS" in blk
+
+
+def test_pick_cta_avoids_recent_last_lines(monkeypatch):
+    import script_writer
+    pool = ["Save this.", "Follow for more.", "Send this to a friend."]
+    monkeypatch.setattr(script_writer, "_recent_video_rows",
+                        lambda n, limit=4: [("h", "Hook line.\nBody.\nSave this."),
+                                            ("h", "Hook.\nBody.\nFollow for more.")])
+    for _ in range(10):
+        cta = script_writer._pick_cta({"cta_pool": pool}, "finance")
+        assert cta == "Send this to a friend."
+
+
+def test_audio_simple_with_loudnorm_masters_fallback():
+    from audio_gen import _audio_filter_simple
+    fc = _audio_filter_simple(2, 30.0, has_music=True, with_loudnorm=True)
+    assert "loudnorm=I=-14" in fc
+    voice_only = _audio_filter_simple(2, 30.0, has_music=False, with_loudnorm=True)
+    assert "loudnorm=I=-14" in voice_only
+
+
+def test_wisdom_quote_author_uniform(monkeypatch, tmp_path):
+    """28 Buffett quotes vs 2 Munger quotes — Munger must still be picked ~half the time."""
+    import json as _json
+    import research
+    quotes = [{"text": f"buffett wisdom {i}", "author": "Warren Buffett"} for i in range(28)]
+    quotes += [{"text": f"munger wisdom {i}", "author": "Charlie Munger"} for i in range(2)]
+    f = tmp_path / "finance.json"
+    f.write_text(_json.dumps({"quotes": quotes}))
+    monkeypatch.setattr(research, "WISDOM_DIR", tmp_path)
+    import random as _random
+    _random.seed(7)
+    authors = [research.pick_wisdom_quote("finance")["source"] for _ in range(200)]
+    munger_share = authors.count("Charlie Munger") / len(authors)
+    assert 0.3 < munger_share < 0.7   # ~0.5 expected; would be ~0.07 with plain choice

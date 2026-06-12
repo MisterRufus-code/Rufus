@@ -158,6 +158,18 @@ def update_youtube_id(video_id: int, youtube_id: str):
         c.execute("UPDATE videos SET youtube_id=? WHERE id=?", (youtube_id, video_id))
 
 
+def mark_upload_failed(video_id: int, error: str):
+    """Record that an upload was ATTEMPTED and failed — the video may or may
+    not exist on YouTube, so ops must check manually before re-uploading
+    (blind retry risks a duplicate public video)."""
+    with _conn() as c:
+        c.execute(
+            "UPDATE videos SET score_reasoning = "
+            "COALESCE(score_reasoning,'') || ? WHERE id=?",
+            (f"\n[UPLOAD FAILED — verify on YouTube before retry] {error[:400]}", video_id),
+        )
+
+
 def get_recent_tracked_videos(days: int = 30) -> list[dict]:
     """Return videos uploaded in last N days that have a youtube_id."""
     with _conn() as c:

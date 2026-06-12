@@ -523,7 +523,13 @@ def pick_wisdom_quote(niche_name: str, used_ids: set | None = None) -> dict | No
     # Prefer unused quotes; if all used (rare), fall back to full pool
     fresh = [q for q in quotes if _quote_seed_id(q) not in used_ids]
     pool  = fresh if fresh else quotes
-    q     = random.choice(pool)
+    # Author-uniform sampling: pick an AUTHOR first, then one of their quotes.
+    # Plain random.choice over the pool lets over-represented authors (e.g.
+    # Buffett is ~28% of the finance pool) dominate consecutive videos.
+    by_author: dict = {}
+    for q in pool:
+        by_author.setdefault(q.get("author", "Unknown"), []).append(q)
+    q = random.choice(by_author[random.choice(list(by_author))])
     return {
         "type":    "wisdom",
         "source":  q.get("author", "Unknown"),

@@ -61,13 +61,22 @@ const KenBurnsClip: React.FC<{
   const frame = useCurrentFrame();
   const {fps} = useVideoConfig();
   const t = Math.min(1, frame / Math.max(1, clipFrames));
-  // Alternate zoom direction + drift per clip so motion never repeats
-  const zoomIn = index % 2 === 0;
-  const scale = zoomIn
+  // 6 zoom+drift patterns (vs the old %2/%3 combo that repeated every 6 clips
+  // with only 3 distinct drifts) — consecutive clips always move differently.
+  const KB_PATTERNS = [
+    {zoomIn: true,  dx: -22, dy: 12},  // push in, drift left-down
+    {zoomIn: false, dx: 22,  dy: -16}, // pull back, drift right-up
+    {zoomIn: true,  dx: 18,  dy: 18},  // push in, drift right-down
+    {zoomIn: false, dx: -16, dy: -10}, // pull back, drift left-up
+    {zoomIn: true,  dx: 0,   dy: -24}, // push in, rise
+    {zoomIn: false, dx: -26, dy: 0},   // pull back, slide left
+  ];
+  const p = KB_PATTERNS[index % KB_PATTERNS.length];
+  const scale = p.zoomIn
     ? interpolate(t, [0, 1], [1.04, 1.16])
     : interpolate(t, [0, 1], [1.16, 1.04]);
-  const driftX = interpolate(t, [0, 1], [0, index % 3 === 0 ? -22 : 22]);
-  const driftY = interpolate(t, [0, 1], [0, index % 3 === 1 ? -16 : 12]);
+  const driftX = interpolate(t, [0, 1], [0, p.dx]);
+  const driftY = interpolate(t, [0, 1], [0, p.dy]);
 
   const video = (
     <OffthreadVideo
