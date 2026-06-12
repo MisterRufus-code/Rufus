@@ -63,7 +63,7 @@ Everything is free except OpenAI credits. Mix and match:
 Both fall back to Pexels if they produce nothing, so a run never dies on footage.
 
 ### Render engines
-- **`ffmpeg`** — fast, stable. xfade crossfades, Ken Burns, Anton captions, ducked music, vignette.
+- **`ffmpeg`** (v4.0 "cinematic edit") — cuts snap to **sentence boundaries** from Whisper timestamps with a punchy ~3s hook cut; synthesized **SFX layer** (sub-bass hit on the hook, whoosh on every cut, riser into the final beat — generated locally by `sfx_gen.py`, zero APIs); music **ducked dynamically** under the voice via sidechain compression; voice runs through a highpass → compressor → presence-EQ chain; final mix mastered to **-14 LUFS** (YouTube reference); retention progress bar + captions accented in the per-niche `accent_color`. Falls back to a simple hard-concat mix if the full graph errors, so renders never break.
 - **`remotion`** — React engine: spring-physics word captions, smooth crossfades, retention progress bar, edge fades. Run `cd remotion && npm install` once. Falls back to FFmpeg on any error.
 
 ### Voice engines

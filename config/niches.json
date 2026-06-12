@@ -33,6 +33,8 @@
         "Save this before the next crash."
       ],
       "ffmpeg_eq": "eq=contrast=1.15:saturation=0.85:gamma=1.05",
+      "accent_color": "#FFC53D",
+      "style_suffix": "muted teal and orange color grade, glass and steel surfaces, shallow depth of field, 35mm film, cinematic",
       "youtube_category_id": "25"
     },
     "motivation": {
@@ -64,6 +66,8 @@
         "Send this to the person grinding alone."
       ],
       "ffmpeg_eq": "eq=contrast=1.2:brightness=0.03:saturation=1.4:gamma=0.9",
+      "accent_color": "#FF5C33",
+      "style_suffix": "golden hour rim lighting, gritty texture, high contrast, anamorphic lens flare, cinematic",
       "youtube_category_id": "22"
     },
     "mindset": {
@@ -95,6 +99,8 @@
         "Send this to someone still asleep."
       ],
       "ffmpeg_eq": "eq=contrast=1.05:saturation=0.75:gamma=1.1",
+      "accent_color": "#3DD9C5",
+      "style_suffix": "soft diffused natural light, muted earth tones, morning fog, medium format film, contemplative",
       "youtube_category_id": "27"
     },
     "business": {
@@ -120,6 +126,8 @@
         "Send this to someone still planning."
       ],
       "ffmpeg_eq": "eq=contrast=1.1:saturation=1.0",
+      "accent_color": "#4DA3FF",
+      "style_suffix": "modern architectural lines, cool daylight, clean minimal composition, 50mm lens, editorial",
       "youtube_category_id": "27"
     },
     "personal_development": {
@@ -145,6 +153,8 @@
         "Save it. Re-read when you slip."
       ],
       "ffmpeg_eq": "eq=contrast=1.08:saturation=1.1:gamma=1.0",
+      "accent_color": "#6EE07A",
+      "style_suffix": "warm morning sunlight, soft shadows, natural tones, lifestyle photography, hopeful",
       "youtube_category_id": "27"
     }
   }

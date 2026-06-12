@@ -1,12 +1,21 @@
 #!/usr/bin/env python3
-"""Rufus – Autonomous Shorts Renderer (v3.0)
+"""Rufus – Autonomous Shorts Renderer (v4.0)
 
-Changes from v2.2:
-- Background music: auto-fetched by mood (Jamendo → archive.org), ducked under voice at vol=0.16
-- Smooth transitions: xfade dissolve between Ken-Burns clips (~0.3s), fade-in/out at edges
-- Display font: Anton (downloaded to assets/fonts/ at first run), falls back to Arial
-- Voice pacing: rate dropped from +20% to +6% for deliberate, authoritative read
-- Guard: audio_dur=0 / n=0 raise early instead of ZeroDivision
+Changes from v3.0 — "cinematic edit" upgrade:
+- Cuts snap to SENTENCE BOUNDARIES from Whisper word timestamps (editor-grade
+  pacing) with a short punchy first cut (~2-4s) for the hook pattern-interrupt.
+- Sound design: synthesized SFX layer (sub-bass hit on the hook, whoosh on
+  every cut, riser into the final beat) — see sfx_gen.py, zero APIs.
+- Music is DUCKED DYNAMICALLY under the voice via sidechaincompress (breathes
+  back up in speech gaps) instead of a fixed low volume.
+- Voice chain: highpass + compressor + presence EQ — Edge TTS sounds studio.
+- Final mix mastered to -14 LUFS (loudnorm), YouTube's reference loudness.
+- Retention progress bar along the bottom edge, in the niche accent color.
+- Caption highlights use the per-niche accent color and also fire on opinion
+  words (worst/never/secret…), not just digits.
+
+Fallback ladder preserved: xfade+full-mix → hard-concat+simple-mix, so a
+render always completes even on minimal FFmpeg builds.
 """
 
 import argparse
@@ -22,16 +31,20 @@ from pathlib import Path
 
 from faster_whisper import WhisperModel
 
-# music_fetcher lives in the same directory; import lazily so audio_gen stays
-# usable even without it (graceful voice-only fallback).
+sys.path.insert(0, str(Path(__file__).parent))
+
+# music_fetcher / sfx_gen are optional layers — renderer degrades gracefully.
 try:
-    sys.path.insert(0, str(Path(__file__).parent))
     from music_fetcher import fetch_music as _fetch_music
-    _MUSIC_OK = True
 except Exception:
-    _MUSIC_OK = False
     def _fetch_music(niche: str):           # type: ignore[misc]
         return None
+
+try:
+    from sfx_gen import ensure_sfx as _ensure_sfx
+except Exception:
+    def _ensure_sfx():                       # type: ignore[misc]
+        return {}
 
 ROOT       = Path(__file__).parent.parent
 CONFIG_DIR = ROOT / "config"
@@ -45,17 +58,28 @@ CLUSTER_SIZE = 1           # 1 word at a time — Hormozi style
 
 XFADE_DUR    = 0.30        # crossfade duration between clips (seconds)
 FADE_EDGE    = 0.40        # fade-in from black / fade-to-black duration (seconds)
-MUSIC_VOL    = 0.14        # music ducked well under voice
+MUSIC_VOL    = 0.14        # static music volume (simple-mix fallback path)
+MUSIC_BED    = 0.30        # music bed volume BEFORE sidechain ducking (full mix)
+BAR_HEIGHT   = 10          # retention progress bar thickness (px)
+
+# Cut planning
+FIRST_CUT_MIN = 2.0        # hook cut window — research: pattern interrupt by ~3s
+FIRST_CUT_MAX = 4.2
+SNAP_WINDOW   = 2.0        # max distance a cut may move to land on a sentence end
+MIN_SEG       = 1.2        # minimum clip duration after planning
 
 WHITE = "&H00FFFFFF"
 GREEN = "&H0000FF00"
 
 _HIGHLIGHT_RE = re.compile(r'[\d$%]')
+_SENT_END_RE  = re.compile(r'[.!?…]["\')\]]*$')
 
 FONT_NAME = "Anton"        # downloaded to assets/fonts/; Arial fallback if missing
 FONT_FILE = FONTS_DIR / "Anton-Regular.ttf"
 FONTSIZE  = 88
 MARGIN_V  = 734
+
+DEFAULT_ACCENT = "#FFD23F"   # warm gold — used when a niche has no accent_color
 
 
 # ── Font bootstrap ───────────────────────────────────────────────────────────────
@@ -147,6 +171,25 @@ def _active_niche_name() -> str:
     return os.environ.get("RUFUS_NICHE_OVERRIDE") or data["active"]
 
 
+def _hex_to_ass(hex_color: str) -> str:
+    """'#RRGGBB' → ASS '&H00BBGGRR' (ASS is BGR-ordered)."""
+    h = hex_color.lstrip("#")
+    if len(h) != 6:
+        return GREEN
+    rr, gg, bb = h[0:2], h[2:4], h[4:6]
+    return f"&H00{bb}{gg}{rr}".upper()
+
+
+@functools.lru_cache(maxsize=1)
+def _opinion_words() -> frozenset:
+    """Opinion words from script_standards.json, uppercased for caption matching."""
+    try:
+        std = json.loads((CONFIG_DIR / "script_standards.json").read_text())
+        return frozenset(w.upper() for w in std.get("opinion_pool", []))
+    except Exception:
+        return frozenset()
+
+
 # ── ASS subtitle builder ─────────────────────────────────────────────────────────
 
 def _ts(sec: float) -> str:
@@ -168,7 +211,16 @@ def _cluster_words(segments, audio_dur: float):
         yield start, end, " ".join(w.word.strip().upper() for w in group)
 
 
-def build_ass(segments, ass_path: Path, audio_dur: float, font_name: str = "Arial") -> None:
+def _is_highlight(text: str) -> bool:
+    """Accent-color a caption if it carries a number/$/% or an opinion word."""
+    if _HIGHLIGHT_RE.search(text):
+        return True
+    stripped = re.sub(r"[^A-Z']", "", text.upper())
+    return stripped in _opinion_words()
+
+
+def build_ass(segments, ass_path: Path, audio_dur: float,
+              font_name: str = "Arial", accent: str = GREEN) -> None:
     header = (
         "[Script Info]\n"
         "ScriptType: v4.00+\n"
@@ -186,7 +238,7 @@ def build_ass(segments, ass_path: Path, audio_dur: float, font_name: str = "Aria
     )
     lines = []
     for start, end, text in _cluster_words(segments, audio_dur):
-        c      = GREEN if _HIGHLIGHT_RE.search(text) else WHITE
+        c      = accent if _is_highlight(text) else WHITE
         styled = f"{{\\c{c}\\fscx120\\fscy120\\t(0,80,\\fscx100\\fscy100)}}{text}"
         lines.append(f"Dialogue: 0,{_ts(start)},{_ts(end)},Default,,0,0,0,,{styled}")
     ass_path.write_text(header + "\n".join(lines), encoding="utf-8")
@@ -200,75 +252,240 @@ def _tts(script: str, mp3_path: Path) -> None:
     tts_engine.synthesize(script, mp3_path)
 
 
+# ── Cut planning (sentence-aligned, editor-grade pacing) ─────────────────────────
+
+def _sentence_ends(segments) -> list[float]:
+    """Timestamps where a spoken sentence ends (word text ends with . ! ? …)."""
+    ends = []
+    for seg in segments:
+        for w in seg.words:
+            if _SENT_END_RE.search(w.word.strip()):
+                ends.append(round(w.end, 3))
+    return ends
+
+
+def _plan_cuts(sentence_ends: list[float], audio_dur: float, n: int) -> list[float]:
+    """Choose n-1 cut timestamps that land on sentence boundaries.
+
+    - Cut 1 lands in [FIRST_CUT_MIN, FIRST_CUT_MAX]s: a quick scene change right
+      after the hook (the pattern interrupt that resets swipe-away attention).
+    - Remaining cuts snap to the nearest sentence end within SNAP_WINDOW of an
+      equal-spacing grid, so scene changes happen where the narration breathes.
+    - Monotonic with MIN_SEG spacing; falls back to the grid where no sentence
+      end is close enough.
+    """
+    if n <= 1 or audio_dur <= 0:
+        return []
+
+    usable = sorted(e for e in sentence_ends if 1.0 < e < audio_dur - 1.0)
+
+    # Hook cut first: earliest sentence end inside the window, else grid clamp.
+    window = [e for e in usable
+              if FIRST_CUT_MIN <= e <= min(FIRST_CUT_MAX, audio_dur - MIN_SEG * (n - 1))]
+    first = window[0] if window else min(max(audio_dur / n, FIRST_CUT_MIN + 0.4), FIRST_CUT_MAX)
+
+    # Remaining cuts: re-spread evenly across [first, audio_dur] (NOT the original
+    # n-grid — the hook cut moved, so the rest must rebalance) and snap each to
+    # the nearest unused sentence end within SNAP_WINDOW.
+    cuts: list[float] = [first]
+    for j in range(1, n - 1):
+        target = first + (audio_dur - first) * j / (n - 1)
+        near   = [e for e in usable if abs(e - target) <= SNAP_WINDOW and e not in cuts]
+        cuts.append(min(near, key=lambda e: abs(e - target)) if near else target)
+
+    # Sanitize: strictly increasing, MIN_SEG apart, inside the timeline
+    clean: list[float] = []
+    prev = 0.0
+    for i, c in enumerate(sorted(cuts)):
+        c = max(c, prev + MIN_SEG)
+        remaining = len(cuts) - i
+        c = min(c, audio_dur - MIN_SEG * remaining)
+        if c <= prev + 0.05:
+            continue
+        clean.append(round(c, 3))
+        prev = c
+    return clean
+
+
+def _xfade_input_lengths(boundaries: list[float], total: float) -> list[float]:
+    """Per-clip -t values for the xfade chain. Fade k ends exactly at boundary k.
+
+    Clip 1 runs to b1; clip k covers (b_{k-1}-XFADE) → b_k; last covers to total.
+    Chained output length telescopes to exactly `total`.
+    """
+    if not boundaries:
+        return [total]
+    lengths = [boundaries[0]]
+    pts = boundaries + [total]
+    for k in range(1, len(pts)):
+        lengths.append(round(pts[k] - pts[k - 1] + XFADE_DUR, 3))
+    return lengths
+
+
+def _concat_input_lengths(boundaries: list[float], total: float) -> list[float]:
+    """Per-clip -t values for the hard-concat fallback (no overlap)."""
+    if not boundaries:
+        return [total]
+    pts = [0.0] + boundaries + [total]
+    return [round(pts[k + 1] - pts[k], 3) for k in range(len(pts) - 1)]
+
+
 # ── FFmpeg filter_complex builders ───────────────────────────────────────────────
 
-def _video_filter_complex(
-    n: int, over_w: int, over_h: int, pad_y: int,
-    seg_dur: float, eq_filter: str, ass_esc: str, fonts_dir_esc: str,
-) -> str:
-    """Build filter_complex: Ken Burns per clip → xfade transitions → grade → subs."""
+def _ken_burns_part(i: int, dur: float, over_w: int, over_h: int, pad_y: int) -> str:
+    """Scale-up + animated crop = Ken Burns pan for clip i over its own duration."""
     x_exprs = [
-        f"({over_w}-{W})*t/{seg_dur:.3f}",
-        f"({over_w}-{W})*(1-t/{seg_dur:.3f})",
+        f"({over_w}-{W})*t/{dur:.3f}",
+        f"({over_w}-{W})*(1-t/{dur:.3f})",
     ]
     y_exprs = [
         str(pad_y),
-        f"({over_h}-{H})*t/{seg_dur:.3f}",
-        f"({over_h}-{H})*(1-t/{seg_dur:.3f})",
+        f"({over_h}-{H})*t/{dur:.3f}",
+        f"({over_h}-{H})*(1-t/{dur:.3f})",
     ]
-    parts = []
-    for i in range(n):
-        pan_x = x_exprs[i % len(x_exprs)]
-        pan_y = y_exprs[i % len(y_exprs)]
-        parts.append(
-            f"[{i}:v]setpts=PTS-STARTPTS,scale={over_w}:{over_h}:force_original_aspect_ratio=increase,"
-            f"crop={W}:{H}:{pan_x}:{pan_y},"
-            f"setsar=1,fps={FPS},format=yuv420p,settb=AVTB[v{i}]"
-        )
-
-    if n == 1:
-        # Single clip — fade in/out only
-        total = seg_dur
-        fade_out_st = max(0.0, total - FADE_EDGE)
-        parts.append(
-            f"[v0]fade=type=in:st=0:d={FADE_EDGE:.3f},"
-            f"fade=type=out:st={fade_out_st:.3f}:d={FADE_EDGE:.3f}[vraw]"
-        )
-    else:
-        # Chain xfade between clips
-        # Offset for i-th xfade (1-indexed) = i * (seg_dur - XFADE_DUR)
-        current = "v0"
-        for i in range(1, n):
-            offset   = i * (seg_dur - XFADE_DUR)
-            out_name = f"xf{i}"
-            parts.append(
-                f"[{current}][v{i}]xfade=transition=dissolve:"
-                f"duration={XFADE_DUR:.3f}:offset={offset:.3f}[{out_name}]"
-            )
-            current = out_name
-
-        total = n * seg_dur - (n - 1) * XFADE_DUR
-        fade_out_st = max(0.0, total - FADE_EDGE)
-        parts.append(
-            f"[{current}]fade=type=in:st=0:d={FADE_EDGE:.3f},"
-            f"fade=type=out:st={fade_out_st:.3f}:d={FADE_EDGE:.3f}[vraw]"
-        )
-
-    # fontsdir path for custom font; ASS filter uses single quotes — escape internal ones
-    parts.append(
-        f"[vraw]{eq_filter},vignette=PI/4,"
-        f"ass='{ass_esc}':fontsdir='{fonts_dir_esc}'[vout]"
+    pan_x = x_exprs[i % len(x_exprs)]
+    pan_y = y_exprs[i % len(y_exprs)]
+    return (
+        f"[{i}:v]setpts=PTS-STARTPTS,scale={over_w}:{over_h}:force_original_aspect_ratio=increase,"
+        f"crop={W}:{H}:{pan_x}:{pan_y},"
+        f"setsar=1,fps={FPS},format=yuv420p,settb=AVTB[v{i}]"
     )
+
+
+def _finish_video(parts: list[str], total: float, eq_filter: str,
+                  ass_esc: str, fonts_dir_esc: str, accent_hex: str) -> str:
+    """Shared tail: edge fades → grade → progress bar → captions → [vout]."""
+    fade_out_st = max(0.0, total - FADE_EDGE)
+    parts.append(
+        f"[vcat]fade=type=in:st=0:d={FADE_EDGE:.3f},"
+        f"fade=type=out:st={fade_out_st:.3f}:d={FADE_EDGE:.3f},"
+        f"{eq_filter},vignette=PI/4[vg]"
+    )
+    bar_color = accent_hex.lstrip("#")
+    parts.append(
+        f"color=c=0x{bar_color}:size={W}x{BAR_HEIGHT}:rate={FPS}:duration={total:.3f}[bar];"
+        f"[vg][bar]overlay=x='-{W}+{W}*t/{total:.3f}':y={H - BAR_HEIGHT}:"
+        f"eof_action=pass,format=yuv420p[vb]"
+    )
+    parts.append(f"[vb]ass='{ass_esc}':fontsdir='{fonts_dir_esc}'[vout]")
     return ";\n".join(parts)
 
 
-def _audio_filter_complex(n: int, audio_dur: float, music_path: Path | None) -> str:
-    """Build audio filter: voice only, or voice + ducked music."""
-    if not music_path:
-        return ""
+def _video_filter_complex(input_lengths: list[float], boundaries: list[float],
+                          total: float, over_w: int, over_h: int, pad_y: int,
+                          eq_filter: str, ass_esc: str, fonts_dir_esc: str,
+                          accent_hex: str) -> str:
+    """Ken Burns per clip → sentence-aligned xfades → grade/bar/captions."""
+    n = len(input_lengths)
+    parts = [_ken_burns_part(i, input_lengths[i], over_w, over_h, pad_y) for i in range(n)]
+
+    if n == 1:
+        parts.append("[v0]null[vcat]")
+    else:
+        current = "v0"
+        for k, b in enumerate(boundaries, start=1):
+            offset   = max(0.0, b - XFADE_DUR)
+            out_name = f"xf{k}"
+            parts.append(
+                f"[{current}][v{k}]xfade=transition=dissolve:"
+                f"duration={XFADE_DUR:.3f}:offset={offset:.3f}[{out_name}]"
+            )
+            current = out_name
+        parts.append(f"[{current}]null[vcat]")
+
+    return _finish_video(parts, total, eq_filter, ass_esc, fonts_dir_esc, accent_hex)
+
+
+def _video_filter_complex_concat(input_lengths: list[float], total: float,
+                                 over_w: int, over_h: int, pad_y: int,
+                                 eq_filter: str, ass_esc: str, fonts_dir_esc: str,
+                                 accent_hex: str) -> str:
+    """Hard-concat fallback (no transitions). Used when xfade errors."""
+    n = len(input_lengths)
+    parts = [_ken_burns_part(i, input_lengths[i], over_w, over_h, pad_y) for i in range(n)]
+    if n == 1:
+        parts.append("[v0]null[vcat]")
+    else:
+        concat_inputs = "".join(f"[v{i}]" for i in range(n))
+        parts.append(f"{concat_inputs}concat=n={n}:v=1:a=0[vcat]")
+    return _finish_video(parts, total, eq_filter, ass_esc, fonts_dir_esc, accent_hex)
+
+
+def _audio_filter_complex(n: int, audio_dur: float, has_music: bool,
+                          sfx_events: list[tuple[float, float]]) -> str:
+    """Full broadcast mix → [aout].
+
+    Voice: highpass → compressor → presence EQ (studio-izes Edge TTS).
+    Music: bed volume → DUCKED under voice via sidechaincompress (breathes back
+           up in speech gaps — the pro alternative to a fixed low volume).
+    SFX:   each event is its own (tiny) input, delayed into place.
+    Master: loudnorm to -14 LUFS / -1.5 dBTP — YouTube reference loudness.
+
+    Input layout: [0..n-1]=clips, [n]=voice, [n+1]=music (if any), then SFX.
+    """
+    # aformat pins 48 kHz stereo on every branch — sidechaincompress and amix
+    # require matching rate/layout (Edge TTS is mono 24 kHz, music is stereo).
+    fmt    = "aformat=sample_rates=48000:channel_layouts=stereo"
+    parts  = []
+    voice  = (
+        f"[{n}:a]highpass=f=70,"
+        f"acompressor=threshold=0.1:ratio=3:attack=12:release=180:makeup=2,"
+        f"equalizer=f=3000:t=q:w=1.2:g=2,{fmt}"
+    )
+    mix_in = []
+
+    if has_music:
+        parts.append(voice + "[vc]")
+        parts.append("[vc]asplit=2[vmain][vkey]")
+        fade_out_st = max(0.0, audio_dur - 1.8)
+        parts.append(
+            f"[{n + 1}:a]volume={MUSIC_BED},"
+            f"afade=type=in:st=0:d=1.2,"
+            f"afade=type=out:st={fade_out_st:.3f}:d=1.8,{fmt}[mbed]"
+        )
+        parts.append(
+            "[mbed][vkey]sidechaincompress="
+            "threshold=0.02:ratio=10:attack=35:release=600[mduck]"
+        )
+        mix_in = ["[vmain]", "[mduck]"]
+    else:
+        parts.append(voice + "[vmain]")
+        mix_in = ["[vmain]"]
+
+    sfx_base = n + (2 if has_music else 1)
+    if sfx_events:
+        sfx_labels = []
+        for j, (delay_s, gain) in enumerate(sfx_events):
+            ms = max(1, int(delay_s * 1000))
+            parts.append(f"[{sfx_base + j}:a]volume={gain:.2f},{fmt},adelay={ms}|{ms}[s{j}]")
+            sfx_labels.append(f"[s{j}]")
+        if len(sfx_labels) == 1:
+            parts.append(f"{sfx_labels[0]}anull[sx]")
+        else:
+            parts.append(
+                f"{''.join(sfx_labels)}amix=inputs={len(sfx_labels)}:"
+                f"duration=longest:normalize=0[sx]"
+            )
+        mix_in.append("[sx]")
+
+    if len(mix_in) == 1:
+        parts.append(f"{mix_in[0]}loudnorm=I=-14:TP=-1.5:LRA=11,aresample=48000[aout]")
+    else:
+        parts.append(
+            f"{''.join(mix_in)}amix=inputs={len(mix_in)}:duration=first:"
+            f"dropout_transition=0:normalize=0,"
+            f"loudnorm=I=-14:TP=-1.5:LRA=11,aresample=48000[aout]"
+        )
+    return ";\n".join(parts)
+
+
+def _audio_filter_simple(n: int, audio_dur: float, has_music: bool) -> str:
+    """Minimal proven mix for the fallback attempt: voice + static-volume music."""
+    if not has_music:
+        return f"[{n}:a]anull[aout]"
     fade_out_st = max(0.0, audio_dur - 1.5)
     return (
-        f"[{n+1}:a]volume={MUSIC_VOL},"
+        f"[{n + 1}:a]volume={MUSIC_VOL},"
         f"afade=type=in:st=0:d=1.5,"
         f"afade=type=out:st={fade_out_st:.3f}:d=1.5[music];"
         f"[{n}:a][music]amix=inputs=2:duration=first:dropout_transition=1[aout]"
@@ -287,9 +504,11 @@ def render(script: str, bg_paths: "Path | list[Path]", out_dir: Path,
 
     n = len(bg_paths)
 
-    niche_cfg = _load_niche()
+    niche_cfg  = _load_niche()
     niche_name = _active_niche_name()
     eq_filter  = niche_cfg.get("ffmpeg_eq", "eq=contrast=1.1:saturation=1.0")
+    accent_hex = niche_cfg.get("accent_color", DEFAULT_ACCENT)
+    accent_ass = _hex_to_ass(accent_hex)
 
     # Auto-fetch music if not provided
     if music_path is None:
@@ -330,13 +549,17 @@ def render(script: str, bg_paths: "Path | list[Path]", out_dir: Path,
             print(f"      ⚠ audio is only {audio_dur:.1f}s (target ≥{MIN_DUR:.0f}s)")
 
         print("[3/4] Building subtitles…")
-        build_ass(segments, ass, audio_dur, font_name=font_name)
+        build_ass(segments, ass, audio_dur, font_name=font_name, accent=accent_ass)
 
-        # seg_dur_xfade: inflate each clip so xfade overlaps sum to zero net loss.
-        # Formula: n*seg - (n-1)*xfade = audio_dur  →  seg = (audio_dur + (n-1)*xfade) / n
-        # Without this, total video duration < audio_dur → frozen last frame.
-        seg_dur_xfade  = (audio_dur + (n - 1) * XFADE_DUR) / n if n > 1 else audio_dur
-        seg_dur_concat = audio_dur / n   # hard-concat fallback needs unpadded duration
+        # Sentence-aligned cut plan — scene changes land where narration breathes
+        boundaries = _plan_cuts(_sentence_ends(segments), audio_dur, n)
+        n = len(boundaries) + 1 if boundaries else 1
+        bg_paths = bg_paths[:n]
+        if boundaries:
+            print(f"      cuts at: {', '.join(f'{b:.1f}s' for b in boundaries)}")
+
+        lens_xfade  = _xfade_input_lengths(boundaries, audio_dur)
+        lens_concat = _concat_input_lengths(boundaries, audio_dur)
         over_w      = int(W * 1.10)
         over_h      = int(H * 1.10)
         pad_y       = (over_h - H) // 2
@@ -344,52 +567,77 @@ def render(script: str, bg_paths: "Path | list[Path]", out_dir: Path,
         fonts_esc   = str(FONTS_DIR).replace("\\", "/").replace("'", "\\'")
         has_music   = music_path is not None and Path(music_path).exists()
 
+        # SFX layer: hit on the hook, whoosh leading into every cut, riser into
+        # the final beat. Synthesized locally — skipped cleanly if unavailable.
+        sfx = {}
+        try:
+            sfx = _ensure_sfx()
+        except Exception:
+            sfx = {}
+        sfx_files:  list[Path] = []
+        sfx_events: list[tuple[float, float]] = []
+        if sfx:
+            sfx_files.append(sfx["hit"]);  sfx_events.append((0.03, 0.9))
+            for b in boundaries:
+                sfx_files.append(sfx["whoosh"]); sfx_events.append((max(0.0, b - 0.18), 0.65))
+            if boundaries:
+                riser_at = max(0.5, boundaries[-1] - 1.25)
+                sfx_files.append(sfx["riser"]); sfx_events.append((riser_at, 0.55))
+
         use_xfade = n > 1 and _ffmpeg_has_xfade()
         print(f"[4/4] Rendering {n} clip{'s' if n > 1 else ''} → {audio_dur:.1f}s"
               f"{' + music' if has_music else ''}"
+              f"{f' + {len(sfx_events)} sfx' if sfx_events else ''}"
               f"{' [xfade]' if use_xfade else ''}…")
 
-        def _build_cmd(fc: str, seg_t: float) -> list:
+        def _build_cmd(fc: str, input_lengths: list[float], with_sfx: bool) -> list:
             c = ["ffmpeg", "-y", "-loglevel", "warning"]
-            for bg in bg_paths:
-                c += ["-stream_loop", "-1", "-t", f"{seg_t:.3f}", "-i", str(bg)]
+            for bg, seg_t in zip(bg_paths, input_lengths):
+                c += ["-stream_loop", "-1", "-t", f"{seg_t + 0.05:.3f}", "-i", str(bg)]
             c += ["-i", str(mp3)]
             if has_music:
-                c += ["-stream_loop", "-1", "-t", f"{audio_dur:.3f}", "-i", str(music_path)]
-            if has_music:
-                afc = _audio_filter_complex(n, audio_dur, music_path)
-                c += ["-filter_complex", fc + ";\n" + afc, "-map", "[vout]", "-map", "[aout]"]
-            else:
-                c += ["-filter_complex", fc, "-map", "[vout]", "-map", f"{n}:a"]
+                c += ["-stream_loop", "-1", "-t", f"{audio_dur + 1.0:.3f}", "-i", str(music_path)]
+            if with_sfx:
+                for sf in sfx_files:
+                    c += ["-i", str(sf)]
+            c += ["-filter_complex", fc, "-map", "[vout]", "-map", "[aout]"]
             c += [
                 "-t", f"{audio_dur:.3f}",
                 *_video_encoder_args(),
-                "-c:a", "aac", "-b:a", "128k",
+                "-c:a", "aac", "-b:a", "160k",
                 "-r", str(FPS), "-pix_fmt", "yuv420p",
                 str(out),
             ]
             return c
 
-        used_xfade = False
+        rendered = False
         if use_xfade:
-            fc_xfade = _video_filter_complex(n, over_w, over_h, pad_y, seg_dur_xfade,
-                                             eq_filter, ass_esc, fonts_esc)
-            r = subprocess.run(_build_cmd(fc_xfade, seg_dur_xfade + XFADE_DUR),
-                                capture_output=True, text=True)
+            fc = (
+                _video_filter_complex(lens_xfade, boundaries, audio_dur, over_w, over_h,
+                                      pad_y, eq_filter, ass_esc, fonts_esc, accent_hex)
+                + ";\n"
+                + _audio_filter_complex(n, audio_dur, has_music, sfx_events)
+            )
+            r = subprocess.run(_build_cmd(fc, lens_xfade, with_sfx=bool(sfx_events)),
+                               capture_output=True, text=True)
             if r.returncode == 0:
-                used_xfade = True
+                rendered = True
             else:
-                print(f"[render] xfade failed (rc={r.returncode}: "
-                      f"{r.stderr[-200:].strip()}), retrying with hard concat…")
+                print(f"[render] full mix failed (rc={r.returncode}: "
+                      f"{r.stderr[-200:].strip()}), retrying with simple pipeline…")
 
-        if not used_xfade:
-            fc_concat = _video_filter_complex_concat(n, over_w, over_h, pad_y, seg_dur_concat,
-                                                      eq_filter, ass_esc, fonts_esc)
-            r2 = subprocess.run(_build_cmd(fc_concat, seg_dur_concat + 0.1),
-                                 capture_output=True, text=True)
+        if not rendered:
+            fc = (
+                _video_filter_complex_concat(lens_concat, audio_dur, over_w, over_h,
+                                             pad_y, eq_filter, ass_esc, fonts_esc, accent_hex)
+                + ";\n"
+                + _audio_filter_simple(n, audio_dur, has_music)
+            )
+            r2 = subprocess.run(_build_cmd(fc, lens_concat, with_sfx=False),
+                                capture_output=True, text=True)
             if r2.returncode != 0:
                 raise RuntimeError(
-                    f"FFmpeg hard-concat failed (rc={r2.returncode}):\n{r2.stderr[-600:]}"
+                    f"FFmpeg fallback render failed (rc={r2.returncode}):\n{r2.stderr[-600:]}"
                 )
 
     finally:
@@ -401,38 +649,6 @@ def render(script: str, bg_paths: "Path | list[Path]", out_dir: Path,
 
     print(f"Done → {out}")
     return out
-
-
-def _video_filter_complex_concat(
-    n: int, over_w: int, over_h: int, pad_y: int,
-    seg_dur: float, eq_filter: str, ass_esc: str, fonts_dir_esc: str,
-) -> str:
-    """Hard-concat fallback (no transitions). Used when xfade errors."""
-    x_exprs = [
-        f"({over_w}-{W})*t/{seg_dur:.3f}",
-        f"({over_w}-{W})*(1-t/{seg_dur:.3f})",
-    ]
-    y_exprs = [
-        str(pad_y),
-        f"({over_h}-{H})*t/{seg_dur:.3f}",
-        f"({over_h}-{H})*(1-t/{seg_dur:.3f})",
-    ]
-    parts = []
-    for i in range(n):
-        pan_x = x_exprs[i % len(x_exprs)]
-        pan_y = y_exprs[i % len(y_exprs)]
-        parts.append(
-            f"[{i}:v]setpts=PTS-STARTPTS,scale={over_w}:{over_h}:force_original_aspect_ratio=increase,"
-            f"crop={W}:{H}:{pan_x}:{pan_y},"
-            f"setsar=1,fps={FPS},format=yuv420p,settb=AVTB[v{i}]"
-        )
-    concat_inputs = "".join(f"[v{i}]" for i in range(n))
-    parts.append(f"{concat_inputs}concat=n={n}:v=1:a=0[vraw]")
-    parts.append(
-        f"[vraw]{eq_filter},vignette=PI/4,"
-        f"ass='{ass_esc}':fontsdir='{fonts_dir_esc}'[vout]"
-    )
-    return ";\n".join(parts)
 
 
 # ── Entry point ──────────────────────────────────────────────────────────────────

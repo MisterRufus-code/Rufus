@@ -26,8 +26,10 @@ import subprocess
 import tempfile
 from pathlib import Path
 
-# Edge TTS defaults (kept in sync with audio_gen historical settings)
-EDGE_VOICE = os.environ.get("RUFUS_EDGE_VOICE", "en-US-ChristopherNeural")
+# Edge TTS defaults. Andrew is the deep "documentary" multilingual-neural voice
+# the community consistently rates most natural for narration; override with
+# RUFUS_EDGE_VOICE (e.g. en-US-BrianMultilingualNeural, en-US-ChristopherNeural).
+EDGE_VOICE = os.environ.get("RUFUS_EDGE_VOICE", "en-US-AndrewMultilingualNeural")
 EDGE_RATE  = os.environ.get("RUFUS_EDGE_RATE", "+6%")
 
 # XTTS defaults

@@ -189,7 +189,7 @@ def test_sd_client_skips_failed_images():
     from sd_client import generate_clips
     call_count = {"n": 0}
 
-    def fake_generate(prompt):
+    def fake_generate(prompt, seed=-1):
         call_count["n"] += 1
         return None  # always fail
 

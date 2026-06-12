@@ -25,11 +25,15 @@ Usage:
 
 import base64
 import io
+import json
+import random
 import subprocess
 import time
 from pathlib import Path
 
 import requests
+
+CONFIG_DIR = Path(__file__).parent.parent / "config"
 
 # ── Constants ────────────────────────────────────────────────────────────────
 
@@ -76,12 +80,27 @@ def is_available() -> bool:
 
 # ── Image generation ─────────────────────────────────────────────────────────
 
-def _query_to_prompt(query: str) -> str:
-    return f"({query}:1.3), {QUALITY_SUFFIX}"
+def _niche_style_suffix() -> str:
+    """Per-niche cinematic style from niches.json — keeps all images on-brand."""
+    import os
+    try:
+        data   = json.loads((CONFIG_DIR / "niches.json").read_text())
+        active = os.environ.get("RUFUS_NICHE_OVERRIDE") or data["active"]
+        return data["niches"][active].get("style_suffix", "") or QUALITY_SUFFIX
+    except Exception:
+        return QUALITY_SUFFIX
 
 
-def _generate_image(prompt: str) -> bytes | None:
-    """Call A1111 txt2img at 576×1024. Returns raw PNG bytes or None."""
+def _query_to_prompt(query: str, style: str = "") -> str:
+    return f"({query}:1.3), {style or QUALITY_SUFFIX}, {QUALITY_SUFFIX}"
+
+
+def _generate_image(prompt: str, seed: int = -1) -> bytes | None:
+    """Call A1111 txt2img at 576×1024. Returns raw PNG bytes or None.
+
+    A fixed seed across a run keeps lighting/palette consistent between images
+    so the four scenes read as one film instead of four random photos.
+    """
     import os
     steps = int(os.environ.get("SD_STEPS", "20"))
     payload = {
@@ -96,7 +115,7 @@ def _generate_image(prompt: str) -> bytes | None:
         "enable_hr":       False,   # upscale separately — safer on 6GB
         "batch_size":      1,
         "n_iter":          1,
-        "seed":            -1,
+        "seed":            seed,
     }
     try:
         r = requests.post(f"{_host()}/sdapi/v1/txt2img", json=payload,
@@ -251,12 +270,16 @@ def generate_clips(queries: list[str], n: int = 4,
             prompts.append(base[len(prompts) % len(base)] + ", different composition, wider shot")
     prompts = prompts[:n]
 
+    style       = _niche_style_suffix()
+    master_seed = random.randint(1, 2_000_000_000)
+    print(f"[sd] master seed {master_seed} — consistent look across {len(prompts)} images")
+
     for i, query in enumerate(prompts):
         print(f"[sd] {i+1}/{len(prompts)}: {query[:70]}")
-        prompt = _query_to_prompt(query)
+        prompt = _query_to_prompt(query, style)
 
         # 1. Generate at 576×1024 (~3-5s on GTX 1060)
-        img_bytes = _generate_image(prompt)
+        img_bytes = _generate_image(prompt, seed=master_seed)
         if not img_bytes:
             continue
 

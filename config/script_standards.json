@@ -32,10 +32,11 @@
 
   "body": {
     "min_words": 80,
-    "max_words": 130,
+    "max_words": 115,
     "min_avg_sentence_words": 6,
     "max_avg_sentence_words": 14,
-    "specificity_per_25_words": 1.0
+    "specificity_per_25_words": 1.0,
+    "_max_words_note": "115 words ≈ 45s at +6% rate. Retention data: Shorts 30-45s hold best for value content; >50s bleeds completion rate."
   },
 
   "loop": {
