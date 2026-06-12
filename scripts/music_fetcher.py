@@ -5,7 +5,8 @@ music_fetcher.py — Provider-agnostic background music for Rufus.
 Fetches royalty-free music by niche mood. Provider chain:
   1. Jamendo API  (free client_id from developers.jamendo.com — set in config/keys.json)
   2. archive.org  (no key needed — CC0 public domain audio)
-  3. None         (graceful skip — render proceeds voice-only, never crashes)
+  3. music_gen    (synthesized local ambient bed — zero APIs, always available)
+  4. None         (only if even local synthesis fails — render proceeds voice-only)
 
 Tracks are cached in media_library/music/ so repeat runs are instant.
 
@@ -37,6 +38,9 @@ DEFAULT_MOODS = ["ambient", "instrumental", "calm"]
 
 MIN_TRACK_BYTES = 200_000
 
+# archive.org throttles/rejects the default python-requests UA — identify properly.
+_UA = {"User-Agent": "Rufus-Shorts/1.0 (autonomous video pipeline; contact via repo)"}
+
 
 def _load_jamendo_key() -> str:
     try:
@@ -52,7 +56,7 @@ def _cache_path(url: str) -> Path:
 
 def _download(url: str, dest: Path) -> bool:
     try:
-        r = requests.get(url, stream=True, timeout=60)
+        r = requests.get(url, stream=True, timeout=60, headers=_UA)
         r.raise_for_status()
         dest.parent.mkdir(parents=True, exist_ok=True)
         with open(dest, "wb") as f:
@@ -114,12 +118,16 @@ def _archive_music(mood: str) -> Path | None:
         r = requests.get(
             "https://archive.org/advancedsearch.php",
             params={
-                "q":      f'{mood} AND mediatype:audio AND format:mp3 AND licenseurl:creativecommons',
+                # subject/title match + opensource_audio = CC-licensed uploads;
+                # the old licenseurl:creativecommons term matched nothing
+                # (licenseurl is a full-URL field, not a keyword field).
+                "q":      f'({mood}) AND mediatype:(audio) AND collection:(opensource_audio) AND format:(MP3)',
                 "fl":     "identifier",
                 "rows":   20,
                 "output": "json",
             },
             timeout=15,
+            headers=_UA,
         )
         r.raise_for_status()
         docs = r.json().get("response", {}).get("docs", [])
@@ -135,6 +143,7 @@ def _archive_music(mood: str) -> Path | None:
                 files_r = requests.get(
                     f"https://archive.org/metadata/{identifier}/files",
                     timeout=10,
+                    headers=_UA,
                 )
                 files_r.raise_for_status()
                 mp3s = [
@@ -162,7 +171,11 @@ def _archive_music(mood: str) -> Path | None:
 
 
 def fetch_music(niche: str) -> Path | None:
-    """Return path to a cached music track for the niche, or None for voice-only."""
+    """Return path to a music track for the niche, or None for voice-only.
+
+    Streaming providers first (real produced tracks), then the synthesized
+    local bed — so a render virtually always has music under the voice.
+    """
     MUSIC_DIR.mkdir(parents=True, exist_ok=True)
     moods = MOOD_MAP.get(niche, DEFAULT_MOODS)
 
@@ -173,6 +186,15 @@ def fetch_music(niche: str) -> Path | None:
         track = _archive_music(mood)
         if track:
             return track
+
+    # No platform reachable — synthesize a bed locally (zero APIs, cached).
+    try:
+        from music_gen import ensure_music
+        track = ensure_music(niche)
+        if track:
+            return track
+    except Exception as e:
+        print(f"[music] local synthesis failed: {e}")
 
     print("[music] all sources failed — proceeding voice-only")
     return None

@@ -166,10 +166,12 @@ def test_archive_music_per_identifier_error_continues(capsys):
 
 
 def test_fetch_music_returns_none_on_all_failures():
-    """fetch_music must return None (not raise) when all providers fail."""
+    """fetch_music must return None (not raise) when every provider AND the
+    local synth bed fail."""
     from music_fetcher import fetch_music
     with patch("music_fetcher._jamendo", return_value=None), \
-         patch("music_fetcher._archive_music", return_value=None):
+         patch("music_fetcher._archive_music", return_value=None), \
+         patch("music_gen.ensure_music", return_value=None):
         result = fetch_music("finance")
     assert result is None
 

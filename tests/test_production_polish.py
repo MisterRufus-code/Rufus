@@ -230,3 +230,46 @@ def test_sfx_cmds_use_lavfi_synthesis():
     assert "anoisesrc=colour=pink" in " ".join(whoosh)
     assert "anoisesrc=colour=white" in " ".join(riser)
     assert _sfx_cmd("nope", Path("/tmp/x.wav")) is None
+
+
+# ── Synthesized music beds ───────────────────────────────────────────────────────
+
+def test_music_pad_expr_structure():
+    """4 chords → 4 gated terms, balanced parens, no stray backslashes."""
+    from music_gen import _pad_expr, NICHE_BEDS
+    expr = _pad_expr(NICHE_BEDS["finance"]["chords"])
+    assert expr.count("between(") == 4
+    assert expr.count("(") == expr.count(")")
+    assert "\\" not in expr           # backslashes would break ffmpeg eval inside quotes
+    assert "sin(2*PI*110.00*t)" in expr   # Am root present
+
+
+def test_music_cmd_pulse_vs_calm():
+    """BPM niches get a pulse layer (2 inputs); calm niches are pad-only."""
+    from pathlib import Path
+    from music_gen import _music_cmd
+    fin = " ".join(_music_cmd("finance", Path("/tmp/f.wav")))
+    mind = " ".join(_music_cmd("mindset", Path("/tmp/m.wav")))
+    assert "anoisesrc" in fin and "tremolo" in fin and "amix=inputs=2" in fin
+    assert "anoisesrc" not in mind and "-af" in mind
+    assert "aevalsrc=exprs=" in fin and "aevalsrc=exprs=" in mind
+
+
+def test_music_unknown_niche_uses_default():
+    from pathlib import Path
+    from music_gen import _music_cmd
+    cmd = _music_cmd("no_such_niche", Path("/tmp/x.wav"))
+    assert cmd[0] == "ffmpeg" and "aevalsrc=exprs=" in " ".join(cmd)
+
+
+def test_fetch_music_falls_back_to_synth(tmp_path):
+    """When Jamendo and archive.org both fail, the synthesized bed is used."""
+    from unittest.mock import patch
+    import music_fetcher
+    bed = tmp_path / "bed.wav"
+    bed.write_bytes(b"\0" * 600_000)
+    with patch("music_fetcher._jamendo", return_value=None), \
+         patch("music_fetcher._archive_music", return_value=None), \
+         patch("music_gen.ensure_music", return_value=bed):
+        result = music_fetcher.fetch_music("finance")
+    assert result == bed

@@ -5,6 +5,9 @@ config/keys.json
 media_library/cache/
 media_library/output/
 media_library/temp/
+media_library/music/
+assets/sfx/
+assets/music_synth/
 
 # Runtime logs and database
 logs/
