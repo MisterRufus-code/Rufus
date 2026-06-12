@@ -4,13 +4,14 @@ research.py – Returns real source material the script writer compresses into a
 
 Strategy:
     1. Try Reddit hot/top posts from niche-specific subreddits
-    2. Try Hacker News "Ask HN" posts (finance/business/mindset niches)
-    3. If nothing passes quality filters, fall back to a curated wisdom quote pool
+    2. Try StackExchange high-voted questions (keyless API — money/workplace stories)
+    3. Try Hacker News "Ask HN" posts (finance/business/mindset niches)
+    4. If nothing passes quality filters, fall back to a curated wisdom quote pool
 
 A Seed dict is returned with keys:
-    - type:    "reddit" | "hackernews" | "wisdom"
+    - type:    "reddit" | "stackexchange" | "hackernews" | "wisdom"
     - content: the substantive text (story or quote)
-    - source:  subreddit name | "Hacker News" | author name
+    - source:  subreddit name | SE site | "Hacker News" | author name
     - title:   post title (empty for wisdom)
     - url:     post permalink (empty for wisdom)
 """
@@ -104,6 +105,24 @@ TITLE_STORY_RE = re.compile(
     re.IGNORECASE,
 )
 
+# ── StackExchange config ─────────────────────────────────────────────────────────
+
+SE_TIMEOUT      = 10.0
+SE_MIN_SCORE    = 40     # SE scores run lower than Reddit — 40+ is a strong question
+SE_MIN_BODY_LEN = 300
+SE_MAX_BODY_LEN = 3000
+
+# Niche → StackExchange site. Only sites whose top questions read as real
+# first-person stories ("My employer did X…", "I inherited Y…").
+SE_NICHE_SITES = {
+    "finance":              "money",
+    "business":             "workplace",
+    "personal_development": "workplace",
+    "mindset":              None,
+    "motivation":           None,
+}
+
+
 # ── Hacker News config ───────────────────────────────────────────────────────────
 
 HN_TIMEOUT      = 10.0
@@ -141,6 +160,8 @@ def _seed_id(seed: dict) -> str:
         return "reddit:" + (seed.get("url") or seed.get("title", ""))
     if t == "hackernews":
         return "hn:" + (seed.get("url") or seed.get("title", ""))
+    if t == "stackexchange":
+        return "se:" + (seed.get("url") or seed.get("title", ""))
     if t == "wisdom":
         text = (seed.get("content") or "").strip().lower()
         return "wisdom:" + hashlib.sha1(text.encode("utf-8")).hexdigest()[:16]
@@ -358,6 +379,63 @@ def fetch_reddit_story(subreddit: str, limit: int = 50, used_ids: set | None = N
     }
 
 
+def fetch_stackexchange_story(niche_name: str, used_ids: set | None = None) -> dict | None:
+    """Fetch a high-voted story-shaped question from the niche's SE site.
+
+    The StackExchange API allows keyless access (IP rate limit ~300 req/day —
+    Rufus uses 1 per run). money.SE and workplace.SE top questions are mostly
+    first-person stories, which is exactly what the script writer needs.
+    """
+    if used_ids is None:
+        used_ids = set()
+
+    site = SE_NICHE_SITES.get(niche_name)
+    if not site:
+        return None
+
+    url = (
+        "https://api.stackexchange.com/2.3/questions"
+        f"?order=desc&sort=votes&site={site}&filter=withbody&pagesize=60"
+    )
+    try:
+        r = httpx.get(url, headers=REDDIT_HEADERS, timeout=SE_TIMEOUT, follow_redirects=True)
+        r.raise_for_status()
+        items = r.json().get("items", [])
+    except Exception as e:
+        print(f"[research] StackExchange unreachable for {site} ({e})")
+        return None
+
+    quality = []
+    for q in items:
+        if q.get("score", 0) < SE_MIN_SCORE:
+            continue
+        body = _strip_html(q.get("body", ""))
+        if not (SE_MIN_BODY_LEN <= len(body) <= SE_MAX_BODY_LEN):
+            continue
+        title = _strip_html(q.get("title", ""))
+        if TITLE_BAD_RE.search(title) or TITLE_OFFTOPIC_RE.search(title):
+            continue
+        if not TITLE_STORY_RE.search(title):
+            continue
+        link = q.get("link", "")
+        if "se:" + link in used_ids:
+            continue
+        quality.append((title, body, link))
+
+    if not quality:
+        print(f"[research] SE {site}: {len(items)} items, none passed quality filter")
+        return None
+
+    title, body, link = random.choice(quality[:8])
+    return {
+        "type":    "stackexchange",
+        "source":  f"{site}.stackexchange.com",
+        "title":   title,
+        "content": _clean_text(body),
+        "url":     link,
+    }
+
+
 def fetch_hackernews_story(niche_name: str, used_ids: set | None = None) -> dict | None:
     """Fetch a substantive Ask HN post relevant to the niche, skipping seen IDs.
 
@@ -478,6 +556,13 @@ def get_seed(niche_name: str | None = None) -> dict:
             print(f"[research] using Reddit story from {seed['source']}: \"{seed['title'][:60]}\"")
             _mark_seed_used(seed)
             return seed
+
+    # StackExchange: keyless API, never IP-blocked like Reddit's public JSON
+    seed = fetch_stackexchange_story(name, used_ids=used_set)
+    if seed:
+        print(f"[research] using StackExchange story from {seed['source']}: \"{seed['title'][:60]}\"")
+        _mark_seed_used(seed)
+        return seed
 
     # Try Hacker News for niches that align with its intellectual/founder audience
     seed = fetch_hackernews_story(name, used_ids=used_set)

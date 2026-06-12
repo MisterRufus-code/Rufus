@@ -186,6 +186,8 @@ def run(skip_upload: bool = False, niche_override: str = None, output_dir: Path 
             print(f"           → Reddit: {seed.get('title', '')[:80]}")
         elif seed.get("type") == "hackernews":
             print(f"           → HN:     {seed.get('title', '')[:80]}")
+        elif seed.get("type") == "stackexchange":
+            print(f"           → SE:     {seed.get('title', '')[:80]}")
         else:
             print(f"           → Quote:  \"{seed.get('content', '')[:80]}\" — {seed.get('source')}\n")
     except Exception as e:

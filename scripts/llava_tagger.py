@@ -195,8 +195,11 @@ def pick_best_video(candidates: list[Path], llava_context: str,
                 f"\nSCRIPT TOPIC: Quote from {seed.get('source', 'Unknown')}:\n"
                 f"\"{(seed.get('content') or '')[:200]}\""
             )
-        elif stype == "hackernews":
-            seed_ctx = f"\nSCRIPT TOPIC: \"{seed.get('title', '')}\""
+        elif stype in ("hackernews", "stackexchange"):
+            seed_ctx = (
+                f"\nSCRIPT TOPIC: \"{seed.get('title', '')}\"\n"
+                f"{(seed.get('content') or '')[:250]}"
+            )
         else:
             seed_ctx = ""
     else:

@@ -96,6 +96,13 @@ def _seed_block(seed: dict) -> str:
             f"Title:     {seed.get('title', '')}\n"
             f"Body:      {seed.get('content', '')}\n"
         )
+    if seed.get("type") == "stackexchange":
+        return (
+            "SOURCE MATERIAL (real StackExchange question/story):\n"
+            f"Site:      {seed.get('source', '')}\n"
+            f"Title:     {seed.get('title', '')}\n"
+            f"Story:     {seed.get('content', '')}\n"
+        )
     if seed.get("type") == "wisdom":
         return (
             "SOURCE MATERIAL (real quote):\n"

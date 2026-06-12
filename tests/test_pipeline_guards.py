@@ -274,3 +274,52 @@ def test_tts_engine_xtts_fallback_on_import_error(tmp_path):
         assert edge_called["n"] == 1, "Edge TTS fallback was not called"
     finally:
         os.environ.pop("RUFUS_TTS", None)
+
+
+# ── stackexchange research guards ─────────────────────────────────────────────
+
+def _se_item(title, body, score=80, link="https://money.stackexchange.com/q/1"):
+    return {"title": title, "body": f"<p>{body}</p>", "score": score, "link": link}
+
+
+def test_stackexchange_returns_story_and_strips_html():
+    import research
+    body = "I inherited $40,000 last year and almost lost it all. " * 10
+    fake = MagicMock()
+    fake.raise_for_status = lambda: None
+    fake.json.return_value = {"items": [_se_item("I saved $40,000 in 2 years", body)]}
+    with patch("research.httpx.get", return_value=fake):
+        seed = research.fetch_stackexchange_story("finance")
+    assert seed is not None
+    assert seed["type"] == "stackexchange"
+    assert "<p>" not in seed["content"]
+    assert seed["source"] == "money.stackexchange.com"
+
+
+def test_stackexchange_skips_used_and_low_score():
+    import research
+    body = "Real story with enough length to pass the body filter. " * 12
+    used_link = "https://money.stackexchange.com/q/1"
+    items = [
+        _se_item("I saved $9,000", body, score=80, link=used_link),     # used
+        _se_item("I lost $500 on fees", body, score=5),                 # low score
+    ]
+    fake = MagicMock()
+    fake.raise_for_status = lambda: None
+    fake.json.return_value = {"items": items}
+    with patch("research.httpx.get", return_value=fake):
+        seed = research.fetch_stackexchange_story("finance", used_ids={"se:" + used_link})
+    assert seed is None
+
+
+def test_stackexchange_unreachable_returns_none(capsys):
+    import research
+    with patch("research.httpx.get", side_effect=Exception("403 Blocked")):
+        seed = research.fetch_stackexchange_story("finance")
+    assert seed is None
+    assert "unreachable" in capsys.readouterr().out.lower()
+
+
+def test_stackexchange_skips_unmapped_niches():
+    import research
+    assert research.fetch_stackexchange_story("motivation") is None
