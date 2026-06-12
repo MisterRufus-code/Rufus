@@ -77,14 +77,28 @@ def _parse_video_queries(analysis: str) -> list[str]:
 
 
 def _build_sd_prompts(script: str, niche: str, n: int = 4) -> list[str]:
-    """Generate n Stable Diffusion visual prompts from the actual script content.
+    """Generate n visually-distinct SD prompts that progress through the script arc.
 
-    Uses GPT-4o-mini to create cinematic scene descriptions that progress through
-    the script's story arc. Falls back to sentence-chunk extraction if GPT fails.
+    Each of the n scenes is anchored to a different camera distance, location,
+    and time of day so consecutive clips never look the same.
     """
     import re
 
-    # Try GPT-4o-mini for rich, arc-aware scene descriptions
+    # Hard visual anchors per scene slot — GPT must honour these.
+    # They rotate if n > 4 so every slot stays unique.
+    ANCHORS = [
+        ("EXTREME CLOSE-UP",  "tight detail shot, face/hands/object",    "high-contrast dramatic light"),
+        ("WIDE ESTABLISHING", "outdoor or large interior, no face needed","golden hour or overcast sky"),
+        ("MEDIUM SHOT",       "person mid-frame, waist-up, in action",    "side or rim lighting"),
+        ("AERIAL / ABSTRACT", "overhead view or symbolic still-life",     "cool blue or dark moody tones"),
+    ]
+
+    anchor_lines = "\n".join(
+        f"  Scene {i+1}: camera={ANCHORS[i % 4][0]}, subject={ANCHORS[i % 4][1]}, "
+        f"lighting={ANCHORS[i % 4][2]}"
+        for i in range(n)
+    )
+
     try:
         from openai import OpenAI
         keys_file = CONFIG_DIR / "keys.json"
@@ -97,16 +111,20 @@ def _build_sd_prompts(script: str, niche: str, n: int = 4) -> list[str]:
                     messages=[{
                         "role": "user",
                         "content": (
-                            f"You're creating background visuals for a YouTube Short about {niche}.\n\n"
-                            f"Script:\n{script}\n\n"
-                            f"Write exactly {n} cinematic photo scene descriptions for Stable Diffusion. "
-                            "Each line: 15-25 words, a specific subject or person, a concrete setting, "
-                            "and mood/lighting. Progress through the script's story arc from start to finish. "
-                            f"Output ONLY {n} plain lines, no numbering, no labels, no extra text."
+                            f"Create {n} Stable Diffusion image prompts for a YouTube Short.\n"
+                            f"Niche: {niche}\n\n"
+                            f"Script (for story context):\n{script}\n\n"
+                            f"MANDATORY scene constraints — you MUST follow these exactly:\n"
+                            f"{anchor_lines}\n\n"
+                            "Rules:\n"
+                            "- Each scene MUST use a DIFFERENT physical location (no two scenes in the same room/place).\n"
+                            "- No two scenes can share the same camera distance.\n"
+                            "- Each description: 15-25 words, concrete subject, concrete setting, specific lighting.\n"
+                            f"- Output ONLY {n} plain lines, no numbering, no labels, nothing else."
                         ),
                     }],
-                    max_tokens=300,
-                    temperature=0.7,
+                    max_tokens=400,
+                    temperature=0.8,
                 )
                 raw_lines = resp.choices[0].message.content.strip().split("\n")
                 lines = [
@@ -114,22 +132,33 @@ def _build_sd_prompts(script: str, niche: str, n: int = 4) -> list[str]:
                     for l in raw_lines if l.strip()
                 ]
                 lines = [l for l in lines if len(l) > 10]
-                if len(lines) >= 2:
-                    while len(lines) < n:
-                        lines.append(lines[len(lines) % len(lines)] + ", different angle")
-                    return lines[:n]
-    except Exception as e:
-        print(f"[sd] GPT prompt generation skipped ({e}) — using fallback")
 
-    # Fallback: split script into n equal chunks, use each chunk's text as a cue
+                # If GPT returned fewer than n, fill with anchor-driven fallbacks
+                # (never cycle the same prompt — each fallback uses a unique anchor).
+                while len(lines) < n:
+                    i = len(lines)
+                    cam, subj, light = ANCHORS[i % 4]
+                    lines.append(
+                        f"{niche} scene, {cam.lower()}, {subj}, {light}, "
+                        "photorealistic, cinematic"
+                    )
+                return lines[:n]
+    except Exception as e:
+        print(f"[sd] GPT prompt generation skipped ({e}) — using anchor fallback")
+
+    # Key-free fallback: anchor-driven prompts (always visually distinct).
     sentences = [s.strip() for s in re.split(r"[.!?]", script) if len(s.strip()) > 15]
-    if not sentences:
-        return [f"cinematic {niche} scene, dramatic lighting, professional photography"] * n
     prompts = []
     for i in range(n):
-        idx   = int(i * len(sentences) / n)
-        chunk = sentences[idx][:80]
-        prompts.append(f"{chunk}, {niche}, cinematic photography, dramatic lighting")
+        cam, subj, light = ANCHORS[i % 4]
+        if sentences:
+            idx = int(i * len(sentences) / n)
+            cue = sentences[idx][:60]
+        else:
+            cue = f"{niche} concept"
+        prompts.append(
+            f"{cue}, {cam.lower()}, {subj}, {light}, photorealistic, cinematic"
+        )
     return prompts
 
 
@@ -202,7 +231,7 @@ def run(skip_upload: bool = False, niche_override: str = None, output_dir: Path 
     except Exception as e:
         print(f"           ⚠ Pre-analysis failed (non-fatal): {e}")
 
-    video_source  = os.environ.get("RUFUS_VIDEO_SOURCE", "pexels").strip().lower()
+    video_source  = os.environ.get("RUFUS_VIDEO_SOURCE", "sd").strip().lower()
     video_queries = _parse_video_queries(seed_analysis)
 
     # ── Step 2: Get candidate clips — AI-generated (SD) or stock (Pexels) ───────

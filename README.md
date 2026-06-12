@@ -53,7 +53,7 @@ Everything is free except OpenAI credits. Mix and match:
 
 | Variable | Values | Default | What it does |
 |---|---|---|---|
-| `RUFUS_VIDEO_SOURCE` | `pexels` / `sd` | `pexels` | Footage source (see below) |
+| `RUFUS_VIDEO_SOURCE` | `sd` / `pexels` | `sd` | Footage source — SD is default, Pexels is fallback when A1111 unavailable |
 | `RUFUS_RENDERER` | `ffmpeg` / `remotion` | `ffmpeg` | Render engine (see below) |
 | `RUFUS_TTS` | `edge` / `xtts` | `edge` | Voice engine (see below) |
 | `RUFUS_GPU` | `1` / unset | unset | Whisper CUDA + FFmpeg NVENC |
