@@ -41,6 +41,10 @@ python scripts/health_check.py        # verify everything is ready
 
 Optional keys: `vimeo`, `pixabay`, `jamendo_client_id` (music), `reddit_client_id`/`reddit_client_secret` (better Reddit research).
 
+**Music needs no key**: the chain is Jamendo (if key set) → archive.org (free) →
+**locally synthesized ambient bed** (`music_gen.py` — per-niche chord-progression pads
+generated with FFmpeg, zero APIs, zero licenses). Every render gets music under the voice.
+
 ---
 
 ## Modes (environment variables)
