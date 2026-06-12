@@ -76,6 +76,63 @@ def _parse_video_queries(analysis: str) -> list[str]:
     return []
 
 
+def _build_sd_prompts(script: str, niche: str, n: int = 4) -> list[str]:
+    """Generate n Stable Diffusion visual prompts from the actual script content.
+
+    Uses GPT-4o-mini to create cinematic scene descriptions that progress through
+    the script's story arc. Falls back to sentence-chunk extraction if GPT fails.
+    """
+    import re
+
+    # Try GPT-4o-mini for rich, arc-aware scene descriptions
+    try:
+        from openai import OpenAI
+        keys_file = CONFIG_DIR / "keys.json"
+        if keys_file.exists():
+            key = json.loads(keys_file.read_text()).get("openai", "")
+            if key and not key.startswith("YOUR_") and not key.startswith("FILL_"):
+                client = OpenAI(api_key=key)
+                resp = client.chat.completions.create(
+                    model="gpt-4o-mini",
+                    messages=[{
+                        "role": "user",
+                        "content": (
+                            f"You're creating background visuals for a YouTube Short about {niche}.\n\n"
+                            f"Script:\n{script}\n\n"
+                            f"Write exactly {n} cinematic photo scene descriptions for Stable Diffusion. "
+                            "Each line: 15-25 words, a specific subject or person, a concrete setting, "
+                            "and mood/lighting. Progress through the script's story arc from start to finish. "
+                            f"Output ONLY {n} plain lines, no numbering, no labels, no extra text."
+                        ),
+                    }],
+                    max_tokens=300,
+                    temperature=0.7,
+                )
+                raw_lines = resp.choices[0].message.content.strip().split("\n")
+                lines = [
+                    re.sub(r"^[\d\.\-\)\s]+", "", l).strip()
+                    for l in raw_lines if l.strip()
+                ]
+                lines = [l for l in lines if len(l) > 10]
+                if len(lines) >= 2:
+                    while len(lines) < n:
+                        lines.append(lines[len(lines) % len(lines)] + ", different angle")
+                    return lines[:n]
+    except Exception as e:
+        print(f"[sd] GPT prompt generation skipped ({e}) — using fallback")
+
+    # Fallback: split script into n equal chunks, use each chunk's text as a cue
+    sentences = [s.strip() for s in re.split(r"[.!?]", script) if len(s.strip()) > 15]
+    if not sentences:
+        return [f"cinematic {niche} scene, dramatic lighting, professional photography"] * n
+    prompts = []
+    for i in range(n):
+        idx   = int(i * len(sentences) / n)
+        chunk = sentences[idx][:80]
+        prompts.append(f"{chunk}, {niche}, cinematic photography, dramatic lighting")
+    return prompts
+
+
 def load_niche_cfg(override: str = None):
     data = json.loads(NICHES_FILE.read_text())
     if override:
@@ -152,20 +209,11 @@ def run(skip_upload: bool = False, niche_override: str = None, output_dir: Path 
     candidates = []
     scene = ""
     if video_source == "sd":
-        print("[ 2 / 7 ]  Generating images with Stable Diffusion (local)...")
-        try:
-            from sd_client import generate_clips as sd_generate
-            prompts = video_queries or [niche_cfg.get("llava_context", f"{active} scene")]
-            n_clips = int(os.environ.get("SD_CLIPS", "4"))
-            candidates = sd_generate(prompts, n=n_clips)
-            if candidates:
-                scene = "SD-generated images: " + "; ".join(prompts[:3])
-                print(f"           → {len(candidates)} clips generated\n")
-        except Exception as e:
-            print(f"           ⚠ SD generation failed ({e}) — falling back to Pexels")
-        if not candidates:
-            print("           → no SD clips — falling back to Pexels")
-            video_source = "pexels"
+        # SD images are generated AFTER the script is written (step 2.5) so they
+        # can be tailored to the actual script content.  Set a placeholder scene
+        # here so write_script has context; candidates are filled in later.
+        scene = niche_cfg.get("llava_context", f"{active} scene")
+        print("[ 2 / 7 ]  SD mode — image generation deferred until after scripting\n")
 
     if video_source != "sd":
         print("[ 2 / 7 ]  Fetching candidate videos (parallel)...")
@@ -179,7 +227,9 @@ def run(skip_upload: bool = False, niche_override: str = None, output_dir: Path 
             sys.exit(1)
 
     # ── Step 3: AI picks best video (stock only — generated clips are on-topic) ─
-    if scene:
+    if video_source == "sd":
+        print("[ 3 / 7 ]  SD mode — skipping vision pick\n")
+    elif scene:
         print("[ 3 / 7 ]  Generated clips are purpose-built — skipping vision pick\n")
     else:
         print("[ 3 / 7 ]  AI selecting best video...")
@@ -222,6 +272,33 @@ def run(skip_upload: bool = False, niche_override: str = None, output_dir: Path 
     except Exception as e:
         print(f"           ✗ Step 4 failed: {e}")
         sys.exit(1)
+
+    # ── Step 2.5 (SD only): Generate script-matched images ──────────────────────
+    if video_source == "sd":
+        print("[ 2.5/7 ]  Generating SD images from script content...")
+        try:
+            from sd_client import generate_clips as sd_generate
+            n_clips    = int(os.environ.get("SD_CLIPS", "4"))
+            sd_prompts = _build_sd_prompts(script, active, n=n_clips)
+            print(f"           → prompts: {sd_prompts}")
+            candidates = sd_generate(sd_prompts, n=n_clips)
+            if candidates:
+                scene = "SD-generated: " + "; ".join(sd_prompts[:2])
+                print(f"           → {len(candidates)} clips ready\n")
+            else:
+                print("           ⚠ SD failed — falling back to Pexels")
+                video_source = "pexels"
+                if video_queries:
+                    print(f"           → using script queries: {video_queries}")
+                candidates = fetch_candidates(n=5, extra_keywords=video_queries or None)
+                video_path, scene = pick_best_video(
+                    candidates, niche_cfg["llava_context"],
+                    seed=seed, analysis=seed_analysis or None,
+                )
+                print(f"           → Pexels fallback: {video_path.name}\n")
+        except Exception as e:
+            print(f"           ✗ SD generation failed: {e}")
+            sys.exit(1)
 
     # ── Step 5: Render (all clips cut together) ─────────────────────────────────
     # RUFUS_RENDERER=remotion uses the React engine (spring-pop captions, smooth

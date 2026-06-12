@@ -244,7 +244,12 @@ def generate_clips(queries: list[str], n: int = 4,
 
     clips:  list[Path] = []
     stamp   = int(time.time())
-    prompts = (queries or ["cinematic scene"])[:n]
+    prompts = list(queries or ["cinematic scene"])
+    if len(prompts) < n:
+        base = prompts[:]
+        while len(prompts) < n:
+            prompts.append(base[len(prompts) % len(base)] + ", different composition, wider shot")
+    prompts = prompts[:n]
 
     for i, query in enumerate(prompts):
         print(f"[sd] {i+1}/{len(prompts)}: {query[:70]}")
