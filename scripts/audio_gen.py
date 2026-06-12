@@ -57,10 +57,11 @@ MIN_DUR      = 30.0
 CLUSTER_SIZE = 1           # 1 word at a time — Hormozi style
 
 XFADE_DUR    = 0.30        # crossfade duration between clips (seconds)
-FADE_EDGE    = 0.40        # fade-in from black / fade-to-black duration (seconds)
+FADE_IN      = 0.0         # fade-in duration — 0 = hard cut (top Shorts open cold)
+FADE_EDGE    = 0.40        # fade-to-black at end duration (seconds)
 MUSIC_VOL    = 0.14        # static music volume (simple-mix fallback path)
 MUSIC_BED    = 0.30        # music bed volume BEFORE sidechain ducking (full mix)
-BAR_HEIGHT   = 10          # retention progress bar thickness (px)
+BAR_HEIGHT   = 14          # retention progress bar thickness (px)
 
 # Cut planning
 FIRST_CUT_MIN = 2.0        # hook cut window — research: pattern interrupt by ~3s
@@ -76,8 +77,8 @@ _SENT_END_RE  = re.compile(r'[.!?…]["\')\]]*$')
 
 FONT_NAME = "Anton"        # downloaded to assets/fonts/; Arial fallback if missing
 FONT_FILE = FONTS_DIR / "Anton-Regular.ttf"
-FONTSIZE  = 88
-MARGIN_V  = 734
+FONTSIZE  = 120
+MARGIN_V  = 576            # 576px from bottom = captions at 70% from top (lower third)
 
 DEFAULT_ACCENT = "#FFD23F"   # warm gold — used when a niche has no accent_color
 
@@ -356,8 +357,9 @@ def _finish_video(parts: list[str], total: float, eq_filter: str,
                   ass_esc: str, fonts_dir_esc: str, accent_hex: str) -> str:
     """Shared tail: edge fades → grade → progress bar → captions → [vout]."""
     fade_out_st = max(0.0, total - FADE_EDGE)
+    fade_in_str = f"fade=type=in:st=0:d={FADE_IN:.3f}," if FADE_IN > 0 else ""
     parts.append(
-        f"[vcat]fade=type=in:st=0:d={FADE_EDGE:.3f},"
+        f"[vcat]{fade_in_str}"
         f"fade=type=out:st={fade_out_st:.3f}:d={FADE_EDGE:.3f},"
         f"{eq_filter},vignette=PI/4[vg]"
     )

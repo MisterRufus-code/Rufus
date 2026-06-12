@@ -203,21 +203,32 @@ def _animate_to_clip(img_path: Path, out_path: Path,
                      duration: float = 8.0, idx: int = 0) -> bool:
     """Animate a 1080×1920 PNG into a Ken Burns mp4 via FFmpeg zoompan.
 
-    Even clips zoom in (1.0 → 1.15), odd clips zoom out (1.15 → 1.0).
-    Matches the direction alternation in audio_gen.py's Ken Burns filter.
+    4-pattern rotation so consecutive clips always feel different:
+      0: zoom in, pan right   (subject entering frame)
+      1: zoom out, pan left   (pull-back reveal)
+      2: zoom in, pan up      (upward momentum)
+      3: zoom out, pan down   (downward weight)
     """
     total_frames = int(duration * FPS)
-    step = round(0.15 / total_frames, 7)   # zoom delta per frame for full-range motion
+    step = round(0.15 / total_frames, 7)
 
-    if idx % 2 == 0:
+    pattern = idx % 4
+    if pattern == 0:
+        zoom_expr = f"min(zoom+{step},1.15)"
+        x_expr    = f"iw/2-(iw/zoom/2)+({step*total_frames:.4f}*on/{total_frames}*iw/8)"
+        y_expr    = "ih/2-(ih/zoom/2)"
+    elif pattern == 1:
+        zoom_expr = f"if(eq(on,1),1.15,max(zoom-{step},1.0))"
+        x_expr    = f"iw/2-(iw/zoom/2)-({step*total_frames:.4f}*on/{total_frames}*iw/8)"
+        y_expr    = "ih/2-(ih/zoom/2)"
+    elif pattern == 2:
         zoom_expr = f"min(zoom+{step},1.15)"
         x_expr    = "iw/2-(iw/zoom/2)"
-        y_expr    = "ih/2-(ih/zoom/2)"
+        y_expr    = f"ih/2-(ih/zoom/2)-({step*total_frames:.4f}*on/{total_frames}*ih/12)"
     else:
-        # Start at 1.15 on frame 1, then decrement
         zoom_expr = f"if(eq(on,1),1.15,max(zoom-{step},1.0))"
         x_expr    = "iw/2-(iw/zoom/2)"
-        y_expr    = "ih/2-(ih/zoom/2)"
+        y_expr    = f"ih/2-(ih/zoom/2)+({step*total_frames:.4f}*on/{total_frames}*ih/12)"
 
     vf = (
         f"zoompan=z='{zoom_expr}':d={total_frames}:"
@@ -272,14 +283,16 @@ def generate_clips(queries: list[str], n: int = 4,
 
     style       = _niche_style_suffix()
     master_seed = random.randint(1, 2_000_000_000)
-    print(f"[sd] master seed {master_seed} — consistent look across {len(prompts)} images")
+    print(f"[sd] base seed {master_seed} — each image offset for variety")
 
     for i, query in enumerate(prompts):
         print(f"[sd] {i+1}/{len(prompts)}: {query[:70]}")
         prompt = _query_to_prompt(query, style)
 
         # 1. Generate at 576×1024 (~3-5s on GTX 1060)
-        img_bytes = _generate_image(prompt, seed=master_seed)
+        # Unique seed per image (master_seed + i) so compositions differ.
+        # Aesthetic cohesion comes from the shared style_suffix, not the seed.
+        img_bytes = _generate_image(prompt, seed=master_seed + i)
         if not img_bytes:
             continue
 

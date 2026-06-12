@@ -164,6 +164,14 @@ def test_video_fc_includes_progress_bar_and_captions():
     assert "ass='/tmp/x.ass'" in fc
 
 
+def test_video_fc_no_fade_in():
+    """FADE_IN=0 means the filter graph must NOT contain a fade-in filter."""
+    from audio_gen import FADE_IN
+    fc = _video_filter_complex([40.0], [], 40.0, **_video_args())
+    if FADE_IN == 0:
+        assert "fade=type=in" not in fc
+
+
 def test_video_fc_concat_has_no_xfade():
     lengths = _concat_input_lengths([3.0, 20.0], 40.0)
     fc = _video_filter_complex_concat(lengths, 40.0, **_video_args())
