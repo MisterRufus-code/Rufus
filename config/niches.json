@@ -1,27 +1,69 @@
 {
   "active": "finance",
-  "schedule": ["finance", "motivation", "mindset", "finance", "motivation", "mindset", "finance"],
+  "schedule": [
+    "finance",
+    "motivation",
+    "mindset",
+    "finance",
+    "motivation",
+    "mindset",
+    "finance"
+  ],
   "schedule_note": "Day-of-year index modulo length. Default: finance/motivation/mindset rotating 7 days (finance gets 3/week, others 2/week each). Edit this list to change rotation.",
   "niches": {
     "finance": {
       "display_name": "Finance & Wealth",
-      "subreddits": ["personalfinance", "financialindependence", "FIRE", "povertyfinance", "Frugal"],
+      "subreddits": [
+        "personalfinance",
+        "financialindependence",
+        "FIRE",
+        "povertyfinance",
+        "Frugal"
+      ],
       "video_keywords": [
-        "trading screen", "stock market chart", "city skyline night", "businessman walking",
-        "money counting", "luxury car", "office skyscraper", "crypto", "wall street",
-        "private jet interior", "yacht aerial",
-        "bank vault", "gold bars", "credit card payment", "financial newspaper",
-        "stock exchange floor", "real estate aerial", "savings jar money",
-        "laptop financial data", "economy recession news", "retirement planning",
-        "passive income", "investment portfolio", "budget spreadsheet",
-        "dollar bills stack", "financial freedom beach", "tax documents",
-        "compound interest graph", "stock ticker board", "financial advisor meeting",
+        "trading screen",
+        "stock market chart",
+        "city skyline night",
+        "businessman walking",
+        "money counting",
+        "luxury car",
+        "office skyscraper",
+        "crypto",
+        "wall street",
+        "private jet interior",
+        "yacht aerial",
+        "bank vault",
+        "gold bars",
+        "credit card payment",
+        "financial newspaper",
+        "stock exchange floor",
+        "real estate aerial",
+        "savings jar money",
+        "laptop financial data",
+        "economy recession news",
+        "retirement planning",
+        "passive income",
+        "investment portfolio",
+        "budget spreadsheet",
+        "dollar bills stack",
+        "financial freedom beach",
+        "tax documents",
+        "compound interest graph",
+        "stock ticker board",
+        "financial advisor meeting",
         "entrepreneur desk hustle"
       ],
-      "pixabay_categories": ["business", "industry"],
+      "pixabay_categories": [
+        "business",
+        "industry"
+      ],
       "llava_context": "Describe this scene focusing on business, wealth, money, or financial themes. Be specific about what you see.",
       "gpt_system": "You write finance YouTube Shorts that deliver real value. Audience: people who want to build wealth, not get-rich-quick types. Tone: tired expert who has seen the same mistakes for decades. Quote real investors when relevant (Buffett, Munger, Bogle, Lynch). Use specific numbers and historical examples. No motivational fluff.",
-      "hook_styles": ["shocking_stat", "counterintuitive", "warning"],
+      "hook_styles": [
+        "shocking_stat",
+        "counterintuitive",
+        "warning"
+      ],
       "cta": "Follow for daily wealth tactics.",
       "cta_pool": [
         "Follow for daily wealth tactics.",
@@ -35,26 +77,57 @@
       "ffmpeg_eq": "eq=contrast=1.15:saturation=0.85:gamma=1.05",
       "accent_color": "#FFC53D",
       "style_suffix": "muted teal and orange color grade, glass and steel surfaces, shallow depth of field, 35mm film, cinematic",
-      "youtube_category_id": "25"
+      "youtube_category_id": "25",
+      "video_source": "hyperframes"
     },
     "motivation": {
       "display_name": "Motivation & Grind",
-      "subreddits": ["GetDisciplined", "DecidingToBeBetter", "selfimprovement", "Stoicism"],
-      "video_keywords": [
-        "athlete training", "runner sunrise", "champion trophy", "boxing gym",
-        "mountain peak", "discipline workout", "winner podium", "hustle night",
-        "weightlifter heavy", "warrior training",
-        "marathon runner finish line", "rock climbing summit", "pushups motivation",
-        "swimming competition", "cycling mountain road", "soccer training drill",
-        "spartan race obstacle", "boxing heavy bag", "early morning workout",
-        "team victory celebration", "lone athlete perseverance", "stadium empty practice",
-        "military training drill", "gymnast parallel bars", "triathlon race",
-        "coach athlete motivation", "locker room pregame", "finish line crossing"
+      "subreddits": [
+        "GetDisciplined",
+        "DecidingToBeBetter",
+        "selfimprovement",
+        "Stoicism"
       ],
-      "pixabay_categories": ["sports", "people"],
+      "video_keywords": [
+        "athlete training",
+        "runner sunrise",
+        "champion trophy",
+        "boxing gym",
+        "mountain peak",
+        "discipline workout",
+        "winner podium",
+        "hustle night",
+        "weightlifter heavy",
+        "warrior training",
+        "marathon runner finish line",
+        "rock climbing summit",
+        "pushups motivation",
+        "swimming competition",
+        "cycling mountain road",
+        "soccer training drill",
+        "spartan race obstacle",
+        "boxing heavy bag",
+        "early morning workout",
+        "team victory celebration",
+        "lone athlete perseverance",
+        "stadium empty practice",
+        "military training drill",
+        "gymnast parallel bars",
+        "triathlon race",
+        "coach athlete motivation",
+        "locker room pregame",
+        "finish line crossing"
+      ],
+      "pixabay_categories": [
+        "sports",
+        "people"
+      ],
       "llava_context": "Describe this scene focusing on effort, struggle, achievement, or physical challenge. Be specific.",
       "gpt_system": "You write motivational Shorts grounded in real philosophy and real stories. Audience: people who are tired of empty motivation. Reference Stoics (Marcus Aurelius, Seneca, Epictetus) or operators (Goggins, Jocko, athletes) when the source supports it. No generic 'never give up' lines. The viewer should feel called out, not pumped up.",
-      "hook_styles": ["personal_challenge", "hard_truth"],
+      "hook_styles": [
+        "personal_challenge",
+        "hard_truth"
+      ],
       "cta": "Save this. Watch it when you want to quit.",
       "cta_pool": [
         "Save this. Watch it when you want to quit.",
@@ -68,26 +141,58 @@
       "ffmpeg_eq": "eq=contrast=1.2:brightness=0.03:saturation=1.4:gamma=0.9",
       "accent_color": "#FF5C33",
       "style_suffix": "golden hour rim lighting, gritty texture, high contrast, anamorphic lens flare, cinematic",
-      "youtube_category_id": "22"
+      "youtube_category_id": "22",
+      "video_source": "sd"
     },
     "mindset": {
       "display_name": "Mindset & Psychology",
-      "subreddits": ["Stoicism", "philosophy", "psychology", "DecidingToBeBetter"],
-      "video_keywords": [
-        "meditation calm", "brain neuron", "thinking person", "focus concentration",
-        "sunrise reflection", "chess strategy", "reading books", "silence nature",
-        "alone window rain", "philosopher pose",
-        "yoga sunrise", "library study desk", "writing journal", "telescope night sky",
-        "forest walk alone", "coffee morning contemplation", "bookshelf close",
-        "chess game strategy", "candle flame focus", "mindfulness retreat",
-        "philosophy cliff view", "lake reflection calm", "empty church silence",
-        "notebook writing hand", "hourglass time", "microscope discovery",
-        "ancient ruins contemplation", "man staring ocean", "brain scan visualization"
+      "subreddits": [
+        "Stoicism",
+        "philosophy",
+        "psychology",
+        "DecidingToBeBetter"
       ],
-      "pixabay_categories": ["people", "nature"],
+      "video_keywords": [
+        "meditation calm",
+        "brain neuron",
+        "thinking person",
+        "focus concentration",
+        "sunrise reflection",
+        "chess strategy",
+        "reading books",
+        "silence nature",
+        "alone window rain",
+        "philosopher pose",
+        "yoga sunrise",
+        "library study desk",
+        "writing journal",
+        "telescope night sky",
+        "forest walk alone",
+        "coffee morning contemplation",
+        "bookshelf close",
+        "chess game strategy",
+        "candle flame focus",
+        "mindfulness retreat",
+        "philosophy cliff view",
+        "lake reflection calm",
+        "empty church silence",
+        "notebook writing hand",
+        "hourglass time",
+        "microscope discovery",
+        "ancient ruins contemplation",
+        "man staring ocean",
+        "brain scan visualization"
+      ],
+      "pixabay_categories": [
+        "people",
+        "nature"
+      ],
       "llava_context": "Describe this scene focusing on human thinking, mental states, focus, or self-reflection.",
       "gpt_system": "You write psychology Shorts that reveal real insights about how minds work. Audience: people who think. Reference real thinkers (Jung, Frankl, Kahneman, Marcus Aurelius) and real studies. Make viewers reconsider an assumption they've held. No generic 'mindset' fluff.",
-      "hook_styles": ["counterintuitive", "psychology_fact"],
+      "hook_styles": [
+        "counterintuitive",
+        "psychology_fact"
+      ],
       "cta": "This is why 1% think differently.",
       "cta_pool": [
         "This is why 1% think differently.",
@@ -101,20 +206,39 @@
       "ffmpeg_eq": "eq=contrast=1.05:saturation=0.75:gamma=1.1",
       "accent_color": "#3DD9C5",
       "style_suffix": "soft diffused natural light, muted earth tones, morning fog, medium format film, contemplative",
-      "youtube_category_id": "27"
+      "youtube_category_id": "27",
+      "video_source": "hyperframes"
     },
     "business": {
       "display_name": "Business & Entrepreneurship",
-      "subreddits": ["Entrepreneur", "startups", "smallbusiness", "EntrepreneurRideAlong"],
-      "video_keywords": [
-        "startup office", "entrepreneur laptop", "team meeting", "product launch",
-        "business growth chart", "CEO presentation", "e-commerce", "hustle desk",
-        "warehouse shipping", "co-working space"
+      "subreddits": [
+        "Entrepreneur",
+        "startups",
+        "smallbusiness",
+        "EntrepreneurRideAlong"
       ],
-      "pixabay_categories": ["business", "computer"],
+      "video_keywords": [
+        "startup office",
+        "entrepreneur laptop",
+        "team meeting",
+        "product launch",
+        "business growth chart",
+        "CEO presentation",
+        "e-commerce",
+        "hustle desk",
+        "warehouse shipping",
+        "co-working space"
+      ],
+      "pixabay_categories": [
+        "business",
+        "computer"
+      ],
       "llava_context": "Describe this scene in a business, startup, or entrepreneurial context.",
       "gpt_system": "You write business Shorts for operators who have actually run a business. Tactics over theory. Real examples from real founders (Bezos, Jobs, Hormozi, Thiel, Graham) when the source supports it. Specific numbers, real failures, real lessons. No 'mindset' fluff.",
-      "hook_styles": ["tactical_insight", "mistake_warning"],
+      "hook_styles": [
+        "tactical_insight",
+        "mistake_warning"
+      ],
       "cta": "Save this. Build something.",
       "cta_pool": [
         "Save this. Build something.",
@@ -128,20 +252,39 @@
       "ffmpeg_eq": "eq=contrast=1.1:saturation=1.0",
       "accent_color": "#4DA3FF",
       "style_suffix": "modern architectural lines, cool daylight, clean minimal composition, 50mm lens, editorial",
-      "youtube_category_id": "27"
+      "youtube_category_id": "27",
+      "video_source": "hyperframes"
     },
     "personal_development": {
       "display_name": "Personal Development",
-      "subreddits": ["selfimprovement", "DecidingToBeBetter", "getdisciplined", "productivity"],
-      "video_keywords": [
-        "morning routine", "journal writing", "cold shower", "reading habit",
-        "goal setting", "self improvement", "confidence posture", "growth mindset",
-        "running morning", "gym discipline"
+      "subreddits": [
+        "selfimprovement",
+        "DecidingToBeBetter",
+        "getdisciplined",
+        "productivity"
       ],
-      "pixabay_categories": ["people", "sports"],
+      "video_keywords": [
+        "morning routine",
+        "journal writing",
+        "cold shower",
+        "reading habit",
+        "goal setting",
+        "self improvement",
+        "confidence posture",
+        "growth mindset",
+        "running morning",
+        "gym discipline"
+      ],
+      "pixabay_categories": [
+        "people",
+        "sports"
+      ],
       "llava_context": "Describe this scene in the context of self-improvement, habits, or personal growth.",
       "gpt_system": "You write personal-development Shorts grounded in real systems. Audience: people who already read James Clear, Cal Newport, Naval. One concrete idea per video, with a specific action the viewer can take today. Reference real authors when the source supports it. No generic self-help speak.",
-      "hook_styles": ["habit_hack", "identity_shift"],
+      "hook_styles": [
+        "habit_hack",
+        "identity_shift"
+      ],
       "cta": "Do this tomorrow morning.",
       "cta_pool": [
         "Do this tomorrow morning.",
@@ -155,7 +298,8 @@
       "ffmpeg_eq": "eq=contrast=1.08:saturation=1.1:gamma=1.0",
       "accent_color": "#6EE07A",
       "style_suffix": "warm morning sunlight, soft shadows, natural tones, lifestyle photography, hopeful",
-      "youtube_category_id": "27"
+      "youtube_category_id": "27",
+      "video_source": "sd"
     }
   }
 }

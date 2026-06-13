@@ -307,22 +307,29 @@ def run(skip_upload: bool = False, niche_override: str = None, output_dir: Path 
     except Exception as e:
         print(f"           ⚠ Pre-analysis failed (non-fatal): {e}")
 
-    video_source  = os.environ.get("RUFUS_VIDEO_SOURCE", "sd").strip().lower()
+    # Source resolution: explicit env > per-niche config > default "sd".
+    # RUFUS_VIDEO_SOURCE=sd          → Stable Diffusion stills + Ken Burns (GPU)
+    # RUFUS_VIDEO_SOURCE=hyperframes → HTML motion-graphics via HyperFrames (CPU)
+    # RUFUS_VIDEO_SOURCE=pexels      → Pexels stock footage
+    video_source  = (os.environ.get("RUFUS_VIDEO_SOURCE")
+                     or niche_cfg.get("video_source") or "sd").strip().lower()
     video_queries = _parse_video_queries(seed_analysis)
 
-    # ── Step 2: Get candidate clips — AI-generated (SD) or stock (Pexels) ───────
-    # RUFUS_VIDEO_SOURCE=sd        → Stable Diffusion local (GTX 1060 safe, free forever)
-    # RUFUS_VIDEO_SOURCE=pexels    → Pexels stock footage (default)
+    # sd and hyperframes both GENERATE clips from the script, so they defer to
+    # step 2.5 (after the script exists). Only stock sources fetch up front.
+    DEFERRED_SOURCES = ("sd", "hyperframes")
+
+    # ── Step 2: Get candidate clips — generated (SD/HyperFrames) or stock ───────
     candidates = []
     scene = ""
-    if video_source == "sd":
-        # SD images are generated AFTER the script is written (step 2.5) so they
-        # can be tailored to the actual script content.  Set a placeholder scene
-        # here so write_script has context; candidates are filled in later.
+    if video_source in DEFERRED_SOURCES:
+        # Clips are generated AFTER the script is written (step 2.5) so they can
+        # be tailored to the actual content. Placeholder scene gives write_script
+        # context; candidates are filled in later.
         scene = niche_cfg.get("llava_context", f"{active} scene")
-        print("[ 2 / 7 ]  SD mode — image generation deferred until after scripting\n")
+        print(f"[ 2 / 7 ]  {video_source} mode — clip generation deferred until after scripting\n")
 
-    if video_source != "sd":
+    if video_source not in DEFERRED_SOURCES:
         print("[ 2 / 7 ]  Fetching candidate videos (parallel)...")
         try:
             if video_queries:
@@ -334,8 +341,8 @@ def run(skip_upload: bool = False, niche_override: str = None, output_dir: Path 
             sys.exit(1)
 
     # ── Step 3: AI picks best video (stock only — generated clips are on-topic) ─
-    if video_source == "sd":
-        print("[ 3 / 7 ]  SD mode — skipping vision pick\n")
+    if video_source in DEFERRED_SOURCES:
+        print(f"[ 3 / 7 ]  {video_source} mode — skipping vision pick\n")
     elif scene:
         print("[ 3 / 7 ]  Generated clips are purpose-built — skipping vision pick\n")
     else:
@@ -380,21 +387,37 @@ def run(skip_upload: bool = False, niche_override: str = None, output_dir: Path 
         print(f"           ✗ Step 4 failed: {e}")
         sys.exit(1)
 
-    # ── Step 2.5 (SD only): Generate script-matched images ──────────────────────
-    if video_source == "sd":
-        print("[ 2.5/7 ]  Generating SD images from script content...")
+    # ── Step 2.5: Generate script-matched clips (SD / HyperFrames) ──────────────
+    # Fallback chain so a render never dies: hyperframes → sd → pexels, sd → pexels.
+    if video_source in DEFERRED_SOURCES:
+        print(f"[ 2.5/7 ]  Generating {video_source} clips from script content...")
         try:
-            from sd_client import generate_clips as sd_generate
-            n_clips    = int(os.environ.get("SD_CLIPS", "4"))
-            sd_prompts = _build_sd_prompts(script, active, n=n_clips)
-            print(f"           → prompts: {sd_prompts}")
-            candidates = sd_generate(sd_prompts, n=n_clips)
-            if candidates:
-                scene = "SD-generated: " + "; ".join(sd_prompts[:2])
-                print(f"           → {len(candidates)} clips ready\n")
-            else:
-                print("           ⚠ SD failed — falling back to Pexels")
-                video_source = "pexels"
+            n_clips = int(os.environ.get("SD_CLIPS", "4"))
+            prompts = _build_sd_prompts(script, active, n=n_clips)
+            print(f"           → prompts: {prompts}")
+
+            if video_source == "hyperframes":
+                from hyperframes_client import generate_clips as hf_generate
+                candidates = hf_generate(prompts, n=n_clips,
+                                         clip_duration=8.0, niche_cfg=niche_cfg)
+                if candidates:
+                    scene = "HyperFrames motion-graphic: " + "; ".join(prompts[:2])
+                    print(f"           → {len(candidates)} clips ready\n")
+                else:
+                    print("           ⚠ HyperFrames produced nothing — trying SD")
+                    video_source = "sd"   # fall through to the SD block below
+
+            if video_source == "sd":
+                from sd_client import generate_clips as sd_generate
+                candidates = sd_generate(prompts, n=n_clips)
+                if candidates:
+                    scene = "SD-generated: " + "; ".join(prompts[:2])
+                    print(f"           → {len(candidates)} clips ready\n")
+                else:
+                    print("           ⚠ SD failed — falling back to Pexels")
+                    video_source = "pexels"
+
+            if not candidates:
                 if video_queries:
                     print(f"           → using script queries: {video_queries}")
                 candidates = fetch_candidates(n=5, extra_keywords=video_queries or None)
@@ -404,7 +427,7 @@ def run(skip_upload: bool = False, niche_override: str = None, output_dir: Path 
                 )
                 print(f"           → Pexels fallback: {video_path.name}\n")
         except Exception as e:
-            print(f"           ✗ SD generation failed: {e}")
+            print(f"           ✗ Clip generation failed: {e}")
             sys.exit(1)
 
     # ── Step 5: Render (all clips cut together) ─────────────────────────────────

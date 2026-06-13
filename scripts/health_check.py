@@ -11,6 +11,7 @@ Exit 1 = at least one critical check failed.
 """
 
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -113,6 +114,27 @@ def run() -> None:
         ok("XTTS v2 available  (RUFUS_TTS=xtts for local voice)")
     except ImportError:
         warn("XTTS v2", "not installed – using Edge TTS (pip install TTS for local voice cloning)")
+
+    # ── HyperFrames (only relevant if a niche uses it) ────────────────────────────
+    try:
+        import json as _json
+        niches = _json.loads((CONFIG_DIR / "niches.json").read_text()).get("niches", {})
+        uses_hf = any(n.get("video_source") == "hyperframes" for n in niches.values())
+        if uses_hf:
+            import subprocess as _sp
+            cmd = os.environ.get("HYPERFRAMES_CMD", "npx --yes hyperframes").split()
+            try:
+                r = _sp.run(cmd + ["--version"], capture_output=True, text=True, timeout=120)
+                if r.returncode == 0:
+                    ok("HyperFrames available  (motion-graphic niches)")
+                else:
+                    warn("HyperFrames", "not runnable – those niches fall back to SD/Pexels "
+                                        "(install Node 22+; `npx hyperframes` auto-fetches)")
+            except Exception:
+                warn("HyperFrames", "Node/npx not found – motion-graphic niches fall back "
+                                    "to SD/Pexels (install Node.js 22+)")
+    except Exception:
+        pass
 
     # ── YouTube OAuth token ─────────────────────────────────────────────────────
     token = CONFIG_DIR / "youtube_token.json"
