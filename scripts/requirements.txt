@@ -1,0 +1,17 @@
+edge-tts>=6.1.9
+faster-whisper>=1.0.3
+openai>=1.30.0
+requests>=2.31.0
+httpx>=0.27.0
+Pillow>=10.0.0
+google-auth>=2.30.0
+google-auth-oauthlib>=1.2.0
+google-api-python-client>=2.140.0
+pytest>=8.0.0
+# ffmpeg + ffprobe must be installed system-wide (apt install ffmpeg)
+# Bold fonts required for thumbnails: apt install fonts-dejavu-core
+#
+# Optional — local Stable Diffusion footage (RUFUS_VIDEO_SOURCE=sd):
+#   run Automatic1111 WebUI separately with --api (no extra pip deps here)
+# Optional — local XTTS v2 voice (RUFUS_TTS=xtts), free near-ElevenLabs quality:
+#   pip install TTS    # Coqui TTS, ~3GB VRAM on GPU or CPU

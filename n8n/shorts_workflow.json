@@ -1,0 +1,153 @@
+{
+  "name": "Rufus – Autonomous Shorts Factory",
+  "nodes": [
+    {
+      "parameters": {
+        "feedUrl": "https://www.theverge.com/rss/index.xml",
+        "options": {}
+      },
+      "id": "rss_trigger",
+      "name": "RSS – The Verge",
+      "type": "n8n-nodes-base.rssFeedRead",
+      "typeVersion": 1,
+      "position": [0, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Pick only the first (latest) item and normalise fields\nconst item = $input.all()[0];\nreturn [{\n  json: {\n    title: item.json.title,\n    content: item.json.contentSnippet || item.json.summary || '',\n    link: item.json.link\n  }\n}];"
+      },
+      "id": "normalise",
+      "name": "Normalise Article",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [240, 300]
+    },
+    {
+      "parameters": {
+        "model": "gpt-4o-mini",
+        "messages": {
+          "values": [
+            {
+              "role": "system",
+              "content": "You are a viral YouTube Shorts scriptwriter trained on Alex Hormozi's style.\nRules:\n- No commas\n- Sentences: 3-6 words max\n- Punchy. Direct. Bold.\n- End with a strong call-to-action or cliffhanger\n- Output ONLY valid JSON: {\"script\": \"...\", \"keywords\": [\"kw1\",\"kw2\",\"kw3\"]}"
+            },
+            {
+              "role": "user",
+              "content": "News headline: {{ $json.title }}\nBrief: {{ $json.content }}\n\nWrite a 30-40 second Shorts script."
+            }
+          ]
+        },
+        "options": {
+          "temperature": 0.85,
+          "maxTokens": 500
+        }
+      },
+      "id": "ai_writer",
+      "name": "AI Script Writer",
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 1,
+      "position": [480, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const raw = $json.message?.content || $json.choices?.[0]?.message?.content || '';\nlet parsed;\ntry {\n  parsed = JSON.parse(raw);\n} catch (e) {\n  // Attempt extraction if model wrapped JSON in markdown\n  const match = raw.match(/```json([\\s\\S]*?)```/);\n  parsed = JSON.parse(match ? match[1] : raw);\n}\nreturn [{ json: { script: parsed.script, keywords: parsed.keywords } }];"
+      },
+      "id": "parse_script",
+      "name": "Parse AI Output",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [720, 300]
+    },
+    {
+      "parameters": {
+        "url": "https://pixabay.com/api/videos/",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            { "name": "key", "value": "YOUR_PIXABAY_API_KEY" },
+            { "name": "q",   "value": "={{ $json.keywords[0] }}" },
+            { "name": "per_page", "value": "5" },
+            { "name": "video_type", "value": "film" }
+          ]
+        },
+        "options": {}
+      },
+      "id": "fetch_media",
+      "name": "Fetch Background Video",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [960, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const hits = $json.hits;\nif (!hits || hits.length === 0) throw new Error('No video found for keywords');\n// Pick highest-resolution medium variant\nconst video = hits[0];\nconst medium = video.videos?.medium?.url || video.videos?.large?.url;\nreturn [{ json: { videoUrl: medium, script: $('Parse AI Output').first().json.script } }];"
+      },
+      "id": "pick_video",
+      "name": "Pick Best Video",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1200, 300]
+    },
+    {
+      "parameters": {
+        "url": "={{ $json.videoUrl }}",
+        "options": { "response": { "response": { "responseFormat": "file" } } }
+      },
+      "id": "download_video",
+      "name": "Download Video",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [1440, 300]
+    },
+    {
+      "parameters": {
+        "host": "172.17.0.1",
+        "port": 22,
+        "username": "daniel",
+        "privateKey": "={{ $credentials.rufusSsh.privateKey }}",
+        "command": "echo '{{ JSON.stringify({ script: $('Pick Best Video').first().json.script, bg: '/home/daniel/media_library/backgrounds/next_bg.mp4', out: '/home/daniel/media_library/output' }) }}' | /home/daniel/media_library/venv/bin/python /home/daniel/media_library/scripts/audio_gen.py",
+        "options": {}
+      },
+      "id": "ssh_render",
+      "name": "SSH – Render Short",
+      "type": "n8n-nodes-base.ssh",
+      "typeVersion": 1,
+      "position": [1680, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const output = $json.stdout || '';\nconst match = output.match(/OUTPUT_PATH=(.+)/);\nif (!match) throw new Error('Render did not return OUTPUT_PATH. stdout: ' + output);\nreturn [{ json: { outputPath: match[1].trim(), stdout: output } }];"
+      },
+      "id": "parse_output",
+      "name": "Parse Output Path",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1920, 300]
+    },
+    {
+      "parameters": {
+        "message": "✅ Short rendered!\nPath: {{ $json.outputPath }}",
+        "additionalFields": {}
+      },
+      "id": "notify",
+      "name": "Telegram Notify",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1,
+      "position": [2160, 300],
+      "notes": "Connect your Telegram Bot credential and set chatId"
+    }
+  ],
+  "connections": {
+    "RSS – The Verge":       { "main": [[{ "node": "Normalise Article",      "type": "main", "index": 0 }]] },
+    "Normalise Article":     { "main": [[{ "node": "AI Script Writer",       "type": "main", "index": 0 }]] },
+    "AI Script Writer":      { "main": [[{ "node": "Parse AI Output",        "type": "main", "index": 0 }]] },
+    "Parse AI Output":       { "main": [[{ "node": "Fetch Background Video", "type": "main", "index": 0 }]] },
+    "Fetch Background Video":{ "main": [[{ "node": "Pick Best Video",        "type": "main", "index": 0 }]] },
+    "Pick Best Video":       { "main": [[{ "node": "Download Video",         "type": "main", "index": 0 }]] },
+    "Download Video":        { "main": [[{ "node": "SSH – Render Short",     "type": "main", "index": 0 }]] },
+    "SSH – Render Short":    { "main": [[{ "node": "Parse Output Path",      "type": "main", "index": 0 }]] },
+    "Parse Output Path":     { "main": [[{ "node": "Telegram Notify",        "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" },
+  "tags": ["shorts", "automation", "rufus"]
+}

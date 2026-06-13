@@ -1,0 +1,39 @@
+# API keys & per-channel credentials – never commit these
+config/keys.json
+config/channels.json
+config/channels/
+config/youtube_token.json
+config/tiktok_token.json
+config/client_secrets.json
+
+# Generated media
+media_library/cache/
+media_library/output/
+media_library/temp/
+media_library/music/
+assets/sfx/
+assets/music_synth/
+
+# Runtime logs and database
+logs/
+rufus.db
+rufus.db-*
+
+# Seed deduplication history (runtime state, not source code)
+config/used_seeds.json
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Remotion (Node render engine)
+remotion/node_modules/
+remotion/public/job_*/
+remotion/out/
