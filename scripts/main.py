@@ -137,27 +137,43 @@ def _parse_video_queries(analysis: str) -> list[str]:
 
 
 def _build_sd_prompts(script: str, niche: str, n: int = 4) -> list[str]:
-    """Generate n visually-distinct SD prompts that progress through the script arc.
+    """Generate n pro-grade SD prompts that cover the script's visual arc.
 
-    Each of the n scenes is anchored to a different camera distance, location,
-    and time of day so consecutive clips never look the same.
+    Prompts are written as proper SD token language (comma-separated descriptors,
+    40-60 words) with ultra-specific subject, setting, lighting, and color grade.
+    Each of the n slots is locked to a distinct camera angle via ANCHORS so the
+    four clips read like coverage from one film — never four random stills.
     """
     import re
 
-    # Hard visual anchors per scene slot — GPT must honour these.
-    # They rotate if n > 4 so every slot stays unique.
+    # Hard visual anchors per scene slot — lock camera angle per clip so the
+    # four scenes read like a film: macro → establishing → human → overhead.
     ANCHORS = [
-        ("EXTREME CLOSE-UP",  "tight detail shot, face/hands/object",    "high-contrast dramatic light"),
-        ("WIDE ESTABLISHING", "outdoor or large interior, no face needed","golden hour or overcast sky"),
-        ("MEDIUM SHOT",       "person mid-frame, waist-up, in action",    "side or rim lighting"),
-        ("AERIAL / ABSTRACT", "overhead view or symbolic still-life",     "cool blue or dark moody tones"),
+        {
+            "camera":  "EXTREME CLOSE-UP macro",
+            "subject": "tight detail on face, hands, or object surface, subject fills frame",
+            "light":   "single hard light at 45°, deep chiaroscuro, inky shadows, specular rim",
+            "fallback_subject": f"weathered hands holding {niche}-related object, close-up macro detail",
+        },
+        {
+            "camera":  "WIDE ESTABLISHING panorama",
+            "subject": "subject small against vast environment, strong leading lines toward subject",
+            "light":   "golden hour natural light, long warm shadows, atmospheric haze, amber sky",
+            "fallback_subject": f"lone person in vast {niche}-themed landscape, wide angle perspective",
+        },
+        {
+            "camera":  "MEDIUM SHOT portrait",
+            "subject": "waist-up, subject off-center left, environment context right, in motion or reaction",
+            "light":   "3-point lighting: soft box key 45° left, fill at 2:1, warm rim behind right",
+            "fallback_subject": f"intense focused person at work in {niche} context, medium shot",
+        },
+        {
+            "camera":  "AERIAL overhead flat-lay",
+            "subject": "bird's-eye view, symmetrical or geometric pattern, minimalist negative space",
+            "light":   "diffused even overhead light, soft shadows show texture, no harsh highlights",
+            "fallback_subject": f"overhead abstract pattern representing {niche}, flat lay minimalist",
+        },
     ]
-
-    anchor_lines = "\n".join(
-        f"  Scene {i+1}: camera={ANCHORS[i % 4][0]}, subject={ANCHORS[i % 4][1]}, "
-        f"lighting={ANCHORS[i % 4][2]}"
-        for i in range(n)
-    )
 
     try:
         from openai import OpenAI
@@ -165,59 +181,83 @@ def _build_sd_prompts(script: str, niche: str, n: int = 4) -> list[str]:
         if keys_file.exists():
             key = json.loads(keys_file.read_text()).get("openai", "")
             if key and not key.startswith("YOUR_") and not key.startswith("FILL_"):
+                # Read niche style for color grade
+                try:
+                    niche_data  = json.loads(NICHES_FILE.read_text())
+                    niche_style = niche_data["niches"].get(niche, {}).get("style_suffix", "")
+                except Exception:
+                    niche_style = ""
+
+                anchor_lines = "\n".join(
+                    f"  Scene {i+1}: {ANCHORS[i % 4]['camera']} | "
+                    f"subject={ANCHORS[i % 4]['subject']} | "
+                    f"lighting={ANCHORS[i % 4]['light']}"
+                    for i in range(n)
+                )
                 client = OpenAI(api_key=key)
                 resp = client.chat.completions.create(
                     model="gpt-4o-mini",
                     messages=[{
                         "role": "user",
                         "content": (
-                            f"Create {n} Stable Diffusion image prompts for a YouTube Short.\n"
-                            f"Niche: {niche}\n\n"
-                            f"Script (for story context):\n{script}\n\n"
-                            f"MANDATORY scene constraints — you MUST follow these exactly:\n"
+                            "You are a professional Stable Diffusion prompt engineer for "
+                            "Realistic Vision v5.1 (ultra-photorealistic model).\n"
+                            f"Generate {n} image prompts for a {niche} YouTube Short.\n\n"
+                            "SCRIPT (context only — find VISUAL METAPHORS, do NOT re-enact the dialogue):\n"
+                            f"{script[:500]}\n\n"
+                            "MANDATORY per-scene constraints — follow EXACTLY:\n"
                             f"{anchor_lines}\n\n"
-                            "Rules:\n"
-                            "- Each scene MUST use a DIFFERENT physical location (no two scenes in the same room/place).\n"
-                            "- No two scenes can share the same camera distance.\n"
-                            "- Each description: 15-25 words, concrete subject, concrete setting, specific lighting.\n"
-                            f"- Output ONLY {n} plain lines, no numbering, no labels, nothing else."
+                            "OUTPUT FORMAT: comma-separated SD token language — NOT natural English sentences.\n"
+                            "Required token order: RAW photo, (SUBJECT:1.35), SETTING_WITH_TEXTURE, "
+                            "COMPOSITION_DETAIL, LIGHTING_SETUP, CAMERA+LENS, COLOR_GRADE\n\n"
+                            "QUALITY RULES — these separate professional from amateur prompts:\n"
+                            "• Subject: ULTRA-SPECIFIC. 'businessman' → "
+                            "'weathered 52yo man, salt-and-pepper stubble, 3am shadows under eyes, "
+                            "rumpled charcoal suit, top button undone'\n"
+                            "• Setting: physical TEXTURE. 'office' → "
+                            "'glass-walled corner office, city lights 40 floors below, "
+                            "scattered papers, cold blue monitor glow, 3am'\n"
+                            "• Lighting: name the SETUP. 'dramatic' → "
+                            "'single tungsten desk lamp at 45 degrees, deep indigo shadows, "
+                            "amber specular on cheekbone'\n"
+                            f"• Color grade: match niche aesthetic — {niche_style or 'cinematic, muted tones, film grain'}\n"
+                            "• Each scene MUST be a DIFFERENT physical location — zero repetition\n"
+                            "• 40-60 words per prompt. NO sentences. Pure SD tokens.\n\n"
+                            f"Output ONLY {n} plain lines, no numbering, no labels, one prompt per line."
                         ),
                     }],
-                    max_tokens=400,
-                    temperature=0.8,
+                    max_tokens=600,
+                    temperature=0.85,
                 )
                 raw_lines = resp.choices[0].message.content.strip().split("\n")
                 lines = [
                     re.sub(r"^[\d\.\-\)\s]+", "", l).strip()
                     for l in raw_lines if l.strip()
                 ]
-                lines = [l for l in lines if len(l) > 10]
+                lines = [l for l in lines if len(l) > 20]
 
-                # If GPT returned fewer than n, fill with anchor-driven fallbacks
-                # (never cycle the same prompt — each fallback uses a unique anchor).
                 while len(lines) < n:
-                    i = len(lines)
-                    cam, subj, light = ANCHORS[i % 4]
+                    a = ANCHORS[len(lines) % 4]
                     lines.append(
-                        f"{niche} scene, {cam.lower()}, {subj}, {light}, "
-                        "photorealistic, cinematic"
+                        f"RAW photo, ({a['fallback_subject']}:1.35), "
+                        f"{a['subject']}, {a['light']}, "
+                        "photorealistic, cinematic color grade, film grain, "
+                        "sharp focus, professional editorial photography"
                     )
                 return lines[:n]
     except Exception as e:
         print(f"[sd] GPT prompt generation skipped ({e}) — using anchor fallback")
 
-    # Key-free fallback: anchor-driven prompts (always visually distinct).
-    sentences = [s.strip() for s in re.split(r"[.!?]", script) if len(s.strip()) > 15]
+    # Key-free fallback: anchor-driven prompts always visually distinct.
+    import re as _re
+    sentences = [s.strip() for s in _re.split(r"[.!?]", script) if len(s.strip()) > 15]
     prompts = []
     for i in range(n):
-        cam, subj, light = ANCHORS[i % 4]
-        if sentences:
-            idx = int(i * len(sentences) / n)
-            cue = sentences[idx][:60]
-        else:
-            cue = f"{niche} concept"
+        a = ANCHORS[i % 4]
+        cue = sentences[int(i * len(sentences) / n)][:60] if sentences else f"{niche} concept"
         prompts.append(
-            f"{cue}, {cam.lower()}, {subj}, {light}, photorealistic, cinematic"
+            f"RAW photo, ({cue}:1.35), {a['subject']}, "
+            f"{a['light']}, photorealistic, cinematic, film grain"
         )
     return prompts
 

@@ -416,10 +416,13 @@ def _pre_analyze(client: OpenAI, seed: dict, scene: str, run_id: str,
             "5. HOOK ANGLE: One ≤8-word seed phrase that leads with the BIOGRAPHICAL FACT — not the quote text.\n"
             "6. LOOP ANGLE: One question for the second-to-last line that makes viewers want to replay from line 1.\n"
             "7. VIDEO QUERIES: 3 comma-separated stock footage search terms that visually match the hook angle "
-            "(e.g. for a 2008 crisis hook: 'stock market crash, trading floor panic, financial chart red').\n\n"
-            "Reply ONLY with these 7 numbered items. No full script."
+            "(e.g. for a 2008 crisis hook: 'stock market crash, trading floor panic, financial chart red').\n"
+            "8. SENSORY ANCHOR: One physical sensation, concrete image, or specific sound from this person's "
+            "experience — something a viewer can feel in their body. "
+            "Not 'it was stressful' → 'the 2am phone call, hands shaking, $2.4M in margin calls'.\n\n"
+            "Reply ONLY with these 8 numbered items. No full script."
         )
-        max_toks = 300
+        max_toks = 320
     else:
         seed_blk = _seed_block(seed) if seed else f"Scene description: {scene}"
         prompt = (
@@ -433,10 +436,13 @@ def _pre_analyze(client: OpenAI, seed: dict, scene: str, run_id: str,
             "5. CONCRETE DETAIL: The single most specific, vivid detail from the source (a number, name, date, or documented outcome).\n"
             "6. LOOP ANGLE: One question for the second-to-last line.\n"
             "7. VIDEO QUERIES: 3 comma-separated stock footage search terms that visually match the hook angle "
-            "(e.g. for a frugal savings story: 'hardware store tools, leaky faucet repair, money saving jar').\n\n"
-            "Reply with ONLY these 7 numbered items. No full script."
+            "(e.g. for a frugal savings story: 'hardware store tools, leaky faucet repair, money saving jar').\n"
+            "8. SENSORY ANCHOR: One physical sensation, concrete image, or specific moment from this source that "
+            "a viewer can feel in their body. Not abstract emotions — a specific scene. "
+            "Example: 'the envelope from the IRS, unopened on the kitchen counter for three weeks'.\n\n"
+            "Reply with ONLY these 8 numbered items. No full script."
         )
-        max_toks = 250
+        max_toks = 280
 
     try:
         t0 = time.time()
@@ -494,14 +500,22 @@ def _hook_factory(client: OpenAI, seed: dict, analysis: str, niche_name: str,
         f"- Must NOT start with any of: {forbidden_str}\n"
         f"- Must NOT use vague generalities — every word earns its place\n\n"
         f"Each of the {n_hooks} hooks should attack the source from a DIFFERENT angle:\n"
-        "1. Number-first  (e.g. '$2.4M by 38. Still scared to retire.')\n"
-        "2. Name-first    (e.g. 'Buffett's worst trade made him $25B.')\n"
-        "3. Time-first    (e.g. '2,000 years ago, Seneca solved your anxiety.')\n"
-        "4. Identity hit  (e.g. 'You're not disciplined. You're scared.')\n"
-        "5. Counter-claim (e.g. 'The richest investors never beat the market.')\n"
-        "6. Pattern break (e.g. 'Stop scrolling. This is the trade that broke Buffett.')\n"
-        "7. Question      (e.g. 'Why do most lottery winners go broke?')\n"
-        "8. Confession    (e.g. 'I made $2.4M and still cried at night.')\n\n"
+        "1. Number-first  — lead with the specific, devastating number. "
+        "(e.g. '$2.4M by 38. Still scared to retire.' — the tension is in the contradiction, not the number)\n"
+        "2. Name-first    — real person's name makes it immediately credible. "
+        "(e.g. 'Buffett's worst trade made him $25B.' — the reversal IS the hook)\n"
+        "3. Time-contrast — a date reveals how long the pattern has existed. "
+        "(e.g. '2,000 years ago, Seneca described your 2024 anxiety exactly.' — the gap creates the itch)\n"
+        "4. Identity hit  — names what the viewer is actually doing wrong. "
+        "(e.g. 'You're not broke. You're making one $340/month mistake.' — blame+specificity+fix)\n"
+        "5. Counter-claim — the thing everyone believes that is factually backwards. "
+        "(e.g. 'The less you work, the more you earn. Here's the math.' — must be provable)\n"
+        "6. Scene-drop    — drop the viewer into a specific moment, no context given. "
+        "(e.g. '3am. $840K in debt. He opened his laptop and typed one email.' — mystery drives completion)\n"
+        "7. Loaded question — a question the viewer cannot NOT answer. "
+        "(e.g. 'Why do doctors have the lowest savings rate of any profession?' — specific, counterintuitive)\n"
+        "8. Confession    — first-person, specific cost, earned credibility. "
+        "(e.g. 'I earned $1.2M in 18 months and had $14 in checking.' — the gap is the hook)\n\n"
         f"Output FORMAT — exactly one hook per line, numbered 1-{n_hooks}, no commentary:\n"
         f"1. <hook>\n2. <hook>\n...\n{n_hooks}. <hook>"
     )
@@ -691,9 +705,15 @@ STRUCTURE — 3-BEAT ARC, NON-NEGOTIABLE:
 LINE 1 (HOOK): USE EXACTLY THIS LINE, DO NOT REWRITE OR REPHRASE IT:
 "{hook}"
 
-BEAT 1 — SETUP (lines 2-3): Ground the viewer in a specific fact. Use a number, name, or date. No vague context.
-BEAT 2 — TURN (lines 4-5): The unexpected reversal or contradiction. Start with "But" or "Until" or "Then". This is the tension that creates emotion.
-BEAT 3 — PAYOFF (lines 6-7): Name the mechanism. Reveal WHY the turn happened. No advice. Show the truth.
+BEAT 1 — SETUP (lines 2-3): Establish the REAL situation with one specific fact (number, name, date). Make it feel LIVED — a concrete detail, not a description. The viewer should see the scene, not just hear a summary.
+
+BEAT 2 — TURN (lines 4-5): The gut-punch reversal that changes everything the viewer just assumed.
+  • Start with "But" or "Until" or "Then" — these words signal the turn to the viewer's brain.
+  • Use SENSORY or SCENE language: what did it LOOK like, what did it FEEL like at that moment.
+  • This is NOT a statistic. It is a MOMENT. "Then the bank called." "But the statement showed $11." "Until the day his wife found the account."
+  • The tension here is what makes viewers replay the video. Make it land hard.
+
+BEAT 3 — PAYOFF (lines 6-7): Reveal the mechanism — WHY the turn happened, what pattern it proves. Give the viewer the "click" moment where they understand something they've been living without knowing. No advice. Show the truth, then step back.
 
 BODY ({body['min_words']}-{body['max_words']} words total including hook and CTA):
 - Every sentence either adds evidence or builds tension. No filler.

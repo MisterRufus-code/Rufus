@@ -46,15 +46,101 @@ FPS   = 30
 TIMEOUT_GEN = 180   # A1111 generation can be slow on 6GB
 TIMEOUT_UPX = 120   # R-ESRGAN upscale timeout
 
+# Tuned for Realistic Vision v5.1 — the model responds best to these activators
 QUALITY_SUFFIX = (
-    "photorealistic, cinematic, professional photography, sharp focus, "
-    "dramatic lighting, high detail, 8k uhd, DSLR, film grain"
+    "RAW photo, 8k uhd, high resolution, masterpiece, best quality, "
+    "photorealistic, hyperrealistic, detailed skin texture, subsurface scattering, "
+    "sharp focus, extreme detail, intricate details, natural lighting falloff, "
+    "Kodak Portra 400 emulation, professional editorial photography, "
+    "shot on Fujifilm XT3, Sigma Art series lens, film grain"
 )
 NEGATIVE_PROMPT = (
-    "cartoon, anime, illustration, sketch, painting, watermark, text, "
-    "logo, blurry, low quality, deformed, bad anatomy, jpeg artifacts, "
-    "signature, frame, border, split image, collage"
+    "(worst quality:2), (low quality:2), (normal quality:2), lowres, "
+    "watermark, text, signature, logo, border, frame, "
+    "cartoon, anime, illustration, sketch, painting, 3d render, cgi, "
+    "(bad anatomy:1.3), (deformed:1.3), (disfigured:1.3), "
+    "(bad hands:1.4), (bad fingers:1.4), missing fingers, extra fingers, "
+    "plastic skin, waxy skin, mannequin, fake-looking, artificial, "
+    "overexposed, underexposed, flat lighting, blown highlights, "
+    "oversaturated, neon colors, chromatic aberration, "
+    "duplicate, split image, collage, out of frame, "
+    "jpeg artifacts, blurry, soft, out of focus, "
+    "ugly, mutilated, poorly drawn face, dull, lifeless"
 )
+
+# Per-scene-slot cinematographic specs — each slot has a distinct visual language.
+# Anchored to the 4-slot rotation in _build_sd_prompts so every clip in a run
+# looks like a different camera angle from the same film.
+ANCHOR_PHOTO_SPECS = [
+    # Slot 0: EXTREME CLOSE-UP — intimate, textural, faces/hands/objects
+    {
+        "composition": (
+            "extreme close-up macro detail, subject fills entire frame, "
+            "razor-thin depth of field, bokeh background, tactile texture visible, "
+            "subject isolation"
+        ),
+        "lighting": (
+            "single hard tungsten light source at 45-degree angle, "
+            "deep chiaroscuro shadows, specular highlight on subject edge, "
+            "no fill light, inky blacks"
+        ),
+        "camera": (
+            "Canon EOS R5, Canon 100mm f/2.8L Macro IS USM, "
+            "1/250s, ISO 400, tripod-mounted, tack-sharp focus"
+        ),
+    },
+    # Slot 1: WIDE ESTABLISHING — world-building, scale, environmental
+    {
+        "composition": (
+            "wide establishing shot, subject small in vast environment, "
+            "rule of thirds, strong leading lines converging to subject, "
+            "deep depth of field, sky fills upper third"
+        ),
+        "lighting": (
+            "natural ambient light, golden hour sun at 15-degree angle, "
+            "long warm directional shadows, atmospheric haze in distance, "
+            "warm amber highlights, cool blue shadows"
+        ),
+        "camera": (
+            "Sony A7R IV, Sony FE 24mm f/1.4 GM, "
+            "f/8, 1/500s, ISO 200, circular polarizer filter"
+        ),
+    },
+    # Slot 2: MEDIUM SHOT — human, emotional, action
+    {
+        "composition": (
+            "medium shot, waist-up, subject slightly off-center left third, "
+            "negative space right, environmental context visible behind, "
+            "portrait orientation, subject in motion or reaction"
+        ),
+        "lighting": (
+            "3-point lighting: key soft box at 45 degrees camera left, "
+            "fill reflector at 2:1 ratio camera right, "
+            "warm rim light from behind right creating edge separation"
+        ),
+        "camera": (
+            "Nikon Z7II, NIKKOR Z 85mm f/1.4 S, "
+            "f/1.8, 1/200s, ISO 640, selective focus on face"
+        ),
+    },
+    # Slot 3: AERIAL / ABSTRACT — pattern, overview, symbolic
+    {
+        "composition": (
+            "overhead bird's-eye nadir view, symmetrical composition, "
+            "abstract geometric pattern, flat lay, "
+            "minimalist negative space, graphic and bold"
+        ),
+        "lighting": (
+            "diffused overhead daylight, even studio exposure, "
+            "soft shadows revealing texture and depth, no harsh highlights, "
+            "clean even illumination showing pattern"
+        ),
+        "camera": (
+            "DJI Mavic 3 Pro, 24mm equivalent, "
+            "f/5.6, 1/800s, ISO 200, nadir shot, zero parallax"
+        ),
+    },
+]
 
 
 # ── Host ─────────────────────────────────────────────────────────────────────
@@ -91,8 +177,24 @@ def _niche_style_suffix() -> str:
         return QUALITY_SUFFIX
 
 
-def _query_to_prompt(query: str, style: str = "") -> str:
-    return f"({query}:1.3), {style or QUALITY_SUFFIX}, {QUALITY_SUFFIX}"
+def _query_to_prompt(query: str, style: str = "", idx: int = 0) -> str:
+    """Build a full SD prompt: subject + per-anchor cinematographic spec + quality.
+
+    idx selects the ANCHOR_PHOTO_SPECS slot (0-3) so each scene in a run uses a
+    distinct camera angle, lighting setup, and composition — the four clips read
+    as coverage of one film, not four random photos.
+    """
+    spec = ANCHOR_PHOTO_SPECS[idx % len(ANCHOR_PHOTO_SPECS)]
+    parts = [
+        f"RAW photo, ({query}:1.35)",
+        spec["composition"],
+        spec["lighting"],
+        spec["camera"],
+    ]
+    if style and style != QUALITY_SUFFIX:
+        parts.append(style)
+    parts.append(QUALITY_SUFFIX)
+    return ", ".join(parts)
 
 
 def _generate_image(prompt: str, seed: int = -1) -> bytes | None:
@@ -287,7 +389,7 @@ def generate_clips(queries: list[str], n: int = 4,
 
     for i, query in enumerate(prompts):
         print(f"[sd] {i+1}/{len(prompts)}: {query[:70]}")
-        prompt = _query_to_prompt(query, style)
+        prompt = _query_to_prompt(query, style, idx=i)
 
         # 1. Generate at 576×1024 (~3-5s on GTX 1060)
         # Unique seed per image (master_seed + i) so compositions differ.
@@ -347,7 +449,7 @@ def generate_images(queries: list[str], n: int = 4) -> list[Path]:
 
     for i, query in enumerate(prompts):
         print(f"[sd-img] {i+1}/{len(prompts)}: {query[:70]}")
-        prompt    = _query_to_prompt(query, style)
+        prompt    = _query_to_prompt(query, style, idx=i)
         img_bytes = _generate_image(prompt, seed=master_seed + i)
         if not img_bytes:
             continue
