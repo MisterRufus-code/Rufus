@@ -78,7 +78,7 @@
       "accent_color": "#FFC53D",
       "style_suffix": "muted teal and orange color grade, glass and steel surfaces, shallow depth of field, 35mm film, cinematic",
       "youtube_category_id": "25",
-      "video_source": "hybrid"
+      "video_source": "sd"
     },
     "motivation": {
       "display_name": "Motivation & Grind",
@@ -207,7 +207,7 @@
       "accent_color": "#3DD9C5",
       "style_suffix": "soft diffused natural light, muted earth tones, morning fog, medium format film, contemplative",
       "youtube_category_id": "27",
-      "video_source": "hybrid"
+      "video_source": "sd"
     },
     "business": {
       "display_name": "Business & Entrepreneurship",
@@ -253,7 +253,7 @@
       "accent_color": "#4DA3FF",
       "style_suffix": "modern architectural lines, cool daylight, clean minimal composition, 50mm lens, editorial",
       "youtube_category_id": "27",
-      "video_source": "hybrid"
+      "video_source": "sd"
     },
     "personal_development": {
       "display_name": "Personal Development",

@@ -187,7 +187,12 @@ def test_sd_client_returns_empty_when_unavailable():
 
 
 def test_sd_client_skips_failed_images():
-    """generate_clips must skip a clip and continue when _generate_image fails."""
+    """generate_clips must skip a clip and continue when _generate_image fails.
+
+    A failed generation is retried (transient 6GB-GPU OOM is common) up to
+    MAX_DUP_RETRIES+1 times per clip, then the clip is skipped — no exception.
+    """
+    import sd_client
     from sd_client import generate_clips
     call_count = {"n": 0}
 
@@ -200,7 +205,8 @@ def test_sd_client_skips_failed_images():
         result = generate_clips(["query1", "query2"], n=2)
 
     assert result == []
-    assert call_count["n"] == 2   # tried both, skipped both — no exception
+    # Both clips attempted; each retried the full budget before being skipped.
+    assert call_count["n"] == 2 * (sd_client.MAX_DUP_RETRIES + 1)
 
 
 def test_sd_query_to_prompt_contains_query():

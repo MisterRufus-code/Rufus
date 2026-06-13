@@ -355,17 +355,52 @@ def _animate_to_clip(img_path: Path, out_path: Path,
     return r.returncode == 0 and out_path.exists() and out_path.stat().st_size > 50_000
 
 
+# ── Perceptual de-duplication ───────────────────────────────────────────────────
+
+DUP_THRESHOLD   = 6   # max Hamming distance (of 64 bits) to treat two images as "same"
+MAX_DUP_RETRIES = 2   # regenerations allowed before accepting a near-duplicate
+
+
+def _avg_hash(png_path: Path) -> int | None:
+    """64-bit average hash (aHash) of an image — PIL only, no numpy.
+
+    Downscale to 8×8 grayscale, then set each bit by whether its pixel is at or
+    above the mean. Visually similar images produce hashes a few bits apart.
+    """
+    try:
+        from PIL import Image
+        img = Image.open(str(png_path)).convert("L").resize((8, 8), Image.LANCZOS)
+        px  = list(img.tobytes())
+        avg = sum(px) / len(px)
+        bits = 0
+        for p in px:
+            bits = (bits << 1) | (1 if p >= avg else 0)
+        return bits
+    except Exception:
+        return None
+
+
+def _hamming(a: int, b: int) -> int:
+    """Number of differing bits between two hashes."""
+    return bin(a ^ b).count("1")
+
+
 # ── Public API ────────────────────────────────────────────────────────────────
 
 def generate_clips(queries: list[str], n: int = 4,
                    clip_duration: float = 8.0) -> list[Path]:
     """
-    Generate n animated clips from scene queries via local Stable Diffusion.
+    Generate one animated clip per query via local Stable Diffusion, in order.
 
     Pipeline per clip:
       query → SD 576×1024 → R-ESRGAN 2× → 1152×2048 → crop 1080×1920 → Ken Burns mp4
 
-    Returns list of .mp4 Paths, or [] if SD not running.
+    Each finished image is perceptual-hashed; if it collides with an already-
+    accepted image it is regenerated with a fresh seed (up to MAX_DUP_RETRIES)
+    so no image visibly repeats within a video. A render never fails on this —
+    after the retries the closest attempt is kept.
+
+    Returns list of .mp4 Paths (one per query), or [] if SD not running.
     """
     if not is_available():
         print(f"[sd] A1111 not running at {_host()} — start with: ./webui.sh --api --medvram --xformers")
@@ -383,31 +418,49 @@ def generate_clips(queries: list[str], n: int = 4,
             prompts.append(base[len(prompts) % len(base)] + ", different composition, wider shot")
     prompts = prompts[:n]
 
-    style       = _niche_style_suffix()
-    master_seed = random.randint(1, 2_000_000_000)
+    style          = _niche_style_suffix()
+    master_seed    = random.randint(1, 2_000_000_000)
+    accepted_hashes: list[int] = []
     print(f"[sd] base seed {master_seed} — each image offset for variety")
 
     for i, query in enumerate(prompts):
         print(f"[sd] {i+1}/{len(prompts)}: {query[:70]}")
-        prompt = _query_to_prompt(query, style, idx=i)
-
-        # 1. Generate at 576×1024 (~3-5s on GTX 1060)
-        # Unique seed per image (master_seed + i) so compositions differ.
-        # Aesthetic cohesion comes from the shared style_suffix, not the seed.
-        img_bytes = _generate_image(prompt, seed=master_seed + i)
-        if not img_bytes:
-            continue
-
-        # 2. Upscale 2× → 1152×2048 (R-ESRGAN tile-based, ~5s)
-        img_bytes = _upscale(img_bytes)
-
-        # 3. Crop to 1080×1920
+        prompt   = _query_to_prompt(query, style, idx=i)
         png_path = tmp_dir / f"{stamp}_{i}.png"
-        if not _crop_to_portrait(img_bytes, png_path):
-            print(f"[sd] crop failed for clip {i+1}")
+        accepted = False
+
+        # Generate → upscale → crop → de-dup check. Regenerate with a new seed
+        # if the result is too close to an earlier image; keep the last try if
+        # all retries still collide (never block a render).
+        for retry in range(MAX_DUP_RETRIES + 1):
+            seed = master_seed + i + 1000 * retry
+            img_bytes = _generate_image(prompt, seed=seed)
+            if not img_bytes:
+                continue
+            img_bytes = _upscale(img_bytes)
+            if not _crop_to_portrait(img_bytes, png_path):
+                continue
+
+            h = _avg_hash(png_path)
+            is_dup = (
+                h is not None and accepted_hashes
+                and min(_hamming(h, prev) for prev in accepted_hashes) < DUP_THRESHOLD
+            )
+            if is_dup and retry < MAX_DUP_RETRIES:
+                print(f"[sd] dup detected on clip {i+1} → regen (retry {retry+1})")
+                continue
+            if is_dup:
+                print(f"[sd] clip {i+1} still near-dup after {MAX_DUP_RETRIES} retries — keeping")
+            if h is not None:
+                accepted_hashes.append(h)
+            accepted = True
+            break
+
+        if not accepted:
+            print(f"[sd] no usable image for clip {i+1} — skipping")
             continue
 
-        # 4. Ken Burns → mp4
+        # Ken Burns → mp4
         clip_path = tmp_dir / f"{stamp}_{i}.mp4"
         if _animate_to_clip(png_path, clip_path, duration=clip_duration, idx=i):
             clips.append(clip_path)
@@ -418,71 +471,6 @@ def generate_clips(queries: list[str], n: int = 4,
         png_path.unlink(missing_ok=True)
 
     print(f"[sd] {len(clips)}/{len(prompts)} clips ready")
-    return clips
-
-
-def generate_images(queries: list[str], n: int = 4) -> list[Path]:
-    """Generate n 1080×1920 PNG stills (no animation). Used by the hybrid source.
-
-    Returns raw image Paths so the caller can embed them into HyperFrames HTML
-    (base64) or animate them with generate_clips_from_images(). Returns [] if
-    A1111 is not running.
-    """
-    if not is_available():
-        return []
-
-    tmp_dir = Path(__file__).parent.parent / "media_library" / "temp" / "sd_imgs"
-    tmp_dir.mkdir(parents=True, exist_ok=True)
-
-    images: list[Path] = []
-    stamp = int(time.time())
-
-    prompts = list(queries or ["cinematic scene"])
-    if len(prompts) < n:
-        base = prompts[:]
-        while len(prompts) < n:
-            prompts.append(base[len(prompts) % len(base)] + ", different composition")
-    prompts = prompts[:n]
-
-    style       = _niche_style_suffix()
-    master_seed = random.randint(1, 2_000_000_000)
-
-    for i, query in enumerate(prompts):
-        print(f"[sd-img] {i+1}/{len(prompts)}: {query[:70]}")
-        prompt    = _query_to_prompt(query, style, idx=i)
-        img_bytes = _generate_image(prompt, seed=master_seed + i)
-        if not img_bytes:
-            continue
-        img_bytes = _upscale(img_bytes)
-        png_path  = tmp_dir / f"{stamp}_{i}.png"
-        if _crop_to_portrait(img_bytes, png_path):
-            images.append(png_path)
-            print(f"[sd-img] image {i+1} ready")
-        else:
-            print(f"[sd-img] image {i+1} crop failed")
-
-    print(f"[sd-img] {len(images)}/{len(prompts)} images ready")
-    return images
-
-
-def generate_clips_from_images(image_paths: list[Path],
-                                clip_duration: float = 8.0) -> list[Path]:
-    """Animate already-generated 1080×1920 PNGs into Ken Burns mp4 clips.
-
-    Used as a fallback when HyperFrames is unavailable but SD images already
-    exist (hybrid source, step C of the fallback chain).
-    """
-    tmp_dir = Path(__file__).parent.parent / "media_library" / "temp" / "sd"
-    tmp_dir.mkdir(parents=True, exist_ok=True)
-    clips = []
-    stamp = int(time.time())
-    for i, img_path in enumerate(image_paths):
-        if not img_path.exists():
-            continue
-        clip_path = tmp_dir / f"{stamp}_kb_{i}.mp4"
-        if _animate_to_clip(img_path, clip_path, duration=clip_duration, idx=i):
-            clips.append(clip_path)
-            print(f"[sd] Ken Burns clip {i+1} ready (from existing image)")
     return clips
 
 

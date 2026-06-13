@@ -53,7 +53,7 @@ Everything is free except OpenAI credits. Mix and match:
 
 | Variable | Values | Default | What it does |
 |---|---|---|---|
-| `RUFUS_VIDEO_SOURCE` | `sd` / `hyperframes` / `pexels` | per-niche (`niches.json`) | Footage source — overrides the niche's `video_source`; falls back down the chain |
+| `RUFUS_VIDEO_SOURCE` | `sd` / `pexels` | per-niche (`niches.json`) | Footage source — overrides the niche's `video_source`; falls back `sd → pexels` |
 | `RUFUS_RENDERER` | `ffmpeg` / `remotion` | `ffmpeg` | Render engine (see below) |
 | `RUFUS_TTS` | `edge` / `xtts` | `edge` | Voice engine (see below) |
 | `RUFUS_GPU` | `1` / unset | unset | Whisper CUDA + FFmpeg NVENC |
@@ -61,15 +61,16 @@ Everything is free except OpenAI credits. Mix and match:
 | `RUFUS_NICHE_OVERRIDE` | niche name | — | Force a niche for one run |
 
 Each niche picks its own source via `"video_source"` in `config/niches.json`
-(default: finance/business/mindset → `hyperframes`, motivation/personal_development → `sd`).
-`RUFUS_VIDEO_SOURCE` overrides it for one run.
+(default: all niches → `sd`). `RUFUS_VIDEO_SOURCE` overrides it for one run.
 
 ### Footage sources
-- **`hyperframes`** — animated **motion-graphic backgrounds** rendered from HTML by [HeyGen HyperFrames](https://github.com/heygen-com/hyperframes). GPT writes a self-contained CSS-animated scene per beat (1080×1920, no on-screen text — Rufus overlays its own captions); HyperFrames renders it to MP4 with headless Chrome + FFmpeg. **CPU-only (no GPU contention), $0, deterministic.** Needs **Node.js 22+** (`npx hyperframes` auto-fetches the package). Best for data niches (charts/counters/gradients).
-- **`sd`** — local Stable Diffusion (Automatic1111). Generates images matching the script, upscales 2× with Real-ESRGAN, crops to 1080×1920, animates with Ken Burns. **Free forever, runs on a GTX 1060 6GB.** Start A1111 with `./webui.sh --api --xformers --medvram`, then set `SD_HOST` if not on localhost. Best for emotive niches (real people/scenes).
-- **`pexels`** — free stock footage, 7 candidates, GPT-4o Vision picks the best match. Needs a Pexels key.
+- **`sd`** (default) — local Stable Diffusion (Automatic1111). Splits the script into **spoken beats** and generates **one content-matched image per beat, in order** — so when the narrator talks about stocks, the screen shows stocks (the renderer cuts on sentence boundaries, keeping image and voice in sync). Each image is upscaled 2× with Real-ESRGAN, cropped to 1080×1920, and animated with Ken Burns. Every image is **perceptual-hash de-duplicated** (aHash + regenerate) so none visibly repeats within a video. Ultra-detailed prompts tuned for Realistic Vision v5.1 with a rotating camera anchor (macro → wide → medium → aerial). **Free forever, runs on a GTX 1060 6GB.** Start A1111 with `./webui.sh --api --xformers --medvram`, then set `SD_HOST` if not on localhost. `SD_CLIPS` caps the scene count (default 6).
+- **`pexels`** — free stock footage, 7 candidates, GPT-4o Vision picks the best match. Needs a Pexels key. Automatic fallback when A1111 isn't running.
 
-Fallback chain so a run never dies on footage: **hyperframes → sd → pexels**, **sd → pexels**.
+Fallback chain so a run never dies on footage: **sd → pexels**.
+
+> _Optional/unwired:_ `scripts/hyperframes_client.py` (HeyGen HyperFrames HTML→MP4 motion-graphics) stays on disk for a possible future data-viz channel but is **not** in the active source routing — the focus is photoreal SD.
+
 
 ### Render engines
 - **`ffmpeg`** (v4.0 "cinematic edit") — cuts snap to **sentence boundaries** from Whisper timestamps with a punchy ~3s hook cut; synthesized **SFX layer** (sub-bass hit on the hook, whoosh on every cut, riser into the final beat — generated locally by `sfx_gen.py`, zero APIs); music **ducked dynamically** under the voice via sidechain compression; voice runs through a highpass → compressor → presence-EQ chain; final mix mastered to **-14 LUFS** (YouTube reference); retention progress bar + captions accented in the per-niche `accent_color`. Falls back to a simple hard-concat mix if the full graph errors, so renders never break.

@@ -136,44 +136,98 @@ def _parse_video_queries(analysis: str) -> list[str]:
     return []
 
 
-def _build_sd_prompts(script: str, niche: str, n: int = 4) -> list[str]:
-    """Generate n pro-grade SD prompts that cover the script's visual arc.
+# Per-beat camera anchors — rotate so consecutive scenes read like film coverage
+# (macro → establishing → human → overhead) instead of four identical framings.
+_SD_ANCHORS = [
+    {
+        "camera": "EXTREME CLOSE-UP macro, Canon 100mm f/2.8L Macro, f/2.8, razor-thin depth of field",
+        "subject_hint": "tight detail on a face, hands, or object surface filling the frame",
+        "light": "single hard tungsten light at 45°, deep chiaroscuro, inky shadows, specular rim highlight",
+    },
+    {
+        "camera": "WIDE ESTABLISHING panorama, Sony FE 24mm f/1.4 GM, f/8, deep focus, circular polarizer",
+        "subject_hint": "subject small against a vast environment, strong leading lines converging on subject",
+        "light": "golden hour natural light, long warm directional shadows, atmospheric haze, amber sky",
+    },
+    {
+        "camera": "MEDIUM SHOT portrait, NIKKOR Z 85mm f/1.4, f/1.8, selective focus on face",
+        "subject_hint": "waist-up, subject off-center left, environmental context right, mid-motion or reaction",
+        "light": "3-point lighting: soft-box key 45° camera-left, 2:1 fill right, warm rim light from behind",
+    },
+    {
+        "camera": "AERIAL overhead flat-lay nadir, DJI Mavic 3 Pro 24mm, f/5.6, symmetrical composition",
+        "subject_hint": "bird's-eye view, geometric pattern or arranged objects, minimalist negative space",
+        "light": "diffused even overhead daylight, soft shadows revealing texture, no harsh highlights",
+    },
+]
 
-    Prompts are written as proper SD token language (comma-separated descriptors,
-    40-60 words) with ultra-specific subject, setting, lighting, and color grade.
-    Each of the n slots is locked to a distinct camera angle via ANCHORS so the
-    four clips read like coverage from one film — never four random stills.
+
+def _split_beats(script: str, max_scenes: int = 6, min_words: int = 3) -> list[str]:
+    """Split a script into ordered visual beats (one per spoken sentence).
+
+    Merges fragments shorter than ``min_words`` into the previous beat, then
+    collapses the shortest adjacent beats until at most ``max_scenes`` remain —
+    so each beat is a meaningful chunk of speech that earns its own image.
+    Order is preserved, which is what lets clip[i] line up with beat[i] at
+    render time (audio_gen cuts on sentence boundaries in list order).
+    """
+    import re
+    raw = [s.strip() for s in re.split(r"(?<=[.!?…])\s+", script.strip()) if s.strip()]
+    if not raw:
+        return []
+
+    # Merge sub-min_words fragments into the previous beat (or the next if first).
+    beats: list[str] = []
+    for s in raw:
+        if len(s.split()) < min_words and beats:
+            beats[-1] = f"{beats[-1]} {s}".strip()
+        else:
+            beats.append(s)
+    if len(beats) > 1 and len(beats[0].split()) < min_words:
+        beats[1] = f"{beats[0]} {beats[1]}".strip()
+        beats = beats[1:]
+
+    # Collapse the shortest adjacent pair until we fit max_scenes.
+    while len(beats) > max_scenes:
+        widths = [len(b.split()) for b in beats]
+        # index of the adjacent pair with the smallest combined width
+        j = min(range(len(beats) - 1), key=lambda k: widths[k] + widths[k + 1])
+        beats[j] = f"{beats[j]} {beats[j + 1]}".strip()
+        del beats[j + 1]
+    return beats
+
+
+def _build_sd_prompts(script: str, niche: str, max_scenes: int = 6) -> list[str]:
+    """One ultra-detailed SD prompt per spoken beat, in narration order.
+
+    Each prompt's SUBJECT depicts what the narrator says during that beat (a
+    photo of stocks while he talks about stocks), so when the renderer cuts on
+    sentence boundaries the on-screen image tracks the voice-over. Prompts use
+    pro Realistic-Vision token language with a rotating camera anchor for visual
+    variety and the niche's color grade. Returns one prompt per beat (≤max_scenes).
     """
     import re
 
-    # Hard visual anchors per scene slot — lock camera angle per clip so the
-    # four scenes read like a film: macro → establishing → human → overhead.
-    ANCHORS = [
-        {
-            "camera":  "EXTREME CLOSE-UP macro",
-            "subject": "tight detail on face, hands, or object surface, subject fills frame",
-            "light":   "single hard light at 45°, deep chiaroscuro, inky shadows, specular rim",
-            "fallback_subject": f"weathered hands holding {niche}-related object, close-up macro detail",
-        },
-        {
-            "camera":  "WIDE ESTABLISHING panorama",
-            "subject": "subject small against vast environment, strong leading lines toward subject",
-            "light":   "golden hour natural light, long warm shadows, atmospheric haze, amber sky",
-            "fallback_subject": f"lone person in vast {niche}-themed landscape, wide angle perspective",
-        },
-        {
-            "camera":  "MEDIUM SHOT portrait",
-            "subject": "waist-up, subject off-center left, environment context right, in motion or reaction",
-            "light":   "3-point lighting: soft box key 45° left, fill at 2:1, warm rim behind right",
-            "fallback_subject": f"intense focused person at work in {niche} context, medium shot",
-        },
-        {
-            "camera":  "AERIAL overhead flat-lay",
-            "subject": "bird's-eye view, symmetrical or geometric pattern, minimalist negative space",
-            "light":   "diffused even overhead light, soft shadows show texture, no harsh highlights",
-            "fallback_subject": f"overhead abstract pattern representing {niche}, flat lay minimalist",
-        },
-    ]
+    beats = _split_beats(script, max_scenes=max_scenes)
+    if not beats:
+        beats = [f"{niche} concept"]
+    n = len(beats)
+
+    try:
+        niche_data  = json.loads(NICHES_FILE.read_text())
+        niche_style = niche_data["niches"].get(niche, {}).get("style_suffix", "")
+    except Exception:
+        niche_style = ""
+    color_grade = niche_style or "cinematic color grade, muted tones, film grain"
+
+    def _fallback_prompt(i: int, beat: str) -> str:
+        a   = _SD_ANCHORS[i % len(_SD_ANCHORS)]
+        cue = beat[:80].rstrip(".,;:! ")
+        return (
+            f"RAW photo, ({cue}:1.35), {a['subject_hint']}, {a['light']}, "
+            f"{a['camera']}, {color_grade}, photorealistic, hyperrealistic, "
+            "8k uhd, sharp focus, professional editorial photography, film grain"
+        )
 
     try:
         from openai import OpenAI
@@ -181,17 +235,15 @@ def _build_sd_prompts(script: str, niche: str, n: int = 4) -> list[str]:
         if keys_file.exists():
             key = json.loads(keys_file.read_text()).get("openai", "")
             if key and not key.startswith("YOUR_") and not key.startswith("FILL_"):
-                # Read niche style for color grade
-                try:
-                    niche_data  = json.loads(NICHES_FILE.read_text())
-                    niche_style = niche_data["niches"].get(niche, {}).get("style_suffix", "")
-                except Exception:
-                    niche_style = ""
-
+                beat_lines = "\n".join(
+                    f"  Beat {i+1} (CAMERA={_SD_ANCHORS[i % len(_SD_ANCHORS)]['camera'].split(',')[0]}): "
+                    f"\"{b}\""
+                    for i, b in enumerate(beats)
+                )
                 anchor_lines = "\n".join(
-                    f"  Scene {i+1}: {ANCHORS[i % 4]['camera']} | "
-                    f"subject={ANCHORS[i % 4]['subject']} | "
-                    f"lighting={ANCHORS[i % 4]['light']}"
+                    f"  Beat {i+1}: framing={_SD_ANCHORS[i % len(_SD_ANCHORS)]['subject_hint']}; "
+                    f"lighting={_SD_ANCHORS[i % len(_SD_ANCHORS)]['light']}; "
+                    f"lens={_SD_ANCHORS[i % len(_SD_ANCHORS)]['camera']}"
                     for i in range(n)
                 )
                 client = OpenAI(api_key=key)
@@ -200,66 +252,51 @@ def _build_sd_prompts(script: str, niche: str, n: int = 4) -> list[str]:
                     messages=[{
                         "role": "user",
                         "content": (
-                            "You are a professional Stable Diffusion prompt engineer for "
-                            "Realistic Vision v5.1 (ultra-photorealistic model).\n"
-                            f"Generate {n} image prompts for a {niche} YouTube Short.\n\n"
-                            "SCRIPT (context only — find VISUAL METAPHORS, do NOT re-enact the dialogue):\n"
-                            f"{script[:500]}\n\n"
-                            "MANDATORY per-scene constraints — follow EXACTLY:\n"
+                            "You are a world-class Stable Diffusion prompt engineer for "
+                            "Realistic Vision v5.1 (ultra-photorealistic model). Write "
+                            f"EXACTLY {n} image prompts for a {niche} YouTube Short — one per beat.\n\n"
+                            "THE SPOKEN BEATS (prompt N MUST visually depict beat N — when the "
+                            "narrator says it, the viewer sees it):\n"
+                            f"{beat_lines}\n\n"
+                            "PER-BEAT FRAMING (use exactly):\n"
                             f"{anchor_lines}\n\n"
-                            "OUTPUT FORMAT: comma-separated SD token language — NOT natural English sentences.\n"
-                            "Required token order: RAW photo, (SUBJECT:1.35), SETTING_WITH_TEXTURE, "
-                            "COMPOSITION_DETAIL, LIGHTING_SETUP, CAMERA+LENS, COLOR_GRADE\n\n"
-                            "QUALITY RULES — these separate professional from amateur prompts:\n"
-                            "• Subject: ULTRA-SPECIFIC. 'businessman' → "
-                            "'weathered 52yo man, salt-and-pepper stubble, 3am shadows under eyes, "
-                            "rumpled charcoal suit, top button undone'\n"
-                            "• Setting: physical TEXTURE. 'office' → "
-                            "'glass-walled corner office, city lights 40 floors below, "
-                            "scattered papers, cold blue monitor glow, 3am'\n"
-                            "• Lighting: name the SETUP. 'dramatic' → "
-                            "'single tungsten desk lamp at 45 degrees, deep indigo shadows, "
-                            "amber specular on cheekbone'\n"
-                            f"• Color grade: match niche aesthetic — {niche_style or 'cinematic, muted tones, film grain'}\n"
-                            "• Each scene MUST be a DIFFERENT physical location — zero repetition\n"
-                            "• 40-60 words per prompt. NO sentences. Pure SD tokens.\n\n"
-                            f"Output ONLY {n} plain lines, no numbering, no labels, one prompt per line."
+                            "OUTPUT FORMAT: comma-separated SD token language — NOT English sentences.\n"
+                            "Token order: RAW photo, (MAIN SUBJECT:1.35), SETTING WITH TEXTURE, "
+                            "COMPOSITION, LIGHTING SETUP, CAMERA+LENS, COLOR GRADE, quality tags\n\n"
+                            "RULES — high-end results depend on these:\n"
+                            "• SUBJECT must match the beat's literal content first; use a strong visual "
+                            "metaphor only when the beat is abstract. Beat 'the market crashed' → "
+                            "'red plummeting stock ticker wall, panicked trading floor'.\n"
+                            "• ULTRA-SPECIFIC subject: age, wardrobe, expression, skin/material texture. "
+                            "'investor' → 'weathered 52yo man, salt-and-pepper stubble, 3am shadows under "
+                            "eyes, rumpled charcoal suit, loosened tie'.\n"
+                            "• SETTING with physical texture: 'office' → 'glass-walled 40th-floor office, "
+                            "city lights below, scattered papers, cold blue monitor glow'.\n"
+                            "• Name the LIGHTING SETUP, never just 'dramatic'.\n"
+                            f"• COLOR GRADE every prompt: {color_grade}.\n"
+                            "• No two prompts may share the same subject or location — all distinct.\n"
+                            "• 60–80 words per prompt. Dense, vivid, pure SD tokens.\n\n"
+                            f"Output ONLY {n} lines, no numbering, no labels, one prompt per line, in beat order."
                         ),
                     }],
-                    max_tokens=600,
+                    max_tokens=1100,
                     temperature=0.85,
                 )
                 raw_lines = resp.choices[0].message.content.strip().split("\n")
-                lines = [
-                    re.sub(r"^[\d\.\-\)\s]+", "", l).strip()
-                    for l in raw_lines if l.strip()
-                ]
+                lines = [re.sub(r"^[\d\.\-\)\s]+", "", l).strip()
+                         for l in raw_lines if l.strip()]
                 lines = [l for l in lines if len(l) > 20]
 
-                while len(lines) < n:
-                    a = ANCHORS[len(lines) % 4]
-                    lines.append(
-                        f"RAW photo, ({a['fallback_subject']}:1.35), "
-                        f"{a['subject']}, {a['light']}, "
-                        "photorealistic, cinematic color grade, film grain, "
-                        "sharp focus, professional editorial photography"
-                    )
-                return lines[:n]
+                # Pad/realign so we always return exactly one prompt per beat, in order.
+                out = []
+                for i in range(n):
+                    out.append(lines[i] if i < len(lines) else _fallback_prompt(i, beats[i]))
+                return out
     except Exception as e:
-        print(f"[sd] GPT prompt generation skipped ({e}) — using anchor fallback")
+        print(f"[sd] GPT prompt generation skipped ({e}) — using beat fallback")
 
-    # Key-free fallback: anchor-driven prompts always visually distinct.
-    import re as _re
-    sentences = [s.strip() for s in _re.split(r"[.!?]", script) if len(s.strip()) > 15]
-    prompts = []
-    for i in range(n):
-        a = ANCHORS[i % 4]
-        cue = sentences[int(i * len(sentences) / n)][:60] if sentences else f"{niche} concept"
-        prompts.append(
-            f"RAW photo, ({cue}:1.35), {a['subject']}, "
-            f"{a['light']}, photorealistic, cinematic, film grain"
-        )
-    return prompts
+    # Key-free fallback: one anchored prompt per beat, content-matched and distinct.
+    return [_fallback_prompt(i, b) for i, b in enumerate(beats)]
 
 
 def load_niche_cfg(override: str = None):
@@ -348,19 +385,18 @@ def run(skip_upload: bool = False, niche_override: str = None, output_dir: Path 
         print(f"           ⚠ Pre-analysis failed (non-fatal): {e}")
 
     # Source resolution: explicit env > per-niche config > default "sd".
-    # RUFUS_VIDEO_SOURCE=sd          → Stable Diffusion stills + Ken Burns (GPU)
-    # RUFUS_VIDEO_SOURCE=hyperframes → HTML motion-graphics via HyperFrames (CPU)
-    # RUFUS_VIDEO_SOURCE=hybrid      → SD photo + HyperFrames CSS overlay (best quality)
-    # RUFUS_VIDEO_SOURCE=pexels      → Pexels stock footage
+    # RUFUS_VIDEO_SOURCE=sd      → Stable Diffusion stills + Ken Burns (GPU), one
+    #                              content-matched image per spoken beat (default).
+    # RUFUS_VIDEO_SOURCE=pexels  → Pexels stock footage.
     video_source  = (os.environ.get("RUFUS_VIDEO_SOURCE")
                      or niche_cfg.get("video_source") or "sd").strip().lower()
     video_queries = _parse_video_queries(seed_analysis)
 
-    # sd, hyperframes, and hybrid all GENERATE clips from the script, so they defer
-    # to step 2.5 (after the script exists). Only stock sources fetch up front.
-    DEFERRED_SOURCES = ("sd", "hyperframes", "hybrid")
+    # SD GENERATES clips from the script, so it defers to step 2.5 (after the
+    # script exists). Only stock sources fetch up front.
+    DEFERRED_SOURCES = ("sd",)
 
-    # ── Step 2: Get candidate clips — generated (SD/HyperFrames) or stock ───────
+    # ── Step 2: Get candidate clips — generated (SD) or stock (Pexels) ──────────
     candidates = []
     scene = ""
     if video_source in DEFERRED_SOURCES:
@@ -428,76 +464,28 @@ def run(skip_upload: bool = False, niche_override: str = None, output_dir: Path 
         print(f"           ✗ Step 4 failed: {e}")
         sys.exit(1)
 
-    # ── Step 2.5: Generate script-matched clips (SD / HyperFrames / Hybrid) ─────
-    # Fallback chain so a render never dies:
-    #   hybrid     → SD images + HF CSS overlay → Ken Burns on SD images → SD → pexels
-    #   hyperframes → sd → pexels
-    #   sd         → pexels
+    # ── Step 2.5: Generate one content-matched SD image per spoken beat ─────────
+    # Each prompt depicts what the narrator says during that beat, in order, so
+    # the renderer's sentence-boundary cuts keep the image tracking the voice-over.
+    # Fallback chain so a render never dies:  sd → pexels.
     if video_source in DEFERRED_SOURCES:
-        print(f"[ 2.5/7 ]  Generating {video_source} clips from script content...")
+        print(f"[ 2.5/7 ]  Generating SD clips from script content...")
         try:
-            n_clips = int(os.environ.get("SD_CLIPS", "4"))
-            prompts = _build_sd_prompts(script, active, n=n_clips)
-            print(f"           → prompts: {prompts}")
-            # Pass niche name so HF prompts can use niche-specific visual guides
-            niche_cfg_tagged = {**niche_cfg, "name": active}
+            # One image per beat; SD_CLIPS (if set) caps the scene count.
+            max_scenes = int(os.environ.get("SD_CLIPS", "6"))
+            prompts = _build_sd_prompts(script, active, max_scenes=max_scenes)
+            print(f"           → {len(prompts)} beat-matched prompts:")
+            for i, p in enumerate(prompts):
+                print(f"             {i+1}. {p[:90]}")
 
-            if video_source == "hybrid":
-                import sd_client as _sd
-                import hyperframes_client as _hf
-                from sd_client import (generate_images as sd_generate_images,
-                                       generate_clips_from_images as sd_animate)
-                from hyperframes_client import generate_clips as hf_generate
-
-                # Step A: SD base images (raw PNGs, no animation)
-                sd_imgs = sd_generate_images(prompts, n=n_clips) if _sd.is_available() else []
-                if sd_imgs:
-                    print(f"           → {len(sd_imgs)} SD base images ready for hybrid")
-                else:
-                    print("           ⚠ SD not running — HyperFrames will use pure CSS")
-
-                # Step B: HyperFrames renders (hybrid if SD images exist, else pure CSS)
-                if _hf.is_available():
-                    candidates = hf_generate(prompts, n=n_clips, clip_duration=8.0,
-                                             niche_cfg=niche_cfg_tagged,
-                                             image_paths=sd_imgs or None)
-                    if candidates:
-                        mode  = "hybrid SD+HF" if sd_imgs else "HF css-only"
-                        scene = f"{mode}: " + "; ".join(prompts[:2])
-                        print(f"           → {len(candidates)} {mode} clips ready\n")
-
-                # Step C: HF unavailable but SD images exist → Ken Burns fallback
-                if not candidates and sd_imgs:
-                    print("           ⚠ HyperFrames unavailable — Ken Burns on SD images")
-                    candidates = sd_animate(sd_imgs, clip_duration=8.0)
-                    if candidates:
-                        scene = "SD Ken Burns: " + "; ".join(prompts[:2])
-                        print(f"           → {len(candidates)} clips ready\n")
-
-                if not candidates:
-                    print("           ⚠ hybrid failed — trying full SD pipeline")
-                    video_source = "sd"  # fall through to the SD block below
-
-            if video_source == "hyperframes":
-                from hyperframes_client import generate_clips as hf_generate
-                candidates = hf_generate(prompts, n=n_clips,
-                                         clip_duration=8.0, niche_cfg=niche_cfg_tagged)
-                if candidates:
-                    scene = "HyperFrames motion-graphic: " + "; ".join(prompts[:2])
-                    print(f"           → {len(candidates)} clips ready\n")
-                else:
-                    print("           ⚠ HyperFrames produced nothing — trying SD")
-                    video_source = "sd"   # fall through to the SD block below
-
-            if video_source == "sd":
-                from sd_client import generate_clips as sd_generate
-                candidates = sd_generate(prompts, n=n_clips)
-                if candidates:
-                    scene = "SD-generated: " + "; ".join(prompts[:2])
-                    print(f"           → {len(candidates)} clips ready\n")
-                else:
-                    print("           ⚠ SD failed — falling back to Pexels")
-                    video_source = "pexels"
+            from sd_client import generate_clips as sd_generate
+            candidates = sd_generate(prompts, n=len(prompts))
+            if candidates:
+                scene = "SD-generated: " + "; ".join(prompts[:2])
+                print(f"           → {len(candidates)} clips ready\n")
+            else:
+                print("           ⚠ SD failed — falling back to Pexels")
+                video_source = "pexels"
 
             if not candidates:
                 if video_queries:
