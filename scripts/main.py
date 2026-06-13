@@ -310,14 +310,15 @@ def run(skip_upload: bool = False, niche_override: str = None, output_dir: Path 
     # Source resolution: explicit env > per-niche config > default "sd".
     # RUFUS_VIDEO_SOURCE=sd          → Stable Diffusion stills + Ken Burns (GPU)
     # RUFUS_VIDEO_SOURCE=hyperframes → HTML motion-graphics via HyperFrames (CPU)
+    # RUFUS_VIDEO_SOURCE=hybrid      → SD photo + HyperFrames CSS overlay (best quality)
     # RUFUS_VIDEO_SOURCE=pexels      → Pexels stock footage
     video_source  = (os.environ.get("RUFUS_VIDEO_SOURCE")
                      or niche_cfg.get("video_source") or "sd").strip().lower()
     video_queries = _parse_video_queries(seed_analysis)
 
-    # sd and hyperframes both GENERATE clips from the script, so they defer to
-    # step 2.5 (after the script exists). Only stock sources fetch up front.
-    DEFERRED_SOURCES = ("sd", "hyperframes")
+    # sd, hyperframes, and hybrid all GENERATE clips from the script, so they defer
+    # to step 2.5 (after the script exists). Only stock sources fetch up front.
+    DEFERRED_SOURCES = ("sd", "hyperframes", "hybrid")
 
     # ── Step 2: Get candidate clips — generated (SD/HyperFrames) or stock ───────
     candidates = []
@@ -387,19 +388,60 @@ def run(skip_upload: bool = False, niche_override: str = None, output_dir: Path 
         print(f"           ✗ Step 4 failed: {e}")
         sys.exit(1)
 
-    # ── Step 2.5: Generate script-matched clips (SD / HyperFrames) ──────────────
-    # Fallback chain so a render never dies: hyperframes → sd → pexels, sd → pexels.
+    # ── Step 2.5: Generate script-matched clips (SD / HyperFrames / Hybrid) ─────
+    # Fallback chain so a render never dies:
+    #   hybrid     → SD images + HF CSS overlay → Ken Burns on SD images → SD → pexels
+    #   hyperframes → sd → pexels
+    #   sd         → pexels
     if video_source in DEFERRED_SOURCES:
         print(f"[ 2.5/7 ]  Generating {video_source} clips from script content...")
         try:
             n_clips = int(os.environ.get("SD_CLIPS", "4"))
             prompts = _build_sd_prompts(script, active, n=n_clips)
             print(f"           → prompts: {prompts}")
+            # Pass niche name so HF prompts can use niche-specific visual guides
+            niche_cfg_tagged = {**niche_cfg, "name": active}
+
+            if video_source == "hybrid":
+                import sd_client as _sd
+                import hyperframes_client as _hf
+                from sd_client import (generate_images as sd_generate_images,
+                                       generate_clips_from_images as sd_animate)
+                from hyperframes_client import generate_clips as hf_generate
+
+                # Step A: SD base images (raw PNGs, no animation)
+                sd_imgs = sd_generate_images(prompts, n=n_clips) if _sd.is_available() else []
+                if sd_imgs:
+                    print(f"           → {len(sd_imgs)} SD base images ready for hybrid")
+                else:
+                    print("           ⚠ SD not running — HyperFrames will use pure CSS")
+
+                # Step B: HyperFrames renders (hybrid if SD images exist, else pure CSS)
+                if _hf.is_available():
+                    candidates = hf_generate(prompts, n=n_clips, clip_duration=8.0,
+                                             niche_cfg=niche_cfg_tagged,
+                                             image_paths=sd_imgs or None)
+                    if candidates:
+                        mode  = "hybrid SD+HF" if sd_imgs else "HF css-only"
+                        scene = f"{mode}: " + "; ".join(prompts[:2])
+                        print(f"           → {len(candidates)} {mode} clips ready\n")
+
+                # Step C: HF unavailable but SD images exist → Ken Burns fallback
+                if not candidates and sd_imgs:
+                    print("           ⚠ HyperFrames unavailable — Ken Burns on SD images")
+                    candidates = sd_animate(sd_imgs, clip_duration=8.0)
+                    if candidates:
+                        scene = "SD Ken Burns: " + "; ".join(prompts[:2])
+                        print(f"           → {len(candidates)} clips ready\n")
+
+                if not candidates:
+                    print("           ⚠ hybrid failed — trying full SD pipeline")
+                    video_source = "sd"  # fall through to the SD block below
 
             if video_source == "hyperframes":
                 from hyperframes_client import generate_clips as hf_generate
                 candidates = hf_generate(prompts, n=n_clips,
-                                         clip_duration=8.0, niche_cfg=niche_cfg)
+                                         clip_duration=8.0, niche_cfg=niche_cfg_tagged)
                 if candidates:
                     scene = "HyperFrames motion-graphic: " + "; ".join(prompts[:2])
                     print(f"           → {len(candidates)} clips ready\n")

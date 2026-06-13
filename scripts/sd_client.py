@@ -319,6 +319,71 @@ def generate_clips(queries: list[str], n: int = 4,
     return clips
 
 
+def generate_images(queries: list[str], n: int = 4) -> list[Path]:
+    """Generate n 1080×1920 PNG stills (no animation). Used by the hybrid source.
+
+    Returns raw image Paths so the caller can embed them into HyperFrames HTML
+    (base64) or animate them with generate_clips_from_images(). Returns [] if
+    A1111 is not running.
+    """
+    if not is_available():
+        return []
+
+    tmp_dir = Path(__file__).parent.parent / "media_library" / "temp" / "sd_imgs"
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+
+    images: list[Path] = []
+    stamp = int(time.time())
+
+    prompts = list(queries or ["cinematic scene"])
+    if len(prompts) < n:
+        base = prompts[:]
+        while len(prompts) < n:
+            prompts.append(base[len(prompts) % len(base)] + ", different composition")
+    prompts = prompts[:n]
+
+    style       = _niche_style_suffix()
+    master_seed = random.randint(1, 2_000_000_000)
+
+    for i, query in enumerate(prompts):
+        print(f"[sd-img] {i+1}/{len(prompts)}: {query[:70]}")
+        prompt    = _query_to_prompt(query, style)
+        img_bytes = _generate_image(prompt, seed=master_seed + i)
+        if not img_bytes:
+            continue
+        img_bytes = _upscale(img_bytes)
+        png_path  = tmp_dir / f"{stamp}_{i}.png"
+        if _crop_to_portrait(img_bytes, png_path):
+            images.append(png_path)
+            print(f"[sd-img] image {i+1} ready")
+        else:
+            print(f"[sd-img] image {i+1} crop failed")
+
+    print(f"[sd-img] {len(images)}/{len(prompts)} images ready")
+    return images
+
+
+def generate_clips_from_images(image_paths: list[Path],
+                                clip_duration: float = 8.0) -> list[Path]:
+    """Animate already-generated 1080×1920 PNGs into Ken Burns mp4 clips.
+
+    Used as a fallback when HyperFrames is unavailable but SD images already
+    exist (hybrid source, step C of the fallback chain).
+    """
+    tmp_dir = Path(__file__).parent.parent / "media_library" / "temp" / "sd"
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+    clips = []
+    stamp = int(time.time())
+    for i, img_path in enumerate(image_paths):
+        if not img_path.exists():
+            continue
+        clip_path = tmp_dir / f"{stamp}_kb_{i}.mp4"
+        if _animate_to_clip(img_path, clip_path, duration=clip_duration, idx=i):
+            clips.append(clip_path)
+            print(f"[sd] Ken Burns clip {i+1} ready (from existing image)")
+    return clips
+
+
 if __name__ == "__main__":
     import sys
     queries = sys.argv[1:] or ["stock market trading floor", "financial charts red decline"]

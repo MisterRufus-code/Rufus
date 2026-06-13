@@ -3,28 +3,28 @@
 hyperframes_client.py — motion-graphic video source for Rufus via HeyGen's
 HyperFrames (open-source HTML→MP4 renderer, Apache-2.0).
 
-An LLM (GPT, reusing the existing OpenAI key) writes a self-contained animated
-HTML scene from each script-derived scene description; HyperFrames renders it to
-a 1080×1920 MP4 with headless Chrome + FFmpeg. Output drops into the same
-pipeline contract as sd_client:
+Two rendering modes:
 
-    generate_clips(queries, n, clip_duration) -> list[Path]   # 1080×1920 mp4s
+  CSS-only  — GPT writes a self-contained animated HTML scene (charts, particles,
+              gradients, counters).  No external assets needed.  Best when SD is
+              not running.
 
-so audio_gen.render() composites voice + captions + ducked music on top exactly
-as it does for SD or Pexels clips.
+  Hybrid    — SD supplies a photorealistic base image; GPT writes HTML that embeds
+              it (via base64 data URI) with a CSS Ken Burns animation + a data
+              overlay (chart / counter / particle) on top.  Best quality.
 
-Why this source: CPU-only (no GPU contention with SD), $0 (no credits), fast,
-and deterministic. Animated charts/gradients/counters read as "agency-grade"
-for data niches (finance/business/mindset).
+Both modes implement the same contract as sd_client:
 
-Requirements on the host: Node.js 22+ (the project already needs Node for the
-remotion engine) and FFmpeg. HyperFrames itself is fetched on demand via npx.
+    generate_clips(queries, n, clip_duration, niche_cfg, image_paths) -> list[Path]
+
+so audio_gen.render() composites voice + captions + music on top unchanged.
 
 Env:
   HYPERFRAMES_CMD   space-separated launcher (default: "npx --yes hyperframes")
   HF_RENDER_TIMEOUT seconds per scene render (default 180)
 """
 
+import base64
 import json
 import os
 import re
@@ -77,32 +77,117 @@ def _extract_html(raw: str) -> str | None:
     return raw
 
 
-def _scene_prompt(scene_desc: str, niche_cfg: dict, duration: float) -> str:
-    accent = niche_cfg.get("accent_color", "#FFD23F")
-    mood   = niche_cfg.get("style_suffix", "cinematic, high contrast")
+# ── Visual-style guidance (niche-aware) ────────────────────────────────────────
+
+def _niche_visual_guide(niche_cfg: dict) -> str:
+    """Return niche-specific visual animation instructions for the GPT scene prompt."""
+    tags = (niche_cfg.get("name", "") + " " + niche_cfg.get("style_suffix", "")).lower()
+
+    if any(k in tags for k in ("finance", "business", "mindset", "stock", "wealth", "data")):
+        return (
+            "VISUAL STYLE — data/finance. Build ONE of:\n"
+            "  (A) SVG line chart: a <path> whose stroke draws itself left→right via "
+            "stroke-dashoffset animation over the full duration. Include light grid lines "
+            "and axis tick marks. Glowing accent-color data line.\n"
+            "  (B) Counter ticking up: large numeric display animating 0 → a realistic "
+            "target (e.g. $847K or 94%) using CSS @property or step() timing.\n"
+            "  (C) Bar chart: 5–7 vertical bars growing upward from 0, staggered delays, "
+            "accent color fills.\n"
+            "Dark near-black background, subtle grid. The chart/counter occupies the "
+            "lower 40% of the stage so it reads clearly behind spoken captions."
+        )
+    if any(k in tags for k in ("motivation", "personal", "development", "energy", "sunrise")):
+        return (
+            "VISUAL STYLE — motivation/energy. ONE of:\n"
+            "  (A) Rising particles: 25–40 small circles drifting upward from the bottom "
+            "with gentle horizontal sway, accent-color gradient opacity.\n"
+            "  (B) Light burst: 8–12 rays expanding from dead-centre with slow rotation, "
+            "high-opacity core fading to transparent at the edges.\n"
+            "  (C) Pulse rings: concentric circles expanding from centre, staggered delays, "
+            "accent color, low opacity — heartbeat feel.\n"
+            "Energetic but smooth — never strobing or jarring."
+        )
     return (
-        "Write ONE self-contained HTML document that animates a looping motion-"
-        "graphic BACKGROUND for a vertical short-form video. Output ONLY the HTML.\n\n"
-        f"Scene concept: {scene_desc}\n"
-        f"Mood/palette: {mood}. Accent color: {accent}. Dark, cinematic base.\n\n"
-        "HARD RULES:\n"
-        f"- Root stage element must carry: id=\"stage\" data-composition-id=\"scene\" "
-        f"data-start=\"0\" data-duration=\"{duration:.1f}\" data-width=\"{OUT_W}\" "
-        f"data-height=\"{OUT_H}\", and CSS sizing it to exactly {OUT_W}x{OUT_H}px.\n"
-        "- Use ONLY inline CSS @keyframes / transforms / gradients / SVG. NO external "
-        "scripts, NO CDN links, NO <img> with remote URLs (must render offline, "
-        "deterministically).\n"
-        "- ABSTRACT/ATMOSPHERIC ONLY — gradients, drifting shapes, particles, grids, "
-        "soft glows, or simple animated bars/lines for data niches. Motion must be "
-        "smooth and subtle, never strobing.\n"
-        "- NO large text, NO words, NO headlines, NO logos. Spoken-word captions are "
-        "overlaid by a later stage; on-screen text here would collide with them.\n"
-        f"- Animation should fill the full {duration:.1f}s and hold gracefully at the end.\n"
-        "- Everything in one file: <!DOCTYPE html><html>…</html> with a <style> block."
+        "VISUAL STYLE — bold geometric. Slowly panning gradient across the frame, OR "
+        "drifting translucent polygons/circles with subtle rotation. Dramatic, cinematic."
     )
 
 
-def _scene_to_html(scene_desc: str, niche_cfg: dict, duration: float) -> str | None:
+def _overlay_hint(niche_cfg: dict, accent: str) -> str:
+    """Short overlay description for hybrid mode (lower-third, above the SD photo)."""
+    tags = (niche_cfg.get("name", "") + " " + niche_cfg.get("style_suffix", "")).lower()
+    if any(k in tags for k in ("finance", "business", "mindset", "stock", "wealth", "data")):
+        return (
+            f"an SVG line chart whose path draws itself over the clip duration. "
+            f"Accent color {accent}. Dark semi-transparent panel (rgba 0,0,0,0.55). "
+            "Subtle grid. Positioned at the bottom 35% of the frame."
+        )
+    if any(k in tags for k in ("motivation", "personal", "development", "energy", "sunrise")):
+        return (
+            f"25–35 small rising particles (accent color {accent}, opacity 0.5–0.8) "
+            "drifting upward from the bottom of the frame."
+        )
+    return f"a soft radial glow pulse from bottom-centre, accent color {accent}, opacity 0.3."
+
+
+# ── Prompt builders ────────────────────────────────────────────────────────────
+
+def _scene_prompt(scene_desc: str, niche_cfg: dict, duration: float) -> str:
+    """CSS-only mode: GPT writes a full animated HTML scene from scratch."""
+    accent = niche_cfg.get("accent_color", "#FFD23F")
+    mood   = niche_cfg.get("style_suffix", "cinematic, high contrast")
+    guide  = _niche_visual_guide(niche_cfg)
+    return (
+        "Write ONE self-contained HTML document for an animated motion-graphic BACKGROUND "
+        "(vertical short-form video). Output ONLY the HTML — no explanation.\n\n"
+        f"Scene concept: {scene_desc}\n"
+        f"Palette: {mood}. Accent color: {accent}. Dark near-black base (#0a0a0f).\n\n"
+        f"{guide}\n\n"
+        "HARD RULES:\n"
+        f'- Root element must have: id="stage" data-composition-id="scene" data-start="0" '
+        f'data-duration="{duration:.1f}" data-width="{OUT_W}" data-height="{OUT_H}" '
+        f'and CSS: width:{OUT_W}px; height:{OUT_H}px; overflow:hidden; position:relative.\n'
+        "- ONLY inline CSS @keyframes / SVG / transforms / gradients. NO external scripts, "
+        "NO CDN links, NO <img src> with http/https URLs — must render offline and "
+        "deterministically.\n"
+        "- NO large text, NO words, NO headlines, NO logos. Spoken-word captions are "
+        "overlaid by a later stage; on-screen text here would collide with them.\n"
+        f"- Animations fill the full {duration:.1f}s and hold gracefully at the final frame.\n"
+        "- One file: <!DOCTYPE html><html><head><style>…</style></head><body>…</body></html>"
+    )
+
+
+def _scene_prompt_hybrid(scene_desc: str, niche_cfg: dict, duration: float) -> str:
+    """Hybrid mode: GPT writes HTML with __IMAGE_DATA_URI__ placeholder + CSS overlay."""
+    accent  = niche_cfg.get("accent_color", "#FFD23F")
+    overlay = _overlay_hint(niche_cfg, accent)
+    return (
+        "Write ONE self-contained HTML document for a vertical short-form video background. "
+        "A photorealistic background image will be injected AFTER generation — write the "
+        "literal string __IMAGE_DATA_URI__ as the src of <img id='bg'> and do NOT change it.\n\n"
+        f"Scene concept: {scene_desc}\n"
+        f"Accent color: {accent}\n\n"
+        "EXACT REQUIRED STRUCTURE:\n"
+        f'<div id="stage" data-composition-id="scene" data-start="0" '
+        f'data-duration="{duration:.1f}" data-width="{OUT_W}" data-height="{OUT_H}" '
+        f'style="width:{OUT_W}px;height:{OUT_H}px;overflow:hidden;position:relative;">\n'
+        f'  <img id="bg" src="__IMAGE_DATA_URI__" style="position:absolute;top:0;left:0;'
+        f'width:100%;height:100%;object-fit:cover;'
+        f'animation:kenburns {duration:.1f}s ease-in-out forwards;">\n'
+        "  <!-- CSS animated overlay elements here -->\n"
+        "</div>\n\n"
+        "@keyframes kenburns must be: 0%{transform:scale(1.1) translate(1%,1%)} "
+        f"100%{{transform:scale(1.0) translate(-1%,-1%)}}\n\n"
+        f"OVERLAY: {overlay}\n"
+        "Use ONLY inline CSS @keyframes. NO external URLs, NO CDN scripts, "
+        f"NO words or logos. All animations fill {duration:.1f}s."
+    )
+
+
+# ── GPT call ───────────────────────────────────────────────────────────────────
+
+def _call_gpt(prompt: str, max_tokens: int = 2000) -> str | None:
+    """Call GPT once, return extracted HTML or None on failure."""
     key = _load_key()
     if not key:
         return None
@@ -111,15 +196,30 @@ def _scene_to_html(scene_desc: str, niche_cfg: dict, duration: float) -> str | N
         client = OpenAI(api_key=key)
         resp = client.chat.completions.create(
             model=MODEL,
-            messages=[{"role": "user", "content": _scene_prompt(scene_desc, niche_cfg, duration)}],
-            max_tokens=1600,
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=max_tokens,
             temperature=0.7,
         )
         return _extract_html(resp.choices[0].message.content or "")
     except Exception as e:
-        print(f"[hf] scene HTML generation failed: {e}")
+        print(f"[hf] HTML generation failed: {e}")
         return None
 
+
+def _scene_to_html(scene_desc: str, niche_cfg: dict, duration: float) -> str | None:
+    return _call_gpt(_scene_prompt(scene_desc, niche_cfg, duration))
+
+
+def _scene_to_html_hybrid(scene_desc: str, niche_cfg: dict, duration: float,
+                           image_b64: str) -> str | None:
+    """Generate hybrid HTML and inject the actual base64 image after GPT responds."""
+    html = _call_gpt(_scene_prompt_hybrid(scene_desc, niche_cfg, duration), max_tokens=2400)
+    if not html:
+        return None
+    return html.replace("__IMAGE_DATA_URI__", f"data:image/png;base64,{image_b64}")
+
+
+# ── Renderer ───────────────────────────────────────────────────────────────────
 
 def _render_html(html: str, work_dir: Path, out_mp4: Path) -> bool:
     """Render one index.html composition to out_mp4 via the HyperFrames CLI."""
@@ -140,10 +240,19 @@ def _render_html(html: str, work_dir: Path, out_mp4: Path) -> bool:
         return False
 
 
+# ── Public API ─────────────────────────────────────────────────────────────────
+
 def generate_clips(queries: list[str], n: int = 4,
                    clip_duration: float = 8.0,
-                   niche_cfg: dict | None = None) -> list[Path]:
-    """Generate up to n motion-graphic mp4 clips (1080×1920). [] if unavailable."""
+                   niche_cfg: dict | None = None,
+                   image_paths: list[Path] | None = None) -> list[Path]:
+    """Generate up to n motion-graphic mp4 clips (1080×1920). Returns [] if unavailable.
+
+    image_paths — optional SD-generated PNG paths for hybrid mode.  When an image
+    is provided for scene i, GPT embeds it as a base64 background with CSS Ken Burns
+    + an animated data overlay on top.  Scenes without a matching image fall back to
+    pure CSS animation automatically.
+    """
     if not is_available():
         print("[hf] HyperFrames not available (need Node 22+; `npx hyperframes`). "
               "Falling back.")
@@ -161,10 +270,21 @@ def generate_clips(queries: list[str], n: int = 4,
 
     for i, desc in enumerate(prompts):
         print(f"[hf] {i+1}/{len(prompts)}: {desc[:70]}")
-        html = _scene_to_html(desc, niche_cfg, clip_duration)
+
+        img_path = (image_paths[i] if image_paths and i < len(image_paths) else None)
+        if img_path and img_path.exists():
+            img_b64 = base64.b64encode(img_path.read_bytes()).decode()
+            html    = _scene_to_html_hybrid(desc, niche_cfg, clip_duration, img_b64)
+            mode    = "hybrid"
+        else:
+            html = _scene_to_html(desc, niche_cfg, clip_duration)
+            mode = "css-only"
+
         if not html:
-            print(f"[hf] no HTML for scene {i+1} — skipping")
+            print(f"[hf] no HTML for scene {i+1} ({mode}) — skipping")
             continue
+
+        print(f"[hf] rendering scene {i+1} ({mode})...")
         work_dir = TMP_DIR / f"{stamp}_{i}"
         out_mp4  = TMP_DIR / f"{stamp}_{i}.mp4"
         ok = _render_html(html, work_dir, out_mp4)

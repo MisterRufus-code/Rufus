@@ -98,6 +98,81 @@ def test_generate_clips_collects_successful(tmp_path, monkeypatch):
     assert all(p.exists() for p in result)
 
 
+# ── Niche-specific visual guide ───────────────────────────────────────────────────
+
+def test_niche_visual_guide_finance_mentions_chart():
+    guide = hf._niche_visual_guide({"name": "finance", "style_suffix": "data visualization"})
+    assert "chart" in guide.lower() or "counter" in guide.lower() or "bar" in guide.lower()
+
+
+def test_niche_visual_guide_motivation_mentions_particles():
+    guide = hf._niche_visual_guide({"name": "motivation", "style_suffix": "sunrise"})
+    assert "particle" in guide.lower() or "ray" in guide.lower() or "ring" in guide.lower()
+
+
+def test_niche_visual_guide_generic_fallback():
+    guide = hf._niche_visual_guide({})
+    assert len(guide) > 20  # returns something, doesn't crash
+
+
+# ── Hybrid prompt ─────────────────────────────────────────────────────────────────
+
+def test_scene_prompt_hybrid_contains_placeholder_and_rules():
+    p = hf._scene_prompt_hybrid("market rally", {"accent_color": "#FFC53D",
+                                                  "name": "finance"}, 8.0)
+    assert "__IMAGE_DATA_URI__" in p
+    assert 'data-duration="8.0"' in p
+    assert "kenburns" in p.lower()
+    assert "NO external" in p or "NO CDN" in p
+
+
+# ── generate_clips with image_paths (hybrid mode) ────────────────────────────────
+
+def test_generate_clips_hybrid_mode_uses_image(tmp_path, monkeypatch):
+    monkeypatch.setattr(hf, "TMP_DIR", tmp_path)
+    fake_img = tmp_path / "scene_0.png"
+    fake_img.write_bytes(b"\x89PNG\r\n" + b"\x00" * 100)  # minimal fake PNG
+
+    html_used = []
+
+    def fake_to_html_hybrid(desc, cfg, dur, img_b64):
+        html_used.append("hybrid")
+        return "<html><body>hybrid</body></html>"
+
+    def fake_render(html, work_dir, out_mp4):
+        out_mp4.write_bytes(b"\x00" * (hf.MIN_BYTES + 1))
+        return True
+
+    with patch("hyperframes_client.is_available", return_value=True), \
+         patch("hyperframes_client._scene_to_html_hybrid", side_effect=fake_to_html_hybrid), \
+         patch("hyperframes_client._render_html", side_effect=fake_render):
+        result = hf.generate_clips(["desc"], n=1, image_paths=[fake_img])
+
+    assert len(result) == 1
+    assert html_used == ["hybrid"]
+
+
+def test_generate_clips_falls_back_to_css_when_no_image(tmp_path, monkeypatch):
+    monkeypatch.setattr(hf, "TMP_DIR", tmp_path)
+    html_used = []
+
+    def fake_to_html(desc, cfg, dur):
+        html_used.append("css")
+        return "<html><body>css</body></html>"
+
+    def fake_render(html, work_dir, out_mp4):
+        out_mp4.write_bytes(b"\x00" * (hf.MIN_BYTES + 1))
+        return True
+
+    with patch("hyperframes_client.is_available", return_value=True), \
+         patch("hyperframes_client._scene_to_html", side_effect=fake_to_html), \
+         patch("hyperframes_client._render_html", side_effect=fake_render):
+        result = hf.generate_clips(["desc"], n=1, image_paths=None)
+
+    assert len(result) == 1
+    assert html_used == ["css"]
+
+
 # ── main.py per-niche source resolution ──────────────────────────────────────────
 
 def test_video_source_resolution_precedence(monkeypatch):
@@ -106,8 +181,9 @@ def test_video_source_resolution_precedence(monkeypatch):
         return (env or niche_cfg.get("video_source") or "sd").strip().lower()
 
     # env wins over everything
-    assert resolve("pexels", {"video_source": "hyperframes"}) == "pexels"
+    assert resolve("pexels", {"video_source": "hybrid"}) == "pexels"
     # niche config wins when no env
+    assert resolve(None, {"video_source": "hybrid"}) == "hybrid"
     assert resolve(None, {"video_source": "hyperframes"}) == "hyperframes"
     # default when neither set
     assert resolve(None, {}) == "sd"
