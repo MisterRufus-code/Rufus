@@ -1,5 +1,10 @@
-# API keys – never commit these
+# API keys & per-channel credentials – never commit these
 config/keys.json
+config/channels.json
+config/channels/
+config/youtube_token.json
+config/tiktok_token.json
+config/client_secrets.json
 
 # Generated media
 media_library/cache/

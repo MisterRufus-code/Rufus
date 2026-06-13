@@ -63,16 +63,24 @@ def _load_key() -> str:
 
 
 def _load_learnings() -> dict:
-    if LEARNINGS_FILE.exists():
+    """Per-channel learnings (channel_config resolves the path; legacy installs
+    keep reading config/learnings.json via the shim)."""
+    try:
+        from channel_config import load_channel
+        path = load_channel().learnings_path
+    except Exception:
+        path = LEARNINGS_FILE
+    if path.exists():
         try:
-            return json.loads(LEARNINGS_FILE.read_text())
+            return json.loads(path.read_text())
         except (json.JSONDecodeError, OSError):
             return {}
     return {}
 
 
 def _recent_video_rows(niche_name: str, limit: int = 12) -> list[tuple[str, str]]:
-    """(script_hook, script_full) of the most recent videos in this niche.
+    """(script_hook, script_full) of the most recent videos in this niche for
+    the ACTIVE CHANNEL (RUFUS_CHANNEL env, set by main.py).
 
     Read-only peek at rufus.db — returns [] on any failure so generation
     never depends on the DB being present.
@@ -82,11 +90,13 @@ def _recent_video_rows(niche_name: str, limit: int = 12) -> list[tuple[str, str]
         db = Path(__file__).parent.parent / "rufus.db"
         if not db.exists():
             return []
+        chan = os.environ.get("RUFUS_CHANNEL", "main_en")
         with sqlite3.connect(str(db)) as c:
             rows = c.execute(
                 "SELECT script_hook, script_full FROM videos "
-                "WHERE niche=? ORDER BY id DESC LIMIT ?",
-                (niche_name, limit),
+                "WHERE niche=? AND (channel=? OR channel IS NULL) "
+                "ORDER BY id DESC LIMIT ?",
+                (niche_name, chan, limit),
             ).fetchall()
         return [(r[0] or "", r[1] or "") for r in rows]
     except Exception:

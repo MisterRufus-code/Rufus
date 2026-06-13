@@ -1,0 +1,53 @@
+{
+  "_doc": "Channel-in-a-box config. Copy to channels.json to go multi-channel (until then the legacy single-channel layout is used automatically). Each channel needs its own Google account; OAuth once per channel: delete its token file and run one manual upload. QUOTA: YouTube allows ~6 uploads/day per Google Cloud project — channels 1-3 at 2/day can share config/client_secrets.json; channel 4+ needs its own project secrets at config/channels/<id>/client_secrets.json. Tokens live at config/channels/<id>/youtube_token.json (gitignored).",
+
+  "default_channel": "main_en",
+
+  "channels": {
+    "main_en": {
+      "display_name": "Main English",
+      "language": "en",
+      "voice": "en-US-AndrewMultilingualNeural",
+      "caption_font": "Anton",
+      "niches": ["finance", "motivation", "mindset", "business", "personal_development"],
+      "schedule": ["finance", "motivation", "mindset", "business", "personal_development", "finance", "motivation"],
+      "upload": {
+        "videos_per_day": 2,
+        "min_score": 8,
+        "privacy": "private",
+        "peak_hours": [8, 12, 17, 20],
+        "timezone": "America/New_York"
+      },
+      "platforms": {
+        "youtube":   { "enabled": true },
+        "tiktok":    { "enabled": false },
+        "instagram": { "enabled": false }
+      },
+      "niche_overrides": {}
+    },
+
+    "_example_spanish_clone": {
+      "_doc": "Rename (remove leading underscore) to activate. Seeds stay English — GPT writes the script natively in Spanish.",
+      "display_name": "Finanzas ES",
+      "language": "es",
+      "voice": "es-MX-JorgeNeural",
+      "caption_font": "Anton",
+      "niches": ["finance", "motivation"],
+      "schedule": ["finance", "motivation", "finance", "motivation", "finance", "motivation", "finance"],
+      "upload": {
+        "videos_per_day": 1,
+        "min_score": 8,
+        "privacy": "private",
+        "peak_hours": [8, 13, 19, 21],
+        "timezone": "America/Mexico_City"
+      },
+      "platforms": { "youtube": { "enabled": true } },
+      "niche_overrides": {
+        "finance": {
+          "hashtags": ["#finanzas", "#dinero", "#inversiones", "#Shorts"],
+          "cta_pool": ["Sígueme para tácticas de dinero diarias."]
+        }
+      }
+    }
+  }
+}

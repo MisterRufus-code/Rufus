@@ -29,7 +29,13 @@ NICHES_FILE     = CONFIG_DIR / "niches.json"
 CLIENT_SECRETS  = CONFIG_DIR / "client_secrets.json"
 TOKEN_FILE      = CONFIG_DIR / "youtube_token.json"
 
-SCOPES = ["https://www.googleapis.com/auth/youtube.upload"]
+# force-ssl is needed for commentThreads().insert (the post-upload CTA comment).
+# NOTE: adding a scope invalidates the old token — delete config/youtube_token.json
+# and run one manual upload to re-OAuth (one time only).
+SCOPES = [
+    "https://www.googleapis.com/auth/youtube.upload",
+    "https://www.googleapis.com/auth/youtube.force-ssl",
+]
 
 # YouTube category IDs by niche (overridable via niches.json "youtube_category_id")
 DEFAULT_CATEGORIES = {
@@ -51,50 +57,62 @@ NICHE_HASHTAGS = {
 }
 
 
-def _next_peak_utc() -> str:
-    """Return ISO 8601 UTC timestamp for the next US-ET peak hour, ≥5 min from now.
-    Uses zoneinfo for automatic EDT/EST handling — no hardcoded UTC offset."""
+def _channel():
+    """Active channel (legacy shim returns the original single-channel paths)."""
+    from channel_config import load_channel
+    return load_channel()
+
+
+def _next_peak_utc(peak_hours: list[int] = None, tz_name: str = None) -> str:
+    """Return ISO 8601 UTC timestamp for the next peak hour, ≥5 min from now.
+    Peak hours/timezone come from the channel config (US-ET defaults).
+    Uses zoneinfo so DST is automatic — no hardcoded UTC offset."""
     from zoneinfo import ZoneInfo
-    tz_et   = ZoneInfo("America/New_York")
+    peaks   = peak_hours or PEAK_HOURS_ET
+    tz      = ZoneInfo(tz_name or "America/New_York")
     now_utc = datetime.now(tz=timezone.utc)
-    now_et  = now_utc.astimezone(tz_et)
+    now_loc = now_utc.astimezone(tz)
 
     for day_delta in range(3):
-        day = now_et.date() + timedelta(days=day_delta)
-        for hour in PEAK_HOURS_ET:
-            et_aware  = datetime(day.year, day.month, day.day, hour, 0, 0, tzinfo=tz_et)
-            utc_aware = et_aware.astimezone(timezone.utc)
+        day = now_loc.date() + timedelta(days=day_delta)
+        for hour in sorted(peaks):
+            loc_aware = datetime(day.year, day.month, day.day, hour, 0, 0, tzinfo=tz)
+            utc_aware = loc_aware.astimezone(timezone.utc)
             if utc_aware > now_utc + timedelta(minutes=5):
                 return utc_aware.strftime("%Y-%m-%dT%H:%M:%SZ")
 
     return (now_utc + timedelta(hours=24)).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def get_authenticated_service():
+def get_authenticated_service(channel=None):
     from google.auth.transport.requests import Request
     from google.oauth2.credentials import Credentials
     from google_auth_oauthlib.flow import InstalledAppFlow
     from googleapiclient.discovery import build
 
+    channel        = channel or _channel()
+    token_file     = channel.token_path("youtube")
+    client_secrets = channel.client_secrets_path()
     creds = None
 
-    if TOKEN_FILE.exists():
-        creds = Credentials.from_authorized_user_file(str(TOKEN_FILE), SCOPES)
+    if token_file.exists():
+        creds = Credentials.from_authorized_user_file(str(token_file), SCOPES)
 
     if not creds or not creds.valid:
         if creds and creds.expired and creds.refresh_token:
             creds.refresh(Request())
         else:
-            if not CLIENT_SECRETS.exists():
+            if not client_secrets.exists():
                 raise FileNotFoundError(
-                    f"Missing {CLIENT_SECRETS}\n"
+                    f"Missing {client_secrets}\n"
                     "Download OAuth credentials from Google Cloud Console → "
                     "APIs & Services → Credentials → Download JSON"
                 )
-            flow = InstalledAppFlow.from_client_secrets_file(str(CLIENT_SECRETS), SCOPES)
+            flow = InstalledAppFlow.from_client_secrets_file(str(client_secrets), SCOPES)
             creds = flow.run_local_server(port=0)
 
-        TOKEN_FILE.write_text(creds.to_json())
+        token_file.parent.mkdir(parents=True, exist_ok=True)
+        token_file.write_text(creds.to_json())
 
     return build("youtube", "v3", credentials=creds)
 
@@ -106,39 +124,76 @@ def load_niche():
 
 
 def build_metadata(script: str, niche_name: str, niche_cfg: dict) -> dict:
-    hashtags   = " ".join(NICHE_HASHTAGS.get(niche_name, ["#Shorts"]))
-    first_line = script.strip().split("\n")[0][:80]
-    title      = first_line if first_line else "Daily Short"
-
-    description = (
-        f"{script}\n\n"
-        f"{hashtags}\n\n"
-        f"{niche_cfg.get('cta', '')}"
-    )
-
-    tags     = [t.lstrip("#") for t in NICHE_HASHTAGS.get(niche_name, [])]
+    """GPT-optimized title/description/tags (metadata_writer), legacy on failure."""
+    hashtags = NICHE_HASHTAGS.get(niche_name, ["#Shorts"])
     category = niche_cfg.get("youtube_category_id") or DEFAULT_CATEGORIES.get(niche_name, "22")
 
-    return {
-        "title":       title,
-        "description": description,
-        "tags":        tags,
-        "categoryId":  category,
-    }
+    try:
+        from metadata_writer import generate_metadata
+        meta = generate_metadata(script, niche_name, niche_cfg, hashtags=hashtags)
+    except Exception as e:
+        print(f"[youtube] metadata_writer unavailable ({e}) — legacy metadata")
+        first_line = script.strip().split("\n")[0][:80]
+        meta = {
+            "title":       first_line if first_line else "Daily Short",
+            "description": f"{script}\n\n{' '.join(hashtags)}\n\n{niche_cfg.get('cta', '')}",
+            "tags":        [t.lstrip("#") for t in hashtags],
+        }
+
+    meta["categoryId"] = category
+    return meta
 
 
-def upload(video_path: Path, script: str, thumbnail_path: Path = None) -> tuple[str, str]:
-    """Upload video (+ optional thumbnail); return (video_url, video_id)."""
+def post_cta_comment(youtube, video_id: str, niche_cfg: dict) -> None:
+    """Post an owner CTA comment right after upload (Shorts can't pin via API —
+    pinning stays a manual 10-second step in the daily checklist). Never raises."""
+    import random
+    pool = niche_cfg.get("cta_pool") or [niche_cfg.get("cta", "")]
+    text = random.choice([c for c in pool if c] or ["What would you add?"])
+    try:
+        youtube.commentThreads().insert(
+            part="snippet",
+            body={"snippet": {
+                "videoId": video_id,
+                "topLevelComment": {"snippet": {"textOriginal": text}},
+            }},
+        ).execute()
+        print(f"[youtube] CTA comment posted: {text[:60]}")
+    except Exception as e:
+        print(f"[youtube] CTA comment skipped: {e}")
+
+
+def upload(video_path: Path, script: str, thumbnail_path: Path = None,
+           metadata: dict = None) -> tuple[str, str]:
+    """Upload video (+ optional thumbnail); return (video_url, video_id).
+    Pass `metadata` to reuse a pre-built dict (avoids a second GPT call)."""
     from googleapiclient.http import MediaFileUpload
 
+    channel               = _channel()
     niche_cfg, niche_name = load_niche()
-    youtube               = get_authenticated_service()
-    metadata              = build_metadata(script, niche_name, niche_cfg)
+    niche_cfg             = {**niche_cfg, **channel.niche_overrides.get(niche_name, {})}
+    youtube               = get_authenticated_service(channel)
+    metadata              = metadata or build_metadata(script, niche_name, niche_cfg)
+    if "categoryId" not in metadata:
+        metadata["categoryId"] = (niche_cfg.get("youtube_category_id")
+                                  or DEFAULT_CATEGORIES.get(niche_name, "22"))
 
-    publish_at = _next_peak_utc()
+    privacy = channel.upload.get("privacy")
+    if privacy not in ("private", "unlisted", "public"):
+        privacy = "private"
+    status = {"privacyStatus": privacy, "selfDeclaredMadeForKids": False}
+    if privacy == "private":
+        # publishAt is only valid on private uploads (YouTube then auto-publishes)
+        status["publishAt"] = _next_peak_utc(channel.upload.get("peak_hours"),
+                                             channel.upload.get("timezone"))
+
+    print(f"[youtube] channel: {channel.id}")
     print(f"[youtube] uploading: {video_path.name}")
     print(f"[youtube] title: {metadata['title']}  category: {metadata['categoryId']}")
-    print(f"[youtube] scheduled: publish at {publish_at} UTC")
+    if "publishAt" in status:
+        print(f"[youtube] scheduled: publish at {status['publishAt']} UTC")
+    else:
+        print(f"[youtube] privacy: {privacy} (immediate)")
 
     request = youtube.videos().insert(
         part="snippet,status",
@@ -149,11 +204,7 @@ def upload(video_path: Path, script: str, thumbnail_path: Path = None) -> tuple[
                 "tags":        metadata["tags"],
                 "categoryId":  metadata["categoryId"],
             },
-            "status": {
-                "privacyStatus":           "private",
-                "publishAt":               publish_at,
-                "selfDeclaredMadeForKids": False,
-            },
+            "status": status,
         },
         media_body=MediaFileUpload(
             str(video_path),
@@ -184,6 +235,8 @@ def upload(video_path: Path, script: str, thumbnail_path: Path = None) -> tuple[
             print(f"[youtube] custom thumbnail uploaded")
         except Exception as e:
             print(f"[youtube] thumbnail upload skipped: {e}")
+
+    post_cta_comment(youtube, video_id, niche_cfg)
 
     return video_url, video_id
 

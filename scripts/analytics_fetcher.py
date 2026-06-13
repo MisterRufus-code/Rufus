@@ -2,6 +2,8 @@
 """
 analytics_fetcher.py
 Pulls YouTube Analytics for recently uploaded videos and saves metrics to SQLite.
+Multi-channel: loops every channel with YouTube enabled, authenticating with
+that channel's own token (channel_config resolves legacy single-channel paths).
 
 Run daily via cron:
     0 10 * * * cd ~/Rufus && venv/bin/python scripts/analytics_fetcher.py
@@ -18,13 +20,11 @@ from googleapiclient.discovery import build
 
 sys.path.insert(0, str(Path(__file__).parent))
 from db_manager import get_recent_tracked_videos, save_metrics
-
-CONFIG_DIR     = Path(__file__).parent.parent / "config"
-CLIENT_SECRETS = CONFIG_DIR / "client_secrets.json"
-TOKEN_FILE     = CONFIG_DIR / "youtube_token.json"
+from channel_config import load_channel, list_channels
 
 SCOPES = [
     "https://www.googleapis.com/auth/youtube.upload",
+    "https://www.googleapis.com/auth/youtube.force-ssl",
     "https://www.googleapis.com/auth/yt-analytics.readonly",
 ]
 
@@ -32,34 +32,49 @@ SCOPES = [
 RECENT_WINDOW_DAYS = 60
 
 
-def _auth() -> Credentials:
+def _auth(channel) -> Credentials:
+    token_file     = channel.token_path("youtube")
+    client_secrets = channel.client_secrets_path()
     creds = None
-    if TOKEN_FILE.exists():
-        creds = Credentials.from_authorized_user_file(str(TOKEN_FILE), SCOPES)
+    if token_file.exists():
+        creds = Credentials.from_authorized_user_file(str(token_file), SCOPES)
     if not creds or not creds.valid:
         if creds and creds.expired and creds.refresh_token:
             creds.refresh(Request())
         else:
-            flow  = InstalledAppFlow.from_client_secrets_file(str(CLIENT_SECRETS), SCOPES)
+            flow  = InstalledAppFlow.from_client_secrets_file(str(client_secrets), SCOPES)
             creds = flow.run_local_server(port=0)
-        TOKEN_FILE.write_text(creds.to_json())
+        token_file.parent.mkdir(parents=True, exist_ok=True)
+        token_file.write_text(creds.to_json())
     return creds
 
 
-def fetch_analytics():
-    creds    = _auth()
+def fetch_analytics(channel_id: str = None):
+    channels = [channel_id] if channel_id else list_channels()
+    for cid in channels:
+        channel = load_channel(cid)
+        if not channel.platform_enabled("youtube"):
+            continue
+        try:
+            _fetch_channel(channel)
+        except Exception as e:
+            print(f"[analytics] channel {channel.id} failed: {e}")
+
+
+def _fetch_channel(channel):
+    videos = get_recent_tracked_videos(days=RECENT_WINDOW_DAYS, channel=channel.id)
+    if not videos:
+        print(f"[analytics] {channel.id}: no videos uploaded in last {RECENT_WINDOW_DAYS} days.")
+        return
+
+    creds    = _auth(channel)
     yt       = build("youtube",          "v3", credentials=creds)
     yt_analy = build("youtubeAnalytics", "v2", credentials=creds)
 
-    videos = get_recent_tracked_videos(days=RECENT_WINDOW_DAYS)
-    if not videos:
-        print(f"No videos uploaded in last {RECENT_WINDOW_DAYS} days.")
-        return
+    print(f"[analytics] {channel.id}: fetching metrics for {len(videos)} recent videos...")
 
-    print(f"Fetching analytics for {len(videos)} recent videos...")
-
-    today_str   = date.today().strftime("%Y-%m-%d")
-    earliest    = (date.today() - timedelta(days=365)).strftime("%Y-%m-%d")
+    today_str = date.today().strftime("%Y-%m-%d")
+    earliest  = (date.today() - timedelta(days=365)).strftime("%Y-%m-%d")
 
     for row in videos:
         vid_id = row["youtube_id"]
@@ -94,4 +109,8 @@ def fetch_analytics():
 
 
 if __name__ == "__main__":
-    fetch_analytics()
+    import argparse
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--channel", help="Fetch one channel (default: all enabled)")
+    args = ap.parse_args()
+    fetch_analytics(args.channel)

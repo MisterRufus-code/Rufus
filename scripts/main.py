@@ -254,19 +254,30 @@ def _all_scheduled_niches() -> list[str]:
     return seen
 
 
-def run(skip_upload: bool = False, niche_override: str = None, output_dir: Path = None):
+def run(skip_upload: bool = False, niche_override: str = None, output_dir: Path = None,
+        channel_id: str = None):
     _acquire_lock()
     import atexit
     atexit.register(_release_lock)   # release on any exit path (idempotent)
+
+    # Channel resolution (channel-in-a-box). Legacy installs without
+    # channels.json get a synthesized "main_en" channel — behavior unchanged.
+    from channel_config import load_channel
+    channel = load_channel(channel_id)
+    os.environ["RUFUS_CHANNEL"] = channel.id          # sub-modules inherit it
+    if channel.voice:
+        os.environ.setdefault("RUFUS_EDGE_VOICE", channel.voice)
 
     log_path = _enable_file_logging()
     _housekeeping()
     start    = time.time()
     niche_cfg, active = load_niche_cfg(niche_override)
-    out_dir  = output_dir or OUTPUT_DIR
+    niche_cfg = {**niche_cfg, **channel.niche_overrides.get(active, {})}
+    out_dir  = output_dir or channel.output_dir
 
     print(f"\n{'='*52}")
-    print(f"  RUFUS  |  niche: {active}  |  {time.strftime('%Y-%m-%d %H:%M:%S')}")
+    print(f"  RUFUS  |  channel: {channel.id}  |  niche: {active}  |  "
+          f"{time.strftime('%Y-%m-%d %H:%M:%S')}")
     print(f"  log:   {log_path}")
     print(f"{'='*52}\n")
 
@@ -437,6 +448,7 @@ def run(skip_upload: bool = False, niche_override: str = None, output_dir: Path 
             attempts_used=result.get("attempts_used"),
             final_temperature=result.get("final_temperature"),
             score_reasoning=(result.get("reasoning") or "")[:2000],
+            channel=channel.id,
         )
         print(f"           → saved (id={db_id})\n")
     except Exception as e:
@@ -447,7 +459,8 @@ def run(skip_upload: bool = False, niche_override: str = None, output_dir: Path 
     # script never reaches YouTube — it's saved locally for review instead.
     yt_url = None
     yt_id  = None   # guard: upload() may not be reached if quality gate holds
-    min_score = int(os.environ.get("RUFUS_MIN_UPLOAD_SCORE", "8"))
+    min_score = int(os.environ.get("RUFUS_MIN_UPLOAD_SCORE",
+                                   str(channel.upload.get("min_score", 8))))
     final_score = result.get("score", 0)
     if skip_upload:
         print("[ 7 / 7 ]  Upload skipped (--skip-upload)\n")
@@ -458,7 +471,7 @@ def run(skip_upload: bool = False, niche_override: str = None, output_dir: Path 
         print(f"[ 7 / 7 ]  Score {final_score}/10 ≥ {min_score} — generating thumbnail + uploading...")
         try:
             from thumbnail_gen    import make_thumbnail
-            from youtube_uploader import upload
+            from youtube_uploader import upload, build_metadata
 
             thumb = None
             try:
@@ -467,7 +480,17 @@ def run(skip_upload: bool = False, niche_override: str = None, output_dir: Path 
             except Exception as e:
                 print(f"           ⚠ thumbnail generation skipped: {e}")
 
-            yt_url, yt_id = upload(output_path, script, thumbnail_path=thumb)
+            # GPT title/description once here, persisted for CTR learning
+            meta = None
+            try:
+                meta = build_metadata(script, active, niche_cfg)
+                if db_id and meta.get("title"):
+                    from db_manager import update_title
+                    update_title(db_id, meta["title"])
+            except Exception as e:
+                print(f"           ⚠ metadata pre-build failed (uploader will retry): {e}")
+
+            yt_url, yt_id = upload(output_path, script, thumbnail_path=thumb, metadata=meta)
             print(f"           → {yt_url}\n")
 
             if db_id and yt_id:
@@ -503,9 +526,10 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Rufus pipeline runner")
     parser.add_argument("--skip-upload", action="store_true", help="Render only, skip YouTube upload")
     parser.add_argument("--niche",       type=str,            help="Override niche (e.g. finance, motivation, mindset)")
-    parser.add_argument("--scheduled",   action="store_true", help="Use today's niche from config schedule (for cron)")
+    parser.add_argument("--scheduled",   action="store_true", help="Use today's niche from the channel/config schedule (for cron)")
     parser.add_argument("--rotate",      action="store_true", help="Run one video per unique niche in the schedule")
     parser.add_argument("--output-dir",  type=str,            help="Directory to write rendered mp4 files (overrides RUFUS_OUTPUT_DIR env var)")
+    parser.add_argument("--channel",     type=str,            help="Channel id from config/channels.json (default: default_channel / legacy)")
     args = parser.parse_args()
 
     if sum(bool(x) for x in (args.niche, args.scheduled, args.rotate)) > 1:
@@ -514,16 +538,37 @@ if __name__ == "__main__":
 
     out_dir_arg = Path(args.output_dir) if args.output_dir else None
 
+    # Channel schedule (if defined) takes precedence over niches.json schedule.
+    def _channel_schedule() -> list[str]:
+        try:
+            from channel_config import load_channel
+            ch = load_channel(args.channel)
+            if ch.schedule:
+                return ch.schedule
+        except Exception:
+            pass
+        data = json.loads(NICHES_FILE.read_text())
+        return data.get("schedule") or [data.get("active", "finance")]
+
     if args.rotate:
-        niches = _all_scheduled_niches()
-        print(f"\n[rotate] producing {len(niches)} video(s): {niches}\n")
-        for n in niches:
+        seen: list[str] = []
+        for n in _channel_schedule():
+            if n not in seen:
+                seen.append(n)
+        print(f"\n[rotate] producing {len(seen)} video(s): {seen}\n")
+        for n in seen:
             # Clear any prior env override so each iteration starts clean
             os.environ.pop("RUFUS_NICHE_OVERRIDE", None)
-            run(skip_upload=args.skip_upload, niche_override=n, output_dir=out_dir_arg)
+            run(skip_upload=args.skip_upload, niche_override=n,
+                output_dir=out_dir_arg, channel_id=args.channel)
     elif args.scheduled:
-        n = _todays_niche()
+        from datetime import datetime
+        schedule = _channel_schedule()
+        doy      = datetime.now().timetuple().tm_yday
+        n        = schedule[(doy - 1) % len(schedule)]
         print(f"\n[scheduled] today's niche: {n}\n")
-        run(skip_upload=args.skip_upload, niche_override=n, output_dir=out_dir_arg)
+        run(skip_upload=args.skip_upload, niche_override=n,
+            output_dir=out_dir_arg, channel_id=args.channel)
     else:
-        run(skip_upload=args.skip_upload, niche_override=args.niche, output_dir=out_dir_arg)
+        run(skip_upload=args.skip_upload, niche_override=args.niche,
+            output_dir=out_dir_arg, channel_id=args.channel)

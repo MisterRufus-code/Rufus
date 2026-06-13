@@ -55,6 +55,10 @@ def init_db():
             "ALTER TABLE videos ADD COLUMN attempts_used INTEGER",
             "ALTER TABLE videos ADD COLUMN final_temperature REAL",
             "ALTER TABLE videos ADD COLUMN score_reasoning TEXT",
+            # Phase 1 (scale plan): GPT-optimized upload title, for CTR learning
+            "ALTER TABLE videos ADD COLUMN title TEXT",
+            # Phase 2 (scale plan): multi-channel attribution
+            "ALTER TABLE videos ADD COLUMN channel TEXT",
         ):
             try:
                 c.execute(ddl)
@@ -91,8 +95,18 @@ def init_db():
                 ms                INTEGER
             )
         """)
+        # script_attempts.channel migration must run AFTER its CREATE (the table
+        # may not have existed when the videos ALTER loop ran on a fresh DB).
+        try:
+            c.execute("ALTER TABLE script_attempts ADD COLUMN channel TEXT")
+        except Exception:
+            pass  # column already exists
+        # Backfill: rows from the single-channel era belong to the default channel
+        c.execute("UPDATE videos SET channel='main_en' WHERE channel IS NULL")
+        c.execute("UPDATE script_attempts SET channel='main_en' WHERE channel IS NULL")
         c.execute("CREATE INDEX IF NOT EXISTS idx_metrics_video    ON metrics(video_id)")
         c.execute("CREATE INDEX IF NOT EXISTS idx_videos_yt        ON videos(youtube_id)")
+        c.execute("CREATE INDEX IF NOT EXISTS idx_videos_channel   ON videos(channel)")
         c.execute("CREATE INDEX IF NOT EXISTS idx_attempts_run     ON script_attempts(run_id)")
         c.execute("CREATE INDEX IF NOT EXISTS idx_attempts_niche   ON script_attempts(niche)")
         c.execute("CREATE INDEX IF NOT EXISTS idx_attempts_phase   ON script_attempts(phase)")
@@ -107,7 +121,9 @@ def save_video(niche: str, script_hook: str, scene_desc: str,
                criterion_scores: dict = None,
                attempts_used: int = None,
                final_temperature: float = None,
-               score_reasoning: str = None) -> int:
+               score_reasoning: str = None,
+               title: str = None,
+               channel: str = "main_en") -> int:
     crits = criterion_scores or {}
     with _conn() as c:
         cur = c.execute(
@@ -117,15 +133,16 @@ def save_video(niche: str, script_hook: str, scene_desc: str,
             " youtube_id, video_file, score, "
             " run_id, score_specificity, score_hook, score_compression, "
             " score_loop, score_human, attempts_used, final_temperature, "
-            " score_reasoning) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            " score_reasoning, title, channel) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (niche, script_hook, script_full, scene_desc,
              seed_type, seed_source, seed_content,
              youtube_id, video_file, score,
              run_id,
              crits.get("specificity"), crits.get("hook"),
              crits.get("compression"), crits.get("loop"), crits.get("human"),
-             attempts_used, final_temperature, score_reasoning),
+             attempts_used, final_temperature, score_reasoning,
+             title, channel),
         )
         return cur.lastrowid
 
@@ -158,6 +175,11 @@ def update_youtube_id(video_id: int, youtube_id: str):
         c.execute("UPDATE videos SET youtube_id=? WHERE id=?", (youtube_id, video_id))
 
 
+def update_title(video_id: int, title: str):
+    with _conn() as c:
+        c.execute("UPDATE videos SET title=? WHERE id=?", (title, video_id))
+
+
 def mark_upload_failed(video_id: int, error: str):
     """Record that an upload was ATTEMPTED and failed — the video may or may
     not exist on YouTube, so ops must check manually before re-uploading
@@ -170,15 +192,17 @@ def mark_upload_failed(video_id: int, error: str):
         )
 
 
-def get_recent_tracked_videos(days: int = 30) -> list[dict]:
-    """Return videos uploaded in last N days that have a youtube_id."""
+def get_recent_tracked_videos(days: int = 30, channel: str = None) -> list[dict]:
+    """Return videos uploaded in last N days that have a youtube_id.
+    channel=None keeps legacy behavior (all channels)."""
+    q = ("SELECT id, youtube_id FROM videos "
+         "WHERE youtube_id IS NOT NULL AND upload_date >= date('now', ?)")
+    args: list = [f"-{days} days"]
+    if channel:
+        q += " AND channel = ?"
+        args.append(channel)
     with _conn() as c:
-        rows = c.execute(
-            "SELECT id, youtube_id FROM videos "
-            "WHERE youtube_id IS NOT NULL "
-            "  AND upload_date >= date('now', ?)",
-            (f"-{days} days",),
-        ).fetchall()
+        rows = c.execute(q, args).fetchall()
     return [{"id": r[0], "youtube_id": r[1]} for r in rows]
 
 
