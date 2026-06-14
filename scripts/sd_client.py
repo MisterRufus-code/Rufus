@@ -26,6 +26,7 @@ Usage:
 import base64
 import io
 import json
+import os
 import random
 import subprocess
 import time
@@ -423,6 +424,15 @@ def generate_clips(queries: list[str], n: int = 4,
     accepted_hashes: list[int] = []
     print(f"[sd] base seed {master_seed} — each image offset for variety")
 
+    # RUFUS_DEBUG=1 keeps a copy of every accepted keyframe + its prompt under
+    # media_library/debug/<stamp>/ so a run can be inspected/critiqued afterwards
+    # (see scripts/inspect_run.py). Off by default — zero overhead on real runs.
+    debug_dir = None
+    if os.environ.get("RUFUS_DEBUG"):
+        debug_dir = Path(__file__).parent.parent / "media_library" / "debug" / str(stamp)
+        debug_dir.mkdir(parents=True, exist_ok=True)
+        print(f"[sd] DEBUG on — keeping keyframes in {debug_dir}")
+
     for i, query in enumerate(prompts):
         print(f"[sd] {i+1}/{len(prompts)}: {query[:70]}")
         prompt   = _query_to_prompt(query, style, idx=i)
@@ -459,6 +469,15 @@ def generate_clips(queries: list[str], n: int = 4,
         if not accepted:
             print(f"[sd] no usable image for clip {i+1} — skipping")
             continue
+
+        # Keep a debug copy of the keyframe + the exact prompt before it's deleted.
+        if debug_dir is not None:
+            try:
+                (debug_dir / f"{i+1:02d}.png").write_bytes(png_path.read_bytes())
+                (debug_dir / f"{i+1:02d}.txt").write_text(
+                    f"BEAT QUERY:\n{query}\n\nFULL SD PROMPT:\n{prompt}\n", encoding="utf-8")
+            except Exception as e:
+                print(f"[sd] debug-save failed for clip {i+1}: {e}")
 
         # Ken Burns → mp4
         clip_path = tmp_dir / f"{stamp}_{i}.mp4"
