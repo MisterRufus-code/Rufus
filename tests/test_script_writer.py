@@ -32,10 +32,10 @@ def test_find_banned_empty_string():
     assert _find_banned("") is None
 
 
-def test_blacklist_key_first_ten_words_lowercase():
-    s = "You're losing money every single day right now my friend stop"
+def test_blacklist_key_first_twenty_words_lowercase():
+    s = "You're losing money every single day right now my friend stop wasting time on things that do not matter"
     key = _blacklist_key(s)
-    assert key == "you're losing money every single day right now my friend"
+    assert key == "you're losing money every single day right now my friend stop wasting time on things that do not matter"
 
 
 def test_blacklist_key_normalises_whitespace():

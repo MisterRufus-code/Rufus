@@ -214,6 +214,14 @@ def _seed_block(seed: dict) -> str:
             f"Title:     {seed.get('title', '')}\n"
             f"Story:     {seed.get('content', '')}\n"
         )
+    if seed.get("type") == "rss":
+        return (
+            "SOURCE MATERIAL (real news article):\n"
+            f"Source:    {seed.get('source', '')}\n"
+            f"Title:     {seed.get('title', '')}\n"
+            f"Summary:   {seed.get('content', '')}\n"
+            f"URL:       {seed.get('url', '')}\n"
+        )
     if seed.get("type") == "wisdom":
         return (
             "SOURCE MATERIAL (real quote):\n"
@@ -400,6 +408,7 @@ def _pre_analyze(client: OpenAI, seed: dict, scene: str, run_id: str,
                  niche: str) -> tuple[str, float]:
     """Cheap pre-pass: extract hook angle + structural cues. Returns (text, cost)."""
     is_wisdom = seed and seed.get("type") == "wisdom"
+    is_rss    = seed and seed.get("type") == "rss"
     model     = _standards()["models"]["pre_analyze"]
 
     if is_wisdom:
@@ -423,6 +432,22 @@ def _pre_analyze(client: OpenAI, seed: dict, scene: str, run_id: str,
             "Reply ONLY with these 8 numbered items. No full script."
         )
         max_toks = 320
+    elif is_rss:
+        seed_blk = _seed_block(seed)
+        prompt = (
+            f"{seed_blk}\n"
+            "You are a news analyst finding the most surprising hook for a 40-second YouTube Short.\n\n"
+            "1. SURPRISE: The single most counterintuitive or shocking fact in this news story. One sentence.\n"
+            "2. HOOK ANGLE: One ≤8-word seed phrase. Lead with the number/name/surprise — not the headline.\n"
+            "3. HUMAN ANGLE: Who is affected and how? One sentence with a specific person, company, or group.\n"
+            "4. EMOTIONAL STAKES: What does the average viewer lose, fear, or gain from this story? One sentence.\n"
+            "5. CONCRETE DETAIL: The most specific, vivid detail (exact dollar amount, date, percentage, or name).\n"
+            "6. LOOP ANGLE: One question for the second-to-last line that makes viewers want to rewatch from line 1.\n"
+            "7. VIDEO QUERIES: 3 comma-separated stock footage search terms that visually match the hook angle.\n"
+            "8. SENSORY ANCHOR: One concrete physical image or moment from this story a viewer can visualize instantly.\n\n"
+            "Reply with ONLY these 8 numbered items. No full script."
+        )
+        max_toks = 280
     else:
         seed_blk = _seed_block(seed) if seed else f"Scene description: {scene}"
         prompt = (
@@ -451,6 +476,7 @@ def _pre_analyze(client: OpenAI, seed: dict, scene: str, run_id: str,
             messages=[{"role": "user", "content": prompt}],
             temperature=0.3,
             max_tokens=max_toks,
+            timeout=90,
         )
         ms = int((time.time() - t0) * 1000)
         usage = resp.usage
@@ -526,6 +552,7 @@ def _hook_factory(client: OpenAI, seed: dict, analysis: str, niche_name: str,
         messages=[{"role": "user", "content": prompt}],
         temperature=temperature,
         max_tokens=400,
+        timeout=60,
     )
     ms    = int((time.time() - t0) * 1000)
     usage = resp.usage
@@ -612,6 +639,7 @@ def _hook_scorer(client: OpenAI, hooks: list[str], seed: dict, niche_name: str,
         messages=[{"role": "user", "content": prompt}],
         temperature=0.0,
         max_tokens=600,
+        timeout=60,
     )
     ms    = int((time.time() - t0) * 1000)
     usage = resp.usage
@@ -750,6 +778,7 @@ def _generate(client: OpenAI, system: str, user: str, model: str,
         ],
         temperature=temperature,
         max_tokens=350,
+        timeout=90,
     )
     ms    = int((time.time() - t0) * 1000)
     usage = resp.usage
@@ -823,6 +852,7 @@ def _score(client: OpenAI, script: str, seed: dict, hook: str, run_id: str,
             messages=[{"role": "user", "content": prompt}],
             temperature=0.0,
             max_tokens=450,
+            timeout=90,
         )
         ms       = int((time.time() - t0) * 1000)
         usage    = resp.usage
@@ -1206,7 +1236,7 @@ def write_script(scene_description: str, seed: dict | None = None,
 # ── Blacklist ───────────────────────────────────────────────────────────────────
 
 def _blacklist_key(script: str) -> str:
-    return " ".join(script.lower().split()[:10])
+    return " ".join(script.lower().split()[:20])
 
 
 def check_blacklist(script: str) -> bool:

@@ -225,12 +225,14 @@ def pick_best_video(candidates: list[Path], llava_context: str,
         messages=[{"role": "user", "content": prompt}],
         temperature=0.3,
         max_tokens=80,
+        timeout=45,
     )
-    answer = resp.choices[0].message.content.strip()
+    answer = (resp.choices[0].message.content or "").strip()
     print(f"[gpt] video pick: {answer}")
 
     try:
-        idx = int(answer.split("|")[0].strip()) - 1
+        raw_idx = answer.split("|")[0].strip()
+        idx = int("".join(c for c in raw_idx if c.isdigit()) or "1") - 1
         idx = max(0, min(idx, len(valid_paths) - 1))
     except Exception:
         idx = 0

@@ -17,6 +17,7 @@ A Seed dict is returned with keys:
     - url:     post permalink (empty for wisdom)
 """
 
+import fcntl
 import hashlib
 import html as html_module
 import json
@@ -244,13 +245,19 @@ def _mark_seed_used(seed: dict) -> None:
     sid = _seed_id(seed)
     if not sid:
         return
-    used = _load_used_seeds()
-    if sid in used:
-        used.remove(sid)        # move to end (most-recent-used at tail)
-    used.append(sid)
-    used = used[-MAX_USED_HISTORY:]
     USED_SEEDS_FILE.parent.mkdir(parents=True, exist_ok=True)
-    USED_SEEDS_FILE.write_text(json.dumps(used, indent=2))
+    lock_path = USED_SEEDS_FILE.with_suffix(".lock")
+    with open(lock_path, "w") as lf:
+        fcntl.flock(lf, fcntl.LOCK_EX)
+        try:
+            used = _load_used_seeds()
+            if sid in used:
+                used.remove(sid)
+            used.append(sid)
+            used = used[-MAX_USED_HISTORY:]
+            USED_SEEDS_FILE.write_text(json.dumps(used, indent=2))
+        finally:
+            fcntl.flock(lf, fcntl.LOCK_UN)
 
 
 def _post_seed_id(post_data: dict) -> str:

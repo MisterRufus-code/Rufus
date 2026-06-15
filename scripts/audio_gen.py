@@ -522,7 +522,9 @@ def render(script: str, bg_paths: "Path | list[Path]", out_dir: Path,
 
     niche_cfg  = _load_niche()
     niche_name = _active_niche_name()
-    eq_filter  = niche_cfg.get("ffmpeg_eq", "eq=contrast=1.1:saturation=1.0")
+    raw_eq     = niche_cfg.get("ffmpeg_eq", "eq=contrast=1.1:saturation=1.0")
+    # Strip shell-dangerous characters to prevent filter injection via niches.json.
+    eq_filter  = re.sub(r"[;\|`$\\]", "", raw_eq)
     accent_hex = niche_cfg.get("accent_color", DEFAULT_ACCENT)
     accent_ass = _hex_to_ass(accent_hex)
 

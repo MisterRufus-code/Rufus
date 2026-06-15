@@ -280,6 +280,7 @@ def _build_sd_prompts(script: str, niche: str, max_scenes: int = 6) -> list[str]
                     }],
                     max_tokens=1100,
                     temperature=0.85,
+                    timeout=60,
                 )
                 raw_lines = resp.choices[0].message.content.strip().split("\n")
                 lines = [re.sub(r"^[\d\.\-\)\s]+", "", l).strip()
@@ -369,6 +370,8 @@ def run(skip_upload: bool = False, niche_override: str = None, output_dir: Path 
             print(f"           → HN:     {seed.get('title', '')[:80]}")
         elif seed.get("type") == "stackexchange":
             print(f"           → SE:     {seed.get('title', '')[:80]}")
+        elif seed.get("type") == "rss":
+            print(f"           → RSS:    {seed.get('title', '')[:80]}  [{seed.get('source', '')}]")
         else:
             print(f"           → Quote:  \"{seed.get('content', '')[:80]}\" — {seed.get('source')}\n")
     except Exception as e:
