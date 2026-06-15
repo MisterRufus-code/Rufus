@@ -70,6 +70,13 @@ def run() -> None:
                 ok("Pexels key set")
             else:
                 warn("Pexels key", "not set – Pexels source disabled")
+
+            reddit_id = keys.get("reddit_client_id", "")
+            if reddit_id and not reddit_id.startswith("YOUR_"):
+                ok("Reddit API key set  (richer research seeds)")
+            else:
+                warn("Reddit key", "not set – Reddit source falls back to StackExchange/HN/RSS "
+                                  "(add reddit_client_id + reddit_client_secret to keys.json)")
         except Exception as e:
             err("config/keys.json parse", str(e))
 
@@ -135,6 +142,29 @@ def run() -> None:
                                     "to SD/Pexels (install Node.js 22+)")
     except Exception:
         pass
+
+    # ── Stable Diffusion host (non-fatal — A1111 may not be running yet) ─────────
+    try:
+        import urllib.request as _urlreq
+        sd_host = os.environ.get("SD_HOST", "http://127.0.0.1:7860")
+        _urlreq.urlopen(f"{sd_host}/sdapi/v1/options", timeout=3)
+        ok(f"Stable Diffusion API reachable  ({sd_host})")
+    except Exception:
+        warn("Stable Diffusion API", f"not reachable at {os.environ.get('SD_HOST','http://127.0.0.1:7860')} "
+                                     "– start A1111 before running or set SD_HOST env var "
+                                     "(pipeline falls back to Pexels)")
+
+    # ── Database writability ─────────────────────────────────────────────────────
+    try:
+        import sqlite3 as _sqlite3
+        db_path = ROOT / "rufus.db"
+        conn = _sqlite3.connect(str(db_path))
+        conn.execute("CREATE TABLE IF NOT EXISTS _hc_probe (x INTEGER)")
+        conn.execute("DROP TABLE IF EXISTS _hc_probe")
+        conn.close()
+        ok(f"Database writable  ({db_path.name})")
+    except Exception as e:
+        err("Database", f"not writable: {e} — check file permissions on rufus.db")
 
     # ── YouTube OAuth token ─────────────────────────────────────────────────────
     token = CONFIG_DIR / "youtube_token.json"

@@ -33,7 +33,7 @@
   "body": {
     "min_words": 80,
     "max_words": 115,
-    "min_avg_sentence_words": 6,
+    "min_avg_sentence_words": 5.5,
     "max_avg_sentence_words": 14,
     "specificity_per_25_words": 1.0,
     "_max_words_note": "115 words ≈ 45s at +6% rate. Retention data: Shorts 30-45s hold best for value content; >50s bleeds completion rate."
@@ -73,7 +73,15 @@
     "in many ways", "in some sense", "you could argue",
     "first and foremost", "moreover", "furthermore", "in conclusion",
     "to sum up", "all in all", "having said that",
-    "remember", "always remember", "never forget"
+    "remember", "always remember", "never forget",
+    "think about it", "ask yourself", "let that sink in",
+    "here's the deal", "here's what", "here's something",
+    "the bottom line", "long story short", "to be honest",
+    "honestly", "truthfully", "the reality is",
+    "wake up", "open your eyes", "the fact is",
+    "it's simple", "it's easy", "it's straightforward",
+    "just remember", "just think", "just imagine",
+    "you need to", "you must", "you have to understand"
   ],
 
   "scoring": {

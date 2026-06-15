@@ -490,11 +490,9 @@ def run(skip_upload: bool = False, niche_override: str = None, output_dir: Path 
                 if video_queries:
                     print(f"           → using script queries: {video_queries}")
                 candidates = fetch_candidates(n=5, extra_keywords=video_queries or None)
-                video_path, scene = pick_best_video(
-                    candidates, niche_cfg["llava_context"],
-                    seed=seed, analysis=seed_analysis or None,
-                )
-                print(f"           → Pexels fallback: {video_path.name}\n")
+                # Script is already written — skip redundant LLaVA vision pick,
+                # pass all downloaded clips to the renderer as an ordered sequence.
+                print(f"           → Pexels fallback: {len(candidates)} clips\n")
         except Exception as e:
             print(f"           ✗ Clip generation failed: {e}")
             sys.exit(1)

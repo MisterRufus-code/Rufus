@@ -5,13 +5,14 @@ research.py – Returns real source material the script writer compresses into a
 Strategy:
     1. Try Reddit hot/top posts from niche-specific subreddits
     2. Try StackExchange high-voted questions (keyless API — money/workplace stories)
-    3. Try Hacker News "Ask HN" posts (finance/business/mindset niches)
-    4. If nothing passes quality filters, fall back to a curated wisdom quote pool
+    3. Try RSS/Atom feeds per niche (free public feeds — no auth required)
+    4. Try Hacker News "Ask HN" posts (finance/business/mindset niches)
+    5. If nothing passes quality filters, fall back to a curated wisdom quote pool
 
 A Seed dict is returned with keys:
-    - type:    "reddit" | "stackexchange" | "hackernews" | "wisdom"
+    - type:    "reddit" | "stackexchange" | "rss" | "hackernews" | "wisdom"
     - content: the substantive text (story or quote)
-    - source:  subreddit name | SE site | "Hacker News" | author name
+    - source:  subreddit name | SE site | domain | "Hacker News" | author name
     - title:   post title (empty for wisdom)
     - url:     post permalink (empty for wisdom)
 """
@@ -123,6 +124,65 @@ SE_NICHE_SITES = {
 }
 
 
+# ── RSS feed config ──────────────────────────────────────────────────────────────
+
+RSS_TIMEOUT = 10.0
+RSS_MIN_DESC_LEN = 100
+
+# Finance/psychology keywords that pass quality filter even without TITLE_STORY_RE
+RSS_FINANCE_PSYCH_KEYWORDS_RE = re.compile(
+    r"\b(invest|stock|market|fund|portfolio|wealth|budget|saving|debt|"
+    r"earn|income|profit|loss|return|compoun|interest|bank|tax|"
+    r"mindset|habit|psycholog|cognitive|behavio|motivat|discipline|"
+    r"productivity|focus|success|goal|growth)\b",
+    re.IGNORECASE,
+)
+
+RSS_STORY_RE = re.compile(
+    r"(\$|\d|"
+    r"\bhow\s+(?:i|we|one)\b|"
+    r"\bwhy\s+(?:i|we|your)\b|"
+    r"\bstop\b|"
+    r"\bworking\b|\bfail\b|\bfailed\b|\bwin\b|\bwon\b|"
+    r"\bboost\b|\bgrow\b|\blose\b|\bsave\b|\bearn\b|"
+    r"\bmistake\b|\bsecret\b|\brule\b|\bprinciple\b|"
+    r"\btrick\b|\bstrategy\b|\blesson\b|"
+    r"\bbest\b|\bworst\b|\bnever\b|\balways\b)",
+    re.IGNORECASE,
+)
+
+RSS_FEEDS = {
+    "finance": [
+        "https://feeds.marketwatch.com/marketwatch/marketpulse/",
+        "https://www.theguardian.com/money/rss",
+        "https://rss.nytimes.com/services/xml/rss/nyt/YourMoney.xml",
+        "https://feeds.bbci.co.uk/news/business/rss.xml",
+        "https://www.investopedia.com/feeds/rss.aspx",
+    ],
+    "business": [
+        "https://feeds.hbr.org/harvardbusiness",
+        "https://www.inc.com/rss",
+        "https://techcrunch.com/rss/",
+        "https://feeds.bbci.co.uk/news/business/rss.xml",
+    ],
+    "mindset": [
+        "https://fs.blog/feed/",
+        "https://bigthink.com/feed/",
+        "https://www.psychologytoday.com/us/articles/rss",
+    ],
+    "motivation": [
+        "https://jamesclear.com/feed",
+        "https://www.success.com/feed/",
+        "https://markmanson.net/feed",
+    ],
+    "personal_development": [
+        "https://jamesclear.com/feed",
+        "https://calnewport.com/blog/feed/",
+        "https://fs.blog/feed/",
+    ],
+}
+
+
 # ── Hacker News config ───────────────────────────────────────────────────────────
 
 HN_TIMEOUT      = 10.0
@@ -162,6 +222,8 @@ def _seed_id(seed: dict) -> str:
         return "hn:" + (seed.get("url") or seed.get("title", ""))
     if t == "stackexchange":
         return "se:" + (seed.get("url") or seed.get("title", ""))
+    if t == "rss":
+        return "rss:" + (seed.get("url") or seed.get("title", ""))
     if t == "wisdom":
         text = (seed.get("content") or "").strip().lower()
         return "wisdom:" + hashlib.sha1(text.encode("utf-8")).hexdigest()[:16]
@@ -505,6 +567,132 @@ def fetch_hackernews_story(niche_name: str, used_ids: set | None = None) -> dict
     }
 
 
+def fetch_rss_story(niche_name: str, used_ids: set | None = None) -> dict | None:
+    """Fetch a quality-filtered article from RSS/Atom feeds for the given niche.
+
+    Tries each feed URL in order, parsing both RSS 2.0 (<channel><item>) and
+    Atom (<feed><entry>) formats using stdlib xml.etree.ElementTree. All network
+    and parse errors are swallowed with a warning print — never raises.
+    """
+    import xml.etree.ElementTree as ET
+
+    if used_ids is None:
+        used_ids = set()
+
+    feeds = RSS_FEEDS.get(niche_name)
+    if not feeds:
+        return None
+
+    feed_list = list(feeds)
+    random.shuffle(feed_list)
+
+    # Atom namespace prefix used in <link href="..."/> elements
+    ATOM_NS = "http://www.w3.org/2005/Atom"
+
+    def _parse_rss_items(root: ET.Element) -> list[dict]:
+        """Extract items from RSS 2.0 <channel><item> structure."""
+        items = []
+        channel = root.find("channel")
+        if channel is None:
+            return items
+        for item in channel.findall("item"):
+            title_el = item.find("title")
+            desc_el  = item.find("description")
+            link_el  = item.find("link")
+            title = (title_el.text or "").strip() if title_el is not None else ""
+            desc  = (desc_el.text  or "").strip() if desc_el  is not None else ""
+            link  = (link_el.text  or "").strip() if link_el  is not None else ""
+            items.append({"title": title, "description": desc, "link": link})
+        return items
+
+    def _parse_atom_items(root: ET.Element) -> list[dict]:
+        """Extract entries from Atom <feed><entry> structure."""
+        items = []
+        ns = {"atom": ATOM_NS}
+        for entry in root.findall("atom:entry", ns):
+            title_el   = entry.find("atom:title",   ns)
+            summary_el = entry.find("atom:summary", ns)
+            link_el    = entry.find("atom:link",    ns)
+            title = (title_el.text   or "").strip() if title_el   is not None else ""
+            desc  = (summary_el.text or "").strip() if summary_el is not None else ""
+            link  = ""
+            if link_el is not None:
+                link = link_el.get("href", "") or (link_el.text or "").strip()
+            items.append({"title": title, "description": desc, "link": link})
+        return items
+
+    for feed_url in feed_list:
+        try:
+            r = httpx.get(feed_url, headers=REDDIT_HEADERS, timeout=RSS_TIMEOUT, follow_redirects=True)
+            r.raise_for_status()
+            raw_xml = r.text
+        except Exception as e:
+            print(f"[research] RSS fetch warning — {feed_url}: {e}")
+            continue
+
+        try:
+            root = ET.fromstring(raw_xml)
+        except ET.ParseError as e:
+            print(f"[research] RSS parse warning — {feed_url}: {e}")
+            continue
+
+        # Detect format: RSS 2.0 has <channel>, Atom has tag ending with "feed"
+        tag = root.tag.lower()
+        if "feed" in tag:
+            raw_items = _parse_atom_items(root)
+        else:
+            raw_items = _parse_rss_items(root)
+
+        if not raw_items:
+            continue
+
+        # Extract domain for the source field
+        try:
+            from urllib.parse import urlparse
+            domain = urlparse(feed_url).netloc
+        except Exception:
+            domain = feed_url
+
+        candidates = []
+        for item in raw_items:
+            title = _clean_text(_strip_html(item["title"]))
+            desc  = _clean_text(_strip_html(item["description"]))
+            link  = item["link"].strip()
+
+            if not title or not link:
+                continue
+            if len(desc) < RSS_MIN_DESC_LEN:
+                continue
+            if TITLE_BAD_RE.search(title):
+                continue
+            if TITLE_DISCUSSION_RE.search(title):
+                continue
+            if TITLE_OFFTOPIC_RE.search(title):
+                continue
+            # Title must pass story RE OR contain finance/psych keywords
+            if not RSS_STORY_RE.search(title) and not RSS_FINANCE_PSYCH_KEYWORDS_RE.search(title):
+                continue
+            sid = "rss:" + link
+            if sid in used_ids:
+                continue
+            candidates.append((title, desc, link))
+
+        if not candidates:
+            continue
+
+        title, desc, link = random.choice(candidates[:8])
+        return {
+            "type":    "rss",
+            "source":  domain,
+            "title":   title,
+            "content": desc,
+            "url":     link,
+        }
+
+    print(f"[research] RSS: no qualifying items found for niche '{niche_name}'")
+    return None
+
+
 def pick_wisdom_quote(niche_name: str, used_ids: set | None = None) -> dict | None:
     """Pick one random quote from the niche's curated pool, skipping seen ones."""
     if used_ids is None:
@@ -542,9 +730,8 @@ def pick_wisdom_quote(niche_name: str, used_ids: set | None = None) -> dict | No
 def get_seed(niche_name: str | None = None) -> dict:
     """Get a seed for the script writer. Tracks history so seeds never repeat.
 
-    Order: Reddit-first (story-filtered), Hacker News second (intellectual niches),
-    wisdom fallback. All sources skip anything already in used_seeds.json
-    (last MAX_USED_HISTORY items).
+    Order: Reddit → StackExchange → RSS → Hacker News → wisdom fallback.
+    All sources skip anything already in used_seeds.json (last MAX_USED_HISTORY items).
     """
     niche, active = _load_niche()
     name      = niche_name or active
@@ -567,6 +754,13 @@ def get_seed(niche_name: str | None = None) -> dict:
     seed = fetch_stackexchange_story(name, used_ids=used_set)
     if seed:
         print(f"[research] using StackExchange story from {seed['source']}: \"{seed['title'][:60]}\"")
+        _mark_seed_used(seed)
+        return seed
+
+    # RSS/Atom feeds: free public feeds, no auth required
+    seed = fetch_rss_story(name, used_ids=used_set)
+    if seed:
+        print(f"[research] using RSS story from {seed['source']}: \"{seed['title'][:60]}\"")
         _mark_seed_used(seed)
         return seed
 

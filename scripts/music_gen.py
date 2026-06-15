@@ -92,7 +92,8 @@ def _music_cmd(niche: str, out_path: Path) -> list[str]:
     tail = (
         "lowpass=f=1800,"
         "aecho=0.6:0.3:46|92:0.35|0.25,"
-        f"volume=0.85,aresample={SAMPLE_RATE}"
+        f"volume=0.85,aresample={SAMPLE_RATE},"
+        "aformat=channel_layouts=stereo"
     )
 
     bpm = bed.get("bpm")
@@ -103,14 +104,14 @@ def _music_cmd(niche: str, out_path: Path) -> list[str]:
         fc = (
             f"[0:a]{tail}[pad];"
             f"[1:a]lowpass=f=400,tremolo=f={bpm / 60:.3f}:d=0.85,volume=0.35,"
-            f"aresample={SAMPLE_RATE}[pulse];"
+            f"aresample={SAMPLE_RATE},aformat=channel_layouts=stereo[pulse];"
             "[pad][pulse]amix=inputs=2:duration=first:normalize=0[a]"
         )
         cmd += ["-filter_complex", fc, "-map", "[a]"]
     else:
         cmd += ["-af", tail]
 
-    cmd += ["-ac", "1", "-t", f"{BED_DUR:g}", str(out_path)]
+    cmd += ["-ac", "2", "-t", f"{BED_DUR:g}", str(out_path)]
     return cmd
 
 
