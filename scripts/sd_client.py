@@ -47,26 +47,31 @@ FPS   = 30
 TIMEOUT_GEN = 180   # A1111 generation can be slow on 6GB
 TIMEOUT_UPX = 120   # R-ESRGAN upscale timeout
 
-# Tuned for Realistic Vision v5.1 — the model responds best to these activators
+# Tuned for Realistic Vision v5.1 — must lead every prompt with "RAW photo"
 QUALITY_SUFFIX = (
-    "RAW photo, 8k uhd, high resolution, masterpiece, best quality, "
-    "photorealistic, hyperrealistic, detailed skin texture, subsurface scattering, "
-    "sharp focus, extreme detail, intricate details, natural lighting falloff, "
-    "Kodak Portra 400 emulation, professional editorial photography, "
-    "shot on Fujifilm XT3, Sigma Art series lens, film grain"
+    "8k uhd, ultra high resolution, masterpiece, best quality, "
+    "photorealistic, hyperrealistic, ultra-detailed skin texture, "
+    "subsurface scattering, pore detail, sharp focus, extreme detail, "
+    "intricate details, natural lighting falloff, "
+    "Kodak Portra 400 film emulation, professional editorial photography, "
+    "shot on Fujifilm GFX100S, Sigma Art series lens, fine film grain"
 )
 NEGATIVE_PROMPT = (
     "(worst quality:2), (low quality:2), (normal quality:2), lowres, "
     "watermark, text, signature, logo, border, frame, "
     "cartoon, anime, illustration, sketch, painting, 3d render, cgi, "
-    "(bad anatomy:1.3), (deformed:1.3), (disfigured:1.3), "
-    "(bad hands:1.4), (bad fingers:1.4), missing fingers, extra fingers, "
+    "(bad anatomy:1.4), (deformed:1.4), (disfigured:1.4), "
+    "(bad hands:1.5), (bad fingers:1.5), missing fingers, extra fingers, "
+    "extra limbs, extra arms, extra legs, mutated hands, fused fingers, "
+    "too many fingers, long neck, cross-eyed, "
     "plastic skin, waxy skin, mannequin, fake-looking, artificial, "
+    "skin spots, acnes, skin blemishes, age spot, "
     "overexposed, underexposed, flat lighting, blown highlights, "
     "oversaturated, neon colors, chromatic aberration, "
     "duplicate, split image, collage, out of frame, "
     "jpeg artifacts, blurry, soft, out of focus, "
-    "ugly, mutilated, poorly drawn face, dull, lifeless"
+    "ugly, mutilated, poorly drawn face, dull, lifeless, "
+    "poorly drawn hands, bad proportions, gross proportions"
 )
 
 # Per-scene-slot cinematographic specs — each slot has a distinct visual language.
@@ -205,17 +210,17 @@ def _generate_image(prompt: str, seed: int = -1) -> bytes | None:
     so the four scenes read as one film instead of four random photos.
     """
     import os
-    steps = int(os.environ.get("SD_STEPS", "20"))
+    steps = int(os.environ.get("SD_STEPS", "28"))  # 28 = quality sweet spot for RV5.1
     payload = {
         "prompt":          prompt,
         "negative_prompt": NEGATIVE_PROMPT,
         "width":           IMG_W,
         "height":          IMG_H,
         "steps":           steps,
-        "cfg_scale":       7.0,
+        "cfg_scale":       6.5,   # RV5.1 sweet spot — less plastic than 7+
         "sampler_name":    "DPM++ 2M Karras",
-        "restore_faces":   False,
-        "enable_hr":       False,   # upscale separately — safer on 6GB
+        "restore_faces":   True,  # fixes uncanny valley on portraits
+        "enable_hr":       False, # upscale separately — safer on 6GB VRAM
         "batch_size":      1,
         "n_iter":          1,
         "seed":            seed,
@@ -313,25 +318,25 @@ def _animate_to_clip(img_path: Path, out_path: Path,
       3: zoom out, pan down   (downward weight)
     """
     total_frames = int(duration * FPS)
-    step = round(0.15 / total_frames, 7)
+    step = round(0.20 / total_frames, 7)  # 20% zoom range — more cinematic than 15%
 
     pattern = idx % 4
-    if pattern == 0:
-        zoom_expr = f"min(zoom+{step},1.15)"
-        x_expr    = f"iw/2-(iw/zoom/2)+({step*total_frames:.4f}*on/{total_frames}*iw/8)"
+    if pattern == 0:   # push-in + right drift (subject entering)
+        zoom_expr = f"min(zoom+{step},1.20)"
+        x_expr    = f"iw/2-(iw/zoom/2)+({step*total_frames:.4f}*on/{total_frames}*iw/7)"
         y_expr    = "ih/2-(ih/zoom/2)"
-    elif pattern == 1:
-        zoom_expr = f"if(eq(on,1),1.15,max(zoom-{step},1.0))"
-        x_expr    = f"iw/2-(iw/zoom/2)-({step*total_frames:.4f}*on/{total_frames}*iw/8)"
+    elif pattern == 1: # pull-back + left drift (reveal)
+        zoom_expr = f"if(eq(on,1),1.20,max(zoom-{step},1.0))"
+        x_expr    = f"iw/2-(iw/zoom/2)-({step*total_frames:.4f}*on/{total_frames}*iw/7)"
         y_expr    = "ih/2-(ih/zoom/2)"
-    elif pattern == 2:
-        zoom_expr = f"min(zoom+{step},1.15)"
+    elif pattern == 2: # push-in + upward drift (momentum)
+        zoom_expr = f"min(zoom+{step},1.20)"
         x_expr    = "iw/2-(iw/zoom/2)"
-        y_expr    = f"ih/2-(ih/zoom/2)-({step*total_frames:.4f}*on/{total_frames}*ih/12)"
-    else:
-        zoom_expr = f"if(eq(on,1),1.15,max(zoom-{step},1.0))"
+        y_expr    = f"ih/2-(ih/zoom/2)-({step*total_frames:.4f}*on/{total_frames}*ih/10)"
+    else:              # pull-back + downward drift (weight)
+        zoom_expr = f"if(eq(on,1),1.20,max(zoom-{step},1.0))"
         x_expr    = "iw/2-(iw/zoom/2)"
-        y_expr    = f"ih/2-(ih/zoom/2)+({step*total_frames:.4f}*on/{total_frames}*ih/12)"
+        y_expr    = f"ih/2-(ih/zoom/2)+({step*total_frames:.4f}*on/{total_frames}*ih/10)"
 
     vf = (
         f"zoompan=z='{zoom_expr}':d={total_frames}:"
@@ -389,12 +394,21 @@ def _hamming(a: int, b: int) -> int:
 # ── Public API ────────────────────────────────────────────────────────────────
 
 def generate_clips(queries: list[str], n: int = 4,
-                   clip_duration: float = 8.0) -> list[Path]:
+                   clip_duration: float = 8.0,
+                   prebuilt: bool = False) -> list[Path]:
     """
     Generate one animated clip per query via local Stable Diffusion, in order.
 
     Pipeline per clip:
       query → SD 576×1024 → R-ESRGAN 2× → 1152×2048 → crop 1080×1920 → Ken Burns mp4
+
+    prebuilt=True: queries are already complete SD token prompts from _build_sd_prompts
+    (GPT-written, 60-80 words, contain their own camera/lighting/color specs). Skip the
+    _query_to_prompt wrapping — just ensure the RV5.1 "RAW photo" activator and the
+    core quality tail are present, then send directly to A1111.
+
+    prebuilt=False (default): queries are short keyword strings; _query_to_prompt builds
+    the full SD token prompt with anchor specs + quality suffix.
 
     Each finished image is perceptual-hashed; if it collides with an already-
     accepted image it is regenerated with a fresh seed (up to MAX_DUP_RETRIES)
@@ -435,7 +449,16 @@ def generate_clips(queries: list[str], n: int = 4,
 
     for i, query in enumerate(prompts):
         print(f"[sd] {i+1}/{len(prompts)}: {query[:70]}")
-        prompt   = _query_to_prompt(query, style, idx=i)
+
+        if prebuilt:
+            # GPT already wrote a complete SD token prompt with specs baked in.
+            # Only ensure the RV5.1 activator leads and the quality tail is present.
+            prompt = query if query.startswith("RAW photo") else f"RAW photo, {query}"
+            if "8k uhd" not in prompt:
+                prompt = f"{prompt}, {QUALITY_SUFFIX}"
+        else:
+            prompt = _query_to_prompt(query, style, idx=i)
+
         png_path = tmp_dir / f"{stamp}_{i}.png"
         accepted = False
 

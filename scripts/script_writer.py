@@ -1153,6 +1153,16 @@ def write_script(scene_description: str, seed: dict | None = None,
         print(f"[gpt] ⚠ no body attempt passed — salvaging closest rejected attempt")
         best["script"] = salvage
         best["attempt_n"] = max_attempts
+        # Score the salvaged text so the reported number reflects the actual script
+        # quality rather than the initial 0 placeholder.
+        try:
+            s_total, s_crits, s_reason, s_cost, _ = _score(
+                client, salvage, seed, winning_hook, run_id, active)
+            total_cost += s_cost
+            best.update(score=s_total, crits=s_crits, reasoning=s_reason)
+            print(f"[gpt] salvage scored {s_total}/10")
+        except Exception:
+            pass
 
     # Safety net: guarantee the shipped script contains no banned phrase, even if the
     # model never produced a clean one. Mapped words → synonyms; others stripped.

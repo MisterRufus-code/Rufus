@@ -252,31 +252,30 @@ def _build_sd_prompts(script: str, niche: str, max_scenes: int = 6) -> list[str]
                     messages=[{
                         "role": "user",
                         "content": (
-                            "You are a world-class Stable Diffusion prompt engineer for "
-                            "Realistic Vision v5.1 (ultra-photorealistic model). Write "
-                            f"EXACTLY {n} image prompts for a {niche} YouTube Short — one per beat.\n\n"
-                            "THE SPOKEN BEATS (prompt N MUST visually depict beat N — when the "
-                            "narrator says it, the viewer sees it):\n"
+                            "You are an elite Stable Diffusion prompt engineer specializing in "
+                            "Realistic Vision v5.1 (ultra-photorealistic checkpoint). "
+                            f"Write EXACTLY {n} image prompts for a {niche} YouTube Short — one per beat.\n\n"
+                            "SPOKEN BEATS — prompt N MUST show what the narrator says during beat N:\n"
                             f"{beat_lines}\n\n"
-                            "PER-BEAT FRAMING (use exactly):\n"
+                            "PER-BEAT CAMERA/FRAMING — use these exact specs for each slot:\n"
                             f"{anchor_lines}\n\n"
-                            "OUTPUT FORMAT: comma-separated SD token language — NOT English sentences.\n"
-                            "Token order: RAW photo, (MAIN SUBJECT:1.35), SETTING WITH TEXTURE, "
-                            "COMPOSITION, LIGHTING SETUP, CAMERA+LENS, COLOR GRADE, quality tags\n\n"
-                            "RULES — high-end results depend on these:\n"
-                            "• SUBJECT must match the beat's literal content first; use a strong visual "
-                            "metaphor only when the beat is abstract. Beat 'the market crashed' → "
-                            "'red plummeting stock ticker wall, panicked trading floor'.\n"
-                            "• ULTRA-SPECIFIC subject: age, wardrobe, expression, skin/material texture. "
-                            "'investor' → 'weathered 52yo man, salt-and-pepper stubble, 3am shadows under "
-                            "eyes, rumpled charcoal suit, loosened tie'.\n"
-                            "• SETTING with physical texture: 'office' → 'glass-walled 40th-floor office, "
-                            "city lights below, scattered papers, cold blue monitor glow'.\n"
-                            "• Name the LIGHTING SETUP, never just 'dramatic'.\n"
-                            f"• COLOR GRADE every prompt: {color_grade}.\n"
-                            "• No two prompts may share the same subject or location — all distinct.\n"
-                            "• 60–80 words per prompt. Dense, vivid, pure SD tokens.\n\n"
-                            f"Output ONLY {n} lines, no numbering, no labels, one prompt per line, in beat order."
+                            "TOKEN FORMAT (mandatory for RV5.1 — pure comma-separated tokens, NO sentences):\n"
+                            "RAW photo, (SUBJECT:1.35), SETTING TEXTURE, COMPOSITION, LIGHTING, CAMERA+LENS, COLOR GRADE\n\n"
+                            "RULES:\n"
+                            "• Every prompt MUST start with 'RAW photo,' — it is the RV5.1 quality activator.\n"
+                            "• SUBJECT = the literal thing the narrator mentions, ultra-specific: "
+                            "'investor' → '(weathered 52yo man, salt-and-pepper stubble, 3am under-eye shadows, "
+                            "rumpled charcoal suit, loosened tie:1.35)'. Clothes, age, expression, skin texture.\n"
+                            "• SETTING = physical texture detail: 'office' → "
+                            "'glass-walled 40th-floor corner office, city lights blurred below, "
+                            "scattered papers, cold blue monitor glow on face'.\n"
+                            "• LIGHTING = named setup only: 'single overhead tungsten key 45°, "
+                            "deep shadow fill, specular rim on shoulder edge'. Never just 'dramatic'.\n"
+                            f"• COLOR GRADE on every prompt: {color_grade}.\n"
+                            "• All {n} subjects and locations must be completely distinct — no repeats.\n"
+                            "• DO NOT add quality tags (8k, masterpiece, etc.) — those are appended separately.\n"
+                            "• 55–70 words per prompt. Dense SD tokens only.\n\n"
+                            f"Output EXACTLY {n} lines. No numbering, no labels, no blank lines. Beat order."
                         ),
                     }],
                     max_tokens=1100,
@@ -479,7 +478,7 @@ def run(skip_upload: bool = False, niche_override: str = None, output_dir: Path 
                 print(f"             {i+1}. {p[:90]}")
 
             from sd_client import generate_clips as sd_generate
-            candidates = sd_generate(prompts, n=len(prompts))
+            candidates = sd_generate(prompts, n=len(prompts), prebuilt=True)
             if candidates:
                 scene = "SD-generated: " + "; ".join(prompts[:2])
                 print(f"           → {len(candidates)} clips ready\n")
