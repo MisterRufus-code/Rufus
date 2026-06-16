@@ -118,10 +118,15 @@ def _archive_music(mood: str) -> Path | None:
         r = requests.get(
             "https://archive.org/advancedsearch.php",
             params={
-                # subject/title match + opensource_audio = CC-licensed uploads;
-                # the old licenseurl:creativecommons term matched nothing
-                # (licenseurl is a full-URL field, not a keyword field).
-                "q":      f'({mood}) AND mediatype:(audio) AND collection:(opensource_audio) AND format:(MP3)',
+                # Require a music subject and exclude spoken-word formats so we
+                # don't pull podcasts/interviews/lectures/audiobooks (which the
+                # broad opensource_audio collection is full of).
+                "q":      (f'({mood}) AND mediatype:(audio) AND format:(MP3) '
+                           f'AND subject:(music) '
+                           f'AND -subject:(podcast) AND -subject:(speech) '
+                           f'AND -subject:(interview) AND -subject:(sermon) '
+                           f'AND -subject:(lecture) AND -subject:(audiobook) '
+                           f'AND -subject:(poetry) AND -subject:(talk)'),
                 "fl":     "identifier",
                 "rows":   20,
                 "output": "json",
@@ -179,15 +184,17 @@ def fetch_music(niche: str) -> Path | None:
     MUSIC_DIR.mkdir(parents=True, exist_ok=True)
     moods = MOOD_MAP.get(niche, DEFAULT_MOODS)
 
+    # 1. Jamendo — real, produced, mood-tagged INSTRUMENTAL music (free key).
+    #    This is the right source for accurate, professional background music.
     for mood in moods:
         track = _jamendo(mood)
         if track:
             return track
-        track = _archive_music(mood)
-        if track:
-            return track
 
-    # No platform reachable — synthesize a bed locally (zero APIs, cached).
+    # 2. Synthesized local bed — mood-matched and instrumental, so it is always
+    #    on-tone and NEVER a stray spoken-word/podcast track. This beats the
+    #    archive.org grab-bag, whose opensource_audio collection mixes music with
+    #    interviews/lectures/audiobooks (the source of "strange" music).
     try:
         from music_gen import ensure_music
         track = ensure_music(niche)
@@ -195,6 +202,12 @@ def fetch_music(niche: str) -> Path | None:
             return track
     except Exception as e:
         print(f"[music] local synthesis failed: {e}")
+
+    # 3. archive.org — last resort only (unpredictable; query is speech-filtered).
+    for mood in moods:
+        track = _archive_music(mood)
+        if track:
+            return track
 
     print("[music] all sources failed — proceeding voice-only")
     return None

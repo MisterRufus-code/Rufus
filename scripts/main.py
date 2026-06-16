@@ -136,34 +136,34 @@ def _parse_video_queries(analysis: str) -> list[str]:
     return []
 
 
-# Per-beat cinematic shot types — emotion-led, not gear-led. They rotate so a
-# Short reads like real coverage (intimate detail → human face → scale/isolation
-# → telling object) instead of four identical framings. Each leads with the
-# FEELING the shot creates; the lens/light just serve that feeling. The point is
-# footage that looks shot by a human cinematographer for THIS line — never stock.
+# Per-beat shot types — four FRAMINGS for the literal subject the narrator names.
+# They rotate so a Short reads like real coverage (intimate detail → person in the
+# situation → the place, wide → the object itself) instead of four identical
+# framings. Each framing is just a lens on the REAL thing the line is about — the
+# emotion/light is treatment, never a replacement for showing the actual subject.
 _SD_ANCHORS = [
     {
-        # The intensity shot — a single charged detail, tense and intimate.
+        # Intensity — push in tight on the literal thing so its detail fills frame.
         "camera": "extreme close-up, 100mm macro, f/2.8, razor-thin focus, slight handheld imperfection",
-        "subject_hint": "ONE charged detail that carries the emotion — eyes mid-thought, white-knuckled grip, a thumb hovering over a screen, sweat on a temple",
+        "subject_hint": "the LITERAL thing the line names, shot in tight macro — real banknotes and their texture, the actual numbers on a screen, hands doing the specific action — detail fills the frame",
         "light": "single hard light raking across at 45°, deep inky shadow, one bright specular catch",
     },
     {
-        # The human shot — a real face mid-emotion, caught not posed.
+        # Human — a real person literally doing/feeling what the line describes.
         "camera": "medium portrait, 85mm, f/1.8, eyes tack-sharp, shot at eye level",
-        "subject_hint": "a real, ordinary-looking person caught MID-EMOTION (exhaustion, quiet resolve, the thousand-yard stare) — candid, unposed, never smiling at the camera",
+        "subject_hint": "a real, ordinary person literally IN the situation the line describes — at the desk paying bills, checking the account, mid-decision — candid, unposed, a real feeling on the face, never smiling at the camera",
         "light": "moody window light from one side, soft warm rim from behind, natural skin, real pores",
     },
     {
-        # The isolation shot — one figure dwarfed by scale, lonely and epic.
-        "camera": "wide establishing, 24mm, deep focus, figure small in frame",
-        "subject_hint": "one lone figure dwarfed by a vast space — empty office at 3am, a city seen from a high window, an endless road — the smallness IS the point",
+        # Scale — the actual place/scene the line is set in, shown wide.
+        "camera": "wide establishing, 24mm, deep focus",
+        "subject_hint": "the actual place or scene the line describes, shown wide — the office, the trading floor, the home, the city — a person small in it only if the line implies one",
         "light": "cold blue pre-dawn or hard golden-hour, long shadows, atmospheric haze, real depth",
     },
     {
-        # The symbol shot — a telling object that says the theme without words.
+        # Object — the exact object the line names, shot cleanly as the hero.
         "camera": "tight overhead or 50mm still-life, f/4, deliberate composition",
-        "subject_hint": "a single telling object arranged like evidence — scattered bills, one coin upright, a worn tool, an unopened envelope — graphic and meaningful, no people",
+        "subject_hint": "the exact object the line names, shot as the hero of the frame — the paycheck, the bank statement, the stack of bills, the contract, the worn tool — real and specific, NOT an abstract symbol",
         "light": "soft directional light revealing every texture, gentle shadow, tactile and real",
     },
 ]
@@ -263,21 +263,27 @@ def _build_sd_prompts(script: str, niche: str, max_scenes: int = 6) -> list[str]
                             "(Realistic Vision v5.1). You don't make stock photos — you make "
                             "frames that feel SHOT by a human for one specific line of narration.\n"
                             f"Write EXACTLY {n} image prompts for a {niche} YouTube Short — one per beat.\n\n"
-                            "SPOKEN BEATS — prompt N must make the viewer FEEL what the narrator says in beat N:\n"
+                            "SPOKEN BEATS — prompt N must SHOW exactly what the narrator says in beat N:\n"
                             f"{beat_lines}\n\n"
-                            "PER-BEAT SHOT TYPE — honor the emotional intent of each slot:\n"
+                            "PER-BEAT FRAMING — use this framing to show the beat's literal subject:\n"
                             f"{anchor_lines}\n\n"
                             "TOKEN FORMAT (RV5.1 — comma-separated tokens, NOT sentences):\n"
                             "RAW photo, (SUBJECT + EMOTION:1.3), SETTING TEXTURE, COMPOSITION, LIGHTING, LENS, COLOR GRADE\n\n"
                             "RULES — in priority order:\n"
                             "• Start every prompt with 'RAW photo,' (the RV5.1 realism activator).\n"
-                            "• EMOTION FIRST: the subject must show a real feeling that matches the beat "
-                            "(exhaustion, dread, quiet resolve, focus) — never a neutral or smiling pose.\n"
-                            "• SUBJECT = the literal thing the line is about, made ultra-specific and HUMAN where possible: "
-                            "'investor' → '(weathered 52yo man, salt-and-pepper stubble, 3am under-eye shadows, "
-                            "loosened tie, jaw tight:1.3)'. Real age, real skin, real wear.\n"
-                            "• BEAT 1 IS THE FIRST FRAME the viewer sees — make it the most arresting, "
-                            "highest-contrast, most emotionally charged image of the set. It has to stop the scroll.\n"
+                            "• ACCURACY FIRST (most important): the subject of prompt N must be the "
+                            "LITERAL, concrete thing the narrator names in beat N. 'paycheck' → a real "
+                            "paycheck; 'savings' → cash going into an account or jar; 'the market' → a real "
+                            "stock ticker/chart; 'debt' → a credit-card bill. Show the THING, not a mood about it.\n"
+                            "• NO ABSTRACT SYMBOLISM: never 'an envelope signifying decisions', 'a road "
+                            "representing the journey', 'a clock symbolizing time'. If the line is abstract, "
+                            "pick the most concrete real-world object a person would actually see in that situation.\n"
+                            "• Make the subject ultra-specific and real: 'investor' → '(weathered 52yo man, "
+                            "salt-and-pepper stubble, 3am under-eye shadows, loosened tie:1.3)'. Real age, real wear.\n"
+                            "• EMOTION SECOND: once the literal subject is set, give it a real feeling that "
+                            "matches the beat (tension, fatigue, focus) — never a neutral or smiling pose.\n"
+                            "• BEAT 1 IS THE FIRST FRAME the viewer sees — make it the clearest, most arresting, "
+                            "highest-contrast shot of the literal subject. It has to stop the scroll.\n"
                             "• SETTING = lived-in physical texture, never clean or corporate: "
                             "'scattered papers, cold monitor glow, coffee rings, fingerprints on glass'.\n"
                             "• LIGHTING = one named, motivated source with real shadow. Never just 'dramatic'.\n"
