@@ -136,28 +136,35 @@ def _parse_video_queries(analysis: str) -> list[str]:
     return []
 
 
-# Per-beat camera anchors — rotate so consecutive scenes read like film coverage
-# (macro → establishing → human → overhead) instead of four identical framings.
+# Per-beat cinematic shot types — emotion-led, not gear-led. They rotate so a
+# Short reads like real coverage (intimate detail → human face → scale/isolation
+# → telling object) instead of four identical framings. Each leads with the
+# FEELING the shot creates; the lens/light just serve that feeling. The point is
+# footage that looks shot by a human cinematographer for THIS line — never stock.
 _SD_ANCHORS = [
     {
-        "camera": "EXTREME CLOSE-UP macro, Canon 100mm f/2.8L Macro, f/2.8, razor-thin depth of field",
-        "subject_hint": "tight detail on a face, hands, or object surface filling the frame",
-        "light": "single hard tungsten light at 45°, deep chiaroscuro, inky shadows, specular rim highlight",
+        # The intensity shot — a single charged detail, tense and intimate.
+        "camera": "extreme close-up, 100mm macro, f/2.8, razor-thin focus, slight handheld imperfection",
+        "subject_hint": "ONE charged detail that carries the emotion — eyes mid-thought, white-knuckled grip, a thumb hovering over a screen, sweat on a temple",
+        "light": "single hard light raking across at 45°, deep inky shadow, one bright specular catch",
     },
     {
-        "camera": "WIDE ESTABLISHING panorama, Sony FE 24mm f/1.4 GM, f/8, deep focus, circular polarizer",
-        "subject_hint": "subject small against a vast environment, strong leading lines converging on subject",
-        "light": "golden hour natural light, long warm directional shadows, atmospheric haze, amber sky",
+        # The human shot — a real face mid-emotion, caught not posed.
+        "camera": "medium portrait, 85mm, f/1.8, eyes tack-sharp, shot at eye level",
+        "subject_hint": "a real, ordinary-looking person caught MID-EMOTION (exhaustion, quiet resolve, the thousand-yard stare) — candid, unposed, never smiling at the camera",
+        "light": "moody window light from one side, soft warm rim from behind, natural skin, real pores",
     },
     {
-        "camera": "MEDIUM SHOT portrait, NIKKOR Z 85mm f/1.4, f/1.8, selective focus on face",
-        "subject_hint": "waist-up, subject off-center left, environmental context right, mid-motion or reaction",
-        "light": "3-point lighting: soft-box key 45° camera-left, 2:1 fill right, warm rim light from behind",
+        # The isolation shot — one figure dwarfed by scale, lonely and epic.
+        "camera": "wide establishing, 24mm, deep focus, figure small in frame",
+        "subject_hint": "one lone figure dwarfed by a vast space — empty office at 3am, a city seen from a high window, an endless road — the smallness IS the point",
+        "light": "cold blue pre-dawn or hard golden-hour, long shadows, atmospheric haze, real depth",
     },
     {
-        "camera": "AERIAL overhead flat-lay nadir, DJI Mavic 3 Pro 24mm, f/5.6, symmetrical composition",
-        "subject_hint": "bird's-eye view, geometric pattern or arranged objects, minimalist negative space",
-        "light": "diffused even overhead daylight, soft shadows revealing texture, no harsh highlights",
+        # The symbol shot — a telling object that says the theme without words.
+        "camera": "tight overhead or 50mm still-life, f/4, deliberate composition",
+        "subject_hint": "a single telling object arranged like evidence — scattered bills, one coin upright, a worn tool, an unopened envelope — graphic and meaningful, no people",
+        "light": "soft directional light revealing every texture, gentle shadow, tactile and real",
     },
 ]
 
@@ -252,29 +259,34 @@ def _build_sd_prompts(script: str, niche: str, max_scenes: int = 6) -> list[str]
                     messages=[{
                         "role": "user",
                         "content": (
-                            "You are an elite Stable Diffusion prompt engineer specializing in "
-                            "Realistic Vision v5.1 (ultra-photorealistic checkpoint). "
+                            "You are a cinematographer turned Stable Diffusion prompt writer "
+                            "(Realistic Vision v5.1). You don't make stock photos — you make "
+                            "frames that feel SHOT by a human for one specific line of narration.\n"
                             f"Write EXACTLY {n} image prompts for a {niche} YouTube Short — one per beat.\n\n"
-                            "SPOKEN BEATS — prompt N MUST show what the narrator says during beat N:\n"
+                            "SPOKEN BEATS — prompt N must make the viewer FEEL what the narrator says in beat N:\n"
                             f"{beat_lines}\n\n"
-                            "PER-BEAT CAMERA/FRAMING — use these exact specs for each slot:\n"
+                            "PER-BEAT SHOT TYPE — honor the emotional intent of each slot:\n"
                             f"{anchor_lines}\n\n"
-                            "TOKEN FORMAT (mandatory for RV5.1 — pure comma-separated tokens, NO sentences):\n"
-                            "RAW photo, (SUBJECT:1.35), SETTING TEXTURE, COMPOSITION, LIGHTING, CAMERA+LENS, COLOR GRADE\n\n"
-                            "RULES:\n"
-                            "• Every prompt MUST start with 'RAW photo,' — it is the RV5.1 quality activator.\n"
-                            "• SUBJECT = the literal thing the narrator mentions, ultra-specific: "
+                            "TOKEN FORMAT (RV5.1 — comma-separated tokens, NOT sentences):\n"
+                            "RAW photo, (SUBJECT + EMOTION:1.3), SETTING TEXTURE, COMPOSITION, LIGHTING, LENS, COLOR GRADE\n\n"
+                            "RULES — in priority order:\n"
+                            "• Start every prompt with 'RAW photo,' (the RV5.1 realism activator).\n"
+                            "• EMOTION FIRST: the subject must show a real feeling that matches the beat "
+                            "(exhaustion, dread, quiet resolve, focus) — never a neutral or smiling pose.\n"
+                            "• SUBJECT = the literal thing the line is about, made ultra-specific and HUMAN where possible: "
                             "'investor' → '(weathered 52yo man, salt-and-pepper stubble, 3am under-eye shadows, "
-                            "rumpled charcoal suit, loosened tie:1.35)'. Clothes, age, expression, skin texture.\n"
-                            "• SETTING = physical texture detail: 'office' → "
-                            "'glass-walled 40th-floor corner office, city lights blurred below, "
-                            "scattered papers, cold blue monitor glow on face'.\n"
-                            "• LIGHTING = named setup only: 'single overhead tungsten key 45°, "
-                            "deep shadow fill, specular rim on shoulder edge'. Never just 'dramatic'.\n"
+                            "loosened tie, jaw tight:1.3)'. Real age, real skin, real wear.\n"
+                            "• BEAT 1 IS THE FIRST FRAME the viewer sees — make it the most arresting, "
+                            "highest-contrast, most emotionally charged image of the set. It has to stop the scroll.\n"
+                            "• SETTING = lived-in physical texture, never clean or corporate: "
+                            "'scattered papers, cold monitor glow, coffee rings, fingerprints on glass'.\n"
+                            "• LIGHTING = one named, motivated source with real shadow. Never just 'dramatic'.\n"
                             f"• COLOR GRADE on every prompt: {color_grade}.\n"
-                            "• All {n} subjects and locations must be completely distinct — no repeats.\n"
-                            "• DO NOT add quality tags (8k, masterpiece, etc.) — those are appended separately.\n"
-                            "• 55–70 words per prompt. Dense SD tokens only.\n\n"
+                            f"• All {n} images must be completely distinct in subject, setting, and framing.\n"
+                            "• BAN the stock look: no posed smiles-at-camera, no clip-art, no glossy "
+                            "corporate handshake, no generic businessman silhouette, no fake-perfect skin.\n"
+                            "• DO NOT add quality tags (8k, masterpiece) — appended separately.\n"
+                            "• 55–70 words per prompt. Dense tokens only.\n\n"
                             f"Output EXACTLY {n} lines. No numbering, no labels, no blank lines. Beat order."
                         ),
                     }],

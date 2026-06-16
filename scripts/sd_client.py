@@ -71,7 +71,10 @@ NEGATIVE_PROMPT = (
     "duplicate, split image, collage, out of frame, "
     "jpeg artifacts, blurry, soft, out of focus, "
     "ugly, mutilated, poorly drawn face, dull, lifeless, "
-    "poorly drawn hands, bad proportions, gross proportions"
+    "poorly drawn hands, bad proportions, gross proportions, "
+    "(stock photo:1.3), posed, smiling at camera, fake smile, "
+    "corporate, clip art, generic businessman, glossy advertisement, "
+    "staged, model pose, perfect teeth, overly polished"
 )
 
 # Per-scene-slot cinematographic specs — each slot has a distinct visual language.

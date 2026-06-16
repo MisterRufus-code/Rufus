@@ -115,12 +115,25 @@ def run() -> None:
     else:
         err("Python packages", f"missing: {', '.join(missing)}  →  pip install -r requirements.txt")
 
-    # ── Optional backends (informational) ─────────────────────────────────────────
+    # ── Voice backends (informational) ─────────────────────────────────────────────
+    tts_backend = os.environ.get("RUFUS_TTS", "edge").strip().lower()
+    try:
+        keys = json.loads(KEYS_FILE.read_text()) if KEYS_FILE.exists() else {}
+    except Exception:
+        keys = {}
+    eleven = keys.get("elevenlabs", "")
+    if eleven and not eleven.startswith("YOUR_"):
+        ok(f"ElevenLabs key set  (RUFUS_TTS=elevenlabs for best voice){'  ← ACTIVE' if tts_backend == 'elevenlabs' else ''}")
+    elif tts_backend == "elevenlabs":
+        err("ElevenLabs key", "RUFUS_TTS=elevenlabs but no key in keys.json — will fall back to Edge TTS")
+    else:
+        warn("ElevenLabs key", "not set – set it + RUFUS_TTS=elevenlabs for the most natural voice (~$0.10/video)")
+
     try:
         __import__("TTS")
-        ok("XTTS v2 available  (RUFUS_TTS=xtts for local voice)")
+        ok(f"XTTS v2 available  (RUFUS_TTS=xtts for free local voice){'  ← ACTIVE' if tts_backend == 'xtts' else ''}")
     except ImportError:
-        warn("XTTS v2", "not installed – using Edge TTS (pip install TTS for local voice cloning)")
+        warn("XTTS v2", "not installed – pip install TTS for free local voice cloning (RUFUS_TTS=xtts)")
 
     # ── HyperFrames (only relevant if a niche uses it) ────────────────────────────
     try:
