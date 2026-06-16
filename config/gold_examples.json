@@ -1,18 +1,18 @@
 {
-  "note": "Gold-standard scripts per niche. 2 examples each. These are injected into the system prompt as few-shot demonstrations. Every claim is attributable. Every example hits 85-115 words (34-46s at ~150wpm).",
+  "note": "Gold-standard scripts per niche. 2 examples each. Injected into the system prompt as few-shot demonstrations — the model mimics these more than any instruction, so they define the voice: open on the VIEWER or a sharp take, use the famous name as PROOF mid-script (never as the subject of a biography), present tense and second person, a loop line that echoes the hook, and an ending that earns a comment instead of begging for a follow. 85-115 words (34-46s at ~150wpm).",
 
   "finance": [
     {
       "seed_type": "wisdom",
       "seed_source": "Warren Buffett",
       "seed_content": "The stock market is a device for transferring money from the impatient to the patient.",
-      "script": "Buffett has owned Coca-Cola stock since 1988.\nThirty-six years. Never sold.\nThat one position grew from one billion to twenty-five billion dollars.\nNot because he picked right. Because he did not move.\nThe average American investor makes eight trades a year.\nBuffett made one major move in the last decade.\nEvery financial advisor tells you to stay invested long-term.\nAlmost nobody actually does it when the market drops forty percent.\nThe skill is not picking the right stock.\nThe skill is sitting still when everything in you says run.\nStill think you need a better strategy?\nFollow for daily wealth tactics."
+      "script": "You checked your portfolio four times today.\nThat's the problem. Not your salary, not your stock picks. Your hands.\nBuffett has held Coca-Cola since 1988 and never sold a single share.\nOne billion dollars turned into twenty-five billion while he did nothing.\nHe didn't pick better than you. He refused to move.\nThe average investor makes eight trades a year and bleeds three percent doing it.\nEvery one of those trades felt smart in the moment. That's the trap.\nThe richest investor alive built his fortune sitting still.\nYou are not under-informed. You are over-active.\nSo you don't have a strategy problem. You have a patience problem.\nHow many times did you check today?"
     },
     {
       "seed_type": "wisdom",
       "seed_source": "Jack Bogle",
       "seed_content": "Do not look for the needle in the haystack. Just buy the haystack.",
-      "script": "The S&P 500 has never been negative over any rolling twenty-year period in history.\nNot in 2008. Not during the Great Depression. Not during COVID.\nEvery single time it came back and went higher.\nThe average investor underperforms the index by three percent a year.\nNot because they picked bad stocks.\nBecause they sold during the crashes.\nJack Bogle understood this in 1974 and built Vanguard on one idea alone.\nStop trying to beat the market. Buy all of it.\nHe made more money for ordinary people than any fund manager alive.\nThe market is not the risk. Your behavior is the risk.\nFollow for daily wealth tactics."
+      "script": "You think the market is the risky part. It isn't. You are.\nThe S&P 500 has never lost money over any twenty-year stretch in history.\nNot in 2008. Not the Great Depression. Not COVID.\nEvery single time, it came back higher.\nYet the average investor underperforms that exact index by three percent a year.\nNot from bad stocks. From selling during the crashes.\nJack Bogle saw this in 1974 and built Vanguard on one idea.\nStop trying to beat the market. Own all of it.\nThe index never fails people. People fail the index.\nSo the risk was never the market. The risk is you.\nWhich crash are you going to sell into next?"
     }
   ],
 
@@ -21,13 +21,13 @@
       "seed_type": "wisdom",
       "seed_source": "Seneca",
       "seed_content": "We suffer more in imagination than in reality.",
-      "script": "Seneca wrote this two thousand years ago.\nWe suffer more in imagination than in reality.\nHe meant the specific thing you are dreading right now.\nThat conversation you have been putting off for a week.\nThat decision you keep moving to next Monday.\nThat call you need to make.\nYou have been living inside the worst case version of it for days.\nMost of the time the actual thing takes five minutes and you wonder what took you so long.\nThe fear costs more than the thing. Every single time.\nWhat are you rehearsing right now that you just need to do?\nSave this. Watch it when you want to quit."
+      "script": "The thing you're dreading right now has already beaten you.\nSeneca said it two thousand years ago: we suffer more in imagination than in reality.\nThat conversation you've put off for a week.\nThe call you keep dragging to next Monday.\nYou've been living inside the worst version of it for days.\nThen you finally do it, and it takes five minutes.\nAnd you sit there wondering what you were so afraid of.\nThe dread always costs more than the thing. Every single time.\nYou're not avoiding the task. You're feeding the fear.\nSo what are you rehearsing right now instead of just doing?\nName the thing. Then go do it today."
     },
     {
       "seed_type": "wisdom",
       "seed_source": "David Goggins",
       "seed_content": "The most important conversations you will ever have are the ones you will have with yourself.",
-      "script": "Goggins ran a hundred miles on two broken feet.\nNot because he is superhuman.\nBecause he spent years training his mind to question its own quit signals.\nHe says the body stops at forty percent of its actual capacity.\nThe rest is negotiation.\nNot with your legs. With the voice in your head telling you that is enough.\nMost people never learn to argue back.\nThey take the first exit their mind offers and call it a limit.\nYou have never actually hit your ceiling.\nYou have only ever believed you did.\nWhen did you last push past the first urge to stop?\nSave this. Watch it when you want to quit."
+      "script": "Your body quit at forty percent. You called it your limit.\nGoggins ran a hundred miles on two broken feet.\nNot because he's built different. Because he learned to argue with the voice that says stop.\nHe says your mind throttles you at forty percent of what you have left.\nThe rest is a negotiation. Not with your legs — with your own head.\nMost people take the first exit their mind offers and obey it instantly.\nThey feel the urge to stop and call it a wall.\nYou have never actually hit your ceiling.\nYou only believed the voice that said this is it.\nSo that wasn't your limit. That was your first offer.\nWhat are you negotiating with right now?"
     }
   ],
 
@@ -36,13 +36,13 @@
       "seed_type": "wisdom",
       "seed_source": "Carl Jung",
       "seed_content": "Everything that irritates us about others can lead us to an understanding of ourselves.",
-      "script": "Carl Jung spent decades asking why intelligent people keep making the same mistakes.\nHis answer: the shadow.\nThe part of yourself you refuse to look at directly.\nWhen you are furious at someone for being arrogant, check whether you have buried your own ambition.\nWhen you cannot stop judging someone for being weak, check what you are afraid to admit about yourself.\nJung called this projection.\nThe loudest judgments about others are usually confessions in disguise.\nEvery strong reaction you have to another person is a map.\nThe clearest map to your blind spot is your strongest opinion about someone else.\nWhat does your anger tell you about yourself?\nThis is why one percent think differently."
+      "script": "The person who irritates you most is showing you yourself.\nCarl Jung spent decades on why smart people keep repeating the same mistakes.\nHis answer was the shadow — the part of you that you refuse to look at.\nThe trait you cannot stand in someone else?\nUsually the one you have buried in yourself.\nFurious at arrogance — check the ambition you won't admit to.\nDisgusted by weakness — check what you're scared to feel.\nJung called it projection. Your loudest judgments are confessions in disguise.\nEvery strong reaction you have to a person is a map to your blind spot.\nSo who is it — who has been living rent-free in your head?\nWhich person were you thinking about just now?"
     },
     {
       "seed_type": "wisdom",
       "seed_source": "Viktor Frankl",
       "seed_content": "Between stimulus and response there is a space. In that space is our power to choose.",
-      "script": "Viktor Frankl survived three Nazi concentration camps.\nHe watched people around him break completely. He watched others find meaning in the same conditions.\nThe difference was not strength. Not luck. Not background.\nIt was the ability to pause between what happened and how they responded.\nFrankl called that pause freedom.\nNot freedom from circumstances. Freedom of response.\nHe said that gap is where your entire character lives.\nYou cannot control what happens to you.\nYou can always control the pause before you react.\nMost people skip the pause entirely and call the reaction their personality.\nWhere in your life are you skipping the pause?\nThis is why one percent think differently."
+      "script": "There's a half-second gap you skip every single day. It's costing you your character.\nViktor Frankl survived three concentration camps.\nHe watched some people break and others find meaning in the exact same hell.\nThe difference wasn't strength. Wasn't luck. Wasn't background.\nIt was the pause between what happened and how they answered.\nFrankl called that pause freedom.\nNot freedom from your circumstances. Freedom inside your response.\nMost people never use it. Stimulus, reaction, no gap.\nThen they call that reaction their personality.\nSo the gap you keep skipping is the only freedom you actually own.\nWhere are you skipping the pause today?"
     }
   ],
 
@@ -51,13 +51,13 @@
       "seed_type": "wisdom",
       "seed_source": "Jeff Bezos",
       "seed_content": "Your margin is my opportunity.",
-      "script": "Jeff Bezos built his first competitive strategy around one observation.\nBarnes and Noble had thirty to forty percent margins on books in 1995.\nAmazon priced books at cost and took losses for three straight years.\nBy year four, Barnes and Noble could not compete.\nThey did not lose to better books.\nThey lost because they had high margins and assumed that made them safe.\nBezos called it the margin opportunity.\nEvery fat-margin business is telling you exactly where to enter.\nThin margins, high volume, long timeline.\nThat is how you make an incumbent obsolete without ever having to be better than them.\nWhat high-margin problem in your market still has no cheap solution?\nSave this. Build something."
+      "script": "Your competitor's fat profit margin is a map showing you exactly where to attack.\nBezos built Amazon's first strategy on one line: your margin is my opportunity.\nBarnes and Noble made forty percent on every book in 1995.\nAmazon sold at cost and ate losses for three straight years.\nBy year four, the bookstore giant could not fight back.\nThey didn't lose to better books. They lost to their own comfortable margins.\nEvery fat-margin business is screaming where the opening is.\nThin margins, huge volume, a timeline nobody else will stomach.\nThat is how you make a giant obsolete without ever being smarter than them.\nSo whose fat margin are you about to turn into your opening?\nWhat fat-margin market are you about to attack?"
     },
     {
       "seed_type": "wisdom",
       "seed_source": "Paul Graham",
       "seed_content": "Make something people want.",
-      "script": "Paul Graham has funded companies worth over one trillion dollars combined.\nHe has one test he applies to every founder in the first ten minutes.\nNot the idea. Not the market size. Not the team credentials.\nOne question: do you talk to your users every week?\nMost founders build for six months then wonder why nobody wants it.\nGraham's answer is always the same.\nYou cannot build what people want from inside a room.\nYou have to go ask them what keeps them up at night and build exactly that.\nDropbox, Airbnb, Stripe. All of them started by talking to ten people.\nWhen did you last talk directly to someone who needs what you are building?\nSave this. Build something."
+      "script": "You've been building for six months without talking to one user. That's why it will flop.\nPaul Graham has funded companies now worth over a trillion dollars combined.\nHe runs one test on every founder in the first ten minutes.\nNot the idea. Not the market. Not the resume.\nOne question: do you talk to your users every week?\nMost founders build in a room for months, then wonder why nobody shows up.\nYou cannot guess what people want from inside your own head.\nDropbox, Airbnb, Stripe — every one started by talking to ten people.\nThe product was never the work. The conversation is the work.\nSo when did you last talk to the person you're building for?\nWhen did you last talk to a real customer?"
     }
   ],
 
@@ -66,13 +66,13 @@
       "seed_type": "wisdom",
       "seed_source": "James Clear",
       "seed_content": "You do not rise to the level of your goals. You fall to the level of your systems.",
-      "script": "James Clear spent three years studying why people fail to build habits.\nHis one finding that changed everything: you do not rise to your goals. You fall to your systems.\nA goal to run a marathon will not get you out of bed on a Tuesday in February.\nRunning shoes already placed on the mat the night before will.\nThe difference is not motivation.\nIt is the number of decisions required to start.\nRemove the decision. The habit runs itself.\nHe sold ten million copies of one book on this single idea.\nIdentity over outcome. System over goal. Process over result.\nWhat is one decision you could eliminate from tomorrow morning?\nDo this tomorrow morning."
+      "script": "Stop setting goals. They are the reason you keep failing.\nJames Clear spent three years on why people cannot build habits.\nThe finding that changed everything: you don't rise to your goals, you fall to your systems.\nA goal to run a marathon won't get you up on a cold Tuesday.\nRunning shoes set by the door the night before will.\nIt was never about motivation.\nIt's about how many decisions stand between you and starting.\nKill the decision, and the habit runs itself.\nTen million people bought his book for that single idea.\nSo you don't need a bigger goal. You need a smaller decision.\nWhat's the one decision you can kill tomorrow?"
     },
     {
       "seed_type": "wisdom",
       "seed_source": "Naval Ravikant",
       "seed_content": "Specific knowledge is found by pursuing your genuine curiosity, not whatever is hot right now.",
-      "script": "Naval Ravikant built two companies, invested in Twitter, Uber, and Notion early, and retired at forty.\nHe has one piece of advice he keeps repeating.\nDo not optimize for what is hot. Optimize for what you cannot stop thinking about.\nHe calls it specific knowledge.\nThe kind of expertise that looks like play to you and work to everyone else.\nThat asymmetry is a competitive advantage you cannot replicate with discipline alone.\nYou cannot fake genuine curiosity. The market eventually figures it out.\nPeople who followed trends are doing okay.\nPeople who followed obsessions built the companies everyone else wishes they had started.\nWhat do you keep coming back to that you have been calling a distraction?\nDo this tomorrow morning."
+      "script": "You're chasing what's hot. That's exactly why you'll stay average.\nNaval Ravikant built two companies, invested early in Uber and Twitter, retired at forty.\nHe repeats one thing: don't optimize for what's hot, optimize for what you can't stop thinking about.\nHe calls it specific knowledge.\nThe expertise that feels like play to you and looks like work to everyone else.\nThat gap is an edge nobody can grind their way into copying.\nYou can fake discipline. You cannot fake genuine obsession.\nThe people who chased trends are doing fine.\nThe people who chased an obsession built the companies the trend-chasers wish they had started.\nSo what do you keep circling back to that you've been calling a distraction?\nWhich one are you starting with — tell me."
     }
   ]
 }
