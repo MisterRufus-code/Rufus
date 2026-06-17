@@ -243,9 +243,10 @@ def _build_sd_prompts(script: str, niche: str, max_scenes: int = 6) -> list[str]
         if keys_file.exists():
             key = json.loads(keys_file.read_text()).get("openai", "")
         if not key or key.startswith("YOUR_") or key.startswith("FILL_"):
-            print("[sd] No OpenAI key — SD needs GPT-4o-mini for quality prompts. "
-                  "Add 'openai' key to config/keys.json. Skipping SD.")
-            return []
+            raise RuntimeError(
+                "OpenAI key missing — SD prompt generation requires GPT-4o-mini.\n"
+                "Add 'openai' key to config/keys.json or use RUFUS_VIDEO_SOURCE=pexels."
+            )
         if True:  # always enter — key is confirmed valid above
                 beat_lines = "\n".join(
                     f"  Beat {i+1} (CAMERA={_SD_ANCHORS[i % len(_SD_ANCHORS)]['camera'].split(',')[0]}): "
@@ -325,14 +326,14 @@ def _build_sd_prompts(script: str, niche: str, max_scenes: int = 6) -> list[str]
                 lines = [l for l in lines if len(l) > 20]
 
                 if not lines:
-                    print("[sd] GPT returned no valid prompts — skipping SD")
-                    return []
+                    raise RuntimeError("GPT returned no valid prompts for SD generation")
                 if len(lines) < n:
                     print(f"[sd] GPT returned {len(lines)}/{n} prompts — using partial batch")
                 return lines[:n]
+    except RuntimeError:
+        raise   # re-raise clean errors (missing key, empty response)
     except Exception as e:
-        print(f"[sd] GPT prompt generation failed: {e} — skipping SD step")
-        return []
+        raise RuntimeError(f"SD prompt generation failed: {e}") from e
 
 
 def load_niche_cfg(override: str = None):
