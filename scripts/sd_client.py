@@ -489,8 +489,10 @@ def generate_clips(queries: list[str], n: int = 4,
         if prebuilt:
             # GPT already wrote a complete SD token prompt with specs baked in.
             # Only ensure the RV5.1 activator leads and the quality tail is present.
+            # Check for "photorealistic" (present in fallback prompts but intentionally
+            # absent from GPT-written prompts per the NO-quality-tokens instruction).
             prompt = query if query.startswith("RAW photo") else f"RAW photo, {query}"
-            if "8k uhd" not in prompt:
+            if "photorealistic" not in prompt:
                 prompt = f"{prompt}, {QUALITY_SUFFIX}"
         else:
             prompt = _query_to_prompt(query, style, idx=i)

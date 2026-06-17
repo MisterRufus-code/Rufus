@@ -154,12 +154,14 @@ def _whisper() -> WhisperModel:
     if _whisper_model is None:
         if _GPU:
             try:
-                _whisper_model = WhisperModel("base", device="cuda", compute_type="float16")
-                print("[whisper] CUDA / float16 (GPU mode)")
+                _whisper_model = WhisperModel("small", device="cuda", compute_type="float16")
+                print("[whisper] CUDA / float16 (GPU mode) — small model")
                 return _whisper_model
             except Exception as e:
                 print(f"[whisper] CUDA init failed ({e}) — falling back to CPU")
-        _whisper_model = WhisperModel("base", device="cpu", compute_type="int8")
+        # "small" (~244M params) vs "base" (~74M): measurably better word accuracy
+        # and sentence boundary detection at ~2x CPU time — worth it for caption quality.
+        _whisper_model = WhisperModel("small", device="cpu", compute_type="int8")
     return _whisper_model
 
 

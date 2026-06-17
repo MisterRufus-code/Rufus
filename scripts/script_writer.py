@@ -782,7 +782,7 @@ def _generate(client: OpenAI, system: str, user: str, model: str,
             {"role": "user",   "content": user},
         ],
         temperature=temperature,
-        max_tokens=350,
+        max_tokens=500,
         timeout=90,
     )
     ms    = int((time.time() - t0) * 1000)
@@ -946,6 +946,7 @@ def write_script(scene_description: str, seed: dict | None = None,
     # ── Phase A + B: get a winning hook (1 retry allowed) ─────────────────────
     winning_hook = None
     winning_hook_score = 0
+    hook_score_min = std["scoring"]["hook_score_min"]
     for hook_attempt in range(1, 3):  # max 2 tries at hook factory
         temp = (std["scoring"]["hook_temperature"]
                 if hook_attempt == 1
@@ -970,11 +971,24 @@ def write_script(scene_description: str, seed: dict | None = None,
             print(f"[gpt] Phase B: {reason}")
             continue
 
-        winning_hook = hooks[idx]
-        winning_hook_score = score
-        print(f"[gpt] Phase B winner ({score}/10): {winning_hook}")
+        candidate_hook  = hooks[idx]
+        candidate_score = score
+        print(f"[gpt] Phase B candidate ({score}/10): {candidate_hook}")
         print(f"[gpt]   reason: {reason}")
-        break
+
+        # Always keep the best candidate across attempts so we can fall back to it
+        # if neither attempt hits the minimum threshold.
+        if candidate_score > winning_hook_score:
+            winning_hook       = candidate_hook
+            winning_hook_score = candidate_score
+
+        if candidate_score >= hook_score_min:
+            print(f"[gpt] Phase B: hook accepted ({score}/10 ≥ {hook_score_min})")
+            break
+        else:
+            print(f"[gpt] Phase B: {score}/10 < {hook_score_min} threshold — retrying hook factory"
+                  if hook_attempt == 1 else
+                  f"[gpt] Phase B: retry also {score}/10 — using best available hook")
 
     if not winning_hook:
         # Last-resort: take whatever hook we have, even if weak
@@ -1008,6 +1022,8 @@ def write_script(scene_description: str, seed: dict | None = None,
     max_attempts  = std["scoring"]["max_body_attempts"]
     score_min     = std["scoring"]["score_min"]
     body_model    = std["models"]["body_gen"]
+    # 500 tokens (≈375 words) gives room for the 80-115 word script + retry pressure
+    # blocks that accumulate across attempts without ever cutting off mid-sentence.
     last_rejection = ""        # what failed in the previous attempt (for the crit note)
     accumulated_fixes: list[str] = []   # ALL corrections so far — carried forward each retry
     rejected_pool: list[tuple[int, str]] = []   # (word_count, script) for salvage fallback
