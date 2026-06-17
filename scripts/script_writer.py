@@ -622,15 +622,20 @@ def _hook_scorer(client: OpenAI, hooks: list[str], seed: dict, niche_name: str,
         f"You are a viral YouTube Shorts editor. Score these hook candidates 0-10 each.\n\n"
         f"SOURCE: \"{seed_text}\"\n\n"
         f"HOOKS:\n{numbered}\n\n"
-        "SCORING CRITERIA (0-10 total):\n"
-        "- Contradiction strength (cognitive gap the brain CANNOT ignore — feels wrong, demands resolution): 0-4\n"
-        "- Pattern interrupt (stops the scroll — opens a question the viewer must answer): 0-3\n"
-        "- Specificity (real number/name/year that earns instant credibility): 0-2\n"
-        "- Brevity & punch (every word earns its place, no filler): 0-1\n\n"
-        "DISQUALIFY (score 0-3) if: hook is purely descriptive with no tension, no contradiction, "
-        "no cognitive gap — just a statement of fact or neutral observation.\n\n"
+        "SCORING — two steps, no exceptions:\n\n"
+        "STEP 1 — BINARY GATE (if ANY gate fails → maximum score is 3, hard cap):\n"
+        "  • Contains a specific number, dollar amount, year, or proper noun (real person/place)?\n"
+        "  • States or implies the OPPOSITE of common belief (contradiction/paradox)?\n"
+        "  • ≤10 words?\n"
+        "If all three pass, proceed to Step 2. If any fail → score 1-3 and stop.\n\n"
+        "STEP 2 — SURPRISE INTENSITY (only when all gates pass — score 4-10):\n"
+        "  • LOW surprise — viewer half-expected this, mild paradox: 4-6\n"
+        "  • MEDIUM surprise — viewer wouldn't have predicted this: 7-8\n"
+        "  • HIGH surprise — viewer actively thinks 'wait, is that actually true?': 9-10\n\n"
+        "A 9/10 hook makes a viewer question something they believed with certainty.\n"
+        "A 7/10 is solid. A 5/10 fails. A 3/10 gets cut.\n\n"
         "Reply ONLY with this JSON array, one object per hook, in order:\n"
-        '[{"i": 1, "score": 0-10, "reason": "one-sentence why"}, ...]'
+        '[{"i": 1, "score": 0-10, "reason": "one-sentence citing which gate passed/failed or surprise level"}, ...]'
     )
 
     t0 = time.time()

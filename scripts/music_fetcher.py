@@ -178,23 +178,33 @@ def _archive_music(mood: str) -> Path | None:
 def fetch_music(niche: str) -> Path | None:
     """Return path to a music track for the niche, or None for voice-only.
 
-    Streaming providers first (real produced tracks), then the synthesized
-    local bed — so a render virtually always has music under the voice.
+    Provider chain (best-to-worst quality):
+      1. Jamendo — real produced tracks with proper mood tagging (needs free key)
+      2. MusicGen — AI-generated from a niche-specific text prompt (always on-tone)
+      3. Synthesized local bed — deterministic mood bed (fallback, always works)
+      4. archive.org — last resort (unpredictable; speech-filtered query)
     """
     MUSIC_DIR.mkdir(parents=True, exist_ok=True)
     moods = MOOD_MAP.get(niche, DEFAULT_MOODS)
 
     # 1. Jamendo — real, produced, mood-tagged INSTRUMENTAL music (free key).
-    #    This is the right source for accurate, professional background music.
     for mood in moods:
         track = _jamendo(mood)
         if track:
             return track
 
-    # 2. Synthesized local bed — mood-matched and instrumental, so it is always
-    #    on-tone and NEVER a stray spoken-word/podcast track. This beats the
-    #    archive.org grab-bag, whose opensource_audio collection mixes music with
-    #    interviews/lectures/audiobooks (the source of "strange" music).
+    # 2. MusicGen — AI-generated from a niche text description.
+    #    Output is literally written for the niche's emotional tone: finance gets
+    #    "cinematic dark ambient, documentary strings", not a random podcast track.
+    try:
+        from musicgen_gen import generate_music
+        track = generate_music(niche)
+        if track:
+            return track
+    except Exception as e:
+        print(f"[music] MusicGen failed: {e}")
+
+    # 3. Synthesized local bed — mood-matched and instrumental, always available.
     try:
         from music_gen import ensure_music
         track = ensure_music(niche)
@@ -203,7 +213,7 @@ def fetch_music(niche: str) -> Path | None:
     except Exception as e:
         print(f"[music] local synthesis failed: {e}")
 
-    # 3. archive.org — last resort only (unpredictable; query is speech-filtered).
+    # 4. archive.org — last resort only (unpredictable; query is speech-filtered).
     for mood in moods:
         track = _archive_music(mood)
         if track:

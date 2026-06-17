@@ -77,8 +77,8 @@ _SENT_END_RE  = re.compile(r'[.!?…]["\')\]]*$')
 
 FONT_NAME = "Anton"        # downloaded to assets/fonts/; Arial fallback if missing
 FONT_FILE = FONTS_DIR / "Anton-Regular.ttf"
-FONTSIZE  = 120
-MARGIN_V  = 576            # 576px from bottom = captions at 70% from top (lower third)
+FONTSIZE  = 140            # larger = better mobile readability
+MARGIN_V  = 750            # 750px from bottom = center zone (~39% from bottom in 1920px frame)
 
 DEFAULT_ACCENT = "#FFD23F"   # warm gold — used when a niche has no accent_color
 
@@ -243,8 +243,18 @@ def build_ass(segments, ass_path: Path, audio_dur: float,
     )
     lines = []
     for start, end, text in _cluster_words(segments, audio_dur):
-        c      = accent if _is_highlight(text) else WHITE
-        styled = f"{{\\c{c}\\fscx120\\fscy120\\t(0,80,\\fscx100\\fscy100)}}{text}"
+        c = accent if _is_highlight(text) else WHITE
+        # Staggered pop: highlights (numbers/$/%/opinion words) get the biggest
+        # fastest pop to punch emphasis; regular words get a subtler scale.
+        if _is_highlight(text):
+            scale_start, pop_ms = 138, 45   # biggest pop, fastest — maximum emphasis
+        elif text[:1].upper() in "TKPBDGFVS":  # strong consonant onset = punch
+            scale_start, pop_ms = 122, 62
+        else:
+            scale_start, pop_ms = 112, 88   # subtle scale, slower — background words
+        styled = (f"{{\\c{c}\\shad2"
+                  f"\\fscx{scale_start}\\fscy{scale_start}"
+                  f"\\t(0,{pop_ms},\\fscx100\\fscy100)}}{text}")
         lines.append(f"Dialogue: 0,{_ts(start)},{_ts(end)},Default,,0,0,0,,{styled}")
     ass_path.write_text(header + "\n".join(lines), encoding="utf-8")
 

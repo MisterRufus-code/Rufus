@@ -90,8 +90,8 @@
     "max_body_attempts": 3,
     "body_temperatures": [0.7, 0.95, 1.1],
     "hook_candidates": 8,
-    "hook_temperature": 1.0,
-    "hook_retry_temperature": 1.2,
+    "hook_temperature": 0.6,
+    "hook_retry_temperature": 0.85,
     "min_surviving_hooks": 2
   },
 

@@ -75,3 +75,8 @@ urllib3==2.6.3
 xmltodict==0.13.0
 yarl==1.24.2
 yq==3.1.0
+# Voice
+kokoro>=0.9.2
+soundfile
+# AI music generation (Meta AudioCraft — optional, ~300MB model download on first use)
+audiocraft

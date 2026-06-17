@@ -2,29 +2,35 @@
 """
 tts_engine.py — Pluggable text-to-speech for Rufus.
 
-Three backends, selected via the RUFUS_TTS environment variable:
+Four backends, selected via the RUFUS_TTS environment variable:
 
   RUFUS_TTS=edge        (default) — Microsoft Edge TTS. Free, fast, cloud, no
                                     GPU. Reliable but reads slightly flat.
-  RUFUS_TTS=xtts                  — Coqui XTTS v2. Free forever, runs locally on
-                                    a GTX 1060 6GB (~3GB VRAM), near-ElevenLabs
-                                    quality, clones a voice from a 6s sample.
-  RUFUS_TTS=elevenlabs            — ElevenLabs cloud. The most natural option;
-                                    ~$0.10/video. Needs an "elevenlabs" key in
-                                    config/keys.json. This is what most top
-                                    faceless channels actually use.
+  RUFUS_TTS=kokoro                — Kokoro-82M (Apache 2.0). Free, runs locally
+                                    on CPU in real time. Voice quality between
+                                    Edge and ElevenLabs — the best free local
+                                    voice for narration with no GPU needed.
+                                    Install: pip install kokoro soundfile
+  RUFUS_TTS=xtts                  — Coqui XTTS v2. Free, local GPU (~3GB VRAM),
+                                    near-ElevenLabs quality, voice cloning.
+  RUFUS_TTS=elevenlabs            — ElevenLabs cloud. Most natural, ~$0.10/video.
+                                    Needs "elevenlabs" key in config/keys.json.
 
-Pick the trade-off you want: elevenlabs = best sound (paid), xtts = best free
-(local GPU), edge = zero-setup fallback. Every backend degrades gracefully — any
-failure (no key, API down, model missing) falls back to Edge TTS so a render
-never breaks over a voice issue.
+Quality ranking: elevenlabs > kokoro > xtts > edge
+Ease ranking:    edge > kokoro > elevenlabs > xtts
+
+Every backend falls back to Edge TTS on any failure so renders never break.
+
+Kokoro tuning (optional):
+  RUFUS_KOKORO_VOICE=am_adam   # default: deep American male narration voice
+                               # options: am_michael, bf_emma, af_heart, af_sky
 
 XTTS voice cloning (optional):
   RUFUS_TTS_VOICE=/path/to/reference.wav   # 6-30s clean speech sample to clone
 
 ElevenLabs tuning (optional):
-  RUFUS_ELEVEN_VOICE=<voice_id>   # default: Adam (deep narration)
-  RUFUS_ELEVEN_MODEL=<model_id>   # default: eleven_turbo_v2_5 (fast + cheap)
+  RUFUS_ELEVEN_VOICE=<voice_id>   # default: Adam (pNInz6obpgDQGcFmaJgB)
+  RUFUS_ELEVEN_MODEL=<model_id>   # default: eleven_turbo_v2_5
 
 All backends write to the exact output path requested (mp3).
 """
@@ -39,28 +45,64 @@ from pathlib import Path
 CONFIG_DIR = Path(__file__).parent.parent / "config"
 KEYS_FILE  = CONFIG_DIR / "keys.json"
 
-# Edge TTS defaults. Andrew is the deep "documentary" multilingual-neural voice
-# the community consistently rates most natural for narration; override with
-# RUFUS_EDGE_VOICE (e.g. en-US-BrianMultilingualNeural, en-US-ChristopherNeural).
+# Edge TTS defaults
 EDGE_VOICE = os.environ.get("RUFUS_EDGE_VOICE", "en-US-AndrewMultilingualNeural")
 EDGE_RATE  = os.environ.get("RUFUS_EDGE_RATE", "+6%")
 
+# Kokoro defaults — am_adam is the deep American male voice built for narration
+KOKORO_VOICE = os.environ.get("RUFUS_KOKORO_VOICE", "am_adam")
+
 # XTTS defaults
-XTTS_MODEL    = "tts_models/multilingual/multi-dataset/xtts_v2"
-XTTS_LANGUAGE = os.environ.get("RUFUS_TTS_LANG", "en")
-# Built-in studio speaker used when no reference clip is provided.
+XTTS_MODEL           = "tts_models/multilingual/multi-dataset/xtts_v2"
+XTTS_LANGUAGE        = os.environ.get("RUFUS_TTS_LANG", "en")
 XTTS_DEFAULT_SPEAKER = os.environ.get("RUFUS_XTTS_SPEAKER", "Damien Black")
 
-# ElevenLabs defaults. Adam is the deep, confident narration preset most used
-# for faceless content. eleven_turbo_v2_5 is the cheap, fast, high-quality model.
+# ElevenLabs defaults
 ELEVEN_VOICE = os.environ.get("RUFUS_ELEVEN_VOICE", "pNInz6obpgDQGcFmaJgB")  # Adam
 ELEVEN_MODEL = os.environ.get("RUFUS_ELEVEN_MODEL", "eleven_turbo_v2_5")
 
-_xtts_model = None   # lazy singleton — loading the model is expensive
+_xtts_model   = None   # lazy singleton
+_kokoro_pipe  = None   # lazy singleton
 
 
 def _backend() -> str:
     return os.environ.get("RUFUS_TTS", "edge").strip().lower()
+
+
+# ── Kokoro TTS ────────────────────────────────────────────────────────────────
+
+def _kokoro(script: str, out_path: Path) -> None:
+    """Synthesize with Kokoro-82M (Apache 2.0, runs on CPU). Outputs mp3."""
+    global _kokoro_pipe
+    import numpy as np
+    import soundfile as sf
+    from kokoro import KPipeline
+
+    if _kokoro_pipe is None:
+        _kokoro_pipe = KPipeline(lang_code="a")   # 'a' = American English
+        print(f"[tts] Kokoro pipeline loaded (voice: {KOKORO_VOICE})")
+
+    # Collect all audio segments (generator yields (graphemes, phonemes, audio_array))
+    segments = [audio for _, _, audio in _kokoro_pipe(script, voice=KOKORO_VOICE)]
+    if not segments:
+        raise RuntimeError("Kokoro returned no audio segments")
+
+    audio = np.concatenate(segments) if len(segments) > 1 else segments[0]
+    sample_rate = 24000   # Kokoro native sample rate
+
+    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tf:
+        wav_path = tf.name
+    try:
+        sf.write(wav_path, audio, sample_rate)
+        r = subprocess.run(
+            ["ffmpeg", "-y", "-loglevel", "error", "-i", wav_path,
+             "-c:a", "libmp3lame", "-b:a", "192k", str(out_path)],
+            capture_output=True, text=True, timeout=60,
+        )
+        if r.returncode != 0 or not out_path.exists() or out_path.stat().st_size < 5_000:
+            raise RuntimeError(f"Kokoro mp3 transcode failed: {r.stderr[-300:]}")
+    finally:
+        Path(wav_path).unlink(missing_ok=True)
 
 
 # ── Edge TTS ──────────────────────────────────────────────────────────────────
@@ -196,7 +238,15 @@ def synthesize(script: str, out_path: Path) -> None:
             _elevenlabs(script, out_path)
             return
         except Exception as e:
-            print(f"[tts] ElevenLabs failed ({e}) — falling back to Edge TTS")
+            print(f"[tts] ElevenLabs failed ({e}) — falling back to Kokoro")
+
+    if backend in ("elevenlabs", "kokoro"):
+        try:
+            print(f"[tts] backend: Kokoro ({KOKORO_VOICE})")
+            _kokoro(script, out_path)
+            return
+        except Exception as e:
+            print(f"[tts] Kokoro failed ({e}) — falling back to Edge TTS")
 
     if backend == "xtts":
         try:
@@ -206,7 +256,7 @@ def synthesize(script: str, out_path: Path) -> None:
         except Exception as e:
             print(f"[tts] XTTS failed ({e}) — falling back to Edge TTS")
 
-    if backend not in ("elevenlabs", "xtts"):
+    if backend not in ("elevenlabs", "kokoro", "xtts"):
         print(f"[tts] backend: Edge TTS ({EDGE_VOICE})")
     _edge(script, out_path)
 

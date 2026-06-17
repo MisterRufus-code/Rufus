@@ -47,34 +47,53 @@ FPS   = 30
 TIMEOUT_GEN = 180   # A1111 generation can be slow on 6GB
 TIMEOUT_UPX = 120   # R-ESRGAN upscale timeout
 
-# Tuned for Realistic Vision v5.1 — must lead every prompt with "RAW photo"
+# Tuned for Realistic Vision v5.1 — surgical quality tokens, no bloat.
+# "RAW photo" activator is included in every prompt directly; these tokens
+# reinforce sharpness, film realism, and proper optics — not redundant hype.
 QUALITY_SUFFIX = (
-    "8k uhd, ultra high resolution, masterpiece, best quality, "
-    "photorealistic, hyperrealistic, ultra-detailed skin texture, "
-    "subsurface scattering, pore detail, sharp focus, extreme detail, "
-    "intricate details, natural lighting falloff, "
-    "Kodak Portra 400 film emulation, professional editorial photography, "
-    "shot on Fujifilm GFX100S, Sigma Art series lens, fine film grain"
+    "photorealistic, hyperrealistic, "
+    "ultra-sharp skin pores, subsurface scattering, micro skin texture, "
+    "natural skin imperfections, real hair strands, fabric weave visible, "
+    "Fujifilm Portra 400 film emulation, Sigma 50mm f/1.4 Art lens, "
+    "shallow depth of field, creamy out-of-focus background bokeh, "
+    "natural chromatic falloff, fine film grain overlay, "
+    "natural lighting falloff, motivated key light source, "
+    "catch light in eyes, real shadow gradients, "
+    "tack-sharp focus on subject, crisp foreground detail, "
+    "professional editorial photography, award-winning photography"
 )
 NEGATIVE_PROMPT = (
+    # Quality failures
     "(worst quality:2), (low quality:2), (normal quality:2), lowres, "
-    "watermark, text, signature, logo, border, frame, "
-    "cartoon, anime, illustration, sketch, painting, 3d render, cgi, "
-    "(bad anatomy:1.4), (deformed:1.4), (disfigured:1.4), "
-    "(bad hands:1.5), (bad fingers:1.5), missing fingers, extra fingers, "
-    "extra limbs, extra arms, extra legs, mutated hands, fused fingers, "
-    "too many fingers, long neck, cross-eyed, "
-    "plastic skin, waxy skin, mannequin, fake-looking, artificial, "
+    "(blurry:1.3), (soft focus:1.3), hazy, out of focus, unfocused, "
+    "jpeg artifacts, noise, color banding, "
+    "(overexposed:1.2), (underexposed:1.2), blown highlights, crushed blacks, "
+    "flat lighting, no shadows, even lighting, shadowless, "
+    # Anatomy failures
+    "(bad anatomy:1.5), (deformed:1.5), (disfigured:1.4), mutated, "
+    "(bad hands:1.6), (bad fingers:1.6), (extra fingers:1.5), missing fingers, "
+    "fused fingers, too many fingers, extra limbs, extra arms, extra legs, "
+    "mutated hands, long neck, cross-eyed, lazy eye, "
+    "(asymmetrical eyes:1.3), floating limbs, disconnected limbs, "
+    # Face failures
+    "(bad face:1.4), (distorted face:1.4), (ugly face:1.3), uncanny valley, "
+    "plastic skin, waxy skin, mannequin face, doll face, "
     "skin spots, acnes, skin blemishes, age spot, "
-    "overexposed, underexposed, flat lighting, blown highlights, "
-    "oversaturated, neon colors, chromatic aberration, "
-    "duplicate, split image, collage, out of frame, "
-    "jpeg artifacts, blurry, soft, out of focus, "
-    "ugly, mutilated, poorly drawn face, dull, lifeless, "
-    "poorly drawn hands, bad proportions, gross proportions, "
-    "(stock photo:1.3), posed, smiling at camera, fake smile, "
-    "corporate, clip art, generic businessman, glossy advertisement, "
-    "staged, model pose, perfect teeth, overly polished"
+    "fake smile, forced smile, unnatural expression, vacant stare, "
+    "poorly drawn face, misaligned features, (asymmetrical face:1.2), "
+    # Stock photo look
+    "(stock photo:1.4), posed, smiling at camera, looking at camera, "
+    "corporate headshot, generic businessman, glossy advertisement, "
+    "clip art, illustration, cartoon, anime, sketch, painting, "
+    "3d render, cgi, digital art, concept art, "
+    "staged scene, fake background, green screen look, composite, "
+    "model pose, catalog pose, perfect teeth, overly polished, "
+    "oversaturated, neon colors, Instagram filter, "
+    # Technical artifacts
+    "watermark, text, signature, logo, border, frame, "
+    "duplicate, split image, collage, out of frame, tiled, "
+    # Content bans
+    "nudity, nsfw"
 )
 
 # Per-scene-slot cinematographic specs — each slot has a distinct visual language.
@@ -213,20 +232,34 @@ def _generate_image(prompt: str, seed: int = -1) -> bytes | None:
     so the four scenes read as one film instead of four random photos.
     """
     import os
-    steps = int(os.environ.get("SD_STEPS", "28"))  # 28 = quality sweet spot for RV5.1
+    steps = int(os.environ.get("SD_STEPS", "32"))  # 32 = sharper detail vs 28
     payload = {
         "prompt":          prompt,
         "negative_prompt": NEGATIVE_PROMPT,
         "width":           IMG_W,
         "height":          IMG_H,
         "steps":           steps,
-        "cfg_scale":       6.5,   # RV5.1 sweet spot — less plastic than 7+
-        "sampler_name":    "DPM++ 2M Karras",
-        "restore_faces":   True,  # fixes uncanny valley on portraits
-        "enable_hr":       False, # upscale separately — safer on 6GB VRAM
+        "cfg_scale":       7.0,              # better prompt adherence for complex subjects
+        "sampler_name":    "DPM++ SDE Karras",  # sharper fine detail for portraits
+        "restore_faces":   True,             # GFPGAN pass fixes uncanny valley
+        "enable_hr":       False,            # upscale separately — safer on 6GB VRAM
         "batch_size":      1,
         "n_iter":          1,
         "seed":            seed,
+        # ADetailer: automatically detects and redraws faces/hands at high res.
+        # Silently ignored if the A1111 ADetailer extension is not installed.
+        "alwayson_scripts": {
+            "ADetailer": {
+                "args": [{
+                    "ad_model":                 "face_yolov8n.pt",
+                    "ad_denoising_strength":    0.35,
+                    "ad_inpaint_only_masked":   True,
+                    "ad_mask_blur":             4,
+                    "ad_prompt":                "",
+                    "ad_negative_prompt":       "(worst quality), (low quality), cartoon, cgi, blurry",
+                }]
+            }
+        },
     }
     try:
         r = requests.post(f"{_host()}/sdapi/v1/txt2img", json=payload,

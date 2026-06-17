@@ -58,8 +58,30 @@ REDDIT_ENDPOINTS = [
     "https://old.reddit.com/r/{sub}/top.json?limit={lim}&t=week&raw_json=1",
 ]
 
-# Quality thresholds for Reddit posts
-MIN_SCORE         = 500
+# Quality thresholds for Reddit posts — per-subreddit because large subs
+# (personalfinance) produce high-score posts while smaller ones (povertyfinance)
+# max out around 200 but still contain gold. Flat 500 rejects too much.
+SUBREDDIT_MIN_SCORE: dict[str, int] = {
+    "personalfinance":        500,
+    "financialindependence":  400,
+    "FIRE":                   400,
+    "povertyfinance":         150,
+    "Frugal":                 200,
+    "GetDisciplined":         250,
+    "DecidingToBeBetter":     150,
+    "selfimprovement":        200,
+    "Stoicism":               200,
+    "philosophy":             100,
+    "psychology":             150,
+    "Entrepreneur":           300,
+    "startups":               250,
+    "smallbusiness":          150,
+    "EntrepreneurRideAlong":  150,
+    "productivity":           200,
+    "getdisciplined":         200,
+}
+DEFAULT_MIN_SCORE = 300   # fallback for any sub not in the dict above
+MIN_SCORE         = DEFAULT_MIN_SCORE   # kept for legacy callers
 MIN_BODY_LEN      = 300
 MIN_COMMENTS      = 50
 MAX_BODY_LEN      = 3000  # too long = won't fit a 35-50s Short
@@ -290,11 +312,11 @@ def _strip_html(text: str) -> str:
     return html_module.unescape(text).strip()
 
 
-def _passes_quality_filter(post: dict) -> bool:
+def _passes_quality_filter(post: dict, subreddit: str = "") -> bool:
     """Return True if a Reddit post has enough substance to be worth using.
 
     Requirements:
-      - Engagement: score >= MIN_SCORE, num_comments >= MIN_COMMENTS
+      - Engagement: score >= per-subreddit threshold, num_comments >= MIN_COMMENTS
       - Substance: body length within MIN_BODY_LEN..MAX_BODY_LEN
       - Title contains a STORY signal (dollar sign, number, or past-tense action verb)
       - Title does NOT match BAD patterns (rage/drama/mod)
@@ -303,7 +325,8 @@ def _passes_quality_filter(post: dict) -> bool:
     d = post.get("data", {})
     if d.get("stickied") or d.get("over_18") or d.get("removed_by_category"):
         return False
-    if d.get("score", 0) < MIN_SCORE:
+    min_score = SUBREDDIT_MIN_SCORE.get(subreddit, DEFAULT_MIN_SCORE)
+    if d.get("score", 0) < min_score:
         return False
     if d.get("num_comments", 0) < MIN_COMMENTS:
         return False
@@ -431,7 +454,7 @@ def fetch_reddit_story(subreddit: str, limit: int = 50, used_ids: set | None = N
     posts = data.get("data", {}).get("children", [])
     quality = [
         p for p in posts
-        if _passes_quality_filter(p)
+        if _passes_quality_filter(p, subreddit=subreddit)
         and _post_seed_id(p.get("data", {})) not in used_ids
     ]
     if not quality:
@@ -687,7 +710,21 @@ def fetch_rss_story(niche_name: str, used_ids: set | None = None) -> dict | None
         if not candidates:
             continue
 
-        title, desc, link = random.choice(candidates[:8])
+        # Prefer items with narrative signals (first-person story, lesson, failure)
+        # over pure-news articles so the script writer gets richer material.
+        NARRATIVE_SIGNALS = [
+            "failed", "mistake", "lost", "lesson", "realized",
+            "discovered", "decided", "why i", "how i", "years ago",
+            "never expected", "changed everything", "what i learned",
+            "confession", "secret", "worst", "best decision",
+        ]
+        narrative = [
+            c for c in candidates
+            if any(s in (c[0] + " " + c[1]).lower() for s in NARRATIVE_SIGNALS)
+        ]
+        pool = narrative if narrative else candidates
+
+        title, desc, link = random.choice(pool[:8])
         return {
             "type":    "rss",
             "source":  domain,
