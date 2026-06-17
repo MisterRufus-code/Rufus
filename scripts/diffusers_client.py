@@ -77,6 +77,13 @@ def _load_pipe():
 
     if gpu:
         _pipe = _pipe.to(device)
+        # Memory optimizations for ≤8GB VRAM (e.g. GTX 1060 6GB)
+        if hasattr(_pipe, "enable_attention_slicing"):
+            _pipe.enable_attention_slicing(1)
+        if hasattr(_pipe, "enable_vae_slicing"):
+            _pipe.enable_vae_slicing()
+        if hasattr(_pipe, "enable_vae_tiling"):
+            _pipe.enable_vae_tiling()
     elif hasattr(_pipe, "enable_sequential_cpu_offload"):
         _pipe.enable_sequential_cpu_offload()
 
