@@ -41,6 +41,13 @@ WISDOM_DIR       = CONFIG_DIR / "wisdom"
 USED_SEEDS_FILE  = CONFIG_DIR / "used_seeds.json"
 MAX_USED_HISTORY = 500  # cap to avoid unbounded growth
 
+# How many top-ranked candidates each source samples from. All sources are
+# already quality-gated (score thresholds + story filters), so the posts in
+# positions 9-20 are still strong — sampling from a wider window means more
+# distinct seeds before the dedup history exhausts a source and we fall back.
+# Bigger pool = fresher videos day over day.
+SAMPLE_POOL = 20
+
 REDDIT_HEADERS = {
     "User-Agent":      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
     "Accept":          "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
@@ -402,7 +409,7 @@ def _fetch_reddit_praw(subreddit: str, limit: int = 50, used_ids: set | None = N
             candidates.append(post)
         if not candidates:
             return None
-        chosen = random.choice(candidates[:8])
+        chosen = random.choice(candidates[:SAMPLE_POOL])
         return {
             "type":    "reddit",
             "source":  f"r/{subreddit}",
@@ -460,7 +467,7 @@ def fetch_reddit_story(subreddit: str, limit: int = 50, used_ids: set | None = N
     if not quality:
         return None
 
-    chosen = random.choice(quality[:8])
+    chosen = random.choice(quality[:SAMPLE_POOL])
     d = chosen["data"]
     return {
         "type":    "reddit",
@@ -518,7 +525,7 @@ def fetch_stackexchange_story(niche_name: str, used_ids: set | None = None) -> d
         print(f"[research] SE {site}: {len(items)} items, none passed quality filter")
         return None
 
-    title, body, link = random.choice(quality[:8])
+    title, body, link = random.choice(quality[:SAMPLE_POOL])
     return {
         "type":    "stackexchange",
         "source":  f"{site}.stackexchange.com",
@@ -587,7 +594,7 @@ def fetch_hackernews_story(niche_name: str, used_ids: set | None = None) -> dict
             seen_oids.add(oid)
             unique.append(h)
 
-    chosen = random.choice(unique[:8])
+    chosen = random.choice(unique[:SAMPLE_POOL])
     return {
         "type":    "hackernews",
         "source":  "Hacker News",
@@ -724,7 +731,7 @@ def fetch_rss_story(niche_name: str, used_ids: set | None = None) -> dict | None
         ]
         pool = narrative if narrative else candidates
 
-        title, desc, link = random.choice(pool[:8])
+        title, desc, link = random.choice(pool[:SAMPLE_POOL])
         return {
             "type":    "rss",
             "source":  domain,
