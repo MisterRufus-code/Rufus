@@ -233,7 +233,7 @@ def _build_sd_prompts(script: str, niche: str, max_scenes: int = 6) -> list[str]
         return (
             f"RAW photo, ({cue}:1.35), {a['subject_hint']}, {a['light']}, "
             f"{a['camera']}, {color_grade}, photorealistic, hyperrealistic, "
-            "8k uhd, sharp focus, professional editorial photography, film grain"
+            "sharp focus, professional editorial photography, film grain"
         )
 
     try:
