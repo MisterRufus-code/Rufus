@@ -233,6 +233,76 @@ HN_NICHE_QUERIES = {
 }
 
 
+# ── Trending signal (pytrends — graceful if not installed) ──────────────────────
+
+# Seed keywords per niche — Google Trends needs 1-5 related terms to find rising queries
+NICHE_TREND_SEEDS: dict[str, list[str]] = {
+    "finance":             ["investing", "stock market", "personal finance", "debt", "savings"],
+    "business":            ["startup", "entrepreneurship", "side hustle", "business strategy"],
+    "mindset":             ["mindset", "mental health", "self improvement", "habits"],
+    "motivation":          ["motivation", "discipline", "success mindset", "goal setting"],
+    "personal_development":["productivity", "learning", "self improvement", "daily habits"],
+}
+
+
+def get_trending_context(niche_name: str) -> str | None:
+    """Return a comma-separated string of rising Google Trends queries for this niche.
+
+    Uses pytrends (unofficial Google Trends scraper — pip install pytrends).
+    Returns None gracefully if not installed, rate-limited, or any failure.
+    Injected into pre-analysis so hooks can reference what people are actively
+    searching this week — the single most reliable signal of viral potential.
+    """
+    try:
+        from pytrends.request import TrendReq
+    except ImportError:
+        return None
+
+    seeds = NICHE_TREND_SEEDS.get(niche_name)
+    if not seeds:
+        return None
+
+    try:
+        pt = TrendReq(hl="en-US", tz=300, timeout=(5, 15))
+        pt.build_payload(seeds[:5], timeframe="now 7-d", geo="US")
+        related = pt.related_queries()
+
+        trending: list[str] = []
+        for kw in seeds[:3]:
+            if kw in related:
+                df = related[kw].get("rising")
+                if df is not None and not df.empty:
+                    trending.extend(df["query"].head(3).tolist())
+
+        if not trending:
+            # Fall back to top queries if no rising data
+            for kw in seeds[:3]:
+                if kw in related:
+                    df = related[kw].get("top")
+                    if df is not None and not df.empty:
+                        trending.extend(df["query"].head(2).tolist())
+
+        if not trending:
+            return None
+
+        # Deduplicate, remove generic single-word terms, cap at 5
+        seen: set[str] = set()
+        unique: list[str] = []
+        for t in trending:
+            t_norm = t.strip().lower()
+            if len(t_norm) > 4 and t_norm not in seen:
+                seen.add(t_norm)
+                unique.append(t.strip())
+
+        result = ", ".join(unique[:5])
+        print(f"[research] Google Trends ({niche_name}): {result}")
+        return result
+
+    except Exception as e:
+        print(f"[research] pytrends failed (non-fatal): {e}")
+        return None
+
+
 def _load_niche():
     data   = json.loads(NICHES_FILE.read_text())
     active = os.environ.get("RUFUS_NICHE_OVERRIDE") or data["active"]
@@ -388,10 +458,11 @@ def _fetch_reddit_praw(subreddit: str, limit: int = 50, used_ids: set | None = N
             user_agent="script:rufus.shorts:v1.0",
         )
         candidates = []
+        min_score_sub = SUBREDDIT_MIN_SCORE.get(subreddit, DEFAULT_MIN_SCORE)
         for post in reddit.subreddit(subreddit).top("week", limit=limit):
             if post.stickied or post.over_18:
                 continue
-            if post.score < MIN_SCORE or post.num_comments < MIN_COMMENTS:
+            if post.score < min_score_sub or post.num_comments < MIN_COMMENTS:
                 continue
             body = post.selftext or ""
             if not body or len(body) < MIN_BODY_LEN or len(body) > MAX_BODY_LEN:
@@ -791,36 +862,46 @@ def get_seed(niche_name: str | None = None) -> dict:
 
     print(f"[research] history: {len(used_list)} prior seeds will be skipped")
 
+    # Trending context — what people are actively searching this week.
+    # Injected into the seed so pre-analysis can build a timely hook.
+    trending_context = get_trending_context(name)
+
     subreddits = list(niche.get("subreddits", []))
     random.shuffle(subreddits)
+
+    def _with_trending(s: dict) -> dict:
+        """Attach trending_context to a seed dict so script_writer can use it."""
+        if trending_context:
+            s["trending_context"] = trending_context
+        return s
 
     for sub in subreddits:
         seed = fetch_reddit_story(sub, used_ids=used_set)
         if seed:
             print(f"[research] using Reddit story from {seed['source']}: \"{seed['title'][:60]}\"")
             _mark_seed_used(seed)
-            return seed
+            return _with_trending(seed)
 
     # StackExchange: keyless API, never IP-blocked like Reddit's public JSON
     seed = fetch_stackexchange_story(name, used_ids=used_set)
     if seed:
         print(f"[research] using StackExchange story from {seed['source']}: \"{seed['title'][:60]}\"")
         _mark_seed_used(seed)
-        return seed
+        return _with_trending(seed)
 
     # RSS/Atom feeds: free public feeds, no auth required
     seed = fetch_rss_story(name, used_ids=used_set)
     if seed:
         print(f"[research] using RSS story from {seed['source']}: \"{seed['title'][:60]}\"")
         _mark_seed_used(seed)
-        return seed
+        return _with_trending(seed)
 
     # Try Hacker News for niches that align with its intellectual/founder audience
     seed = fetch_hackernews_story(name, used_ids=used_set)
     if seed:
         print(f"[research] using HN story: \"{seed['title'][:60]}\"")
         _mark_seed_used(seed)
-        return seed
+        return _with_trending(seed)
 
     # No live story passed filters — fall back to wisdom quote pool
     seed = pick_wisdom_quote(name, used_ids=used_set)
@@ -839,7 +920,7 @@ def get_seed(niche_name: str | None = None) -> dict:
         "url":     "",
     }
     _mark_seed_used(fallback)
-    return fallback
+    return _with_trending(fallback)
 
 
 if __name__ == "__main__":

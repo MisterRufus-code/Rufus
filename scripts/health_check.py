@@ -151,6 +151,27 @@ def run() -> None:
     except ImportError:
         warn("MusicGen", "not installed — pip install audiocraft for AI music generation (optional)")
 
+    # ── Diffusers (in-process SD — no A1111 server needed) ──────────────────────
+    video_src = os.environ.get("RUFUS_VIDEO_SOURCE", "sd").lower()
+    try:
+        import diffusers as _diff  # noqa: F401
+        model_key = os.environ.get("RUFUS_DIFFUSERS_MODEL", "sdxl-turbo")
+        ok(f"Diffusers available  ({model_key}, RUFUS_VIDEO_SOURCE=diffusers){'  ← ACTIVE' if video_src == 'diffusers' else ''}")
+    except ImportError:
+        if video_src == "diffusers":
+            err("Diffusers", "RUFUS_VIDEO_SOURCE=diffusers but diffusers not installed — "
+                "pip install diffusers transformers accelerate")
+        else:
+            warn("Diffusers", "not installed — pip install diffusers transformers accelerate "
+                 "(enables RUFUS_VIDEO_SOURCE=diffusers, no A1111 server needed)")
+
+    # ── pytrends (Google Trends trending signal — optional) ──────────────────────
+    try:
+        from pytrends.request import TrendReq as _TR  # noqa: F401
+        ok("pytrends available  (Google Trends signal — timely hooks)")
+    except ImportError:
+        warn("pytrends", "not installed — pip install pytrends>=4.9.0 for trending-topic hook boost (optional)")
+
     # ── HyperFrames (only relevant if a niche uses it) ────────────────────────────
     try:
         import json as _json

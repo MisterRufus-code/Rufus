@@ -426,9 +426,9 @@ def run(skip_upload: bool = False, niche_override: str = None, output_dir: Path 
                      or niche_cfg.get("video_source") or "sd").strip().lower()
     video_queries = _parse_video_queries(seed_analysis)
 
-    # SD GENERATES clips from the script, so it defers to step 2.5 (after the
-    # script exists). Only stock sources fetch up front.
-    DEFERRED_SOURCES = ("sd",)
+    # SD and diffusers GENERATE clips from the script, so they defer to step 2.5
+    # (after the script exists). Only stock sources fetch up front.
+    DEFERRED_SOURCES = ("sd", "diffusers")
 
     # ── Step 2: Get candidate clips — generated (SD) or stock (Pexels) ──────────
     candidates = []
@@ -503,7 +503,7 @@ def run(skip_upload: bool = False, niche_override: str = None, output_dir: Path 
     # the renderer's sentence-boundary cuts keep the image tracking the voice-over.
     # Fallback chain so a render never dies:  sd → pexels.
     if video_source in DEFERRED_SOURCES:
-        print(f"[ 2.5/7 ]  Generating SD clips from script content...")
+        print(f"[ 2.5/7 ]  Generating clips from script content ({video_source})...")
         try:
             # One image per beat; SD_CLIPS (if set) caps the scene count.
             max_scenes = int(os.environ.get("SD_CLIPS", "6"))
@@ -512,13 +512,18 @@ def run(skip_upload: bool = False, niche_override: str = None, output_dir: Path 
             for i, p in enumerate(prompts):
                 print(f"             {i+1}. {p[:90]}")
 
-            from sd_client import generate_clips as sd_generate
-            candidates = sd_generate(prompts, n=len(prompts), prebuilt=True)
+            if video_source == "diffusers":
+                from diffusers_client import generate_clips as diffusers_generate
+                candidates = diffusers_generate(prompts)
+            else:
+                from sd_client import generate_clips as sd_generate
+                candidates = sd_generate(prompts, n=len(prompts), prebuilt=True)
+
             if candidates:
-                scene = "SD-generated: " + "; ".join(prompts[:2])
+                scene = f"{video_source}-generated: " + "; ".join(prompts[:2])
                 print(f"           → {len(candidates)} clips ready\n")
             else:
-                print("           ⚠ SD failed — falling back to Pexels")
+                print(f"           ⚠ {video_source} failed — falling back to Pexels")
                 video_source = "pexels"
 
             if not candidates:

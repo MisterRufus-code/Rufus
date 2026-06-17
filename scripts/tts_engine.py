@@ -66,7 +66,15 @@ _kokoro_pipe  = None   # lazy singleton
 
 
 def _backend() -> str:
-    return os.environ.get("RUFUS_TTS", "edge").strip().lower()
+    explicit = os.environ.get("RUFUS_TTS", "").strip().lower()
+    if explicit:
+        return explicit
+    # Auto-select best available: Kokoro (human-quality, free) > Edge (robotic)
+    try:
+        import kokoro  # noqa: F401
+        return "kokoro"
+    except ImportError:
+        return "edge"
 
 
 # ── Kokoro TTS ────────────────────────────────────────────────────────────────

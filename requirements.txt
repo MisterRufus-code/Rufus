@@ -80,3 +80,9 @@ kokoro>=0.9.2
 soundfile
 # AI music generation (Meta AudioCraft — optional, ~300MB model download on first use)
 audiocraft
+# Trending signal (Google Trends — no API key required)
+pytrends>=4.9.0
+# In-process SD generation — no A1111 server required (RUFUS_VIDEO_SOURCE=diffusers)
+diffusers>=0.27.0
+transformers>=4.40.0
+accelerate>=0.30.0

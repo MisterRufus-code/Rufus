@@ -405,17 +405,23 @@ def _body_pre_check(script: str) -> str | None:
 # ── Pre-analysis ────────────────────────────────────────────────────────────────
 
 def _pre_analyze(client: OpenAI, seed: dict, scene: str, run_id: str,
-                 niche: str) -> tuple[str, float]:
+                 niche: str, trending_context: str = "") -> tuple[str, float]:
     """Cheap pre-pass: extract hook angle + structural cues. Returns (text, cost)."""
     is_wisdom = seed and seed.get("type") == "wisdom"
     is_rss    = seed and seed.get("type") == "rss"
     model     = _standards()["models"]["pre_analyze"]
 
+    trending_note = (
+        f"\nCURRENTLY TRENDING (Google Trends, past 7 days): {trending_context}\n"
+        "Reference a trending term in the hook IF it fits naturally — don't force it.\n"
+        if trending_context else ""
+    )
+
     if is_wisdom:
         quote  = seed.get("content", "")
         author = seed.get("source", "Unknown")
         prompt = (
-            f"QUOTE: \"{quote}\"\nAUTHOR: {author}\n\n"
+            f"QUOTE: \"{quote}\"\nAUTHOR: {author}\n{trending_note}\n"
             "You are a historical researcher finding hook material for a 40-second YouTube Short.\n\n"
             "1. BIOGRAPHICAL FACT: One real, verifiable fact about this person's life that PROVES the quote through their actions. "
             "Must be concrete — include a number, year, event, or documented outcome.\n"
@@ -435,7 +441,7 @@ def _pre_analyze(client: OpenAI, seed: dict, scene: str, run_id: str,
     elif is_rss:
         seed_blk = _seed_block(seed)
         prompt = (
-            f"{seed_blk}\n"
+            f"{seed_blk}\n{trending_note}"
             "You are a news analyst finding the most surprising hook for a 40-second YouTube Short.\n\n"
             "1. SURPRISE: The single most counterintuitive or shocking fact in this news story. One sentence.\n"
             "2. HOOK ANGLE: One ≤8-word seed phrase. Lead with the number/name/surprise — not the headline.\n"
@@ -451,7 +457,7 @@ def _pre_analyze(client: OpenAI, seed: dict, scene: str, run_id: str,
     else:
         seed_blk = _seed_block(seed) if seed else f"Scene description: {scene}"
         prompt = (
-            f"{seed_blk}\nBackground scene: {scene}\n\n"
+            f"{seed_blk}\nBackground scene: {scene}\n{trending_note}\n"
             "Before writing the script, find these things in the source. Use REAL details — no invention.\n\n"
             "1. CONTRADICTION: One sentence — the surprising paradox in this source.\n"
             "2. HOOK ANGLE: One ≤8-word seed phrase. Lead with the number/name/contradiction. "
@@ -895,7 +901,9 @@ def preanalyze(seed: dict, scene: str = "") -> tuple[str, str, float]:
     run_id    = new_run_id()
     if seed:
         print(f"[gpt] run_id={run_id} seed: {seed.get('type', '?')} from {seed.get('source', 'Unknown')}")
-    analysis, cost = _pre_analyze(client, seed, scene, run_id, active)
+    trending_context = (seed or {}).get("trending_context", "")
+    analysis, cost = _pre_analyze(client, seed, scene, run_id, active,
+                                  trending_context=trending_context)
     if analysis:
         print(f"[gpt] analysis:\n{analysis}")
     return analysis, run_id, cost
@@ -930,11 +938,14 @@ def write_script(scene_description: str, seed: dict | None = None,
     if seed and not precomputed_analysis:
         print(f"[gpt] run_id={run_id} seed: {seed.get('type', '?')} from {seed.get('source', 'Unknown')}")
 
+    trending_context = (seed or {}).get("trending_context", "")
+
     # Pre-analysis — skip if already done before video selection
     if precomputed_analysis:
         analysis = precomputed_analysis
     else:
-        analysis, cost = _pre_analyze(client, seed, scene_description, run_id, active)
+        analysis, cost = _pre_analyze(client, seed, scene_description, run_id, active,
+                                      trending_context=trending_context)
         total_cost += cost
         if analysis:
             print(f"[gpt] analysis:\n{analysis}")
