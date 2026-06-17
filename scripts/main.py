@@ -501,7 +501,7 @@ def run(skip_upload: bool = False, niche_override: str = None, output_dir: Path 
     # ── Step 2.5: Generate one content-matched SD image per spoken beat ─────────
     # Each prompt depicts what the narrator says during that beat, in order, so
     # the renderer's sentence-boundary cuts keep the image tracking the voice-over.
-    # Fallback chain so a render never dies:  sd → pexels.
+    # Fallback chain so a render never dies:  sd → diffusers → pexels.
     if video_source in DEFERRED_SOURCES:
         print(f"[ 2.5/7 ]  Generating clips from script content ({video_source})...")
         try:
@@ -519,19 +519,28 @@ def run(skip_upload: bool = False, niche_override: str = None, output_dir: Path 
                 from sd_client import generate_clips as sd_generate
                 candidates = sd_generate(prompts, n=len(prompts), prebuilt=True)
 
+                # A1111 offline or returned nothing → try diffusers in-process
+                if not candidates:
+                    print("           ⚠ A1111 offline — trying diffusers in-process...")
+                    try:
+                        from diffusers_client import generate_clips as diffusers_generate
+                        candidates = diffusers_generate(prompts)
+                        if candidates:
+                            print(f"           → diffusers fallback: {len(candidates)} clips ready\n")
+                    except Exception as _diff_err:
+                        print(f"           ⚠ diffusers also failed ({_diff_err})")
+
             if candidates:
                 scene = f"{video_source}-generated: " + "; ".join(prompts[:2])
                 print(f"           → {len(candidates)} clips ready\n")
             else:
-                print(f"           ⚠ {video_source} failed — falling back to Pexels")
+                print("           ⚠ all SD sources failed — falling back to Pexels")
                 video_source = "pexels"
 
             if not candidates:
                 if video_queries:
                     print(f"           → using script queries: {video_queries}")
                 candidates = fetch_candidates(n=5, extra_keywords=video_queries or None)
-                # Script is already written — skip redundant LLaVA vision pick,
-                # pass all downloaded clips to the renderer as an ordered sequence.
                 print(f"           → Pexels fallback: {len(candidates)} clips\n")
         except Exception as e:
             print(f"           ✗ Clip generation failed: {e}")
