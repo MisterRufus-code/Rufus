@@ -239,9 +239,14 @@ def _build_sd_prompts(script: str, niche: str, max_scenes: int = 6) -> list[str]
     try:
         from openai import OpenAI
         keys_file = CONFIG_DIR / "keys.json"
+        key = ""
         if keys_file.exists():
             key = json.loads(keys_file.read_text()).get("openai", "")
-            if key and not key.startswith("YOUR_") and not key.startswith("FILL_"):
+        if not key or key.startswith("YOUR_") or key.startswith("FILL_"):
+            print("[sd] No OpenAI key — SD needs GPT-4o-mini for quality prompts. "
+                  "Add 'openai' key to config/keys.json. Skipping SD.")
+            return []
+        if True:  # always enter — key is confirmed valid above
                 beat_lines = "\n".join(
                     f"  Beat {i+1} (CAMERA={_SD_ANCHORS[i % len(_SD_ANCHORS)]['camera'].split(',')[0]}): "
                     f"\"{b}\""
@@ -319,16 +324,15 @@ def _build_sd_prompts(script: str, niche: str, max_scenes: int = 6) -> list[str]
                          for l in raw_lines if l.strip()]
                 lines = [l for l in lines if len(l) > 20]
 
-                # Pad/realign so we always return exactly one prompt per beat, in order.
-                out = []
-                for i in range(n):
-                    out.append(lines[i] if i < len(lines) else _fallback_prompt(i, beats[i]))
-                return out
+                if not lines:
+                    print("[sd] GPT returned no valid prompts — skipping SD")
+                    return []
+                if len(lines) < n:
+                    print(f"[sd] GPT returned {len(lines)}/{n} prompts — using partial batch")
+                return lines[:n]
     except Exception as e:
-        print(f"[sd] GPT prompt generation skipped ({e}) — using beat fallback")
-
-    # Key-free fallback: one anchored prompt per beat, content-matched and distinct.
-    return [_fallback_prompt(i, b) for i, b in enumerate(beats)]
+        print(f"[sd] GPT prompt generation failed: {e} — skipping SD step")
+        return []
 
 
 def load_niche_cfg(override: str = None):
