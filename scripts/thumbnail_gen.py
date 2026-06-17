@@ -23,7 +23,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
 ROOT       = Path(__file__).parent.parent
 CONFIG_DIR = ROOT / "config"
@@ -94,6 +94,31 @@ def _extract_frame(video_path: Path, ts: float, tmp_png: str) -> bool:
     return r.returncode == 0 and Path(tmp_png).exists()
 
 
+def _score_frame(img: Image.Image) -> float:
+    """Score a frame by visual interestingness (edge density). Higher = more striking."""
+    small = img.convert("L").resize((108, 192), Image.BILINEAR)
+    edges = small.filter(ImageFilter.FIND_EDGES)
+    return sum(edges.getdata()) / (108 * 192)
+
+
+def _best_frame(video_path: Path, duration: float, tmp_png: str) -> Image.Image | None:
+    """Try 5 timestamps across the video; return the most visually dynamic frame."""
+    candidates = [duration * p for p in (0.20, 0.30, 0.45, 0.60, 0.75)]
+    best_img, best_score = None, -1.0
+    for ts in candidates:
+        if not _extract_frame(video_path, ts, tmp_png):
+            continue
+        try:
+            img = Image.open(tmp_png).convert("RGBA")
+            score = _score_frame(img)
+            if score > best_score:
+                best_score = score
+                best_img = img.copy()
+        except Exception:
+            continue
+    return best_img
+
+
 def _wrap_hook(text: str, max_chars: int = MAX_LINE_CHARS) -> list[str]:
     """Word-wrap hook text to at most 2 lines for thumbnail readability."""
     words = text.split()
@@ -140,19 +165,17 @@ def make_thumbnail(video_path: Path, script: str, out_path: Path = None) -> Path
     out_path = Path(out_path)
 
     duration    = _probe_duration(video_path)
-    ts          = max(0.5, duration * 0.30)
     accent_hex  = _load_niche_accent()
     accent_rgb  = _hex_to_rgb(accent_hex)
     font_path   = _find_font()
 
-    # Extract frame
+    # Extract best frame from 5 candidate timestamps
     with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tf:
         tmp_png = tf.name
     try:
-        if not _extract_frame(video_path, ts, tmp_png):
-            raise RuntimeError(f"Frame extraction failed at {ts:.1f}s")
-
-        img = Image.open(tmp_png).convert("RGBA")
+        img = _best_frame(video_path, duration, tmp_png)
+        if img is None:
+            raise RuntimeError("Frame extraction failed at all candidate timestamps")
         # Ensure correct dimensions
         if img.size != (THUMB_W, THUMB_H):
             img = img.resize((THUMB_W, THUMB_H), Image.LANCZOS)

@@ -18,6 +18,7 @@ import hashlib
 import json
 import os
 import random
+import subprocess
 from pathlib import Path
 
 import requests
@@ -36,10 +37,29 @@ MOOD_MAP = {
 }
 DEFAULT_MOODS = ["ambient", "instrumental", "calm"]
 
-MIN_TRACK_BYTES = 200_000
+MIN_TRACK_BYTES  = 200_000
+MIN_TRACK_SECS   = 55.0   # reject tracks shorter than this — Shorts are ~60s
 
 # archive.org throttles/rejects the default python-requests UA — identify properly.
 _UA = {"User-Agent": "Rufus-Shorts/1.0 (autonomous video pipeline; contact via repo)"}
+
+
+def _check_audio_duration(path: Path, min_secs: float = MIN_TRACK_SECS) -> bool:
+    """Return True if the audio file is at least min_secs long."""
+    try:
+        r = subprocess.run(
+            ["ffprobe", "-v", "quiet", "-print_format", "json",
+             "-show_streams", str(path)],
+            capture_output=True, text=True, timeout=15,
+        )
+        info = json.loads(r.stdout)
+        for stream in info.get("streams", []):
+            dur = float(stream.get("duration", 0))
+            if dur >= min_secs:
+                return True
+        return False
+    except Exception:
+        return True   # if ffprobe unavailable, don't reject the track
 
 
 def _load_jamendo_key() -> str:
@@ -86,7 +106,7 @@ def _jamendo(mood: str) -> Path | None:
                 "search":        mood,
                 "audioformat":   "mp31",
                 "license_cc":    "1",
-                "minDuration":   25,
+                "minDuration":   60,  # Shorts are ~60s; 25s tracks loop badly
                 "boost":         "popularity_month",
             },
             timeout=10,
@@ -107,7 +127,13 @@ def _jamendo(mood: str) -> Path | None:
             return dest
 
         print(f"[music] Jamendo: \"{track.get('name','?')}\" by {track.get('artist_name','?')}")
-        return dest if _download(audio_url, dest) else None
+        if not _download(audio_url, dest):
+            return None
+        if not _check_audio_duration(dest):
+            print(f"[music] Jamendo: track too short (<{MIN_TRACK_SECS:.0f}s) — skipping")
+            dest.unlink(missing_ok=True)
+            return None
+        return dest
     except Exception as e:
         print(f"[music] Jamendo failed: {e}")
         return None
@@ -166,7 +192,10 @@ def _archive_music(mood: str) -> Path | None:
                     return dest
                 print(f"[music] archive.org: {identifier}/{chosen['name']}")
                 if _download(audio_url, dest):
-                    return dest
+                    if _check_audio_duration(dest):
+                        return dest
+                    print(f"[music] archive.org: track too short — skipping")
+                    dest.unlink(missing_ok=True)
             except Exception as e:
                 print(f"[music] archive.org {identifier} failed: {e}")
                 continue

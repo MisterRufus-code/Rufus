@@ -254,7 +254,13 @@ def synthesize(script: str, out_path: Path) -> None:
             _xtts(script, out_path)
             return
         except Exception as e:
-            print(f"[tts] XTTS failed ({e}) — falling back to Edge TTS")
+            print(f"[tts] XTTS failed ({e}) — falling back to Kokoro")
+        try:
+            print(f"[tts] backend: Kokoro ({KOKORO_VOICE})  [XTTS fallback]")
+            _kokoro(script, out_path)
+            return
+        except Exception as e:
+            print(f"[tts] Kokoro failed ({e}) — falling back to Edge TTS")
 
     if backend not in ("elevenlabs", "kokoro", "xtts"):
         print(f"[tts] backend: Edge TTS ({EDGE_VOICE})")

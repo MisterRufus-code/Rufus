@@ -20,8 +20,9 @@ import os
 import sys
 from pathlib import Path
 
-ROOT       = Path(__file__).parent.parent
-SYNTH_DIR  = ROOT / "assets" / "music_synth"
+ROOT         = Path(__file__).parent.parent
+SYNTH_DIR    = ROOT / "assets" / "music_synth"
+MAX_VARIANTS = 3   # keep up to 3 distinct tracks per niche so every video sounds fresh
 
 # One text description per niche — written as MusicGen prompts (natural language).
 # Each prompt is engineered to produce instrumental, background-friendly music.
@@ -75,29 +76,43 @@ def _model():
     return _musicgen_model
 
 
+def _variant_paths(niche: str) -> list[Path]:
+    """Return all existing cached variant paths for this niche, sorted by slot."""
+    return sorted(
+        p for p in SYNTH_DIR.glob(f"musicgen_{niche}_*.wav")
+        if p.stat().st_size > 100_000
+    )
+
+
 def generate_music(niche: str, duration: float = 65.0, force: bool = False) -> Path | None:
     """Generate or return cached AI music for `niche`.
 
-    Cached to assets/music_synth/musicgen_{niche}.wav — only regenerated when
-    the file is absent or force=True.  Returns None on any failure (graceful).
+    Up to MAX_VARIANTS distinct tracks are cached per niche
+    (musicgen_{niche}_0.wav … musicgen_{niche}_2.wav). Returning a random
+    variant means consecutive videos in the same niche get different music.
+    A new variant is generated whenever fewer than MAX_VARIANTS exist.
 
     Args:
         niche:    Niche key — must be in NICHE_PROMPTS or falls back to default.
         duration: Target duration in seconds (MusicGen is approximate ±2s).
-        force:    Regenerate even if cached file exists.
+        force:    Force generation of a new variant even if MAX_VARIANTS cached.
     """
     SYNTH_DIR.mkdir(parents=True, exist_ok=True)
-    out = SYNTH_DIR / f"musicgen_{niche}.wav"
 
-    if out.exists() and not force:
-        size = out.stat().st_size
-        if size > 100_000:
-            print(f"[musicgen] cached: {out.name}  ({size // 1024}KB)")
-            return out
-        out.unlink(missing_ok=True)
+    existing = _variant_paths(niche)
+
+    # Return a random cached variant unless we still have room to grow the pool
+    if existing and not force and len(existing) >= MAX_VARIANTS:
+        chosen = random.choice(existing)
+        print(f"[musicgen] cached ({len(existing)} variants): {chosen.name}")
+        return chosen
+
+    # Determine next slot (0-based, wrap around if somehow over cap)
+    next_slot = len(existing) % MAX_VARIANTS
+    out = SYNTH_DIR / f"musicgen_{niche}_{next_slot}.wav"
 
     prompt = NICHE_PROMPTS.get(niche, DEFAULT_PROMPT)
-    print(f"[musicgen] generating {duration:.0f}s for niche='{niche}'")
+    print(f"[musicgen] generating variant {next_slot} ({duration:.0f}s) for niche='{niche}'")
     print(f"[musicgen] prompt: {prompt}")
 
     try:
@@ -118,12 +133,19 @@ def generate_music(niche: str, duration: float = 65.0, force: bool = False) -> P
         if not out.exists() or out.stat().st_size < 100_000:
             raise RuntimeError(f"output file too small ({out.stat().st_size if out.exists() else 0} bytes)")
 
-        print(f"[musicgen] saved: {out}  ({out.stat().st_size // 1024}KB, {sr}Hz)")
-        return out
+        print(f"[musicgen] saved: {out}  ({out.stat().st_size // 1024}KB, {sr}Hz, variant {next_slot})")
+
+        # Return a random variant from the updated pool so caller gets variety
+        updated = _variant_paths(niche)
+        return random.choice(updated) if updated else out
 
     except Exception as e:
         print(f"[musicgen] generation failed: {e}")
         out.unlink(missing_ok=True)
+        # Fall back to any existing variant rather than returning None
+        existing = _variant_paths(niche)
+        if existing:
+            return random.choice(existing)
         return None
 
 
