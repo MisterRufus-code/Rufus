@@ -1,15 +1,9 @@
 {
-  "active": "finance",
+  "active": "money_history",
   "schedule": [
-    "finance",
-    "motivation",
-    "mindset",
-    "finance",
-    "motivation",
-    "mindset",
-    "finance"
+    "money_history"
   ],
-  "schedule_note": "Day-of-year index modulo length. Default: finance/motivation/mindset rotating 7 days (finance gets 3/week, others 2/week each). Edit this list to change rotation.",
+  "schedule_note": "Single-niche schedule: every run produces a History of Money Short (FLUX via ComfyUI).",
   "niches": {
     "finance": {
       "display_name": "Finance & Wealth",
@@ -300,6 +294,61 @@
       "style_suffix": "warm morning sunlight, soft shadows, natural tones, lifestyle photography, hopeful",
       "youtube_category_id": "27",
       "video_source": "sd"
+    },
+    "money_history": {
+      "display_name": "History of Money",
+      "subreddits": [
+        "AskHistorians",
+        "economics",
+        "history",
+        "EconomicHistory",
+        "badeconomics"
+      ],
+      "video_keywords": [
+        "ancient gold coins",
+        "roman coins",
+        "old paper money",
+        "gold bars vault",
+        "ancient marketplace",
+        "medieval bank ledger",
+        "stock exchange archive",
+        "weimar hyperinflation banknotes",
+        "gold standard certificate",
+        "cowrie shells",
+        "antique scale weighing gold",
+        "old bank building columns",
+        "printing press money",
+        "treasure chest coins",
+        "central bank facade",
+        "wax seal document",
+        "tally sticks"
+      ],
+      "pixabay_categories": [
+        "business",
+        "backgrounds"
+      ],
+      "llava_context": "Describe this scene focusing on historical money, ancient coins, gold, banking, or economic history. Be specific about what you see.",
+      "gpt_system": "You write YouTube Shorts about the HISTORY OF MONEY and nothing else. Every script teaches ONE true, specific story from monetary history with real dates, names, and numbers: the first coins of Lydia (~600 BC), Rome debasing the denarius, China inventing paper money under the Song dynasty, the Medici banks, tally sticks, cowrie-shell currency, the gold standard, the 1944 Bretton Woods agreement, Nixon ending gold convertibility in 1971, the Weimar and Zimbabwe hyperinflations, and the birth of central banks. Tone: a sharp historian who ties one old event to how money works for the viewer today. Always end by connecting the past to the present. No motivational fluff, no investment advice, no get-rich talk — pure, surprising history that makes money make sense.",
+      "hook_styles": [
+        "counterintuitive",
+        "shocking_stat",
+        "warning"
+      ],
+      "cta": "Follow for the real history of money.",
+      "cta_pool": [
+        "Follow for the real history of money.",
+        "Save this — money was never what you think.",
+        "Follow if school never taught you this.",
+        "Part of a series on how money really began.",
+        "Send this to someone who thinks cash is old.",
+        "More monetary history every post."
+      ],
+      "ffmpeg_eq": "eq=contrast=1.10:saturation=0.90:gamma=1.03",
+      "accent_color": "#D4AF37",
+      "style_suffix": "archival cinematic, warm sepia and gold tones, museum lighting, weathered historical textures, aged patina, fine film grain, 35mm film, photorealistic, dramatic chiaroscuro",
+      "youtube_category_id": "27",
+      "video_source": "comfy",
+      "comfy_model": "flux1-dev-fp8.safetensors"
     }
   }
 }

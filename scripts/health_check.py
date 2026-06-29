@@ -46,11 +46,17 @@ def run() -> None:
         except (FileNotFoundError, OSError):
             return False
 
+    _ffmpeg_hint = (
+        "not found in PATH — download from https://www.gyan.dev/ffmpeg/builds/, unzip, "
+        "and add the \\bin folder to PATH (then reopen the terminal)"
+        if os.name == "nt" else
+        "not found in PATH — run: sudo apt install ffmpeg"
+    )
     for binary in ("ffmpeg", "ffprobe"):
         if _binary_ok(binary):
             ok(f"{binary} installed")
         else:
-            err(f"{binary} installed", f"{binary} not found in PATH — run: sudo apt install ffmpeg")
+            err(f"{binary} installed", f"{binary} {_ffmpeg_hint}")
 
     # ── config/keys.json ────────────────────────────────────────────────────────
     if not KEYS_FILE.exists():
@@ -171,6 +177,42 @@ def run() -> None:
         ok("pytrends available  (Google Trends signal — timely hooks)")
     except ImportError:
         warn("pytrends", "not installed — pip install pytrends>=4.9.0 for trending-topic hook boost (optional)")
+
+    # ── ComfyUI + FLUX (only relevant if a niche uses it or it's selected) ───────
+    try:
+        _niches = json.loads(NICHES_FILE.read_text()).get("niches", {})
+        uses_comfy = (video_src == "comfy"
+                      or any(n.get("video_source") == "comfy" for n in _niches.values()))
+        if uses_comfy:
+            import requests as _rq
+            chost = os.environ.get("COMFY_HOST", "http://localhost:8188").rstrip("/")
+            try:
+                r = _rq.get(f"{chost}/system_stats", timeout=5)
+                if r.status_code == 200:
+                    ok(f"ComfyUI available ({chost})  ← FLUX engine"
+                       + ("  ← ACTIVE" if video_src == "comfy" else ""))
+                else:
+                    warn("ComfyUI", f"responded {r.status_code} at {chost} — check startup")
+            except Exception:
+                msg = (f"not running at {chost} — start ComfyUI with --listen "
+                       f"(comfy niches fall back to SD/Pexels)")
+                err("ComfyUI", msg) if video_src == "comfy" else warn("ComfyUI", msg)
+    except Exception:
+        pass
+
+    # ── Kokoro-FastAPI (only checked when selected) ──────────────────────────────
+    if tts_backend == "kokoro_api":
+        import requests as _rq
+        kurl = os.environ.get("KOKORO_API_URL", "http://localhost:8880").rstrip("/")
+        try:
+            r = _rq.get(f"{kurl}/health", timeout=5)
+            if r.status_code == 200:
+                ok(f"Kokoro-FastAPI reachable ({kurl})  ← ACTIVE")
+            else:
+                warn("Kokoro-FastAPI", f"responded {r.status_code} at {kurl} — check the container")
+        except Exception:
+            err("Kokoro-FastAPI", f"RUFUS_TTS=kokoro_api but nothing at {kurl} — start it: "
+                f"docker run -d -p 8880:8880 ghcr.io/remsky/kokoro-fastapi-cpu:v0.2.2")
 
     # ── HyperFrames (only relevant if a niche uses it) ────────────────────────────
     try:

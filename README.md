@@ -26,12 +26,23 @@ python scripts/main.py --skip-upload   # render only, nothing leaves the machine
 
 ## Setup
 
+**Linux / macOS:**
 ```bash
 bash scripts/setup.sh                 # venv, deps, DB, font, health check
 # then edit config/keys.json with your real keys
 source venv/bin/activate
 python scripts/health_check.py        # verify everything is ready
 ```
+
+**Windows 11 (+ RTX 3090):**
+```powershell
+.\setup_windows.ps1                   # venv, deps, ffmpeg check, prints GPU-stack cmds, health check
+# then edit config\keys.json with your real keys
+.\run.bat --skip-upload               # daily run (ComfyUI/FLUX + GPU by default)
+```
+Fully cross-platform: locking uses `filelock` (no POSIX `os.kill`/`fcntl`), fonts resolve
+`C:\Windows\Fonts` plus the bundled `assets/fonts/Anton-Regular.ttf`. You need **ffmpeg on
+PATH** (the script tells you how) and, for the FLUX engine, **ComfyUI** running.
 
 `config/keys.json` (never commit it — it's gitignored) needs at minimum:
 
@@ -53,9 +64,11 @@ Everything is free except OpenAI credits. Mix and match:
 
 | Variable | Values | Default | What it does |
 |---|---|---|---|
-| `RUFUS_VIDEO_SOURCE` | `sd` / `pexels` | per-niche (`niches.json`) | Footage source — overrides the niche's `video_source`; falls back `sd → pexels` |
+| `RUFUS_VIDEO_SOURCE` | `comfy` / `sd` / `diffusers` / `pexels` | per-niche (`niches.json`) | Footage source — overrides the niche's `video_source`; falls back down the chain |
+| `COMFY_HOST` / `COMFY_MODEL` | URL / checkpoint | `http://localhost:8188` / `flux1-dev-fp8.safetensors` | ComfyUI server + FLUX checkpoint |
 | `RUFUS_RENDERER` | `ffmpeg` / `remotion` | `ffmpeg` | Render engine (see below) |
-| `RUFUS_TTS` | `edge` / `xtts` | `edge` | Voice engine (see below) |
+| `RUFUS_TTS` | `edge` / `kokoro` / `kokoro_api` / `xtts` / `elevenlabs` | auto (`kokoro` if installed, else `edge`) | Voice engine (see below) |
+| `KOKORO_API_URL` | URL | `http://localhost:8880` | Kokoro-FastAPI service (for `kokoro_api`) |
 | `RUFUS_GPU` | `1` / unset | unset | Whisper CUDA + FFmpeg NVENC |
 | `RUFUS_MIN_UPLOAD_SCORE` | `0`–`10` | `8` | Quality gate — only ≥N auto-uploads |
 | `RUFUS_NICHE_OVERRIDE` | niche name | — | Force a niche for one run |
@@ -64,10 +77,12 @@ Each niche picks its own source via `"video_source"` in `config/niches.json`
 (default: all niches → `sd`). `RUFUS_VIDEO_SOURCE` overrides it for one run.
 
 ### Footage sources
+- **`comfy`** — local **ComfyUI + FLUX.1-dev**, the top-quality engine (needs ~24GB VRAM, e.g. **RTX 3090**). One photoreal image per beat at 832×1472 → Lanczos upscale → crop 1080×1920 → Ken Burns, with perceptual-hash dedup so no scene repeats. Start ComfyUI with `--listen` and drop `flux1-dev-fp8.safetensors` in `models/checkpoints/`. Tune via `COMFY_HOST`/`COMFY_MODEL`. Falls back: **comfy → sd → diffusers → pexels**.
+- **`diffusers`** — in-process HuggingFace Diffusers (SDXL-Turbo by default) — no A1111 server needed. Lighter than FLUX; good when ComfyUI/A1111 aren't running. `RUFUS_DIFFUSERS_MODEL` selects the model.
 - **`sd`** (default) — local Stable Diffusion (Automatic1111). Splits the script into **spoken beats** and generates **one content-matched image per beat, in order** — so when the narrator talks about stocks, the screen shows stocks (the renderer cuts on sentence boundaries, keeping image and voice in sync). Each image is upscaled 2× with Real-ESRGAN, cropped to 1080×1920, and animated with Ken Burns. Every image is **perceptual-hash de-duplicated** (aHash + regenerate) so none visibly repeats within a video. Ultra-detailed prompts tuned for Realistic Vision v5.1 with a rotating camera anchor (macro → wide → medium → aerial). **Free forever, runs on a GTX 1060 6GB.** Start A1111 with `./webui.sh --api --xformers --medvram`, then set `SD_HOST` if not on localhost. `SD_CLIPS` caps the scene count (default 6).
 - **`pexels`** — free stock footage, 7 candidates, GPT-4o Vision picks the best match. Needs a Pexels key. Automatic fallback when A1111 isn't running.
 
-Fallback chain so a run never dies on footage: **sd → pexels**.
+Fallback chain so a run never dies on footage: **comfy → sd → diffusers → pexels**.
 
 > _Optional/unwired:_ `scripts/hyperframes_client.py` (HeyGen HyperFrames HTML→MP4 motion-graphics) stays on disk for a possible future data-viz channel but is **not** in the active source routing — the focus is photoreal SD.
 
@@ -78,7 +93,10 @@ Fallback chain so a run never dies on footage: **sd → pexels**.
 
 ### Voice engines
 - **`edge`** — Microsoft Edge TTS. Free, fast, cloud, no GPU. Reliable but slightly synthetic.
+- **`kokoro`** — Kokoro-82M in-process (CPU, free, natural). Auto-selected if the `kokoro` package is installed. `pip install kokoro soundfile`.
+- **`kokoro_api`** — **Kokoro-FastAPI** over HTTP — same voice, zero native install (ideal on Windows). Run once: `docker run -d -p 8880:8880 ghcr.io/remsky/kokoro-fastapi-cpu:v0.2.2` (or the `-gpu` image). Tune with `KOKORO_API_URL` / `RUFUS_KOKORO_VOICE` (default `am_adam`). Falls back to Edge on any error.
 - **`xtts`** — Coqui XTTS v2, local. Near-ElevenLabs quality, free forever, ~3GB VRAM. Voice-clone from a 6s sample with `RUFUS_TTS_VOICE=/path/to/ref.wav`. Install: `pip install TTS`. Falls back to Edge on any error.
+- **`elevenlabs`** — cloud, most natural (~$0.10/video). Needs `elevenlabs` key in `config/keys.json`.
 
 ---
 

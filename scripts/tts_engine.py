@@ -51,6 +51,10 @@ EDGE_RATE  = os.environ.get("RUFUS_EDGE_RATE", "+6%")
 
 # Kokoro defaults — am_adam is the deep American male voice built for narration
 KOKORO_VOICE = os.environ.get("RUFUS_KOKORO_VOICE", "am_adam")
+# Kokoro-FastAPI (the Docker HTTP service) — used by the kokoro_api backend.
+# Cross-platform: no native `kokoro` pip install needed (ideal on Windows 11).
+KOKORO_API_URL = os.environ.get("KOKORO_API_URL", "http://localhost:8880").rstrip("/")
+KOKORO_SPEED   = os.environ.get("RUFUS_KOKORO_SPEED", "1.0")
 
 # XTTS defaults
 XTTS_MODEL           = "tts_models/multilingual/multi-dataset/xtts_v2"
@@ -111,6 +115,35 @@ def _kokoro(script: str, out_path: Path) -> None:
             raise RuntimeError(f"Kokoro mp3 transcode failed: {r.stderr[-300:]}")
     finally:
         Path(wav_path).unlink(missing_ok=True)
+
+
+# ── Kokoro-FastAPI (HTTP) ───────────────────────────────────────────────────────
+
+def _kokoro_api(script: str, out_path: Path) -> None:
+    """Synthesize via the Kokoro-FastAPI Docker service (OpenAI-compatible route).
+
+    POST /v1/audio/speech → mp3 bytes written to out_path. Just an HTTP call, so it
+    sidesteps the fragile native `kokoro` pip install on Windows. Raises on failure
+    so synthesize() falls back to Edge.
+    """
+    import requests
+
+    try:
+        speed = float(KOKORO_SPEED)
+    except ValueError:
+        speed = 1.0
+
+    r = requests.post(
+        f"{KOKORO_API_URL}/v1/audio/speech",
+        json={"model": "kokoro", "input": script, "voice": KOKORO_VOICE,
+              "response_format": "mp3", "speed": speed},
+        timeout=180,
+    )
+    if r.status_code != 200:
+        raise RuntimeError(f"Kokoro-FastAPI HTTP {r.status_code}: {r.text[:200]}")
+    out_path.write_bytes(r.content)
+    if not out_path.exists() or out_path.stat().st_size < 5_000:
+        raise RuntimeError("Kokoro-FastAPI returned an empty/too-small audio file")
 
 
 # ── Edge TTS ──────────────────────────────────────────────────────────────────
@@ -239,6 +272,16 @@ def synthesize(script: str, out_path: Path) -> None:
     """
     out_path = Path(out_path)
     backend  = _backend()
+
+    if backend == "kokoro_api":
+        try:
+            print(f"[tts] backend: Kokoro-FastAPI ({KOKORO_VOICE} @ {KOKORO_API_URL})")
+            _kokoro_api(script, out_path)
+            return
+        except Exception as e:
+            print(f"[tts] Kokoro-FastAPI failed ({e}) — falling back to Edge TTS")
+            _edge(script, out_path)
+            return
 
     if backend == "elevenlabs":
         try:

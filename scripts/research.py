@@ -17,7 +17,6 @@ A Seed dict is returned with keys:
     - url:     post permalink (empty for wisdom)
 """
 
-import fcntl
 import hashlib
 import html as html_module
 import json
@@ -28,6 +27,7 @@ import sys
 from pathlib import Path
 
 import httpx
+from filelock import FileLock
 
 try:
     import praw as _praw_mod
@@ -345,18 +345,15 @@ def _mark_seed_used(seed: dict) -> None:
     if not sid:
         return
     USED_SEEDS_FILE.parent.mkdir(parents=True, exist_ok=True)
-    lock_path = USED_SEEDS_FILE.with_suffix(".lock")
-    with open(lock_path, "w") as lf:
-        fcntl.flock(lf, fcntl.LOCK_EX)
-        try:
-            used = _load_used_seeds()
-            if sid in used:
-                used.remove(sid)
-            used.append(sid)
-            used = used[-MAX_USED_HISTORY:]
-            USED_SEEDS_FILE.write_text(json.dumps(used, indent=2))
-        finally:
-            fcntl.flock(lf, fcntl.LOCK_UN)
+    # Cross-platform advisory lock (Windows + Linux) — filelock instead of POSIX
+    # fcntl, which doesn't exist on Windows.
+    with FileLock(str(USED_SEEDS_FILE.with_suffix(".lock"))):
+        used = _load_used_seeds()
+        if sid in used:
+            used.remove(sid)
+        used.append(sid)
+        used = used[-MAX_USED_HISTORY:]
+        USED_SEEDS_FILE.write_text(json.dumps(used, indent=2))
 
 
 def _post_seed_id(post_data: dict) -> str:

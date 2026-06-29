@@ -30,9 +30,17 @@ CONFIG_DIR = ROOT / "config"
 FONTS_DIR  = ROOT / "assets" / "fonts"
 FONT_FILE  = FONTS_DIR / "Anton-Regular.ttf"
 
-# Fallback system fonts if Anton not downloaded yet
+# Cross-platform fallback fonts if the bundled Anton TTF is missing.
+# Windows first (the user's rig), then macOS, then Linux.
 FONT_CANDIDATES = [
     str(FONT_FILE),
+    # Windows 11
+    r"C:\Windows\Fonts\arialbd.ttf",
+    r"C:\Windows\Fonts\ariblk.ttf",
+    r"C:\Windows\Fonts\arial.ttf",
+    # macOS
+    "/System/Library/Fonts/Supplemental/Arial Bold.ttf",
+    # Linux
     "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
     "/usr/share/fonts/TTF/DejaVuSans-Bold.ttf",
     "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",

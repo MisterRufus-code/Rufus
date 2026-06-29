@@ -35,34 +35,31 @@ LOCK_FILE   = ROOT / "rufus.lock"
 
 
 # ── Single-instance lock (cron overlap protection) ───────────────────────────────
+# Cross-platform (Windows + Linux + macOS) via filelock — POSIX os.kill(pid, 0)
+# raises on Windows. An OS advisory lock held for the life of the process means a
+# second overlapping run simply can't acquire it.
+
+from filelock import FileLock, Timeout
+
+_INSTANCE_LOCK = FileLock(str(LOCK_FILE) + ".lock")
+
 
 def _acquire_lock() -> None:
     """Refuse to start if another Rufus run is alive (overlapping cron + manual
-    runs corrupt temp files and double-write the DB). Stale locks self-clear."""
-    if LOCK_FILE.exists():
-        try:
-            pid = int(LOCK_FILE.read_text().strip())
-        except (ValueError, OSError):
-            pid = -1
-        if pid > 0 and pid != os.getpid():
-            try:
-                os.kill(pid, 0)   # signal 0 = existence check only
-                print(f"ERROR: another Rufus run (pid {pid}) is in progress. "
-                      f"Wait for it, or delete {LOCK_FILE} if it crashed.")
-                sys.exit(1)
-            except ProcessLookupError:
-                pass              # stale lock from a dead process — take over
-            except PermissionError:
-                print(f"ERROR: pid {pid} exists (no permission to signal) — assuming live run.")
-                sys.exit(1)
-    LOCK_FILE.write_text(str(os.getpid()))
+    runs corrupt temp files and double-write the DB)."""
+    try:
+        _INSTANCE_LOCK.acquire(timeout=0)   # non-blocking
+    except Timeout:
+        print(f"ERROR: another Rufus run is in progress (lock held: {LOCK_FILE}.lock). "
+              f"Wait for it, or delete the .lock file if it crashed.")
+        sys.exit(1)
 
 
 def _release_lock() -> None:
     try:
-        if LOCK_FILE.exists() and LOCK_FILE.read_text().strip() == str(os.getpid()):
-            LOCK_FILE.unlink()
-    except OSError:
+        if _INSTANCE_LOCK.is_locked:
+            _INSTANCE_LOCK.release()
+    except Exception:
         pass
 
 
@@ -433,7 +430,7 @@ def run(skip_upload: bool = False, niche_override: str = None, output_dir: Path 
 
     # SD and diffusers GENERATE clips from the script, so they defer to step 2.5
     # (after the script exists). Only stock sources fetch up front.
-    DEFERRED_SOURCES = ("sd", "diffusers")
+    DEFERRED_SOURCES = ("sd", "diffusers", "comfy")
 
     # ── Step 2: Get candidate clips — generated (SD) or stock (Pexels) ──────────
     candidates = []
@@ -506,7 +503,7 @@ def run(skip_upload: bool = False, niche_override: str = None, output_dir: Path 
     # ── Step 2.5: Generate one content-matched SD image per spoken beat ─────────
     # Each prompt depicts what the narrator says during that beat, in order, so
     # the renderer's sentence-boundary cuts keep the image tracking the voice-over.
-    # Fallback chain so a render never dies:  sd → diffusers → pexels.
+    # Fallback chain so a render never dies:  comfy → sd → diffusers → pexels.
     if video_source in DEFERRED_SOURCES:
         print(f"[ 2.5/7 ]  Generating clips from script content ({video_source})...")
         try:
@@ -517,7 +514,22 @@ def run(skip_upload: bool = False, niche_override: str = None, output_dir: Path 
             for i, p in enumerate(prompts):
                 print(f"             {i+1}. {p[:90]}")
 
-            if video_source == "diffusers":
+            if video_source == "comfy":
+                # ComfyUI + FLUX.1-dev (best quality, needs ~24GB VRAM / RTX 3090).
+                from comfy_client import generate_clips as comfy_generate
+                candidates = comfy_generate(prompts, n=len(prompts), niche_cfg=niche_cfg)
+                if not candidates:
+                    print("           ⚠ ComfyUI offline — trying A1111 SD...")
+                    from sd_client import generate_clips as sd_generate
+                    candidates = sd_generate(prompts, n=len(prompts), prebuilt=True)
+                    if not candidates:
+                        print("           ⚠ A1111 offline — trying diffusers in-process...")
+                        try:
+                            from diffusers_client import generate_clips as diffusers_generate
+                            candidates = diffusers_generate(prompts)
+                        except Exception as _diff_err:
+                            print(f"           ⚠ diffusers also failed ({_diff_err})")
+            elif video_source == "diffusers":
                 from diffusers_client import generate_clips as diffusers_generate
                 candidates = diffusers_generate(prompts)
             else:
