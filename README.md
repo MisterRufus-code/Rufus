@@ -44,6 +44,11 @@ Fully cross-platform: locking uses `filelock` (no POSIX `os.kill`/`fcntl`), font
 `C:\Windows\Fonts` plus the bundled `assets/fonts/Anton-Regular.ttf`. You need **ffmpeg on
 PATH** (the script tells you how) and, for the FLUX engine, **ComfyUI** running.
 
+Dependencies are split: `requirements.txt` is the lean core (always installed);
+`requirements-optional.txt` holds the heavy local-ML extras (in-process Kokoro voice,
+MusicGen music, Diffusers images, pytrends, praw) — **not needed** for the
+ComfyUI + Docker-Kokoro setup, install only what you want.
+
 `config/keys.json` (never commit it — it's gitignored) needs at minimum:
 
 ```json

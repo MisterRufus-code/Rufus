@@ -1,0 +1,28 @@
+# Rufus optional extras — local-ML backends the pipeline can use but does not need.
+#
+# The recommended Windows 11 + RTX 3090 setup does NOT need anything here:
+#   images → ComfyUI/FLUX (separate app),  voice → Kokoro-FastAPI (Docker),
+#   music  → Jamendo / local synth bed (core deps only).
+#
+# Install individually (`pip install kokoro soundfile`) or everything:
+#   pip install -r requirements-optional.txt
+# These are heavy (torch etc.) and can take a long time to resolve/build.
+
+# In-process Kokoro voice (RUFUS_TTS=kokoro) — instead of the Docker service
+kokoro>=0.9.2
+soundfile
+
+# Google Trends trending-topic hook boost (research.py, auto-detected)
+pytrends>=4.9.0
+
+# Reddit OAuth research source (research.py, auto-detected)
+praw
+
+# In-process Diffusers image backend (RUFUS_VIDEO_SOURCE=diffusers)
+diffusers>=0.27.0
+transformers>=4.40.0
+accelerate>=0.30.0
+
+# AI-generated music via Meta MusicGen (music_fetcher provider #2)
+# NOTE: heavy — pulls torch 2.1, xformers, spacy; skip unless you want it.
+audiocraft

@@ -33,10 +33,16 @@ if (-not (Test-Path ".\.venv")) {
 }
 . .\.venv\Scripts\Activate.ps1
 
-# 2. Dependencies
-Write-Host "[2/4] Installing Python dependencies..."
+# 2. Dependencies (core only — images come from ComfyUI, voice from Docker;
+#    the heavy local-ML extras live in requirements-optional.txt)
+Write-Host "[2/4] Installing Python dependencies (core)..."
 python -m pip install --upgrade pip | Out-Null
 python -m pip install -r requirements.txt
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "pip install failed — see the error above." -ForegroundColor Red
+    exit 1
+}
+Write-Host "      Optional extras (in-process voice/music/images):  pip install -r requirements-optional.txt" -ForegroundColor DarkGray
 
 # 3. ffmpeg check
 Write-Host "[3/4] Checking ffmpeg..."
