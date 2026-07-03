@@ -96,6 +96,30 @@ def is_available() -> bool:
         return False
 
 
+def _parse_checkpoint_list(obj_info: dict) -> list[str]:
+    """Extract loadable checkpoint names from /object_info/CheckpointLoaderSimple.
+
+    Shape: {"CheckpointLoaderSimple": {"input": {"required":
+            {"ckpt_name": [["a.safetensors", ...], ...]}}}}
+    Returns [] on any shape mismatch — callers treat that as "can't verify".
+    """
+    try:
+        names = obj_info["CheckpointLoaderSimple"]["input"]["required"]["ckpt_name"][0]
+        return [n for n in names if isinstance(n, str)] if isinstance(names, list) else []
+    except (KeyError, IndexError, TypeError):
+        return []
+
+
+def list_checkpoints() -> list[str]:
+    """Checkpoint names the running ComfyUI can actually load. [] on any failure."""
+    try:
+        r = requests.get(f"{_host()}/object_info/CheckpointLoaderSimple", timeout=10)
+        r.raise_for_status()
+        return _parse_checkpoint_list(r.json())
+    except Exception:
+        return []
+
+
 def _build_flux_graph(prompt: str, seed: int, model: str, steps: int) -> dict:
     """A minimal FLUX.1-dev txt2img graph (no custom nodes required).
 
@@ -206,6 +230,18 @@ def generate_clips(queries: list[str], n: int = 4,
              or (niche_cfg or {}).get("comfy_model")
              or "flux1-dev-fp8.safetensors")
     steps = int(os.environ.get("COMFY_STEPS", "20"))
+
+    # Preflight the checkpoint: server-up but model-missing is the classic
+    # first-run failure. Catch it here with the exact fix instead of submitting
+    # a batch of doomed jobs. Empty list = endpoint unavailable → can't verify,
+    # proceed (fail-open).
+    available = list_checkpoints()
+    if available and model not in available:
+        print(f"[comfy] checkpoint '{model}' not loadable by ComfyUI.")
+        print(f"[comfy] it sees: {', '.join(available[:5])}")
+        print(f"[comfy] put the file in ComfyUI\\models\\checkpoints\\ (not unet/), "
+              f"or set COMFY_MODEL to one of the names above. Falling back.")
+        return []
 
     tmp_dir = Path(__file__).parent.parent / "media_library" / "temp" / "comfy"
     tmp_dir.mkdir(parents=True, exist_ok=True)

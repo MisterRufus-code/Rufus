@@ -142,13 +142,34 @@ python scripts/switch_niche.py --list
 ## Operations
 
 ```bash
-python scripts/health_check.py        # pre-flight: deps, keys, config, disk
+python scripts/health_check.py        # pre-flight: deps, keys, config, disk, ComfyUI+FLUX checkpoint
 python scripts/review_scripts.py      # browse generated scripts from the DB
 python scripts/analyze_scripts.py     # script-writer funnel/cost/score analysis
 python scripts/analytics_fetcher.py   # pull YouTube metrics into the DB (cron daily)
 python scripts/feedback_analyzer.py   # turn metrics into config/learnings.json
 python -m pytest tests/ -q            # test suite
 ```
+
+### Go live (daily automation, Windows)
+
+One command turns the machine autonomous — one Short per day, hands-off:
+
+```powershell
+.\schedule_daily.ps1                 # every day at 13:00
+.\schedule_daily.ps1 -Time "09:30"   # or pick the hour
+.\schedule_daily.ps1 -Unregister     # stop
+```
+
+Requirements at run time: PC on, ComfyUI running (FLUX engine). The scheduled
+run uses `run_scheduled.bat` — full pipeline **including upload**, protected by
+the built-in gates: script must score ≥8/10, output must pass QC, and uploads
+are **private** (scheduled to the next peak hour) so nothing goes public
+without you.
+
+**Daily 2-minute checklist:** open `media_library\output\` → skim the newest
+video + its `.qc.json` → if it's good, it publishes itself at the scheduled
+peak hour (or flip it public in YouTube Studio); if it's held, the log says
+exactly why (`logs\rufus_YYYYMMDD.log`).
 
 ---
 

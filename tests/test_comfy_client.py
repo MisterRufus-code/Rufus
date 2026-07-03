@@ -89,3 +89,54 @@ def test_fit_to_portrait_trims_only_a_sliver():
     new_w, new_h = round(c.GEN_W * scale), round(c.GEN_H * scale)
     assert (new_w - 1080) / new_w < 0.02
     assert (new_h - 1920) / new_h < 0.02
+
+
+# ── Checkpoint preflight ─────────────────────────────────────────────────────────
+
+def _obj_info_fixture(names):
+    return {"CheckpointLoaderSimple": {"input": {"required": {
+        "ckpt_name": [names, {"tooltip": "checkpoint to load"}]}}}}
+
+
+def test_parse_checkpoint_list_extracts_names():
+    got = c._parse_checkpoint_list(_obj_info_fixture(["flux1-dev-fp8.safetensors", "sd15.ckpt"]))
+    assert got == ["flux1-dev-fp8.safetensors", "sd15.ckpt"]
+
+
+def test_parse_checkpoint_list_garbage_shapes_return_empty():
+    assert c._parse_checkpoint_list({}) == []
+    assert c._parse_checkpoint_list({"CheckpointLoaderSimple": {}}) == []
+    assert c._parse_checkpoint_list(
+        {"CheckpointLoaderSimple": {"input": {"required": {"ckpt_name": "oops"}}}}) == []
+    assert c._parse_checkpoint_list(
+        {"CheckpointLoaderSimple": {"input": {"required": {"ckpt_name": [None]}}}}) == []
+
+
+def test_generate_clips_refuses_missing_checkpoint():
+    # Server up, but the configured FLUX model isn't in ComfyUI's list →
+    # return [] (fall back down the chain) instead of submitting doomed jobs.
+    with patch.object(c, "is_available", return_value=True), \
+         patch.object(c, "list_checkpoints", return_value=["something_else.safetensors"]):
+        assert c.generate_clips(["a prompt"], n=1) == []
+
+
+def test_generate_clips_proceeds_when_list_unavailable():
+    # Empty list = endpoint couldn't be read → can't verify → fail-open past the
+    # preflight (then stop at submit, which we stub to fail fast here).
+    with patch.object(c, "is_available", return_value=True), \
+         patch.object(c, "list_checkpoints", return_value=[]), \
+         patch.object(c, "_submit", return_value=None), \
+         patch.object(c, "MAX_DUP_RETRIES", 0):
+        assert c.generate_clips(["a prompt"], n=1) == []   # fails at submit, not preflight
+
+
+# ── Scheduled runner hygiene ─────────────────────────────────────────────────────
+
+def test_run_scheduled_bat_is_task_scheduler_safe():
+    bat = (Path(__file__).parent.parent / "run_scheduled.bat").read_text()
+    commands = [l.strip().lower() for l in bat.splitlines()
+                if l.strip() and not l.strip().upper().startswith("REM")]
+    assert "pause" not in commands             # a pause command hangs the scheduled task
+    # the scheduled run IS the product run — no --skip-upload on any command line
+    assert not any("--skip-upload" in l for l in commands)
+    assert any("main.py" in l for l in commands)

@@ -191,6 +191,29 @@ def run() -> None:
                 if r.status_code == 200:
                     ok(f"ComfyUI available ({chost})  ← FLUX engine"
                        + ("  ← ACTIVE" if video_src == "comfy" else ""))
+                    # Server up ≠ model loadable — verify the configured
+                    # checkpoint is actually in ComfyUI's list (the classic
+                    # first-run failure is the file in the wrong folder).
+                    try:
+                        sys.path.insert(0, str(Path(__file__).parent))
+                        from comfy_client import list_checkpoints as _lc
+                        _active = json.loads(NICHES_FILE.read_text())
+                        _acfg   = _active["niches"].get(
+                            os.environ.get("RUFUS_NICHE_OVERRIDE") or _active["active"], {})
+                        _model  = (os.environ.get("COMFY_MODEL")
+                                   or _acfg.get("comfy_model")
+                                   or "flux1-dev-fp8.safetensors")
+                        _ckpts = _lc()
+                        if _ckpts and _model in _ckpts:
+                            ok(f"FLUX checkpoint loadable  ({_model})")
+                        elif _ckpts:
+                            msg = (f"'{_model}' not in ComfyUI's checkpoint list "
+                                   f"(sees: {', '.join(_ckpts[:4])}) — put the file in "
+                                   f"ComfyUI\\models\\checkpoints\\ or set COMFY_MODEL")
+                            err("FLUX checkpoint", msg) if video_src == "comfy" \
+                                else warn("FLUX checkpoint", msg)
+                    except Exception:
+                        pass
                 else:
                     warn("ComfyUI", f"responded {r.status_code} at {chost} — check startup")
             except Exception:
