@@ -157,16 +157,18 @@ _whisper_model = None
 def _whisper() -> WhisperModel:
     global _whisper_model
     if _whisper_model is None:
+        # "small" (~244M params) vs "base" (~74M): measurably better word accuracy
+        # and sentence boundaries at ~2x CPU time. RUFUS_WHISPER_MODEL=base is the
+        # low-RAM escape hatch (halves CPU-mode memory) for constrained machines.
+        model_name = os.environ.get("RUFUS_WHISPER_MODEL", "small").strip() or "small"
         if _GPU:
             try:
-                _whisper_model = WhisperModel("small", device="cuda", compute_type="float16")
-                print("[whisper] CUDA / float16 (GPU mode) — small model")
+                _whisper_model = WhisperModel(model_name, device="cuda", compute_type="float16")
+                print(f"[whisper] CUDA / float16 (GPU mode) — {model_name} model")
                 return _whisper_model
             except Exception as e:
                 print(f"[whisper] CUDA init failed ({e}) — falling back to CPU")
-        # "small" (~244M params) vs "base" (~74M): measurably better word accuracy
-        # and sentence boundary detection at ~2x CPU time — worth it for caption quality.
-        _whisper_model = WhisperModel("small", device="cpu", compute_type="int8")
+        _whisper_model = WhisperModel(model_name, device="cpu", compute_type="int8")
     return _whisper_model
 
 

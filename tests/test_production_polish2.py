@@ -143,3 +143,22 @@ def test_thumbnail_hook_extraction_none_safe():
     import thumbnail_gen
     src = inspect.getsource(thumbnail_gen.make_thumbnail)
     assert '(script or "")' in src
+
+
+# ── Low-RAM contingency: Whisper model env knob ──────────────────────────────────
+
+def test_whisper_model_env_override(monkeypatch):
+    import audio_gen as ag
+    monkeypatch.setenv("RUFUS_WHISPER_MODEL", "base")
+    monkeypatch.setattr(ag, "_whisper_model", None)
+    captured = {}
+
+    class FakeModel:
+        def __init__(self, name, device=None, compute_type=None):
+            captured["name"] = name
+
+    monkeypatch.setattr(ag, "WhisperModel", FakeModel)
+    monkeypatch.setattr(ag, "_GPU", False)
+    ag._whisper()
+    assert captured["name"] == "base"
+    monkeypatch.setattr(ag, "_whisper_model", None)   # don't poison other tests
