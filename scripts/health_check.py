@@ -42,7 +42,7 @@ def run() -> None:
         if shutil.which(name) is None:
             return False
         try:
-            return subprocess.run([name, "-version"], capture_output=True).returncode == 0
+            return subprocess.run([name, "-version"], capture_output=True, timeout=10).returncode == 0
         except (FileNotFoundError, OSError):
             return False
 

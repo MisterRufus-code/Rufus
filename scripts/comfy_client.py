@@ -37,9 +37,14 @@ from pathlib import Path
 import requests
 
 # Reuse the proven, dependency-free (PIL/FFmpeg-only) helpers from sd_client so
-# animation and the negative prompt behave identically across backends.
+# animation, perceptual dedup, and the negative prompt behave identically
+# across backends. One-way import — sd_client never imports comfy_client.
 from sd_client import (
     _animate_to_clip,
+    _avg_hash,
+    _hamming,
+    DUP_THRESHOLD,
+    MAX_DUP_RETRIES,
     NEGATIVE_PROMPT,
     OUT_W,
     OUT_H,
@@ -69,32 +74,6 @@ def _fit_to_portrait(img_bytes: bytes, out_path: Path) -> bool:
 
     img.save(str(out_path), format="PNG", optimize=False)
     return out_path.exists() and out_path.stat().st_size > 20_000
-
-# Perceptual de-duplication so no two scenes in a video look alike. Kept local
-# (sd_client doesn't expose these in this build) — PIL-only, no numpy.
-DUP_THRESHOLD   = 6    # max Hamming distance (of 64 bits) to treat two frames as "same"
-MAX_DUP_RETRIES = 2    # regenerations allowed before accepting a near-duplicate
-
-
-def _avg_hash(png_path: Path) -> int | None:
-    """64-bit average hash (aHash) of an image — visually similar images produce
-    hashes only a few bits apart."""
-    try:
-        from PIL import Image
-        img = Image.open(str(png_path)).convert("L").resize((8, 8), Image.LANCZOS)
-        px  = list(img.tobytes())
-        avg = sum(px) / len(px)
-        bits = 0
-        for p in px:
-            bits = (bits << 1) | (1 if p >= avg else 0)
-        return bits
-    except Exception:
-        return None
-
-
-def _hamming(a: int, b: int) -> int:
-    """Number of differing bits between two hashes."""
-    return bin(a ^ b).count("1")
 
 # FLUX likes ~1MP. 832×1472 is ÷16 on both axes, ~9:16, then we upscale+crop to
 # exactly 1080×1920. (Generating native 1080×1920 wastes VRAM/time for no gain.)

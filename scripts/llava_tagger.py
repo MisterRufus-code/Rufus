@@ -42,7 +42,7 @@ def extract_frame(video_path: Path) -> Path:
             "-frames:v", "1", "-q:v", "2",
             tmp.name,
         ]
-        result = subprocess.run(cmd, capture_output=True)
+        result = subprocess.run(cmd, capture_output=True, timeout=60)
         if result.returncode == 0 and Path(tmp.name).stat().st_size > 1000:
             return Path(tmp.name)
 
@@ -53,7 +53,7 @@ def extract_frames(video_path: Path, count: int = 3) -> list[Path]:
     """Extract `count` frames at 20/50/80% of the video's duration."""
     probe = subprocess.run(
         ["ffprobe", "-v", "quiet", "-print_format", "json", "-show_streams", str(video_path)],
-        capture_output=True, text=True,
+        capture_output=True, text=True, timeout=30,
     )
     duration = 15.0
     try:
@@ -79,7 +79,7 @@ def extract_frames(video_path: Path, count: int = 3) -> list[Path]:
             "-frames:v", "1", "-q:v", "2",
             tmp.name,
         ]
-        result = subprocess.run(cmd, capture_output=True)
+        result = subprocess.run(cmd, capture_output=True, timeout=60)
         if result.returncode == 0 and Path(tmp.name).stat().st_size > 1000:
             frames.append(Path(tmp.name))
 

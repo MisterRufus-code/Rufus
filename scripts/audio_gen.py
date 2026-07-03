@@ -78,7 +78,12 @@ _SENT_END_RE  = re.compile(r'[.!?…]["\')\]]*$')
 FONT_NAME = "Anton"        # downloaded to assets/fonts/; Arial fallback if missing
 FONT_FILE = FONTS_DIR / "Anton-Regular.ttf"
 FONTSIZE  = 140            # larger = better mobile readability
-MARGIN_V  = 750            # 750px from bottom = center zone (~39% from bottom in 1920px frame)
+MARGIN_V  = 600            # ~31% from bottom: below the portrait face zone, above Shorts UI
+
+# Hard ceiling for a single ffmpeg render pass — a hung/looping ffmpeg must
+# fail the attempt (and fall through to the simple pipeline), never freeze an
+# autonomous cron run forever. Override with RENDER_TIMEOUT (seconds).
+RENDER_TIMEOUT = int(os.environ.get("RENDER_TIMEOUT", "600"))
 
 DEFAULT_ACCENT = "#FFD23F"   # warm gold — used when a niche has no accent_color
 
@@ -429,8 +434,114 @@ def _video_filter_complex_concat(input_lengths: list[float], total: float,
     return _finish_video(parts, total, eq_filter, ass_esc, fonts_dir_esc, accent_hex)
 
 
+def _silence_trim_cmd(src: Path, dst: Path) -> list[str]:
+    """ffmpeg command that strips leading AND trailing silence from a voice track.
+
+    Leading silence from TTS delays the hook and desyncs the 0.03s SFX hit and
+    the first caption — on Shorts, dead air at 0:00 is a swipe-away. Head trim
+    via silenceremove; tail trim via the areverse sandwich (reverse → head-trim
+    → reverse back).
+    """
+    af = (
+        "silenceremove=start_periods=1:start_threshold=-40dB:start_silence=0.05,"
+        "areverse,"
+        "silenceremove=start_periods=1:start_threshold=-40dB:start_silence=0.10,"
+        "areverse"
+    )
+    return ["ffmpeg", "-y", "-loglevel", "error", "-i", str(src),
+            "-af", af, "-c:a", "libmp3lame", "-b:a", "192k", str(dst)]
+
+
+def _trim_silence(mp3: Path) -> None:
+    """Trim silence off the TTS mp3 in place. Fail-open: any problem keeps the
+    original file untouched. MUST run before Whisper so word timestamps (which
+    drive cuts, SFX, and captions) describe the trimmed audio."""
+    trimmed = mp3.with_suffix(".trim.mp3")
+    try:
+        r = subprocess.run(_silence_trim_cmd(mp3, trimmed),
+                           capture_output=True, text=True, timeout=120)
+        if r.returncode == 0 and trimmed.exists() and trimmed.stat().st_size > 5_000:
+            trimmed.replace(mp3)
+        else:
+            trimmed.unlink(missing_ok=True)
+            print("[audio] silence trim skipped (ffmpeg filter unavailable?)")
+    except Exception as e:
+        trimmed.unlink(missing_ok=True)
+        print(f"[audio] silence trim skipped ({e})")
+
+
+# ── Two-pass loudness normalization ──────────────────────────────────────────────
+
+def _parse_loudnorm_json(stderr: str) -> dict | None:
+    """Extract the loudnorm measurement JSON that ffmpeg prints to stderr.
+
+    ffmpeg emits it as the LAST {...} block; other log lines may precede it.
+    Returns the parsed dict, or None if no valid block is found."""
+    depth, start = 0, -1
+    last = None
+    for i, ch in enumerate(stderr):
+        if ch == "{":
+            if depth == 0:
+                start = i
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0 and start >= 0:
+                try:
+                    cand = json.loads(stderr[start:i + 1])
+                    if "input_i" in cand:
+                        last = cand
+                except json.JSONDecodeError:
+                    pass
+    return last
+
+
+def _normalize_loudness(video: Path) -> None:
+    """Two-pass loudnorm to exactly -14 LUFS on the finished mp4.
+
+    The in-graph loudnorm is single-pass (can miss the target by 1-3 LU and
+    pump). Pass 1 measures the final mix; pass 2 re-encodes ONLY the audio
+    stream with the measured values in linear mode (-c:v copy — video bits are
+    untouched, so qc_check's resolution/duration checks stay valid).
+    Fail-open: any problem leaves the render as-is."""
+    tuned = video.with_suffix(".ln.mp4")
+    try:
+        measure = subprocess.run(
+            ["ffmpeg", "-hide_banner", "-i", str(video),
+             "-af", "loudnorm=I=-14:TP=-1.5:LRA=11:print_format=json",
+             "-vn", "-f", "null", "-"],
+            capture_output=True, text=True, timeout=300,
+        )
+        m = _parse_loudnorm_json(measure.stderr)
+        if not m:
+            print("[audio] loudnorm pass-2 skipped (no measurement)")
+            return
+        af = (
+            f"loudnorm=I=-14:TP=-1.5:LRA=11:"
+            f"measured_I={m['input_i']}:measured_TP={m['input_tp']}:"
+            f"measured_LRA={m['input_lra']}:measured_thresh={m['input_thresh']}:"
+            f"offset={m.get('target_offset', 0)}:linear=true"
+        )
+        r = subprocess.run(
+            ["ffmpeg", "-y", "-loglevel", "error", "-i", str(video),
+             "-af", af, "-c:v", "copy", "-c:a", "aac", "-b:a", "160k",
+             str(tuned)],
+            capture_output=True, text=True, timeout=300,
+        )
+        if r.returncode == 0 and tuned.exists() and tuned.stat().st_size > 500_000:
+            tuned.replace(video)
+            print(f"[audio] loudness locked to -14 LUFS (measured {m['input_i']} LUFS)")
+        else:
+            tuned.unlink(missing_ok=True)
+            print("[audio] loudnorm pass-2 skipped (re-encode failed)")
+    except Exception as e:
+        tuned.unlink(missing_ok=True)
+        print(f"[audio] loudnorm pass-2 skipped ({e})")
+
+
 def _audio_filter_complex(n: int, audio_dur: float, has_music: bool,
-                          sfx_events: list[tuple[float, float]]) -> str:
+                          sfx_events: list[tuple[float, float]],
+                          with_deesser: bool = False) -> str:
     """Full broadcast mix → [aout].
 
     Voice: highpass → compressor → presence EQ (studio-izes Edge TTS).
@@ -445,10 +556,13 @@ def _audio_filter_complex(n: int, audio_dur: float, has_music: bool,
     # require matching rate/layout (Edge TTS is mono 24 kHz, music is stereo).
     fmt    = "aformat=sample_rates=48000:channel_layouts=stereo"
     parts  = []
+    # De-esser tames TTS sibilance that the 3 kHz presence boost would otherwise
+    # sharpen. Gated on filter availability (older ffmpeg builds lack it).
+    deess  = "deesser=i=0.4," if with_deesser else ""
     voice  = (
         f"[{n}:a]highpass=f=70,"
         f"acompressor=threshold=0.1:ratio=3:attack=12:release=180:makeup=2,"
-        f"equalizer=f=3000:t=q:w=1.2:g=2,{fmt}"
+        f"equalizer=f=3000:t=q:w=1.2:g=2,{deess}{fmt}"
     )
     mix_in = []
 
@@ -564,6 +678,10 @@ def render(script: str, bg_paths: "Path | list[Path]", out_dir: Path,
     try:
         print("[1/4] Generating voice…")
         _tts(script, mp3)
+        # Strip leading/trailing TTS silence BEFORE transcription — Whisper's
+        # word timestamps then describe the trimmed audio, so cuts, the 0.03s
+        # SFX hit, and the first caption all land on the actual first word.
+        _trim_silence(mp3)
 
         print("[2/4] Transcribing…")
         segs, _ = _whisper().transcribe(str(mp3), word_timestamps=True)
@@ -649,15 +767,22 @@ def render(script: str, bg_paths: "Path | list[Path]", out_dir: Path,
                 _video_filter_complex(lens_xfade, boundaries, audio_dur, over_w, over_h,
                                       pad_y, eq_filter, ass_esc, fonts_esc, accent_hex)
                 + ";\n"
-                + _audio_filter_complex(n, audio_dur, has_music, sfx_events)
+                + _audio_filter_complex(n, audio_dur, has_music, sfx_events,
+                                        with_deesser=_ffmpeg_has_filter("deesser"))
             )
-            r = subprocess.run(_build_cmd(fc, lens_xfade, with_sfx=bool(sfx_events)),
-                               capture_output=True, text=True)
-            if r.returncode == 0:
-                rendered = True
-            else:
-                print(f"[render] full mix failed (rc={r.returncode}: "
-                      f"{r.stderr[-200:].strip()}), retrying with simple pipeline…")
+            # A timeout must degrade exactly like a nonzero return code — fall
+            # through to the simple pipeline, never freeze an autonomous run.
+            try:
+                r = subprocess.run(_build_cmd(fc, lens_xfade, with_sfx=bool(sfx_events)),
+                                   capture_output=True, text=True, timeout=RENDER_TIMEOUT)
+                if r.returncode == 0:
+                    rendered = True
+                else:
+                    print(f"[render] full mix failed (rc={r.returncode}: "
+                          f"{r.stderr[-200:].strip()}), retrying with simple pipeline…")
+            except subprocess.TimeoutExpired:
+                print(f"[render] full mix timed out after {RENDER_TIMEOUT}s — "
+                      f"retrying with simple pipeline…")
 
         if not rendered:
             fc = (
@@ -667,12 +792,20 @@ def render(script: str, bg_paths: "Path | list[Path]", out_dir: Path,
                 + _audio_filter_simple(n, audio_dur, has_music,
                                        with_loudnorm=_ffmpeg_has_filter("loudnorm"))
             )
-            r2 = subprocess.run(_build_cmd(fc, lens_concat, with_sfx=False),
-                                capture_output=True, text=True)
+            try:
+                r2 = subprocess.run(_build_cmd(fc, lens_concat, with_sfx=False),
+                                    capture_output=True, text=True, timeout=RENDER_TIMEOUT)
+            except subprocess.TimeoutExpired:
+                raise RuntimeError(f"FFmpeg fallback render timed out after {RENDER_TIMEOUT}s")
             if r2.returncode != 0:
                 raise RuntimeError(
                     f"FFmpeg fallback render failed (rc={r2.returncode}):\n{r2.stderr[-600:]}"
                 )
+
+        # Two-pass loudness lock: measure the finished mix, re-encode audio only
+        # (video bits untouched). Fail-open — a skipped pass leaves single-pass
+        # loudnorm output, which is still within ~1-3 LU of target.
+        _normalize_loudness(out)
 
     finally:
         for f in (mp3, ass):

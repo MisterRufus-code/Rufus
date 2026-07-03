@@ -100,8 +100,18 @@ def get_authenticated_service(channel=None):
 
     if not creds or not creds.valid:
         if creds and creds.expired and creds.refresh_token:
-            creds.refresh(Request())
-        else:
+            try:
+                creds.refresh(Request())
+            except Exception as e:
+                # Revoked/expired refresh token — don't crash a cron run on it.
+                # Park the stale token and fall through to interactive re-auth.
+                print(f"[youtube] token refresh failed ({e}) — re-auth required")
+                try:
+                    token_file.replace(token_file.with_suffix(".json.stale"))
+                except OSError:
+                    pass
+                creds = None
+        if not creds or not creds.valid:
             if not client_secrets.exists():
                 raise FileNotFoundError(
                     f"Missing {client_secrets}\n"
@@ -109,7 +119,14 @@ def get_authenticated_service(channel=None):
                     "APIs & Services → Credentials → Download JSON"
                 )
             flow = InstalledAppFlow.from_client_secrets_file(str(client_secrets), SCOPES)
-            creds = flow.run_local_server(port=0)
+            try:
+                creds = flow.run_local_server(port=0)
+            except Exception as e:
+                raise RuntimeError(
+                    f"YouTube re-authentication needs a browser and none is available "
+                    f"({e}). Run `python scripts/youtube_uploader.py <video> '<script>'` "
+                    f"once interactively to regenerate {token_file}."
+                ) from e
 
         token_file.parent.mkdir(parents=True, exist_ok=True)
         token_file.write_text(creds.to_json())
@@ -216,9 +233,9 @@ def upload(video_path: Path, script: str, thumbnail_path: Path = None,
 
     response = None
     while response is None:
-        status, response = request.next_chunk()
-        if status:
-            print(f"\r[youtube] {int(status.progress() * 100)}%", end="", flush=True)
+        progress, response = request.next_chunk()   # don't shadow the status dict above
+        if progress:
+            print(f"\r[youtube] {int(progress.progress() * 100)}%", end="", flush=True)
 
     print()
     video_id  = response["id"]

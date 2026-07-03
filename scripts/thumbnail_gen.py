@@ -77,7 +77,7 @@ def _probe_duration(video_path: Path) -> float:
     probe = subprocess.run(
         ["ffprobe", "-v", "quiet", "-print_format", "json",
          "-show_streams", str(video_path)],
-        capture_output=True, text=True,
+        capture_output=True, text=True, timeout=30,
     )
     try:
         info = json.loads(probe.stdout)
@@ -97,7 +97,7 @@ def _extract_frame(video_path: Path, ts: float, tmp_png: str) -> bool:
         ["ffmpeg", "-y", "-loglevel", "error",
          "-ss", f"{ts:.2f}", "-i", str(video_path),
          "-frames:v", "1", tmp_png],
-        capture_output=True,
+        capture_output=True, timeout=60,
     )
     return r.returncode == 0 and Path(tmp_png).exists()
 
@@ -207,8 +207,8 @@ def make_thumbnail(video_path: Path, script: str, out_path: Path = None) -> Path
         except Exception:
             font = ImageFont.load_default()
 
-        # Get and wrap the hook (first line of script)
-        hook_raw = script.strip().split("\n")[0].rstrip(".!?,;")
+        # Get and wrap the hook (first line of script); None-safe
+        hook_raw = (script or "").strip().split("\n")[0].rstrip(".!?,;")
         lines    = _wrap_hook(hook_raw)
 
         # Position text in the lower quarter of the frame
