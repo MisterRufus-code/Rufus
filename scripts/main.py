@@ -256,12 +256,57 @@ def _build_sd_prompts(script: str, niche: str, max_scenes: int = 6) -> list[str]
                     f"lens={_SD_ANCHORS[i % len(_SD_ANCHORS)]['camera']}"
                     for i in range(n)
                 )
+                # FLUX (ComfyUI) reads full natural-language sentences and renders
+                # period-accurate scenes far better than SD1.5 tag-soup. Detect the
+                # target engine so FLUX niches get sentence prompts that lock each
+                # image to its beat's literal subject.
+                _vs = os.environ.get("RUFUS_VIDEO_SOURCE", "").strip().lower()
+                is_flux = _vs == "comfy"
+                if not _vs:
+                    try:
+                        _nd = json.loads(NICHES_FILE.read_text())
+                        is_flux = _nd["niches"].get(niche, {}).get("video_source") == "comfy"
+                    except Exception:
+                        is_flux = False
+
+                _FLUX_INSTRUCTION = (
+                    "You write prompts for FLUX.1-dev, which understands full "
+                    "natural-language sentences (NOT comma tag-soup).\n"
+                    f"Write EXACTLY {n} image prompts for a '{niche}' YouTube Short — "
+                    "ONE per spoken beat, in narration order.\n\n"
+                    "CRITICAL — THE SCENE MUST MATCH THE SCRIPT: prompt N depicts the EXACT "
+                    "literal thing the narrator says in beat N. If a beat names a historical "
+                    "period, place, currency, person, or object, the image MUST show THAT, "
+                    "and be period-accurate.\n\n"
+                    "SPOKEN BEATS (prompt N must show beat N):\n"
+                    f"{beat_lines}\n\n"
+                    "RULES:\n"
+                    "- 2 to 4 vivid natural-language sentences per prompt.\n"
+                    "- Show the LITERAL subject. Examples: 'the first coins of Lydia' -> a macro "
+                    "shot of ancient electrum Lydian stater coins on a worn stone counter; "
+                    "'Weimar hyperinflation' -> 1923 Germany, a wheelbarrow overflowing with "
+                    "near-worthless Reichsmark banknotes on a cobbled street; 'Bretton Woods' -> "
+                    "a 1944 conference hall, men in 1940s suits around a long table.\n"
+                    "- PERIOD ACCURACY: zero anachronisms — no modern objects, clothing, logos, "
+                    "screens, or writing in a historical scene. Show present-day items only if "
+                    "the beat is explicitly about today.\n"
+                    "- Vary framing across consecutive beats (macro object, wide establishing "
+                    "shot of a place, a person's hands handling the item, overhead of documents). "
+                    "Never repeat the same framing back-to-back.\n"
+                    "- Photoreal, documentary realism. Apply this exact look to EVERY prompt: "
+                    f"{color_grade}.\n"
+                    "- NO on-screen text, captions, watermarks, or written numbers in the image "
+                    "(Rufus overlays its own captions).\n"
+                    "- All prompts must be visually distinct.\n\n"
+                    f"Output EXACTLY {n} prompts, one per line. No numbering, no labels, no blank lines."
+                )
+
                 client = OpenAI(api_key=key)
                 resp = client.chat.completions.create(
                     model="gpt-4o-mini",
                     messages=[{
                         "role": "user",
-                        "content": (
+                        "content": _FLUX_INSTRUCTION if is_flux else (
                             "You are a cinematographer turned Stable Diffusion prompt writer "
                             "(Realistic Vision v5.1). You don't make stock photos — you make "
                             "frames that feel SHOT by a human for one specific line of narration.\n"
