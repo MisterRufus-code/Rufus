@@ -53,6 +53,10 @@ NICHE_BEDS = {
         "chords": [[_G2, _B2, _D3], [_E2, _G2, _B2], [_C3, _E3, _G3], [_D3, _F3 * 2**(1/6), _A3]],
         "bpm": None,
     },
+    "money_history": {     # Dm – Bb – F – C, solemn documentary, slow pulse
+        "chords": [[_D3, _F3, _A3], [_BB2, _D3, _F3], [_F2, _A2, _C3], [_C3, _E3, _G3]],
+        "bpm": 72,
+    },
 }
 DEFAULT_BED = NICHE_BEDS["mindset"]
 

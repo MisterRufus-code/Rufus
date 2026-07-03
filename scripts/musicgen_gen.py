@@ -17,6 +17,7 @@ Usage:
 """
 
 import os
+import random
 import sys
 from pathlib import Path
 
@@ -46,6 +47,11 @@ NICHE_PROMPTS: dict[str, str] = {
     "personal_development": (
         "warm acoustic guitar fingerpicking, no lyrics, hopeful, gentle forward movement, "
         "soft string swells, morning energy, sunrise feel, optimistic, calm crescendo"
+    ),
+    "money_history": (
+        "cinematic documentary underscore, no lyrics, low strings and soft percussion, "
+        "ancient and timeless mood, museum atmosphere, slow build, mysterious but warm, "
+        "historical epic feel"
     ),
 }
 DEFAULT_PROMPT = "calm ambient instrumental, no lyrics, background music, neutral, peaceful"

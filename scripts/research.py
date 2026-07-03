@@ -151,6 +151,7 @@ SE_NICHE_SITES = {
     "personal_development": "workplace",
     "mindset":              None,
     "motivation":           None,
+    "money_history":        "history",
 }
 
 
@@ -210,6 +211,11 @@ RSS_FEEDS = {
         "https://calnewport.com/blog/feed/",
         "https://fs.blog/feed/",
     ],
+    "money_history": [
+        "https://www.smithsonianmag.com/rss/history/",
+        "https://daily.jstor.org/feed/",
+        "https://aeon.co/feed.rss",
+    ],
 }
 
 
@@ -230,6 +236,7 @@ HN_NICHE_QUERIES = {
     "mindset":             "mental clarity habits decision systems focus burnout thinking",
     "personal_development": "habits discipline self improvement learning productivity",
     "motivation":          None,
+    "money_history":       "history of money gold standard inflation currency collapse",
 }
 
 
@@ -242,6 +249,7 @@ NICHE_TREND_SEEDS: dict[str, list[str]] = {
     "mindset":             ["mindset", "mental health", "self improvement", "habits"],
     "motivation":          ["motivation", "discipline", "success mindset", "goal setting"],
     "personal_development":["productivity", "learning", "self improvement", "daily habits"],
+    "money_history":       ["history of money", "gold standard", "hyperinflation", "roman empire economy"],
 }
 
 

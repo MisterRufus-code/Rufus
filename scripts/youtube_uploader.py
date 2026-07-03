@@ -44,6 +44,7 @@ DEFAULT_CATEGORIES = {
     "mindset":              "27",   # Education
     "business":             "27",   # Education
     "personal_development": "27",   # Education
+    "money_history":        "27",   # Education
 }
 
 PEAK_HOURS_ET = [8, 12, 17, 20]  # US Eastern hours
@@ -54,6 +55,7 @@ NICHE_HASHTAGS = {
     "mindset":              ["#mindset", "#psychology", "#selfimprovement", "#mentalhealth", "#Shorts"],
     "business":             ["#business", "#entrepreneur", "#startup", "#hustle", "#success", "#Shorts"],
     "personal_development": ["#personaldevelopment", "#habits", "#growth", "#selfimprovement", "#Shorts"],
+    "money_history":        ["#history", "#money", "#economics", "#historyfacts", "#didyouknow", "#Shorts"],
 }
 
 

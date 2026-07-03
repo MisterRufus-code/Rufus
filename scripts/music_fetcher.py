@@ -34,6 +34,7 @@ MOOD_MAP = {
     "mindset":              ["calm lofi", "ambient focus", "peaceful instrumental"],
     "business":             ["corporate", "upbeat business", "ambient professional"],
     "personal_development": ["calm lofi", "ambient focus", "inspirational soft"],
+    "money_history":        ["cinematic documentary", "epic historical orchestral", "ambient tension"],
 }
 DEFAULT_MOODS = ["ambient", "instrumental", "calm"]
 
