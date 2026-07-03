@@ -58,3 +58,34 @@ def test_hamming_counts_differing_bits():
     assert c._hamming(0b1010, 0b1010) == 0
     assert c._hamming(0b1111, 0b0000) == 4
     assert c._hamming(0b1100, 0b1010) == 2
+
+
+# ── Composition-preserving fit ───────────────────────────────────────────────────
+
+def test_fit_to_portrait_outputs_exact_1080x1920(tmp_path):
+    import io
+    import random
+    from PIL import Image
+
+    # A GEN_W×GEN_H frame like FLUX produces. Noise, not a flat color — the
+    # function's size sanity gate (>20KB) is calibrated for real photos, and a
+    # solid color compresses below it.
+    rng = random.Random(42)
+    src = Image.new("RGB", (c.GEN_W, c.GEN_H))
+    src.putdata([(rng.randrange(256), rng.randrange(256), rng.randrange(256))
+                 for _ in range(c.GEN_W * c.GEN_H)])
+    buf = io.BytesIO()
+    src.save(buf, format="PNG")
+
+    out = tmp_path / "fit.png"
+    assert c._fit_to_portrait(buf.getvalue(), out) is True
+    assert Image.open(out).size == (1080, 1920)
+
+
+def test_fit_to_portrait_trims_only_a_sliver():
+    # 832/1472 vs 1080/1920: cover-scale then crop must discard <2% per axis —
+    # the whole point vs. the old 2×-upscale-then-crop that discarded 35%.
+    scale = max(1080 / c.GEN_W, 1920 / c.GEN_H)
+    new_w, new_h = round(c.GEN_W * scale), round(c.GEN_H * scale)
+    assert (new_w - 1080) / new_w < 0.02
+    assert (new_h - 1920) / new_h < 0.02

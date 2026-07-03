@@ -624,10 +624,26 @@ def run(skip_upload: bool = False, niche_override: str = None, output_dir: Path 
                 output_path = render(script, candidates, out_dir)
         else:
             output_path = render(script, candidates, out_dir)
-        print(f"           → {output_path}\n")
+        print(f"           → {output_path}")
     except Exception as e:
         print(f"           ✗ Step 5 failed: {e}")
         sys.exit(1)
+
+    # Automated output QC — is this file actually a publishable Short?
+    # Criticals (no audio, wrong resolution, truncated encode) hold the upload;
+    # warnings are printed so quality trends stay visible. Never fatal.
+    qc = None
+    try:
+        from qc_check import run_qc, print_report
+        qc = run_qc(output_path)
+        print_report(qc)
+        try:
+            Path(str(output_path) + ".qc.json").write_text(json.dumps(qc, indent=2))
+        except OSError:
+            pass
+    except Exception as e:
+        print(f"           ⚠ QC skipped (non-fatal): {e}")
+    print()
 
     # ── Step 6: Save to DB ──────────────────────────────────────────────────────
     print("[ 6 / 7 ]  Saving to database...")
@@ -665,6 +681,9 @@ def run(skip_upload: bool = False, niche_override: str = None, output_dir: Path 
     final_score = result.get("score", 0)
     if skip_upload:
         print("[ 7 / 7 ]  Upload skipped (--skip-upload)\n")
+    elif qc is not None and not qc.get("ok", True):
+        print(f"[ 7 / 7 ]  Upload held — output failed QC: {'; '.join(qc['critical'])}")
+        print(f"           Video saved for review: {output_path}\n")
     elif final_score < min_score:
         print(f"[ 7 / 7 ]  Upload held — score {final_score}/10 < {min_score}/10 threshold.")
         print(f"           Video saved for review: {output_path}\n")

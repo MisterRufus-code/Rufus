@@ -37,13 +37,38 @@ from pathlib import Path
 import requests
 
 # Reuse the proven, dependency-free (PIL/FFmpeg-only) helpers from sd_client so
-# animation, cropping, and the negative prompt behave identically across backends.
+# animation and the negative prompt behave identically across backends.
 from sd_client import (
     _animate_to_clip,
-    _crop_to_portrait,
-    _upscale_lanczos,
     NEGATIVE_PROMPT,
+    OUT_W,
+    OUT_H,
 )
+
+
+def _fit_to_portrait(img_bytes: bytes, out_path: Path) -> bool:
+    """Cover-resize a FLUX frame to exactly 1080×1920, preserving composition.
+
+    832×1472 (0.5652) vs 1080×1920 (0.5625) are near-identical aspect ratios, so
+    we Lanczos-scale to just cover the target and trim the ~0.5% sliver. This
+    keeps ~99% of the frame FLUX composed — unlike sd_client's fixed 2× upscale
+    + center-crop, which at this generation size would discard 35% of the image.
+    """
+    from PIL import Image
+    import io as _io
+
+    img  = Image.open(_io.BytesIO(img_bytes)).convert("RGB")
+    w, h = img.size
+    scale = max(OUT_W / w, OUT_H / h)
+    new_w, new_h = round(w * scale), round(h * scale)
+    img = img.resize((new_w, new_h), Image.LANCZOS)
+
+    left = (new_w - OUT_W) // 2
+    top  = (new_h - OUT_H) // 2
+    img  = img.crop((left, top, left + OUT_W, top + OUT_H))
+
+    img.save(str(out_path), format="PNG", optimize=False)
+    return out_path.exists() and out_path.stat().st_size > 20_000
 
 # Perceptual de-duplication so no two scenes in a video look alike. Kept local
 # (sd_client doesn't expose these in this build) — PIL-only, no numpy.
@@ -242,8 +267,7 @@ def generate_clips(queries: list[str], n: int = 4,
             if not img_bytes:
                 continue
 
-            big = _upscale_lanczos(img_bytes)         # PIL-only, no A1111 needed
-            if not _crop_to_portrait(big, png_path):  # → exactly 1080×1920
+            if not _fit_to_portrait(img_bytes, png_path):  # → exactly 1080×1920
                 continue
 
             h = _avg_hash(png_path)
