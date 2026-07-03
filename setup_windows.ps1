@@ -7,6 +7,21 @@
 $ErrorActionPreference = "Stop"
 Write-Host "=== Rufus Windows setup ===" -ForegroundColor Cyan
 
+# 0. Prerequisites — fail with the exact install command instead of a cryptic error
+$missing = @()
+if (-not (Get-Command python -ErrorAction SilentlyContinue)) {
+    $missing += "winget install --id Python.Python.3.11 -e"
+}
+if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
+    $missing += "winget install --id Git.Git -e"
+}
+if ($missing.Count -gt 0) {
+    Write-Host "Missing prerequisites. Run these, then CLOSE and REOPEN PowerShell:" -ForegroundColor Red
+    $missing | ForEach-Object { Write-Host "  $_" -ForegroundColor Yellow }
+    Write-Host "(ffmpeg too, if you haven't:  winget install --id Gyan.FFmpeg -e)" -ForegroundColor Yellow
+    exit 1
+}
+
 # 1. Python venv
 if (-not (Test-Path ".\.venv")) {
     Write-Host "[1/4] Creating virtual environment (.venv)..."
