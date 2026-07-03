@@ -1,0 +1,19 @@
+# Normalize line endings so scripts work on every OS regardless of git config.
+* text=auto
+
+# Windows scripts MUST be CRLF: PowerShell 5.1 mis-parses here-strings in
+# LF-only files, and cmd.exe misreads LF-only .bat labels.
+*.ps1 text eol=crlf
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# Unix scripts stay LF
+*.sh  text eol=lf
+
+# Binary assets — never touch
+*.ttf  binary
+*.png  binary
+*.jpg  binary
+*.mp3  binary
+*.mp4  binary
+*.wav  binary
