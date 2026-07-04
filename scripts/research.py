@@ -154,6 +154,24 @@ SE_NICHE_SITES = {
     "money_history":        "history",
 }
 
+# money.SE and workplace.SE are inherently on-topic — every question there is
+# about money or work by definition. history.stackexchange.com is NOT: it's a
+# general history site (Vikings, wars, politics, anything), so without a topic
+# filter it surfaces off-topic questions like "how would a Viking curse someone"
+# for a niche that's specifically about monetary/economic history. Niches whose
+# SE site needs this extra check go here; sites that are inherently on-topic
+# are simply absent (no filter applied).
+SE_TOPIC_FILTER_RE = {
+    "money_history": re.compile(
+        r"\b(money|coin|currency|gold|silver|mint(?:ed|ing)?|"
+        r"(?:hyper|de)?inflation\w*|"
+        r"tax(?:es|ation)?|bank(?:ing)?|trade|econom\w*|debt|wage|price|wealth|"
+        r"fortune|treasure|market|merchant|commerce|loan|interest|credit|"
+        r"financ\w*|monetary|tribute|toll|tariff|ransom)\b",
+        re.IGNORECASE,
+    ),
+}
+
 
 # ── RSS feed config ──────────────────────────────────────────────────────────────
 
@@ -567,6 +585,7 @@ def fetch_stackexchange_story(niche_name: str, used_ids: set | None = None) -> d
     site = SE_NICHE_SITES.get(niche_name)
     if not site:
         return None
+    topic_re = SE_TOPIC_FILTER_RE.get(niche_name)
 
     url = (
         "https://api.stackexchange.com/2.3/questions"
@@ -591,6 +610,8 @@ def fetch_stackexchange_story(niche_name: str, used_ids: set | None = None) -> d
         if TITLE_BAD_RE.search(title) or TITLE_OFFTOPIC_RE.search(title):
             continue
         if not TITLE_STORY_RE.search(title):
+            continue
+        if topic_re and not (topic_re.search(title) or topic_re.search(body)):
             continue
         link = q.get("link", "")
         if "se:" + link in used_ids:
@@ -695,6 +716,7 @@ def fetch_rss_story(niche_name: str, used_ids: set | None = None) -> dict | None
     feeds = RSS_FEEDS.get(niche_name)
     if not feeds:
         return None
+    topic_re = SE_TOPIC_FILTER_RE.get(niche_name)
 
     feed_list = list(feeds)
     random.shuffle(feed_list)
@@ -784,6 +806,11 @@ def fetch_rss_story(niche_name: str, used_ids: set | None = None) -> dict | None
                 continue
             # Title must pass story RE OR contain finance/psych keywords
             if not RSS_STORY_RE.search(title) and not RSS_FINANCE_PSYCH_KEYWORDS_RE.search(title):
+                continue
+            # General-interest feeds (Smithsonian/JSTOR/Aeon) cover every topic —
+            # require genuinely on-topic content for niches that need it, same as
+            # the StackExchange filter (e.g. money_history: not just any history).
+            if topic_re and not (topic_re.search(title) or topic_re.search(desc)):
                 continue
             sid = "rss:" + link
             if sid in used_ids:
