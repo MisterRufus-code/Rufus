@@ -399,6 +399,26 @@ def _ken_burns_part(i: int, dur: float, over_w: int, over_h: int, pad_y: int) ->
     )
 
 
+def _ffmpeg_filter_path_escape(path) -> str:
+    """Escape a filesystem path for safe use inside an ffmpeg filtergraph string
+    (e.g. ass='...':fontsdir='...').
+
+    Two independent escapes are needed, in this order:
+    1. Backslash → forward slash (Windows paths use \\, filtergraphs treat \\ as
+       an escape character).
+    2. Colon → \\: — the ass/subtitles filter has its OWN internal option parser
+       that splits on ':' to separate filename from fontsdir=/charenc=/etc. A
+       Windows drive letter (C:/Users/...) has a colon right after the drive
+       letter, which that parser misreads as an option separator, corrupting
+       the whole filter chain. This never surfaces on Linux (no drive-letter
+       colon in paths), which is why it only bit on the user's first Windows
+       render — the fix must be here, not conditional on platform.
+    Single-quote escaping (for the outer ass='...' wrapping) is handled by the
+    caller, since not every use of this helper is wrapped in single quotes.
+    """
+    return str(path).replace("\\", "/").replace(":", "\\:")
+
+
 def _finish_video(parts: list[str], total: float, eq_filter: str,
                   ass_esc: str, fonts_dir_esc: str, accent_hex: str) -> str:
     """Shared tail: edge fades → grade → progress bar → captions → [vout]."""
@@ -739,8 +759,8 @@ def render(script: str, bg_paths: "Path | list[Path]", out_dir: Path,
         over_w      = int(W * 1.10)
         over_h      = int(H * 1.10)
         pad_y       = (over_h - H) // 2
-        ass_esc     = str(ass).replace("\\", "/").replace("'", "\\'")
-        fonts_esc   = str(FONTS_DIR).replace("\\", "/").replace("'", "\\'")
+        ass_esc     = _ffmpeg_filter_path_escape(ass).replace("'", "\\'")
+        fonts_esc   = _ffmpeg_filter_path_escape(FONTS_DIR).replace("'", "\\'")
         has_music   = music_path is not None and Path(music_path).exists()
 
         # SFX layer: hit on the hook, whoosh leading into every cut, riser into

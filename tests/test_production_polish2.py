@@ -208,3 +208,29 @@ def test_transcribe_reraises_when_already_on_cpu(monkeypatch):
     import pytest
     with pytest.raises(RuntimeError, match="disk read error"):
         ag._transcribe(Path("dummy.mp3"))
+
+
+# ── FFmpeg filtergraph path escaping (Windows drive-letter colon bug) ────────────
+
+def test_ffmpeg_filter_path_escape_handles_windows_drive_letter():
+    """The ass/subtitles filter has its own internal ':' option-separator parser —
+    a Windows drive-letter colon (C:/Users/...) must be escaped as \\: or the
+    whole filtergraph misparses. This bit in the user's first real Windows render."""
+    from audio_gen import _ffmpeg_filter_path_escape
+    escaped = _ffmpeg_filter_path_escape(r"C:\Users\ddani\Rufus\media_library\temp\1783184998.ass")
+    assert escaped == "C\\:/Users/ddani/Rufus/media_library/temp/1783184998.ass"
+    assert "\\\\" not in escaped   # backslashes fully converted, only the colon-escape remains
+
+
+def test_ffmpeg_filter_path_escape_linux_path_unaffected():
+    from audio_gen import _ffmpeg_filter_path_escape
+    # No drive letter, no backslashes — nothing to escape
+    assert _ffmpeg_filter_path_escape("/home/user/Rufus/media_library/temp/x.ass") == \
+        "/home/user/Rufus/media_library/temp/x.ass"
+
+
+def test_render_uses_the_shared_escape_helper():
+    import inspect, audio_gen
+    src = inspect.getsource(audio_gen.render)
+    assert "_ffmpeg_filter_path_escape(ass)" in src
+    assert "_ffmpeg_filter_path_escape(FONTS_DIR)" in src
