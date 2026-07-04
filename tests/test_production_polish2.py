@@ -162,3 +162,49 @@ def test_whisper_model_env_override(monkeypatch):
     ag._whisper()
     assert captured["name"] == "base"
     monkeypatch.setattr(ag, "_whisper_model", None)   # don't poison other tests
+
+
+# ── Whisper CUDA lazy-load failure fallback ──────────────────────────────────────
+
+def test_transcribe_retries_on_cpu_when_cuda_lazy_load_fails(monkeypatch):
+    """ctranslate2 lazy-loads its CUDA backend — construction can succeed while
+    the first .transcribe() call still fails (e.g. missing cublas64_12.dll).
+    _transcribe() must catch that and retry on CPU, not just guard construction."""
+    import audio_gen as ag
+
+    calls = {"n": 0}
+
+    class FakeCudaModel:
+        def transcribe(self, *a, **kw):
+            calls["n"] += 1
+            raise RuntimeError("Library cublas64_12.dll is not found or cannot be loaded")
+
+    class FakeCpuModel:
+        def transcribe(self, *a, **kw):
+            calls["n"] += 1
+            return ("segments", "info")
+
+    def fake_whisper(force_cpu=False):
+        return FakeCpuModel() if force_cpu else FakeCudaModel()
+
+    monkeypatch.setattr(ag, "_whisper", fake_whisper)
+    monkeypatch.setattr(ag, "_whisper_device", "cuda")
+
+    result = ag._transcribe(Path("dummy.mp3"))
+    assert result == ("segments", "info")
+    assert calls["n"] == 2   # first CUDA attempt, then the CPU retry
+
+
+def test_transcribe_reraises_when_already_on_cpu(monkeypatch):
+    import audio_gen as ag
+
+    class FailingCpuModel:
+        def transcribe(self, *a, **kw):
+            raise RuntimeError("disk read error")
+
+    monkeypatch.setattr(ag, "_whisper", lambda force_cpu=False: FailingCpuModel())
+    monkeypatch.setattr(ag, "_whisper_device", "cpu")
+
+    import pytest
+    with pytest.raises(RuntimeError, match="disk read error"):
+        ag._transcribe(Path("dummy.mp3"))

@@ -152,24 +152,47 @@ def _video_encoder_args() -> list[str]:
 
 # ── Whisper singleton ────────────────────────────────────────────────────────────
 
-_whisper_model = None
+_whisper_model  = None
+_whisper_device = None   # "cuda" or "cpu" — tracks what the singleton actually is
 
-def _whisper() -> WhisperModel:
-    global _whisper_model
-    if _whisper_model is None:
+def _whisper(force_cpu: bool = False) -> WhisperModel:
+    global _whisper_model, _whisper_device
+    if _whisper_model is None or (force_cpu and _whisper_device == "cuda"):
         # "small" (~244M params) vs "base" (~74M): measurably better word accuracy
         # and sentence boundaries at ~2x CPU time. RUFUS_WHISPER_MODEL=base is the
         # low-RAM escape hatch (halves CPU-mode memory) for constrained machines.
         model_name = os.environ.get("RUFUS_WHISPER_MODEL", "small").strip() or "small"
-        if _GPU:
+        if _GPU and not force_cpu:
             try:
-                _whisper_model = WhisperModel(model_name, device="cuda", compute_type="float16")
+                _whisper_model  = WhisperModel(model_name, device="cuda", compute_type="float16")
+                _whisper_device = "cuda"
                 print(f"[whisper] CUDA / float16 (GPU mode) — {model_name} model")
                 return _whisper_model
             except Exception as e:
                 print(f"[whisper] CUDA init failed ({e}) — falling back to CPU")
-        _whisper_model = WhisperModel(model_name, device="cpu", compute_type="int8")
+        _whisper_model  = WhisperModel(model_name, device="cpu", compute_type="int8")
+        _whisper_device = "cpu"
     return _whisper_model
+
+
+def _transcribe(mp3: Path):
+    """Transcribe with automatic CPU fallback.
+
+    ctranslate2 lazy-loads its CUDA backend (cuBLAS/cuDNN) — a missing DLL
+    (e.g. cublas64_12.dll when only the CUDA runtime bundled with another app
+    like ComfyUI is present, not the system-wide CUDA Toolkit) only surfaces
+    on the FIRST actual transcribe() call, not at WhisperModel() construction.
+    So the GPU→CPU fallback has to wrap this call too, not just model init.
+    """
+    global _whisper_model
+    try:
+        return _whisper().transcribe(str(mp3), word_timestamps=True)
+    except Exception as e:
+        if _whisper_device == "cuda":
+            print(f"[whisper] CUDA transcribe failed ({e}) — retrying on CPU")
+            _whisper_model = None   # discard the broken CUDA instance
+            return _whisper(force_cpu=True).transcribe(str(mp3), word_timestamps=True)
+        raise
 
 
 # ── Config ───────────────────────────────────────────────────────────────────────
@@ -686,7 +709,7 @@ def render(script: str, bg_paths: "Path | list[Path]", out_dir: Path,
         _trim_silence(mp3)
 
         print("[2/4] Transcribing…")
-        segs, _ = _whisper().transcribe(str(mp3), word_timestamps=True)
+        segs, _ = _transcribe(mp3)
         segments = list(segs)
         if not segments:
             raise RuntimeError("Whisper produced no segments")
