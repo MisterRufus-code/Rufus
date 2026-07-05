@@ -63,6 +63,13 @@ MUSIC_VOL    = 0.14        # static music volume (simple-mix fallback path)
 MUSIC_BED    = 0.30        # music bed volume BEFORE sidechain ducking (full mix)
 BAR_HEIGHT   = 14          # retention progress bar thickness (px)
 
+# SFX layer gains (relative, 0-1). whoosh plays on EVERY cut (up to 9x per video)
+# so it's the one most likely to feel loud/repetitive — kept noticeably quieter
+# than hit/riser, which each play once per video.
+SFX_HIT_GAIN    = 0.90     # sub-bass hit on the hook (once, 0.03s in)
+SFX_WHOOSH_GAIN = 0.35     # transition swoosh into each cut (was 0.65 — too loud/frequent)
+SFX_RISER_GAIN  = 0.55     # riser leading into the final beat (once)
+
 # Cut planning
 FIRST_CUT_MIN = 2.0        # hook cut window — research: pattern interrupt by ~3s
 FIRST_CUT_MAX = 4.2
@@ -773,12 +780,13 @@ def render(script: str, bg_paths: "Path | list[Path]", out_dir: Path,
         sfx_files:  list[Path] = []
         sfx_events: list[tuple[float, float]] = []
         if sfx:
-            sfx_files.append(sfx["hit"]);  sfx_events.append((0.03, 0.9))
+            sfx_files.append(sfx["hit"]);  sfx_events.append((0.03, SFX_HIT_GAIN))
             for b in boundaries:
-                sfx_files.append(sfx["whoosh"]); sfx_events.append((max(0.0, b - 0.18), 0.65))
+                sfx_files.append(sfx["whoosh"])
+                sfx_events.append((max(0.0, b - 0.18), SFX_WHOOSH_GAIN))
             if boundaries:
                 riser_at = max(0.5, boundaries[-1] - 1.25)
-                sfx_files.append(sfx["riser"]); sfx_events.append((riser_at, 0.55))
+                sfx_files.append(sfx["riser"]); sfx_events.append((riser_at, SFX_RISER_GAIN))
 
         use_xfade = n > 1 and _ffmpeg_has_xfade()
         print(f"[4/4] Rendering {n} clip{'s' if n > 1 else ''} → {audio_dur:.1f}s"
