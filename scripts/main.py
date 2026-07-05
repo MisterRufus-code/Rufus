@@ -456,6 +456,19 @@ def run(skip_upload: bool = False, niche_override: str = None, output_dir: Path 
         print(f"           ✗ Step 1 failed: {e}")
         sys.exit(1)
 
+    # Supervisor: reject a thin/generic/off-topic seed before spending a script
+    # + render on it. One retry only (fail-open, opt out with RUFUS_SUPERVISOR=0).
+    try:
+        from supervisor import judge_seed
+        ok, reason = judge_seed(seed, active)
+        if not ok:
+            print(f"           ⚠ supervisor rejected seed ({reason}) — trying one more...")
+            seed = get_seed(active)
+            ok2, reason2 = judge_seed(seed, active)
+            print(f"           → retry seed {'accepted' if ok2 else 'used anyway'} ({reason2})")
+    except Exception as e:
+        print(f"           ⚠ seed supervisor skipped (non-fatal): {e}")
+
     # Pre-analysis runs here so the hook angle is available for video selection
     seed_analysis = ""
     script_run_id = None
@@ -544,6 +557,36 @@ def run(skip_upload: bool = False, niche_override: str = None, output_dir: Path 
         print(f"           ✗ Step 4 failed: {e}")
         sys.exit(1)
 
+    # Supervisor: factual-integrity gate — verify the script didn't contradict
+    # or fabricate beyond its source (the prompt forbids it; this checks GPT
+    # complied). One rewrite with the objection fed back; if the rewrite is
+    # still flagged, render anyway but HOLD the upload for human review —
+    # wrong facts must never publish themselves. RUFUS_SUPERVISOR=0 disables.
+    facts_hold = None
+    try:
+        from supervisor import judge_script_facts
+        ok_f, why_f = judge_script_facts(script, seed)
+        if not ok_f:
+            print(f"           ⚠ fact-check flagged: {why_f} — rewriting once...")
+            try:
+                result = write_script(
+                    scene + f" (FACTUAL CORRECTION REQUIRED — previous draft was "
+                            f"rejected for: {why_f}. Stick strictly to the source.)",
+                    seed=seed, precomputed_analysis=seed_analysis or None,
+                    run_id=script_run_id)
+                script = result["script"]
+                add_to_blacklist(script)
+            except Exception as _fc_err:
+                print(f"           ⚠ fact-fix rewrite failed ({_fc_err}) — keeping original")
+            ok2, why2 = judge_script_facts(script, seed)
+            if not ok2:
+                facts_hold = why2
+                print(f"           ⚠ still flagged ({why2}) — upload will be HELD for review")
+            else:
+                print(f"           → rewrite passed fact-check ({why2})")
+    except Exception as e:
+        print(f"           ⚠ fact-check supervisor skipped (non-fatal): {e}")
+
     # ── Step 2.5: Generate one content-matched SD image per spoken beat ─────────
     # Each prompt depicts what the narrator says during that beat, in order, so
     # the renderer's sentence-boundary cuts keep the image tracking the voice-over.
@@ -559,6 +602,22 @@ def run(skip_upload: bool = False, niche_override: str = None, output_dir: Path 
             print(f"           → {len(prompts)} beat-matched prompts:")
             for i, p in enumerate(prompts):
                 print(f"             {i+1}. {p[:90]}")
+
+            # Supervisor: catch prompt-builder drift (near-duplicates, off-topic
+            # imagery) BEFORE burning FLUX/SD generation time on doomed images.
+            # One retry only (fail-open, opt out with RUFUS_SUPERVISOR=0).
+            try:
+                from supervisor import judge_footage_prompts
+                hook = script.strip().split("\n")[0]
+                ok, reason = judge_footage_prompts(prompts, active, hook)
+                if not ok:
+                    print(f"           ⚠ supervisor rejected prompts ({reason}) — rewriting once...")
+                    retry_prompts = _build_sd_prompts(script, active, max_scenes=max_scenes)
+                    ok2, reason2 = judge_footage_prompts(retry_prompts, active, hook)
+                    prompts = retry_prompts
+                    print(f"           → retry prompts {'accepted' if ok2 else 'used anyway'} ({reason2})")
+            except Exception as e:
+                print(f"           ⚠ footage supervisor skipped (non-fatal): {e}")
 
             if video_source == "comfy":
                 # ComfyUI + FLUX.1-dev (best quality, needs ~24GB VRAM / RTX 3090).
@@ -684,6 +743,10 @@ def run(skip_upload: bool = False, niche_override: str = None, output_dir: Path 
         print("[ 7 / 7 ]  Upload skipped (--skip-upload)\n")
     elif qc is not None and not qc.get("ok", True):
         print(f"[ 7 / 7 ]  Upload held — output failed QC: {'; '.join(qc['critical'])}")
+        print(f"           Video saved for review: {output_path}\n")
+    elif facts_hold:
+        print(f"[ 7 / 7 ]  Upload held — factual integrity flag: {facts_hold}")
+        print(f"           Verify against the source, then upload manually if it's fine.")
         print(f"           Video saved for review: {output_path}\n")
     elif final_score < min_score:
         print(f"[ 7 / 7 ]  Upload held — score {final_score}/10 < {min_score}/10 threshold.")
