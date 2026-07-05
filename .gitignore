@@ -37,3 +37,4 @@ Thumbs.db
 remotion/node_modules/
 remotion/public/job_*/
 remotion/out/
+.aider*

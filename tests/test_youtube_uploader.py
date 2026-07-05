@@ -3,6 +3,7 @@
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
+import metadata_writer
 from youtube_uploader import _next_peak_utc, build_metadata, PEAK_HOURS_ET
 
 
@@ -30,7 +31,12 @@ def test_next_peak_hour_is_in_peak_list():
     assert et.hour in PEAK_HOURS_ET
 
 
-def test_build_metadata_basic():
+def test_build_metadata_basic(monkeypatch):
+    # Force the legacy (no-key) path so this test is hermetic regardless of
+    # whether a real OpenAI key is configured in config/keys.json — otherwise
+    # it silently makes a live GPT call and asserts on non-deterministic output.
+    monkeypatch.setattr(metadata_writer, "_load_key", lambda: "")
+
     script = "You're broke\nHere's why\nStop saving\nBuy assets\nFollow for more"
     cfg    = {"cta": "Follow for daily tactics.", "youtube_category_id": "25"}
     meta   = build_metadata(script, "finance", cfg)
@@ -42,19 +48,22 @@ def test_build_metadata_basic():
     assert "#finance" in meta["description"]
 
 
-def test_build_metadata_falls_back_to_default_category():
+def test_build_metadata_falls_back_to_default_category(monkeypatch):
     """When niche_cfg has no youtube_category_id, fall back to DEFAULT_CATEGORIES."""
+    monkeypatch.setattr(metadata_writer, "_load_key", lambda: "")
     meta = build_metadata("Hook\nBody\nCTA", "motivation", {"cta": "x"})
     assert meta["categoryId"] == "22"  # People & Blogs
 
 
-def test_build_metadata_truncates_long_first_line():
+def test_build_metadata_truncates_long_first_line(monkeypatch):
+    monkeypatch.setattr(metadata_writer, "_load_key", lambda: "")
     long_hook = "x" * 200
     meta = build_metadata(f"{long_hook}\nsecond line", "finance", {"cta": "x"})
     assert len(meta["title"]) <= 80
 
 
-def test_build_metadata_tags_have_no_hash():
+def test_build_metadata_tags_have_no_hash(monkeypatch):
+    monkeypatch.setattr(metadata_writer, "_load_key", lambda: "")
     meta = build_metadata("Hook\n", "finance", {"cta": ""})
     # Tags should not include the leading #
     assert all(not t.startswith("#") for t in meta["tags"])
