@@ -77,12 +77,16 @@ Everything is free except OpenAI credits. Mix and match:
 | `RUFUS_GPU` | `1` / unset | unset | Whisper CUDA + FFmpeg NVENC |
 | `RUFUS_MIN_UPLOAD_SCORE` | `0`–`10` | `8` | Quality gate — only ≥N auto-uploads |
 | `RUFUS_NICHE_OVERRIDE` | niche name | — | Force a niche for one run |
+| `RUFUS_SUPERVISOR` | `0`/`1` | `1` | Per-stage retry judge (see below) — set `0` to skip the extra GPT calls |
+| `RUFUS_IMG2VID` | `0`/`1` | `1` | SVD image-to-video: generated stills become real motion clips (see below) |
+| `RUFUS_IMG2VID_ENGINE` | `auto` / `comfy` / `diffusers` | `auto` | SVD engine — `auto` prefers ComfyUI, falls back to in-process diffusers |
 
 Each niche picks its own source via `"video_source"` in `config/niches.json`
 (default: all niches → `sd`). `RUFUS_VIDEO_SOURCE` overrides it for one run.
 
 ### Footage sources
-- **`comfy`** — local **ComfyUI + FLUX.1-dev**, the top-quality engine (needs ~24GB VRAM, e.g. **RTX 3090**). One photoreal image per beat at 832×1472 → Lanczos upscale → crop 1080×1920 → Ken Burns, with perceptual-hash dedup so no scene repeats. Start ComfyUI with `--listen` and drop `flux1-dev-fp8.safetensors` in `models/checkpoints/`. Tune via `COMFY_HOST`/`COMFY_MODEL`. Falls back: **comfy → sd → diffusers → pexels**.
+- **`comfy`** — local **ComfyUI + FLUX.1-dev**, the top-quality engine (needs ~24GB VRAM, e.g. **RTX 3090**). One photoreal image per beat at 832×1472 → Lanczos upscale → crop 1080×1920, with perceptual-hash dedup so no scene repeats. Start ComfyUI with `--listen` and drop `flux1-dev-fp8.safetensors` in `models/checkpoints/`. Tune via `COMFY_HOST`/`COMFY_MODEL`. Falls back: **comfy → sd → diffusers → pexels**.
+  - **Image-to-video (SVD)**: every generated still is animated into a **real motion clip** — 25 frames at 576×1024, interpolated to 30fps, ping-pong-looped seamlessly, upscaled to 1080×1920 (`svd_client.py`). Two engines, resolved automatically once per run: **ComfyUI** (drop `svd_xt.safetensors` in `models/checkpoints/` — one-time ~9GB download from [stabilityai/stable-video-diffusion-img2vid-xt](https://huggingface.co/stabilityai/stable-video-diffusion-img2vid-xt)) or **in-process diffusers** (`pip install diffusers transformers accelerate`, needs CUDA; downloads the same weights to the HF cache — no manual file placement). Applies to the `comfy` AND `diffusers` footage sources. Adds ~30-60s GPU time per beat on a 3090. Any per-image failure falls back to the classic **Ken Burns** zoom so a clip is never lost. Knobs: `RUFUS_IMG2VID=0` disables, `RUFUS_IMG2VID_ENGINE` forces an engine, `COMFY_SVD_MODEL` / `RUFUS_SVD_DIFFUSERS_MODEL`, `RUFUS_SVD_MOTION` (1-255, more = more motion), `RUFUS_SVD_FRAMES`/`RUFUS_SVD_FPS`/`RUFUS_SVD_STEPS`. Note: SVD conditions on the image only — it takes **no text prompt** (the model card's generic `DiffusionPipeline` + prompt snippet is misleading; the correct class is `StableVideoDiffusionPipeline`).
 - **`diffusers`** — in-process HuggingFace Diffusers (SDXL-Turbo by default) — no A1111 server needed. Lighter than FLUX; good when ComfyUI/A1111 aren't running. `RUFUS_DIFFUSERS_MODEL` selects the model.
 - **`sd`** (default) — local Stable Diffusion (Automatic1111). Splits the script into **spoken beats** and generates **one content-matched image per beat, in order** — so when the narrator talks about stocks, the screen shows stocks (the renderer cuts on sentence boundaries, keeping image and voice in sync). Each image is upscaled 2× with Real-ESRGAN, cropped to 1080×1920, and animated with Ken Burns. Every image is **perceptual-hash de-duplicated** (aHash + regenerate) so none visibly repeats within a video. Ultra-detailed prompts tuned for Realistic Vision v5.1 with a rotating camera anchor (macro → wide → medium → aerial). **Free forever, runs on a GTX 1060 6GB.** Start A1111 with `./webui.sh --api --xformers --medvram`, then set `SD_HOST` if not on localhost. `SD_CLIPS` caps the scene count (default 6).
 - **`pexels`** — free stock footage, 7 candidates, GPT-4o Vision picks the best match. Needs a Pexels key. Automatic fallback when A1111 isn't running.
@@ -98,7 +102,7 @@ Fallback chain so a run never dies on footage: **comfy → sd → diffusers → 
 
 ### Voice engines
 - **`edge`** — Microsoft Edge TTS. Free, fast, cloud, no GPU. Reliable but slightly synthetic.
-- **`kokoro`** — Kokoro-82M in-process (CPU, free, natural). Auto-selected if the `kokoro` package is installed. `pip install kokoro soundfile`.
+- **`kokoro`** — Kokoro-82M in-process (CPU, free, natural). Auto-selected if the `kokoro` package is installed. `pip install kokoro soundfile`. Kokoro has no SSML/prosody control, so delivery comes from punctuation: a silence is inserted after each line sized to its trailing punctuation (longest after an em-dash/ellipsis "beat", shortest after a comma) — `RUFUS_KOKORO_SPEED` (default `1.0`) tunes playback rate. `script_writer.py`'s prompt is written to lean on this (dashes/ellipses before a reveal, hard stops instead of comma run-ons).
 - **`kokoro_api`** — **Kokoro-FastAPI** over HTTP — same voice, zero native install (ideal on Windows). Run once: `docker run -d -p 8880:8880 ghcr.io/remsky/kokoro-fastapi-cpu:v0.2.2` (or the `-gpu` image). Tune with `KOKORO_API_URL` / `RUFUS_KOKORO_VOICE` (default `am_adam`). Falls back to Edge on any error.
 - **`xtts`** — Coqui XTTS v2, local. Near-ElevenLabs quality, free forever, ~3GB VRAM. Voice-clone from a 6s sample with `RUFUS_TTS_VOICE=/path/to/ref.wav`. Install: `pip install TTS`. Falls back to Edge on any error.
 - **`elevenlabs`** — cloud, most natural (~$0.10/video). Needs `elevenlabs` key in `config/keys.json`.
@@ -136,6 +140,23 @@ Configured in `config/niches.json` (`finance`, `motivation`, `mindset`,
 python scripts/switch_niche.py motivation
 python scripts/switch_niche.py --list
 ```
+
+---
+
+## Supervisor (per-stage retry judge)
+
+The quality gate at upload time catches a bad *script*, but a thin research
+seed or off-target image prompts burn a full render before anything catches
+them. `scripts/supervisor.py` adds two early gpt-4o-mini judge calls that can
+reject and force **one** retry of just that stage:
+
+- **After research** — rejects a seed with no concrete facts to build a story on (retries `get_seed`).
+- **After scripting** — a **fact-check**: compares the finished script's names/numbers/dates against the source seed (the script prompt forbids inventing them; this verifies GPT complied). On rejection the script is rewritten once with the objection fed back; if the rewrite is *still* flagged, the video renders but the **upload is held** with the specific claim printed — wrong facts never publish themselves. Wisdom-quote seeds keep their documented-history allowance.
+- **After beat-prompt writing, before FLUX/SD/diffusers generation** — rejects near-duplicate or off-topic image prompts (retries `_build_sd_prompts`, which is non-deterministic so a retry actually differs).
+
+Each call is a few hundred tokens (a fraction of a cent) and fails **open** —
+no key, an API error, or a malformed reply always approves, so a broken judge
+can never block a render. Set `RUFUS_SUPERVISOR=0` to skip it entirely.
 
 ---
 

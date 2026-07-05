@@ -214,6 +214,18 @@ def run() -> None:
                                 else warn("FLUX checkpoint", msg)
                     except Exception:
                         pass
+                    # SVD img2vid is optional (Ken Burns is the guaranteed
+                    # fallback) → warn-only, never an error.
+                    try:
+                        from svd_client import img2vid_enabled, resolve_engine
+                        if img2vid_enabled():
+                            _eng, _why = resolve_engine()
+                            if _eng:
+                                ok(f"SVD img2vid ready via {_eng}  ({_why})")
+                            else:
+                                warn("SVD img2vid", f"{_why} — stills use Ken Burns")
+                    except Exception:
+                        pass
                 else:
                     warn("ComfyUI", f"responded {r.status_code} at {chost} — check startup")
             except Exception:

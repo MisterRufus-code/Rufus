@@ -243,6 +243,21 @@ def generate_clips(queries: list[str], n: int = 4,
               f"or set COMFY_MODEL to one of the names above. Falling back.")
         return []
 
+    # Image-to-video (SVD): animate each FLUX still into real motion instead of
+    # the Ken Burns zoom. Engine resolved once per run (ComfyUI checkpoint →
+    # in-process diffusers); any per-image failure falls back to Ken Burns so a
+    # clip is never lost to the fancier path.
+    svd_engine = None
+    try:
+        import svd_client
+        if svd_client.img2vid_enabled():
+            svd_engine, svd_why = svd_client.resolve_engine()
+            print(f"[comfy] img2vid (SVD): "
+                  f"{'ON via ' + svd_engine if svd_engine else 'off'} — {svd_why}")
+    except Exception as e:
+        print(f"[comfy] img2vid unavailable ({e}) — Ken Burns only")
+    use_svd = svd_engine is not None
+
     tmp_dir = Path(__file__).parent.parent / "media_library" / "temp" / "comfy"
     tmp_dir.mkdir(parents=True, exist_ok=True)
 
@@ -311,9 +326,18 @@ def generate_clips(queries: list[str], n: int = 4,
                 print(f"[comfy] debug-save failed for clip {i+1}: {e}")
 
         clip_path = tmp_dir / f"{stamp}_{i}.mp4"
-        if _animate_to_clip(png_path, clip_path, duration=clip_duration, idx=i):
+        via_svd = False
+        if use_svd:
+            via_svd = svd_client.animate_image(png_path, clip_path,
+                                               duration=clip_duration, idx=i,
+                                               engine=svd_engine)
+            if not via_svd:
+                print(f"[comfy] SVD failed for clip {i+1} — Ken Burns fallback")
+        made = via_svd or _animate_to_clip(png_path, clip_path,
+                                           duration=clip_duration, idx=i)
+        if made:
             clips.append(clip_path)
-            print(f"[comfy] clip {i+1} ready")
+            print(f"[comfy] clip {i+1} ready" + (" (SVD motion)" if via_svd else ""))
         else:
             print(f"[comfy] animation failed for clip {i+1}")
         png_path.unlink(missing_ok=True)

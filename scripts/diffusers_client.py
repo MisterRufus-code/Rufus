@@ -167,6 +167,18 @@ def generate_clips(prompts: list[str], master_seed: int = 42) -> list[Path]:
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
     clips: list[Path] = []
 
+    # Image-to-video (SVD): same enhancement as the comfy engine — stills become
+    # real motion clips when an SVD engine is available, Ken Burns otherwise.
+    svd_engine = None
+    try:
+        import svd_client
+        if svd_client.img2vid_enabled():
+            svd_engine, svd_why = svd_client.resolve_engine()
+            print(f"[diffusers] img2vid (SVD): "
+                  f"{'ON via ' + svd_engine if svd_engine else 'off'} — {svd_why}")
+    except Exception as e:
+        print(f"[diffusers] img2vid unavailable ({e}) — Ken Burns only")
+
     for i, prompt in enumerate(prompts):
         img_seed = master_seed + i
         print(f"[diffusers] generating image {i+1}/{len(prompts)} (seed={img_seed}): {prompt[:70]}…")
@@ -177,9 +189,17 @@ def generate_clips(prompts: list[str], master_seed: int = 42) -> list[Path]:
             continue
 
         clip_path = CACHE_DIR / f"diff_{i:02d}.mp4"
-        if _ken_burns(img_path, clip_path):
+        via_svd = False
+        if svd_engine:
+            via_svd = svd_client.animate_image(img_path, clip_path,
+                                               duration=KEN_BURNS_DUR, idx=i,
+                                               engine=svd_engine)
+            if not via_svd:
+                print(f"[diffusers] SVD failed for clip {i+1} — Ken Burns fallback")
+        if via_svd or _ken_burns(img_path, clip_path):
             clips.append(clip_path)
-            print(f"[diffusers] clip {i+1}: {clip_path.name}")
+            print(f"[diffusers] clip {i+1}: {clip_path.name}"
+                  + (" (SVD motion)" if via_svd else ""))
         else:
             print(f"[diffusers] Ken Burns failed for clip {i+1}")
 

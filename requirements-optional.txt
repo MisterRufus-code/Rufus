@@ -18,7 +18,9 @@ pytrends>=4.9.0
 # Reddit OAuth research source (research.py, auto-detected)
 praw
 
-# In-process Diffusers image backend (RUFUS_VIDEO_SOURCE=diffusers)
+# In-process Diffusers backends: images (RUFUS_VIDEO_SOURCE=diffusers) and
+# SVD image-to-video (svd_client.py's fallback engine when the ComfyUI
+# svd_xt checkpoint isn't installed — needs CUDA)
 diffusers>=0.27.0
 transformers>=4.40.0
 accelerate>=0.30.0
