@@ -251,3 +251,14 @@ def test_render_uses_named_sfx_gain_constants():
     assert "SFX_HIT_GAIN" in src
     assert "SFX_WHOOSH_GAIN" in src
     assert "SFX_RISER_GAIN" in src
+
+
+# ── Whisper GPU via pip-installed NVIDIA DLLs ────────────────────────────────────
+
+def test_nvidia_dll_helper_noop_on_linux():
+    audio_gen._add_nvidia_dll_dirs()   # must never raise on non-Windows
+
+
+def test_whisper_registers_nvidia_dlls_before_cuda_attempt():
+    src = inspect.getsource(audio_gen._whisper)
+    assert "_add_nvidia_dll_dirs()" in src

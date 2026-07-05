@@ -159,6 +159,27 @@ def _video_encoder_args() -> list[str]:
 
 # ── Whisper singleton ────────────────────────────────────────────────────────────
 
+def _add_nvidia_dll_dirs() -> None:
+    """Windows: make pip-installed CUDA runtime DLLs visible to ctranslate2.
+
+    GPU Whisper needs cuBLAS/cuDNN. Instead of the multi-GB CUDA Toolkit, the
+    runtime DLLs install via `pip install nvidia-cublas-cu12 nvidia-cudnn-cu12`
+    into site-packages/nvidia/<lib>/bin — but Windows won't find them there
+    unless we register the directories. No-op on Linux and when not installed.
+    """
+    if os.name != "nt":
+        return
+    try:
+        import nvidia
+        base = Path(nvidia.__file__).parent
+        for sub in ("cublas", "cudnn"):
+            d = base / sub / "bin"
+            if d.is_dir():
+                os.add_dll_directory(str(d))
+    except Exception:
+        pass
+
+
 _whisper_model  = None
 _whisper_device = None   # "cuda" or "cpu" — tracks what the singleton actually is
 
@@ -170,6 +191,7 @@ def _whisper(force_cpu: bool = False) -> WhisperModel:
         # low-RAM escape hatch (halves CPU-mode memory) for constrained machines.
         model_name = os.environ.get("RUFUS_WHISPER_MODEL", "small").strip() or "small"
         if _GPU and not force_cpu:
+            _add_nvidia_dll_dirs()
             try:
                 _whisper_model  = WhisperModel(model_name, device="cuda", compute_type="float16")
                 _whisper_device = "cuda"
