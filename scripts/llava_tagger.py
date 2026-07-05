@@ -215,8 +215,12 @@ def pick_best_video(candidates: list[Path], llava_context: str,
         "A market crash story → trading screens with red; a frugality story → tools/repair work; "
         "a discipline story → athlete grinding; a wealth trap story → bills/debt, NOT a yacht.\n"
         "2. CONTRADICT the story if needed: a story about losing wealth should show loss, not luxury.\n"
-        "3. MOOD match: tension/conflict → darker/dramatic footage; inspiration → bright/dynamic.\n"
-        "4. REJECT any video whose visuals directly contradict the story's emotional tone.\n\n"
+        "3. EMOTIONAL ARC over the whole clip: this one video plays under the entire "
+        "setup → turn → payoff, not just the hook. Prefer a clip whose own motion/mood can "
+        "carry that arc (e.g. a slow, tense shot over one that resolves too early or reads "
+        "purely celebratory) over one that only nails the opening frame.\n"
+        "4. MOOD match: tension/conflict → darker/dramatic footage; inspiration → bright/dynamic.\n"
+        "5. REJECT any video whose visuals directly contradict the story's emotional tone.\n\n"
         "Reply with ONLY: NUMBER|REASON (e.g. '3|Trading screens with red — matches the crash story')"
     )
 

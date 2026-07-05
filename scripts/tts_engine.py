@@ -24,6 +24,11 @@ Every backend falls back to Edge TTS on any failure so renders never break.
 Kokoro tuning (optional):
   RUFUS_KOKORO_VOICE=am_adam   # default: deep American male narration voice
                                # options: am_michael, bf_emma, af_heart, af_sky
+  RUFUS_KOKORO_SPEED=1.0       # playback speed (applies to both kokoro + kokoro_api)
+  Kokoro has no SSML/prosody control, so delivery comes from punctuation: the
+  local backend inserts a silence after each line sized to its trailing
+  punctuation (longest after em-dash/ellipsis "beats", shortest after commas) —
+  pair with script_writer's punctuation-as-pacing guidance for the best result.
 
 XTTS voice cloning (optional):
   RUFUS_TTS_VOICE=/path/to/reference.wav   # 6-30s clean speech sample to clone
@@ -83,6 +88,27 @@ def _backend() -> str:
 
 # ── Kokoro TTS ────────────────────────────────────────────────────────────────
 
+def _pause_seconds(chunk_text: str) -> float:
+    """How long a silence to insert AFTER this chunk, based on its trailing
+    punctuation. Kokoro has no SSML/prosody control — punctuation is the only
+    delivery cue it reads, so this is where "detailed direction" for a free
+    local voice actually lives. Tuned for narration pace, not real speech:
+    dramatic beats (em-dash/ellipsis) get the longest gap, full stops next,
+    commas the shortest — anything unrecognized defaults to a light beat."""
+    t = chunk_text.rstrip()
+    if not t:
+        return 0.15
+    if t.endswith("...") or t.endswith("—") or t.endswith("–"):
+        return 0.32
+    if t[-1] in "?!":
+        return 0.30
+    if t[-1] == ".":
+        return 0.26
+    if t[-1] in ",;:":
+        return 0.14
+    return 0.15
+
+
 def _kokoro(script: str, out_path: Path) -> None:
     """Synthesize with Kokoro-82M (Apache 2.0, runs on CPU). Outputs mp3."""
     global _kokoro_pipe
@@ -94,13 +120,29 @@ def _kokoro(script: str, out_path: Path) -> None:
         _kokoro_pipe = KPipeline(lang_code="a")   # 'a' = American English
         print(f"[tts] Kokoro pipeline loaded (voice: {KOKORO_VOICE})")
 
-    # Collect all audio segments (generator yields (graphemes, phonemes, audio_array))
-    segments = [audio for _, _, audio in _kokoro_pipe(script, voice=KOKORO_VOICE)]
-    if not segments:
+    try:
+        speed = float(KOKORO_SPEED)
+    except ValueError:
+        speed = 1.0
+
+    # Generator yields (graphemes, phonemes, audio_array) per chunk (split on
+    # blank lines by default). Keep the source text alongside each chunk so we
+    # can size the gap that follows it from its own punctuation.
+    chunks = [(g, audio) for g, _, audio in
+              _kokoro_pipe(script, voice=KOKORO_VOICE, speed=speed)]
+    if not chunks:
         raise RuntimeError("Kokoro returned no audio segments")
 
-    audio = np.concatenate(segments) if len(segments) > 1 else segments[0]
     sample_rate = 24000   # Kokoro native sample rate
+    pieces = []
+    for i, (graphemes, seg_audio) in enumerate(chunks):
+        pieces.append(seg_audio)
+        if i < len(chunks) - 1:
+            gap = int(_pause_seconds(graphemes) * sample_rate)
+            if gap > 0:
+                pieces.append(np.zeros(gap, dtype=seg_audio.dtype))
+
+    audio = np.concatenate(pieces) if len(pieces) > 1 else pieces[0]
 
     with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tf:
         wav_path = tf.name

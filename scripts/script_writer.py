@@ -759,6 +759,15 @@ BODY ({body['min_words']}-{body['max_words']} words total including hook and CTA
 - Use specific names, numbers, dates, dollar amounts. At least one specific per 25 words.
 - OPINION WORD (required): body must contain at least one of these exact words: {opinion_all}
 
+DELIVERY (this is read aloud by TTS, not just read on screen):
+- Punctuation IS the pacing — the voice engine pauses longer after ".", "?", "!",
+  and dramatic beats ("—" or "..."), and only briefly after ",". Choose punctuation
+  for how the line should be HEARD, not just grammar.
+- Put a dash or ellipsis right before the turn/reveal so the pause lands like a
+  breath before the punch — not mid-sentence filler.
+- Never write a long comma-chained run-on when the moment deserves a hard stop.
+  Split it into short sentences instead.
+
 SECOND-TO-LAST LINE (LOOP):
 A question or restatement that SHARES AT LEAST ONE CONTENT WORD with the hook. This drives replays.
 
