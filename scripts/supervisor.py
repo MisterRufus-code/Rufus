@@ -97,7 +97,14 @@ def judge_script_facts(script: str, seed: dict) -> tuple[bool, str]:
     beyond its source material? The script-writer PROMPT forbids inventing
     names/numbers/dates — this verifies it actually complied. The one judge
     whose rejection should ultimately HOLD an upload: publishing wrong facts
-    costs viewer trust that a channel never gets back."""
+    costs viewer trust that a channel never gets back.
+
+    NOTE — two-layer design, on purpose: script_writer._fact_gate runs INSIDE
+    every write_script call (including the corrective rewrite this judge
+    triggers) and caps the score below the auto-upload threshold; this judge
+    runs at the main.py stage boundary and drives ONE rewrite with the
+    objection fed back, then holds the upload if still flagged. Both are
+    gpt-4o-mini (~$0.001 each) — cheap defense in depth, not duplication."""
     if not enabled():
         return True, "supervisor disabled"
 
@@ -121,7 +128,10 @@ def judge_script_facts(script: str, seed: dict) -> tuple[bool, str]:
         f"SOURCE (type={stype}):\n{source}\n\nSCRIPT:\n{script}\n\n"
         "REJECT only if the script states a specific checkable claim — a name, "
         "number, date, dollar amount, place, or event — that CONTRADICTS the source "
-        "or is fabricated (not in the source and not verifiable common knowledge)."
+        "or is fabricated (not in the source and not verifiable common knowledge). "
+        "Also REJECT if it presents conspiracy-theory claims or framing as fact "
+        "(hidden cabals, secret deals mainstream historiography does not support, "
+        "claims sourced from known misinformation)."
         f"{wisdom_note}\n"
         "Do NOT reject for: opinions, vague statements, dramatic framing, rounding, "
         "or reasonable paraphrase. This is an integrity check, not a style review.\n\n"

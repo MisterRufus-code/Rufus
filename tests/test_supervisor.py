@@ -177,3 +177,17 @@ def test_judge_footage_prompts_reject(monkeypatch):
         "finance", "You're broke")
     assert ok is False
     assert "near-identical" in reason
+
+
+# ── Criteria alignment with script_writer._fact_gate ────────────────────────────
+
+def test_judge_script_facts_covers_conspiracy_framing():
+    """The two fact-check layers (this judge + script_writer._fact_gate) must
+    enforce the same standards — including the conspiracy/misinformation clause
+    added after a live incident (Freedman-speech seed → 8/10 conspiracy script).
+    This judge drives the corrective rewrite, so its objection must cover it."""
+    import inspect
+    import supervisor
+    src = inspect.getsource(supervisor.judge_script_facts)
+    assert "conspiracy" in src.lower()
+    assert "misinformation" in src.lower()
