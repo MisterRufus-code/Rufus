@@ -75,3 +75,70 @@ def test_fetch_stackexchange_finance_niche_unaffected_by_topic_filter():
     with patch.object(research.httpx, "get", return_value=_se_response(items)):
         result = research.fetch_stackexchange_story("finance")
     assert result is not None
+
+
+# ── Wikipedia seed source (self-directed, grounded) ──────────────────────────────
+
+def _wiki_response(extract, title="Nixon shock"):
+    resp = MagicMock()
+    resp.raise_for_status = MagicMock()
+    resp.json.return_value = {"title": title, "extract": extract}
+    return resp
+
+
+def test_fetch_wikipedia_returns_grounded_seed(monkeypatch, tmp_path):
+    topics = tmp_path / "wiki_topics.json"
+    topics.write_text('{"money_history": ["Nixon shock"]}')
+    monkeypatch.setattr(research, "WIKI_TOPICS_FILE", topics)
+
+    extract = ("The Nixon shock was a series of economic measures taken by "
+               "United States President Richard Nixon in 1971, including the "
+               "unilateral cancellation of the direct international "
+               "convertibility of the United States dollar to gold. " * 2)
+    with patch.object(research.httpx, "get", return_value=_wiki_response(extract)):
+        seed = research.fetch_wikipedia_story("money_history")
+
+    assert seed is not None
+    assert seed["type"] == "wikipedia"
+    assert "Nixon" in seed["content"]
+    assert seed["url"] == "https://en.wikipedia.org/wiki/Nixon_shock"
+
+
+def test_fetch_wikipedia_skips_used_topics(monkeypatch, tmp_path):
+    topics = tmp_path / "wiki_topics.json"
+    topics.write_text('{"money_history": ["Nixon shock"]}')
+    monkeypatch.setattr(research, "WIKI_TOPICS_FILE", topics)
+
+    used = {"wiki:https://en.wikipedia.org/wiki/Nixon_shock"}
+    with patch.object(research.httpx, "get") as get:
+        seed = research.fetch_wikipedia_story("money_history", used_ids=used)
+    assert seed is None
+    get.assert_not_called()          # dedup happens before any network fetch
+
+
+def test_fetch_wikipedia_rejects_short_extract(monkeypatch, tmp_path):
+    topics = tmp_path / "wiki_topics.json"
+    topics.write_text('{"money_history": ["Stub article"]}')
+    monkeypatch.setattr(research, "WIKI_TOPICS_FILE", topics)
+
+    with patch.object(research.httpx, "get", return_value=_wiki_response("Too short.")):
+        assert research.fetch_wikipedia_story("money_history") is None
+
+
+def test_fetch_wikipedia_none_for_unlisted_niche(monkeypatch, tmp_path):
+    topics = tmp_path / "wiki_topics.json"
+    topics.write_text('{"money_history": ["Nixon shock"]}')
+    monkeypatch.setattr(research, "WIKI_TOPICS_FILE", topics)
+    assert research.fetch_wikipedia_story("motivation") is None
+
+
+def test_wikipedia_seed_id_uses_url():
+    seed = {"type": "wikipedia", "url": "https://en.wikipedia.org/wiki/Denarius"}
+    assert research._seed_id(seed) == "wiki:https://en.wikipedia.org/wiki/Denarius"
+
+
+def test_wiki_topics_config_valid_and_substantial():
+    import json as _json
+    topics = _json.loads((Path(__file__).parent.parent / "config" / "wiki_topics.json").read_text())
+    assert len(topics["money_history"]) >= 60
+    assert all(isinstance(t, str) and t for t in topics["money_history"])

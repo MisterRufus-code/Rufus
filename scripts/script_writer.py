@@ -214,6 +214,14 @@ def _seed_block(seed: dict) -> str:
             f"Title:     {seed.get('title', '')}\n"
             f"Story:     {seed.get('content', '')}\n"
         )
+    if seed.get("type") == "wikipedia":
+        return (
+            "SOURCE MATERIAL (Wikipedia article summary — real, sourced facts; "
+            "use ONLY details stated here or universally established):\n"
+            f"Article:   {seed.get('title', '')}\n"
+            f"Summary:   {seed.get('content', '')}\n"
+            f"URL:       {seed.get('url', '')}\n"
+        )
     if seed.get("type") == "rss":
         return (
             "SOURCE MATERIAL (real news article):\n"
@@ -1244,6 +1252,18 @@ def write_script(scene_description: str, seed: dict | None = None,
         print(f"[gpt] repaired banned phrase '{before}'"
               + (f" (still found '{after}')" if after else " — clean"))
 
+    # Fact gate: verify grounding + no misinformation before the script can
+    # reach the upload path. A FAIL doesn't kill the render — it caps the score
+    # below the auto-upload threshold, so the video is saved for human review.
+    fact_ok, fact_reason, fact_cost = _fact_gate(client, seed, best["script"])
+    total_cost += fact_cost
+    if not fact_ok:
+        capped = min(best["score"], score_min - 3)
+        print(f"[gpt] ⚠ FACT GATE FAILED: {fact_reason}")
+        print(f"[gpt]   score capped {best['score']} → {capped} (upload will be held for review)")
+        best["score"] = capped
+        best["reasoning"] = f"FACT GATE: {fact_reason} | " + (best.get("reasoning") or "")
+
     if best["score"] < score_min:
         print(f"[gpt] ⚠ best score was {best['score']}/10 (target ≥{score_min}) — using best attempt")
 
@@ -1272,6 +1292,56 @@ def write_script(scene_description: str, seed: dict | None = None,
         "reasoning": best["reasoning"],
         "cost_usd": total_cost,
     }
+
+
+# ── Fact gate ───────────────────────────────────────────────────────────────────
+
+def _fact_gate(client: OpenAI, seed: dict | None, script: str) -> tuple[bool, str, float]:
+    """Grounding + misinformation check on the FINAL script.
+
+    An educational channel lives or dies on accuracy. GPT is told to use only
+    real details from the seed, but it can still invent specifics — and a seed
+    itself can carry conspiracy framing (this happened live: a history.SE
+    question about Benjamin Freedman's 1961 speech, a known antisemitic
+    conspiracy source, became an 8/10 script about a "$50B deception").
+
+    Returns (passed, reason, cost_usd). Fail-open on API errors: the gate must
+    never break a render — a failed CHECK is not a failed SCRIPT.
+    """
+    seed_blk = _seed_block(seed) if seed else "(no source material)"
+    prompt = (
+        "You are a strict fact-checker for a history-education YouTube channel.\n\n"
+        f"{seed_blk}\n"
+        f"SCRIPT TO VERIFY:\n{script}\n\n"
+        "FAIL this script if ANY of these hold:\n"
+        "1. A specific claim (number, date, name, event, quote) is neither supported "
+        "by the source material above nor well-established mainstream history.\n"
+        "2. It presents conspiracy-theory claims or framing as fact (hidden cabals, "
+        "'what they don't want you to know', claims from known misinformation sources).\n"
+        "3. It attributes motives or secret deals that mainstream historiography does "
+        "not support.\n\n"
+        "Reply with EXACTLY one line:\n"
+        "PASS\n"
+        "or\n"
+        "FAIL: <one short sentence naming the worst violation>"
+    )
+    model = _standards()["models"].get("fact_check", "gpt-4o-mini")
+    try:
+        resp = client.chat.completions.create(
+            model=model,
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.0, max_tokens=80, timeout=60,
+        )
+        usage = resp.usage
+        cost  = estimate_cost(model, usage.prompt_tokens, usage.completion_tokens)
+        text  = (resp.choices[0].message.content or "").strip()
+        if text.upper().startswith("PASS"):
+            return True, "", cost
+        reason = text.split(":", 1)[1].strip() if ":" in text else text
+        return False, reason, cost
+    except Exception as e:
+        print(f"[gpt] fact gate skipped ({e})")
+        return True, "", 0.0
 
 
 # ── Blacklist ───────────────────────────────────────────────────────────────────

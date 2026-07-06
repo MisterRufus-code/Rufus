@@ -101,7 +101,8 @@
     "body_gen":   "gpt-4o",
     "body_score": "gpt-4o",
     "pre_analyze": "gpt-4o-mini",
-    "hook_gen_escalation": "gpt-4o"
+    "hook_gen_escalation": "gpt-4o",
+    "fact_check": "gpt-4o-mini"
   },
 
   "stopwords": [

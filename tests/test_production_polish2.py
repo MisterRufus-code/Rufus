@@ -234,3 +234,31 @@ def test_render_uses_the_shared_escape_helper():
     src = inspect.getsource(audio_gen.render)
     assert "_ffmpeg_filter_path_escape(ass)" in src
     assert "_ffmpeg_filter_path_escape(FONTS_DIR)" in src
+
+
+# ── SFX gain tuning (whoosh reduced per user feedback) ───────────────────────────
+
+def test_whoosh_gain_reduced_below_hit_and_riser():
+    """Whoosh plays on every cut (up to ~9x/video) so it must sit noticeably below
+    hit/riser, which each play once — otherwise it reads as loud and repetitive."""
+    assert audio_gen.SFX_WHOOSH_GAIN < audio_gen.SFX_HIT_GAIN
+    assert audio_gen.SFX_WHOOSH_GAIN < audio_gen.SFX_RISER_GAIN
+    assert audio_gen.SFX_WHOOSH_GAIN <= 0.40
+
+
+def test_render_uses_named_sfx_gain_constants():
+    src = inspect.getsource(audio_gen.render)
+    assert "SFX_HIT_GAIN" in src
+    assert "SFX_WHOOSH_GAIN" in src
+    assert "SFX_RISER_GAIN" in src
+
+
+# ── Whisper GPU via pip-installed NVIDIA DLLs ────────────────────────────────────
+
+def test_nvidia_dll_helper_noop_on_linux():
+    audio_gen._add_nvidia_dll_dirs()   # must never raise on non-Windows
+
+
+def test_whisper_registers_nvidia_dlls_before_cuda_attempt():
+    src = inspect.getsource(audio_gen._whisper)
+    assert "_add_nvidia_dll_dirs()" in src
