@@ -214,6 +214,14 @@ def _seed_block(seed: dict) -> str:
             f"Title:     {seed.get('title', '')}\n"
             f"Story:     {seed.get('content', '')}\n"
         )
+    if seed.get("type") == "wikipedia":
+        return (
+            "SOURCE MATERIAL (Wikipedia article summary — real, sourced facts; "
+            "use ONLY details stated here or universally established):\n"
+            f"Article:   {seed.get('title', '')}\n"
+            f"Summary:   {seed.get('content', '')}\n"
+            f"URL:       {seed.get('url', '')}\n"
+        )
     if seed.get("type") == "rss":
         return (
             "SOURCE MATERIAL (real news article):\n"

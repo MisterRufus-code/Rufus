@@ -350,6 +350,8 @@ def _seed_id(seed: dict) -> str:
         return "se:" + (seed.get("url") or seed.get("title", ""))
     if t == "rss":
         return "rss:" + (seed.get("url") or seed.get("title", ""))
+    if t == "wikipedia":
+        return "wiki:" + (seed.get("url") or seed.get("title", ""))
     if t == "wisdom":
         text = (seed.get("content") or "").strip().lower()
         return "wisdom:" + hashlib.sha1(text.encode("utf-8")).hexdigest()[:16]
@@ -630,6 +632,70 @@ def fetch_stackexchange_story(niche_name: str, used_ids: set | None = None) -> d
         "content": _clean_text(body),
         "url":     link,
     }
+
+
+WIKI_TOPICS_FILE = CONFIG_DIR / "wiki_topics.json"
+WIKI_TIMEOUT       = 10.0
+WIKI_MIN_EXTRACT   = 200   # a summary shorter than this can't carry a 45s script
+WIKI_MAX_ATTEMPTS  = 8     # bound network fetches per run
+
+
+def fetch_wikipedia_story(niche_name: str, used_ids: set | None = None) -> dict | None:
+    """Self-directed, grounded seed source: the machine picks a topic from the
+    niche's topic list (config/wiki_topics.json) and pulls the REAL facts from
+    Wikipedia's summary API (free, keyless, follows redirects).
+
+    This is the safe version of "the machine invents its own seed": GPT never
+    invents the facts — it compresses a real, sourced article extract, exactly
+    like a Reddit story. Topics are just titles, so expanding coverage is one
+    line of config, not hand-writing researched seed text.
+    """
+    if used_ids is None:
+        used_ids = set()
+
+    try:
+        topics = json.loads(WIKI_TOPICS_FILE.read_text()).get(niche_name, [])
+    except (OSError, json.JSONDecodeError):
+        topics = []
+    if not topics:
+        return None
+
+    topics = list(topics)
+    random.shuffle(topics)
+    attempts = 0
+    for title in topics:
+        url_title = title.strip().replace(" ", "_")
+        page_url  = f"https://en.wikipedia.org/wiki/{url_title}"
+        if "wiki:" + page_url in used_ids:
+            continue
+        if attempts >= WIKI_MAX_ATTEMPTS:
+            break
+        attempts += 1
+        try:
+            r = httpx.get(
+                f"https://en.wikipedia.org/api/rest_v1/page/summary/{url_title}",
+                headers=REDDIT_HEADERS, timeout=WIKI_TIMEOUT, follow_redirects=True,
+            )
+            r.raise_for_status()
+            data = r.json()
+        except Exception as e:
+            print(f"[research] Wikipedia fetch warning — {title}: {e}")
+            continue
+
+        extract = _clean_text(data.get("extract") or "")
+        if len(extract) < WIKI_MIN_EXTRACT:
+            continue
+        return {
+            "type":    "wikipedia",
+            "source":  "Wikipedia",
+            "title":   data.get("title") or title,
+            "content": extract,
+            "url":     page_url,
+        }
+
+    print(f"[research] Wikipedia: no fresh topic found for '{niche_name}' "
+          f"({attempts} fetch attempts)")
+    return None
 
 
 def fetch_hackernews_story(niche_name: str, used_ids: set | None = None) -> dict | None:
@@ -918,6 +984,13 @@ def get_seed(niche_name: str | None = None) -> dict:
     seed = fetch_stackexchange_story(name, used_ids=used_set)
     if seed:
         print(f"[research] using StackExchange story from {seed['source']}: \"{seed['title'][:60]}\"")
+        _mark_seed_used(seed)
+        return _with_trending(seed)
+
+    # Wikipedia: self-directed topic pick, real sourced facts, keyless, infinite
+    seed = fetch_wikipedia_story(name, used_ids=used_set)
+    if seed:
+        print(f"[research] using Wikipedia article: \"{seed['title'][:60]}\"")
         _mark_seed_used(seed)
         return _with_trending(seed)
 
