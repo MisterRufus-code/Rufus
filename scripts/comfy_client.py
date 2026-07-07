@@ -121,6 +121,110 @@ def list_checkpoints() -> list[str]:
         return []
 
 
+# ── Optional face restoration ─────────────────────────────────────────────────
+# FLUX (like any diffusion model) renders human faces worst — the prompt steering
+# in main.py avoids the hardest close-ups, and this is the belt-and-suspenders:
+# if a face-restoration custom node is installed in ComfyUI, route each FLUX still
+# through it (CodeFormer / GFPGAN) to clean up eyes/teeth/skin before animation.
+#
+# STRICTLY OPTIONAL and fail-safe: with no node installed, or RUFUS_FACE_RESTORE=0,
+# or ANY failure of the restore graph, we render the plain graph you already run —
+# restoration can only ever ADD quality, never reduce reliability or clip yield.
+#
+#   RUFUS_FACE_RESTORE        auto (default: use a restore node if one is installed)
+#                             | 0 to force off | 1 = same as auto
+#   RUFUS_FACE_RESTORE_MODEL  restore weights filename (default GFPGANv1.4.pth)
+#   RUFUS_FACE_FIDELITY       0..1, higher = truer to the original (default 0.5)
+
+
+def _has_node(class_type: str) -> bool:
+    """True if the running ComfyUI has a node of this class_type installed."""
+    try:
+        r = requests.get(f"{_host()}/object_info/{class_type}", timeout=10)
+        if r.status_code != 200:
+            return False
+        return bool(r.json().get(class_type))
+    except Exception:
+        return False
+
+
+def _face_restore_setting() -> str:
+    return os.environ.get("RUFUS_FACE_RESTORE", "auto").strip().lower()
+
+
+def resolve_face_restore() -> dict | None:
+    """Pick an installed face-restoration node, or None to skip it entirely.
+
+    Prefers the dedicated facerestore_cf pack (FaceRestoreCFWithModel), then the
+    ReActor pack (ReActorRestoreFace). Returns a descriptor dict consumed by
+    _apply_face_restore, or None when disabled or no supported node is present."""
+    if _face_restore_setting() in ("0", "false", "no", "off"):
+        return None
+    model    = os.environ.get("RUFUS_FACE_RESTORE_MODEL", "GFPGANv1.4.pth")
+    fidelity = float(os.environ.get("RUFUS_FACE_FIDELITY", "0.5"))
+    if _has_node("FaceRestoreCFWithModel") and _has_node("FaceRestoreModelLoader"):
+        return {"kind": "facerestore_cf", "model": model, "fidelity": fidelity}
+    if _has_node("ReActorRestoreFace"):
+        return {"kind": "reactor", "model": model, "fidelity": fidelity}
+    return None
+
+
+def _apply_face_restore(graph: dict, restore: dict) -> dict:
+    """Insert a face-restoration node between VAEDecode ('8') and SaveImage ('9'),
+    re-pointing SaveImage at the restored image. Mutates and returns graph.
+
+    A restore node with no face in the frame passes the image through unchanged,
+    so it's safe on object-only beats (coins, documents, streets)."""
+    if restore["kind"] == "facerestore_cf":
+        graph["20"] = {"class_type": "FaceRestoreModelLoader",
+                       "inputs": {"model_name": restore["model"]}}
+        graph["21"] = {"class_type": "FaceRestoreCFWithModel",
+                       "inputs": {
+                           "facerestore_model": ["20", 0],
+                           "image": ["8", 0],
+                           "facedetection": "retinaface_resnet50",
+                           "codeformer_fidelity": restore["fidelity"],
+                       }}
+        graph["9"]["inputs"]["images"] = ["21", 0]
+    elif restore["kind"] == "reactor":
+        graph["21"] = {"class_type": "ReActorRestoreFace",
+                       "inputs": {
+                           "image": ["8", 0],
+                           "facedetection": "retinaface_resnet50",
+                           "model": restore["model"],
+                           "visibility": 1.0,
+                           "codeformer_weight": restore["fidelity"],
+                       }}
+        graph["9"]["inputs"]["images"] = ["21", 0]
+    return graph
+
+
+def _build_flux_graph_face(prompt: str, seed: int, model: str, steps: int,
+                           restore: dict) -> dict:
+    """Plain FLUX graph plus a face-restoration tail."""
+    return _apply_face_restore(_build_flux_graph(prompt, seed, model, steps), restore)
+
+
+def _render_image(prompt: str, seed: int, model: str, steps: int,
+                  client_id: str, restore: dict | None) -> tuple[bytes | None, bool]:
+    """Render one FLUX still → raw PNG bytes (or None). Returns (bytes, used_restore).
+
+    If a face-restore graph is configured and fails at EITHER submit (node/param
+    rejected) or generation, fall back to the plain graph with the SAME seed —
+    so an unusable/misconfigured restore node can never cost a clip."""
+    if restore:
+        pid = _submit(_build_flux_graph_face(prompt, seed, model, steps, restore), client_id)
+        if pid:
+            img = _await_image(pid)
+            if img:
+                return img, True
+        print(f"[comfy] face-restore render failed — falling back to plain (seed={seed})")
+    pid = _submit(_build_flux_graph(prompt, seed, model, steps), client_id)
+    if not pid:
+        return None, False
+    return _await_image(pid), False
+
+
 def _build_flux_graph(prompt: str, seed: int, model: str, steps: int) -> dict:
     """A minimal FLUX.1-dev txt2img graph (no custom nodes required).
 
@@ -259,6 +363,19 @@ def generate_clips(queries: list[str], n: int = 4,
         print(f"[comfy] img2vid unavailable ({e}) — Ken Burns only")
     use_svd = svd_engine is not None
 
+    # Face restoration (optional): clean up FLUX faces if a restore node is
+    # installed. Fail-safe — any problem falls back to the plain graph per image.
+    restore = None
+    try:
+        restore = resolve_face_restore()
+        if restore:
+            print(f"[comfy] face restore: ON via {restore['kind']} ({restore['model']})")
+        elif _face_restore_setting() not in ("0", "false", "no", "off"):
+            print("[comfy] face restore: off (no restore node found in ComfyUI — "
+                  "install one to enable, see README)")
+    except Exception as e:
+        print(f"[comfy] face restore unavailable ({e}) — plain render")
+
     tmp_dir = Path(__file__).parent.parent / "media_library" / "temp" / "comfy"
     tmp_dir.mkdir(parents=True, exist_ok=True)
 
@@ -290,12 +407,10 @@ def generate_clips(queries: list[str], n: int = 4,
         for retry in range(MAX_DUP_RETRIES + 1):
             # %(2**31) keeps the seed in range for any backend; offset per clip/retry.
             seed  = (master_seed + i + 1000 * retry) % (2**31 - 1)
-            graph = _build_flux_graph(prompt, seed, model, steps)
-            pid   = _submit(graph, client_id)
-            if not pid:
-                time.sleep(GEN_ERROR_BACKOFF)
-                continue
-            img_bytes = _await_image(pid)
+            # Face-restore graph if configured, else plain — with an automatic
+            # same-seed fallback to plain inside _render_image, so restoration
+            # never costs a clip.
+            img_bytes, _ = _render_image(prompt, seed, model, steps, client_id, restore)
             if not img_bytes:
                 # A hard generation error (vs. a plain duplicate) is often a
                 # transient GPU/model-loading hiccup on the ComfyUI side —

@@ -125,6 +125,7 @@ def test_generate_clips_proceeds_when_list_unavailable():
     # preflight (then stop at submit, which we stub to fail fast here).
     with patch.object(c, "is_available", return_value=True), \
          patch.object(c, "list_checkpoints", return_value=[]), \
+         patch.object(c, "resolve_face_restore", return_value=None), \
          patch.object(c, "_submit", return_value=None), \
          patch.object(c, "MAX_DUP_RETRIES", 0), \
          patch.object(c, "GEN_ERROR_BACKOFF", 0):
@@ -139,10 +140,84 @@ def test_generate_clips_backs_off_between_hard_failures(monkeypatch):
     monkeypatch.setattr(c.time, "sleep", lambda s: sleeps.append(s))
     with patch.object(c, "is_available", return_value=True), \
          patch.object(c, "list_checkpoints", return_value=[]), \
+         patch.object(c, "resolve_face_restore", return_value=None), \
          patch.object(c, "_submit", return_value=None), \
          patch.object(c, "MAX_DUP_RETRIES", 2):
         assert c.generate_clips(["a prompt"], n=1) == []
     assert sleeps == [c.GEN_ERROR_BACKOFF] * 3
+
+
+# ── Optional face restoration ─────────────────────────────────────────────────
+
+def test_apply_face_restore_cf_repoints_saveimage():
+    g = c._build_flux_graph("a portrait of a person", 1, "flux.safetensors", 28)
+    c._apply_face_restore(g, {"kind": "facerestore_cf", "model": "GFPGANv1.4.pth", "fidelity": 0.5})
+    json.dumps(g)                                    # must stay serializable
+    assert g["21"]["class_type"] == "FaceRestoreCFWithModel"
+    assert g["21"]["inputs"]["image"] == ["8", 0]    # reads the VAEDecode output
+    assert g["21"]["inputs"]["facerestore_model"] == ["20", 0]
+    assert g["9"]["inputs"]["images"] == ["21", 0]   # SaveImage now reads restored
+
+
+def test_apply_face_restore_reactor_repoints_saveimage():
+    g = c._build_flux_graph("a portrait", 1, "flux.safetensors", 28)
+    c._apply_face_restore(g, {"kind": "reactor", "model": "GFPGANv1.4.pth", "fidelity": 0.5})
+    json.dumps(g)
+    assert g["21"]["class_type"] == "ReActorRestoreFace"
+    assert g["21"]["inputs"]["image"] == ["8", 0]
+    assert g["9"]["inputs"]["images"] == ["21", 0]
+
+
+def test_resolve_face_restore_off_when_disabled(monkeypatch):
+    monkeypatch.setenv("RUFUS_FACE_RESTORE", "0")
+    assert c.resolve_face_restore() is None
+
+
+def test_resolve_face_restore_none_when_no_node(monkeypatch):
+    monkeypatch.delenv("RUFUS_FACE_RESTORE", raising=False)
+    with patch.object(c, "_has_node", return_value=False):
+        assert c.resolve_face_restore() is None
+
+
+def test_resolve_face_restore_prefers_cf(monkeypatch):
+    monkeypatch.delenv("RUFUS_FACE_RESTORE", raising=False)
+    with patch.object(c, "_has_node", lambda cls: cls in ("FaceRestoreCFWithModel", "FaceRestoreModelLoader")):
+        r = c.resolve_face_restore()
+    assert r["kind"] == "facerestore_cf"
+
+
+def test_resolve_face_restore_uses_reactor_when_only_it_present(monkeypatch):
+    monkeypatch.delenv("RUFUS_FACE_RESTORE", raising=False)
+    with patch.object(c, "_has_node", lambda cls: cls == "ReActorRestoreFace"):
+        r = c.resolve_face_restore()
+    assert r["kind"] == "reactor"
+
+
+def test_render_image_falls_back_to_plain_when_restore_fails():
+    # Face-restore submit is rejected (bad node/param) → must retry the SAME seed
+    # on the plain graph so a misconfigured restore node never costs a clip.
+    restore = {"kind": "reactor", "model": "GFPGANv1.4.pth", "fidelity": 0.5}
+    calls = []
+
+    def fake_submit(graph, client_id):
+        has_restore = "21" in graph
+        calls.append(has_restore)
+        return None if has_restore else "pid-123"
+
+    with patch.object(c, "_submit", side_effect=fake_submit), \
+         patch.object(c, "_await_image", return_value=b"PNGDATA"):
+        img, used = c._render_image("a face", 42, "flux.safetensors", 28, "cid", restore)
+
+    assert img == b"PNGDATA" and used is False       # plain graph produced it
+    assert calls == [True, False]                    # tried restore, then plain
+
+
+def test_render_image_plain_when_no_restore():
+    with patch.object(c, "_submit", return_value="pid-1") as sub, \
+         patch.object(c, "_await_image", return_value=b"IMG"):
+        img, used = c._render_image("x", 1, "flux.safetensors", 28, "cid", None)
+    assert img == b"IMG" and used is False
+    assert "21" not in sub.call_args[0][0]           # plain graph only
 
 
 # ── Scheduled runner hygiene ─────────────────────────────────────────────────────
