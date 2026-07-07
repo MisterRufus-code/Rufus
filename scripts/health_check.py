@@ -80,9 +80,12 @@ def run() -> None:
             reddit_id = keys.get("reddit_client_id", "")
             if reddit_id and not reddit_id.startswith("YOUR_"):
                 ok("Reddit API key set  (richer research seeds)")
+            elif os.environ.get("RUFUS_SKIP_REDDIT", "0").strip().lower() in ("1", "true", "yes", "on"):
+                ok("Reddit skipped  (RUFUS_SKIP_REDDIT=1 — using StackExchange/Wikipedia/RSS)")
             else:
-                warn("Reddit key", "not set – Reddit source falls back to StackExchange/HN/RSS "
-                                  "(add reddit_client_id + reddit_client_secret to keys.json)")
+                warn("Reddit key", "not set – Reddit source falls back to StackExchange/Wikipedia/RSS "
+                                  "(add reddit_client_id + reddit_client_secret to keys.json, or set "
+                                  "RUFUS_SKIP_REDDIT=1 to stop trying and skip straight to the fallbacks)")
         except Exception as e:
             err("config/keys.json parse", str(e))
 

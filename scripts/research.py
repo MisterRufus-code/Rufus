@@ -956,10 +956,18 @@ def pick_wisdom_quote(niche_name: str, used_ids: set | None = None) -> dict | No
     }
 
 
+def _skip_reddit() -> bool:
+    """RUFUS_SKIP_REDDIT=1 bypasses Reddit entirely — useful when no OAuth app
+    is configured and the public JSON endpoints are IP-blocked anyway, so a
+    run doesn't burn time/log noise on requests that can't succeed."""
+    return os.environ.get("RUFUS_SKIP_REDDIT", "0").strip().lower() in ("1", "true", "yes", "on")
+
+
 def get_seed(niche_name: str | None = None) -> dict:
     """Get a seed for the script writer. Tracks history so seeds never repeat.
 
-    Order: Reddit → StackExchange → RSS → Hacker News → wisdom fallback.
+    Order: Reddit → StackExchange → Wikipedia → RSS → Hacker News → wisdom fallback.
+    Set RUFUS_SKIP_REDDIT=1 to skip straight past Reddit (e.g. no OAuth app set up).
     All sources skip anything already in used_seeds.json (last MAX_USED_HISTORY items).
     """
     niche, active = _load_niche()
@@ -982,12 +990,15 @@ def get_seed(niche_name: str | None = None) -> dict:
             s["trending_context"] = trending_context
         return s
 
-    for sub in subreddits:
-        seed = fetch_reddit_story(sub, used_ids=used_set)
-        if seed:
-            print(f"[research] using Reddit story from {seed['source']}: \"{seed['title'][:60]}\"")
-            _mark_seed_used(seed)
-            return _with_trending(seed)
+    if _skip_reddit():
+        print("[research] RUFUS_SKIP_REDDIT=1 — skipping Reddit, trying StackExchange next")
+    else:
+        for sub in subreddits:
+            seed = fetch_reddit_story(sub, used_ids=used_set)
+            if seed:
+                print(f"[research] using Reddit story from {seed['source']}: \"{seed['title'][:60]}\"")
+                _mark_seed_used(seed)
+                return _with_trending(seed)
 
     # StackExchange: keyless API, never IP-blocked like Reddit's public JSON
     seed = fetch_stackexchange_story(name, used_ids=used_set)

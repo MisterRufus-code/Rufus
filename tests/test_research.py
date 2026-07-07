@@ -2,6 +2,7 @@
 off-topic seeds slipping through general-interest sources (e.g. history.SE
 surfacing a Viking-insult question for the money_history niche)."""
 
+import json
 import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -160,3 +161,55 @@ def test_wiki_topics_config_valid_and_substantial():
     topics = _json.loads((Path(__file__).parent.parent / "config" / "wiki_topics.json").read_text())
     assert len(topics["money_history"]) >= 60
     assert all(isinstance(t, str) and t for t in topics["money_history"])
+
+
+# ── RUFUS_SKIP_REDDIT / get_seed source order ─────────────────────────────────────
+
+def _niches_fixture(tmp_path, subreddits=None):
+    niches = tmp_path / "niches.json"
+    niches.write_text(json.dumps({
+        "active": "money_history",
+        "niches": {"money_history": {"subreddits": subreddits or ["badeconomics"]}},
+    }))
+    return niches
+
+
+def test_skip_reddit_env_var_recognizes_truthy_values(monkeypatch):
+    for val in ("1", "true", "True", "yes", "on"):
+        monkeypatch.setenv("RUFUS_SKIP_REDDIT", val)
+        assert research._skip_reddit() is True
+    for val in ("0", "false", "", "off"):
+        monkeypatch.setenv("RUFUS_SKIP_REDDIT", val)
+        assert research._skip_reddit() is False
+
+
+def test_get_seed_skips_reddit_when_flag_set(monkeypatch, tmp_path):
+    monkeypatch.setenv("RUFUS_SKIP_REDDIT", "1")
+    monkeypatch.setattr(research, "NICHES_FILE", _niches_fixture(tmp_path))
+    monkeypatch.setattr(research, "USED_SEEDS_FILE", tmp_path / "used_seeds.json")
+
+    se_seed = {"type": "stackexchange", "source": "history.SE",
+               "title": "Why did Rome debase its coinage?", "content": "...", "url": "http://x"}
+    with patch.object(research, "fetch_reddit_story") as reddit_mock, \
+         patch.object(research, "fetch_stackexchange_story", return_value=se_seed), \
+         patch.object(research, "_mark_seed_used"):
+        seed = research.get_seed("money_history")
+
+    reddit_mock.assert_not_called()
+    assert seed["type"] == "stackexchange"
+
+
+def test_get_seed_tries_reddit_when_flag_unset(monkeypatch, tmp_path):
+    monkeypatch.delenv("RUFUS_SKIP_REDDIT", raising=False)
+    monkeypatch.setattr(research, "NICHES_FILE", _niches_fixture(tmp_path))
+    monkeypatch.setattr(research, "USED_SEEDS_FILE", tmp_path / "used_seeds.json")
+
+    with patch.object(research, "fetch_reddit_story", return_value=None) as reddit_mock, \
+         patch.object(research, "fetch_stackexchange_story", return_value=None), \
+         patch.object(research, "fetch_wikipedia_story", return_value=None), \
+         patch.object(research, "fetch_rss_story", return_value=None), \
+         patch.object(research, "fetch_hackernews_story", return_value=None), \
+         patch.object(research, "pick_wisdom_quote", return_value={"type": "wisdom", "source": "x"}):
+        research.get_seed("money_history")
+
+    reddit_mock.assert_called_once_with("badeconomics", used_ids=set())
