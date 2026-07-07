@@ -81,6 +81,7 @@ GEN_W, GEN_H = 832, 1472
 
 POLL_INTERVAL = 1.5    # seconds between /history polls
 GEN_TIMEOUT   = 300    # max seconds to wait for one image (FLUX ~20-30s on a 3090)
+GEN_ERROR_BACKOFF = 3.0  # pause before resubmitting after a submit/generation failure
 
 
 def _host() -> str:
@@ -292,9 +293,15 @@ def generate_clips(queries: list[str], n: int = 4,
             graph = _build_flux_graph(prompt, seed, model, steps)
             pid   = _submit(graph, client_id)
             if not pid:
+                time.sleep(GEN_ERROR_BACKOFF)
                 continue
             img_bytes = _await_image(pid)
             if not img_bytes:
+                # A hard generation error (vs. a plain duplicate) is often a
+                # transient GPU/model-loading hiccup on the ComfyUI side —
+                # a short pause before resubmitting gives it a chance to clear
+                # instead of hammering the same broken state 3x back-to-back.
+                time.sleep(GEN_ERROR_BACKOFF)
                 continue
 
             if not _fit_to_portrait(img_bytes, png_path):  # → exactly 1080×1920

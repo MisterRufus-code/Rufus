@@ -126,8 +126,23 @@ def test_generate_clips_proceeds_when_list_unavailable():
     with patch.object(c, "is_available", return_value=True), \
          patch.object(c, "list_checkpoints", return_value=[]), \
          patch.object(c, "_submit", return_value=None), \
-         patch.object(c, "MAX_DUP_RETRIES", 0):
+         patch.object(c, "MAX_DUP_RETRIES", 0), \
+         patch.object(c, "GEN_ERROR_BACKOFF", 0):
         assert c.generate_clips(["a prompt"], n=1) == []   # fails at submit, not preflight
+
+
+def test_generate_clips_backs_off_between_hard_failures(monkeypatch):
+    # A ComfyUI-side generation error (vs. a plain duplicate) is often a
+    # transient GPU/model-loading hiccup — regression test for hammering the
+    # same broken state 3x back-to-back with no pause.
+    sleeps = []
+    monkeypatch.setattr(c.time, "sleep", lambda s: sleeps.append(s))
+    with patch.object(c, "is_available", return_value=True), \
+         patch.object(c, "list_checkpoints", return_value=[]), \
+         patch.object(c, "_submit", return_value=None), \
+         patch.object(c, "MAX_DUP_RETRIES", 2):
+        assert c.generate_clips(["a prompt"], n=1) == []
+    assert sleeps == [c.GEN_ERROR_BACKOFF] * 3
 
 
 # ── Scheduled runner hygiene ─────────────────────────────────────────────────────
