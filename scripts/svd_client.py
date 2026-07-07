@@ -324,7 +324,12 @@ def _assemble(frames_dir: Path, fps: int, out_path: Path, duration: float) -> bo
          "-filter_complex", fc, "-map", "[out]",
          "-c:v", "libx264", "-preset", "fast", "-crf", "20",
          str(inter)],
-        capture_output=True, text=True, timeout=300,
+        # mi_mode=mci (motion-compensated interpolation) is CPU-bound and the
+        # heaviest step here — on a live run it timed out at 300s while the
+        # GPU was concurrently busy with the next clip's FLUX/SVD generation.
+        # Generous headroom so a slow-but-working pass doesn't get killed and
+        # fall back to Ken Burns unnecessarily.
+        capture_output=True, text=True, timeout=480,
     )
     if r.returncode != 0 or not inter.exists():
         print(f"[svd] ffmpeg assemble failed: {r.stderr[-300:]}")
