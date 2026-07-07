@@ -104,6 +104,24 @@ def test_fetch_wikipedia_returns_grounded_seed(monkeypatch, tmp_path):
     assert seed["url"] == "https://en.wikipedia.org/wiki/Nixon_shock"
 
 
+def test_fetch_wikipedia_uses_wiki_headers_not_reddit_ua(monkeypatch, tmp_path):
+    """Wikipedia's API rejects/deprioritizes browser-spoofed User-Agents (403)
+    — regression test for the real 403 Forbidden bug seen in production. The
+    Wikipedia call must use WIKI_HEADERS, never the Chrome-spoofing REDDIT_HEADERS."""
+    topics = tmp_path / "wiki_topics.json"
+    topics.write_text('{"money_history": ["Nixon shock"]}')
+    monkeypatch.setattr(research, "WIKI_TOPICS_FILE", topics)
+
+    extract = "x" * (research.WIKI_MIN_EXTRACT + 10)
+    with patch.object(research.httpx, "get", return_value=_wiki_response(extract)) as get:
+        research.fetch_wikipedia_story("money_history")
+
+    _, kwargs = get.call_args
+    assert kwargs["headers"] == research.WIKI_HEADERS
+    assert kwargs["headers"] != research.REDDIT_HEADERS
+    assert "Chrome" not in kwargs["headers"]["User-Agent"]
+
+
 def test_fetch_wikipedia_skips_used_topics(monkeypatch, tmp_path):
     topics = tmp_path / "wiki_topics.json"
     topics.write_text('{"money_history": ["Nixon shock"]}')

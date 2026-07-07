@@ -56,6 +56,15 @@ REDDIT_HEADERS = {
     "Cache-Control":   "no-cache",
     "DNT":             "1",
 }
+# Wikipedia's REST API rejects/deprioritizes browser-spoofed User-Agents (the
+# Chrome UA above works for Reddit/HN scraping but gets a 403 from Wikipedia) —
+# their API etiquette policy requires an identifying UA instead:
+# https://meta.wikimedia.org/wiki/User-Agent_policy
+WIKI_HEADERS = {
+    "User-Agent": "Rufus-ContentBot/1.0 (https://github.com/MisterRufus-code/Rufus; "
+                  "automated research for a YouTube Shorts pipeline) httpx",
+}
+
 REDDIT_TIMEOUT  = 10.0
 # old.reddit.com .json is the most permissive endpoint for cloud IPs.
 # www.reddit.com .json sometimes works; api.reddit.com is the most aggressive blocker.
@@ -674,7 +683,7 @@ def fetch_wikipedia_story(niche_name: str, used_ids: set | None = None) -> dict 
         try:
             r = httpx.get(
                 f"https://en.wikipedia.org/api/rest_v1/page/summary/{url_title}",
-                headers=REDDIT_HEADERS, timeout=WIKI_TIMEOUT, follow_redirects=True,
+                headers=WIKI_HEADERS, timeout=WIKI_TIMEOUT, follow_redirects=True,
             )
             r.raise_for_status()
             data = r.json()
