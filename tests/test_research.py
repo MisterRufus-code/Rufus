@@ -159,8 +159,16 @@ def test_wikipedia_seed_id_uses_url():
 def test_wiki_topics_config_valid_and_substantial():
     import json as _json
     topics = _json.loads((Path(__file__).parent.parent / "config" / "wiki_topics.json").read_text())
-    assert len(topics["money_history"]) >= 60
+    assert len(topics["money_history"]) >= 150   # enough runway that daily uploads
+                                                  # don't exhaust fresh topics for months
     assert all(isinstance(t, str) and t for t in topics["money_history"])
+
+
+def test_wiki_topics_no_duplicates():
+    import json as _json
+    topics = _json.loads((Path(__file__).parent.parent / "config" / "wiki_topics.json").read_text())
+    money_history = topics["money_history"]
+    assert len(money_history) == len(set(money_history))
 
 
 # ── RUFUS_SKIP_REDDIT / get_seed source order ─────────────────────────────────────
