@@ -78,6 +78,47 @@ def _prompt_likely_shows_a_face(prompt: str) -> bool:
     return bool(_FACE_HINT_RE.search(prompt or ""))
 
 
+_face_cascade = None   # lazy singleton — loaded once per process
+
+
+def _load_face_cascade():
+    """Load OpenCV's bundled frontal-face Haar cascade once. No model download —
+    the XML ships inside the opencv-python-headless package itself."""
+    global _face_cascade
+    if _face_cascade is None:
+        import cv2
+        _face_cascade = cv2.CascadeClassifier(
+            cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
+    return _face_cascade
+
+
+def _image_shows_a_face(png_path: Path) -> bool:
+    """Pixel-level backstop for _prompt_likely_shows_a_face: catches a face the
+    PROMPT TEXT didn't mention by name — e.g. GPT wrote "a banknote depicting
+    Mao Zedong" (no "portrait"/"face" keyword) but the rendered image is a
+    close-up of an engraved portrait, which Haar cascades still fire on.
+
+    Only counts a face that's a substantial fraction of the frame (minSize
+    relative to image dimensions) — a wide crowd shot full of small, distant
+    faces should still get real SVD motion; a single dominant face/portrait
+    (the actual warping risk) should not. Fails open (False) on any error —
+    this is a bonus safety net on top of the prompt check, never a hard
+    requirement, and OpenCV may not be installed yet on every machine."""
+    try:
+        import cv2
+        img = cv2.imread(str(png_path))
+        if img is None:
+            return False
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        h, w = gray.shape[:2]
+        faces = _load_face_cascade().detectMultiScale(
+            gray, scaleFactor=1.1, minNeighbors=5,
+            minSize=(max(1, w // 6), max(1, h // 6)))
+        return len(faces) > 0
+    except Exception:
+        return False
+
+
 def img2vid_enabled() -> bool:
     return os.environ.get("RUFUS_IMG2VID", "1").strip().lower() not in ("0", "false", "no", "off")
 
@@ -377,6 +418,11 @@ def animate_image(png_path: Path, out_path: Path,
     if _prompt_likely_shows_a_face(prompt):
         print(f"[svd] clip {idx+1}: prompt shows a face — skipping SVD motion "
               f"(not face-aware, would warp features), Ken Burns instead")
+        return False
+    if _image_shows_a_face(png_path):
+        print(f"[svd] clip {idx+1}: image contains a detected face (prompt text "
+              f"didn't mention it, e.g. an engraved portrait) — skipping SVD "
+              f"motion, Ken Burns instead")
         return False
     try:
         frames_n = int(os.environ.get("RUFUS_SVD_FRAMES", "25"))

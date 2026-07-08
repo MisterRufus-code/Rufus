@@ -219,6 +219,43 @@ def test_animate_image_skips_svd_for_face_prompt(tmp_path, monkeypatch):
                            prompt="A medium portrait of a worried banker") is False
 
 
+def test_image_shows_a_face_false_for_missing_file(tmp_path):
+    assert s._image_shows_a_face(tmp_path / "nope.png") is False
+
+
+def test_image_shows_a_face_false_for_solid_color_object_image(tmp_path):
+    # No face detector should ever fire on a plain object/scene image.
+    from PIL import Image
+    obj = tmp_path / "obj.png"
+    Image.new("RGB", (1080, 1920), (120, 90, 60)).save(str(obj))
+    assert s._image_shows_a_face(obj) is False
+
+
+def test_image_shows_a_face_fails_open_on_detector_error(tmp_path, monkeypatch):
+    from PIL import Image
+    img = tmp_path / "img.png"
+    Image.new("RGB", (100, 100), (1, 2, 3)).save(str(img))
+    monkeypatch.setattr(s, "_load_face_cascade",
+                        lambda: (_ for _ in ()).throw(RuntimeError("no cascade")))
+    assert s._image_shows_a_face(img) is False
+
+
+def test_animate_image_skips_svd_when_image_detector_finds_a_face(tmp_path, monkeypatch):
+    # Prompt text gives no hint ("a banknote depicting a historical figure"),
+    # but the pixel-level check catches the engraved portrait anyway —
+    # regression test for the exact live bug (Mao's portrait warping on a
+    # banknote clip the text heuristic missed).
+    from PIL import Image
+    src = tmp_path / "still.png"
+    Image.new("RGB", (1080, 1920), (120, 90, 60)).save(str(src))
+
+    monkeypatch.setattr(s, "_image_shows_a_face", lambda p: True)
+    monkeypatch.setattr(s, "_prep_init_image",
+                        lambda a, b: (_ for _ in ()).throw(AssertionError("SVD pipeline touched")))
+    assert s.animate_image(src, tmp_path / "out.mp4",
+                           prompt="a banknote depicting a historical figure") is False
+
+
 def test_animate_image_no_prompt_runs_normal_path(tmp_path, monkeypatch):
     # Backward compatible: no prompt passed -> behaves exactly as before (the
     # existing missing-source-file test already covers this without prompt=).

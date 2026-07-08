@@ -25,6 +25,16 @@ faster-whisper>=1.2
 # images (thumbnails, crops, perceptual dedup)
 Pillow>=10.0
 
+# pixel-level face detection (Haar cascade) — catches faces the SVD prompt-text
+# heuristic misses, e.g. an engraved/printed portrait on a banknote or coin
+# that GPT described without literally saying "portrait"/"face".
+# PINNED BELOW 5.0: opencv-python 5.0 removed cv2.CascadeClassifier and the
+# bundled Haar XML entirely (moved to a DNN detector needing a separate
+# downloaded model file) — verified by installing it and watching
+# CascadeClassifier disappear. Stay on the 4.x line, which bundles the cascade
+# with zero downloads.
+opencv-python-headless>=4.8,<5
+
 # cross-platform locking (single-instance + seed history)
 filelock>=3.12
 
