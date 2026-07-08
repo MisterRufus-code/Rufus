@@ -67,7 +67,9 @@ BAR_HEIGHT   = 14          # retention progress bar thickness (px)
 # so it's the one most likely to feel loud/repetitive — kept noticeably quieter
 # than hit/riser, which each play once per video.
 SFX_HIT_GAIN    = 0.90     # sub-bass hit on the hook (once, 0.03s in)
-SFX_WHOOSH_GAIN = 0.35     # transition swoosh into each cut (was 0.65 — too loud/frequent)
+SFX_WHOOSH_GAIN = 0.15     # transition swoosh into each cut (was 0.65, then 0.35 —
+                           # channel owner reported it's still too loud/fatiguing
+                           # across up to 9 cuts/video; cut hard toward "minimal")
 SFX_RISER_GAIN  = 0.55     # riser leading into the final beat (once)
 
 # Cut planning
