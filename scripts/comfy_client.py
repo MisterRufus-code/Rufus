@@ -452,7 +452,7 @@ def generate_clips(queries: list[str], n: int = 4,
         if use_svd:
             via_svd = svd_client.animate_image(png_path, clip_path,
                                                duration=clip_duration, idx=i,
-                                               engine=svd_engine)
+                                               engine=svd_engine, prompt=prompt)
             if not via_svd:
                 print(f"[comfy] SVD failed for clip {i+1} — Ken Burns fallback")
         made = via_svd or _animate_to_clip(png_path, clip_path,

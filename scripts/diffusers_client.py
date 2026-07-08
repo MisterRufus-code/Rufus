@@ -193,7 +193,7 @@ def generate_clips(prompts: list[str], master_seed: int = 42) -> list[Path]:
         if svd_engine:
             via_svd = svd_client.animate_image(img_path, clip_path,
                                                duration=KEN_BURNS_DUR, idx=i,
-                                               engine=svd_engine)
+                                               engine=svd_engine, prompt=prompt)
             if not via_svd:
                 print(f"[diffusers] SVD failed for clip {i+1} — Ken Burns fallback")
         if via_svd or _ken_burns(img_path, clip_path):

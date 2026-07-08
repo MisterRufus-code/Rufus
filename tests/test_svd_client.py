@@ -190,6 +190,47 @@ def test_animate_image_diffusers_engine_false_when_generation_empty(tmp_path, mo
     assert s.animate_image(src, tmp_path / "out.mp4", engine="diffusers") is False
 
 
+# ── Face-hint heuristic (SVD isn't face-aware, warps facial features) ────────────
+
+def test_prompt_likely_shows_a_face_matches_portrait_and_face():
+    assert s._prompt_likely_shows_a_face("A medium portrait of Richard Nixon speaking")
+    assert s._prompt_likely_shows_a_face("An extreme close-up of a distressed face")
+    assert s._prompt_likely_shows_a_face("Two portraits side by side")
+
+
+def test_prompt_likely_shows_a_face_false_for_object_scene_prompts():
+    assert not s._prompt_likely_shows_a_face(
+        "A macro shot of ancient electrum Lydian stater coins on a stone counter")
+    assert not s._prompt_likely_shows_a_face(
+        "A wide establishing shot of a 1970s trading floor")
+    assert not s._prompt_likely_shows_a_face("")
+    assert not s._prompt_likely_shows_a_face(None)
+
+
+def test_animate_image_skips_svd_for_face_prompt(tmp_path, monkeypatch):
+    from PIL import Image
+    src = tmp_path / "still.png"
+    Image.new("RGB", (1080, 1920), (120, 90, 60)).save(str(src))
+
+    # If the face short-circuit didn't fire, this would raise and fail the test.
+    monkeypatch.setattr(s, "_prep_init_image",
+                        lambda a, b: (_ for _ in ()).throw(AssertionError("SVD pipeline touched")))
+    assert s.animate_image(src, tmp_path / "out.mp4",
+                           prompt="A medium portrait of a worried banker") is False
+
+
+def test_animate_image_no_prompt_runs_normal_path(tmp_path, monkeypatch):
+    # Backward compatible: no prompt passed -> behaves exactly as before (the
+    # existing missing-source-file test already covers this without prompt=).
+    monkeypatch.setattr(s, "_prep_init_image", lambda a, b: True)
+    monkeypatch.setattr(s, "_upload_image", lambda p: None)   # fails further down, not a face-skip
+    from PIL import Image
+    src = tmp_path / "still.png"
+    Image.new("RGB", (1080, 1920), (120, 90, 60)).save(str(src))
+    assert s.animate_image(src, tmp_path / "out.mp4",
+                           prompt="a macro shot of ancient coins") is False
+
+
 def test_prep_init_image_outputs_svd_portrait(tmp_path):
     import random
     from PIL import Image

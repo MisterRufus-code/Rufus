@@ -43,6 +43,7 @@ Environment:
 
 import os
 import random
+import re
 import subprocess
 import tempfile
 import time
@@ -59,6 +60,22 @@ from sd_client import FPS, OUT_W, OUT_H
 SVD_W, SVD_H = 576, 1024
 
 SVD_TIMEOUT = 420   # 25 frames on a 3090 ≈ 60-120s; generous headroom
+
+# SVD is trained on general scene/object motion, NOT faces — it has no concept
+# of facial structure, so animating a shot with a visible face frequently
+# warps/melts features (eyes drifting, mouth morphing) across the 25 frames.
+# Ken Burns (plain camera pan/zoom on the static image) can't distort anything,
+# so beats that likely show a face skip SVD entirely rather than risk it.
+# Heuristic, not a vision check: the FLUX/SD prompt-writer's own framing
+# vocabulary uses "portrait" for person-focused beats; "face" is the other
+# direct tell. False positives just mean a real object shot loses motion for
+# no reason (safe); false negatives mean an occasional face still gets
+# animated (same as today) — biased toward the safe side either way.
+_FACE_HINT_RE = re.compile(r"\bportraits?\b|\bfaces?\b", re.IGNORECASE)
+
+
+def _prompt_likely_shows_a_face(prompt: str) -> bool:
+    return bool(_FACE_HINT_RE.search(prompt or ""))
 
 
 def img2vid_enabled() -> bool:
@@ -350,10 +367,17 @@ def _assemble(frames_dir: Path, fps: int, out_path: Path, duration: float) -> bo
 
 def animate_image(png_path: Path, out_path: Path,
                   duration: float = 8.0, idx: int = 0,
-                  engine: str = "comfy") -> bool:
+                  engine: str = "comfy", prompt: str = "") -> bool:
     """FLUX still → SVD motion clip at out_path. False on ANY failure — the
     caller falls back to Ken Burns for this image, so a clip is never lost.
-    `engine` comes from resolve_engine(): "comfy" or "diffusers"."""
+    `engine` comes from resolve_engine(): "comfy" or "diffusers". `prompt` is
+    the image's own generation prompt — pass it so beats that likely show a
+    face skip SVD (see _prompt_likely_shows_a_face) instead of risking the
+    warped-face artifact Ken Burns can never produce."""
+    if _prompt_likely_shows_a_face(prompt):
+        print(f"[svd] clip {idx+1}: prompt shows a face — skipping SVD motion "
+              f"(not face-aware, would warp features), Ken Burns instead")
+        return False
     try:
         frames_n = int(os.environ.get("RUFUS_SVD_FRAMES", "25"))
         fps      = int(os.environ.get("RUFUS_SVD_FPS", "8"))
