@@ -334,7 +334,7 @@ def generate_clips(queries: list[str], n: int = 4,
     model = (os.environ.get("COMFY_MODEL")
              or (niche_cfg or {}).get("comfy_model")
              or "flux1-dev-fp8.safetensors")
-    steps = int(os.environ.get("COMFY_STEPS", "28"))
+    steps = int(os.environ.get("COMFY_STEPS", "32"))
 
     # Preflight the checkpoint: server-up but model-missing is the classic
     # first-run failure. Catch it here with the exact fix instead of submitting

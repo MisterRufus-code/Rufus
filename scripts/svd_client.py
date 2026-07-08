@@ -98,10 +98,13 @@ def _image_shows_a_face(png_path: Path) -> bool:
     Mao Zedong" (no "portrait"/"face" keyword) but the rendered image is a
     close-up of an engraved portrait, which Haar cascades still fire on.
 
-    Only counts a face that's a substantial fraction of the frame (minSize
-    relative to image dimensions) — a wide crowd shot full of small, distant
-    faces should still get real SVD motion; a single dominant face/portrait
-    (the actual warping risk) should not. Fails open (False) on any error —
+    Only counts a face above a minimum size (minSize relative to image
+    dimensions) — an enormous crowd shot with dozens of tiny, distant faces
+    can still get real SVD motion; anything large enough to actually read as
+    a face on a phone screen does not. Tuned toward "skip motion when in
+    doubt" per the priority set by the channel owner (perfect over fast) —
+    lower minSize catches more borderline/smaller faces at the cost of
+    losing SVD motion on a few more shots. Fails open (False) on any error —
     this is a bonus safety net on top of the prompt check, never a hard
     requirement, and OpenCV may not be installed yet on every machine."""
     try:
@@ -113,7 +116,7 @@ def _image_shows_a_face(png_path: Path) -> bool:
         h, w = gray.shape[:2]
         faces = _load_face_cascade().detectMultiScale(
             gray, scaleFactor=1.1, minNeighbors=5,
-            minSize=(max(1, w // 6), max(1, h // 6)))
+            minSize=(max(1, w // 10), max(1, h // 10)))
         return len(faces) > 0
     except Exception:
         return False
