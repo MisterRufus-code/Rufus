@@ -200,7 +200,15 @@ def upload(video_path: Path, script: str, thumbnail_path: Path = None,
     privacy = channel.upload.get("privacy")
     if privacy not in ("private", "unlisted", "public"):
         privacy = "private"
-    status = {"privacyStatus": privacy, "selfDeclaredMadeForKids": False}
+    # Every Rufus video is 100% synthetic — GPT script, FLUX/SVD-generated
+    # imagery and motion, synthesized voice — so this is unconditionally True,
+    # never a per-niche knob. YouTube's altered/synthetic-content disclosure
+    # policy (API support added 2024-10-30) requires self-declaring this for
+    # realistic AI-generated content; the API returns it back once set but
+    # never infers it — an undisclosed synthetic-media channel risks a strike
+    # or removal once it's actually public, not just a style choice.
+    status = {"privacyStatus": privacy, "selfDeclaredMadeForKids": False,
+             "containsSyntheticMedia": True}
     if privacy == "private":
         # publishAt is only valid on private uploads (YouTube then auto-publishes)
         status["publishAt"] = _next_peak_utc(channel.upload.get("peak_hours"),

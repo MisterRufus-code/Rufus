@@ -1,9 +1,12 @@
 """Tests for youtube_uploader.py – peak time scheduling and metadata building."""
 
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
+from unittest.mock import MagicMock, patch
 from zoneinfo import ZoneInfo
 
 import metadata_writer
+import youtube_uploader
 from youtube_uploader import _next_peak_utc, build_metadata, PEAK_HOURS_ET
 
 
@@ -67,3 +70,43 @@ def test_build_metadata_tags_have_no_hash(monkeypatch):
     meta = build_metadata("Hook\n", "finance", {"cta": ""})
     # Tags should not include the leading #
     assert all(not t.startswith("#") for t in meta["tags"])
+
+
+# ── Synthetic-media disclosure ────────────────────────────────────────────────
+# Every Rufus video is 100% AI-generated (GPT script, FLUX/SVD imagery/motion,
+# synthesized voice) — YouTube's altered/synthetic-content policy requires
+# self-declaring status.containsSyntheticMedia=True on upload. Regression test
+# for that disclosure actually reaching the API request body.
+
+@dataclass
+class _FakeChannel:
+    id: str = "main_en"
+    upload: dict = field(default_factory=lambda: {"privacy": "private", "peak_hours": [18], "timezone": "UTC"})
+    niche_overrides: dict = field(default_factory=dict)
+
+
+def test_upload_declares_synthetic_media(tmp_path, monkeypatch):
+    video = tmp_path / "out.mp4"
+    video.write_bytes(b"fake mp4 bytes")
+
+    captured = {}
+    fake_youtube = MagicMock()
+
+    def fake_insert(part, body, media_body):
+        captured["body"] = body
+        req = MagicMock()
+        req.next_chunk.return_value = (None, {"id": "vid123"})
+        return req
+
+    fake_youtube.videos.return_value.insert.side_effect = fake_insert
+
+    monkeypatch.setattr(youtube_uploader, "_channel", lambda: _FakeChannel())
+    monkeypatch.setattr(youtube_uploader, "get_authenticated_service", lambda channel=None: fake_youtube)
+    monkeypatch.setattr(youtube_uploader, "load_niche", lambda: ({"cta": "x"}, "money_history"))
+    monkeypatch.setattr(youtube_uploader, "post_cta_comment", lambda *a, **k: None)
+
+    meta = {"title": "t", "description": "d", "tags": ["a"], "categoryId": "22"}
+    with patch("googleapiclient.http.MediaFileUpload", MagicMock()):
+        youtube_uploader.upload(video, "script text", metadata=meta)
+
+    assert captured["body"]["status"]["containsSyntheticMedia"] is True

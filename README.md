@@ -202,3 +202,4 @@ exactly why (`logs\rufus_YYYYMMDD.log`).
 - `config/keys.json` is **gitignored** — never commit real keys.
 - YouTube uploads default to **private**.
 - The quality gate (`RUFUS_MIN_UPLOAD_SCORE`, default 8) holds weak scripts back for review.
+- Every upload sets `status.containsSyntheticMedia=True` (`youtube_uploader.py`) — YouTube's altered/synthetic-content disclosure policy requires self-declaring this for realistic AI-generated video, and every Rufus video qualifies (GPT script, FLUX/SVD imagery and motion, synthesized voice). Not optional/configurable — it's always true for this pipeline's output.
