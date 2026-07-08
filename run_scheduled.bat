@@ -6,6 +6,13 @@ REM own gates: script score >= 8/10, QC pass required, uploads default PRIVATE.
 
 cd /d "%~dp0"
 
+REM Computed once, upfront, outside any conditional block — setting a variable
+REM and reading it back with %var% inside the SAME parenthesized if-block is a
+REM classic batch pitfall (the whole block is %-expanded once at parse time,
+REM before it runs line-by-line, so a value set mid-block isn't seen later in
+REM that same block without setlocal enabledelayedexpansion + !var! syntax).
+for /f %%d in ('powershell -NoProfile -Command "Get-Date -Format yyyyMMdd"') do set TODAY=%%d
+
 if exist ".venv\Scripts\activate.bat" call ".venv\Scripts\activate.bat"
 
 set RUFUS_GPU=1
@@ -13,4 +20,29 @@ set RUFUS_VIDEO_SOURCE=comfy
 REM Uncomment for the Kokoro voice (needs the Docker container on :8880):
 REM set RUFUS_TTS=kokoro_api
 
+REM Push notification on FAILURE only (no news = good news, avoids daily spam).
+REM Zero signup: pick any unguessable topic name below, then install the free
+REM "ntfy" app (iOS/Android) and subscribe to that same topic name. Leave blank
+REM to disable — everything below degrades to a no-op silently if unset.
+set RUFUS_NTFY_TOPIC=
+
+REM Feedback loop: pull yesterday's YouTube Analytics and refold "what worked"
+REM into learnings.json BEFORE today's script gets written, so script_writer.py
+REM can actually use it (was built but never scheduled — dormant until now).
+REM Both are non-fatal: a failure here only prints a warning, never blocks the
+REM main run below.
+echo Updating analytics + feedback learnings...
+python scripts\analytics_fetcher.py
+python scripts\feedback_analyzer.py
+
 python scripts\main.py %*
+set RUFUS_EXIT=%ERRORLEVEL%
+
+if not "%RUFUS_EXIT%"=="0" (
+    echo Rufus run FAILED - exit code %RUFUS_EXIT%
+    if not "%RUFUS_NTFY_TOPIC%"=="" (
+        curl -s -d "Rufus daily run FAILED (exit %RUFUS_EXIT%) - check logs\rufus_%TODAY%.log" "ntfy.sh/%RUFUS_NTFY_TOPIC%" >nul 2>&1
+    )
+)
+
+exit /b %RUFUS_EXIT%

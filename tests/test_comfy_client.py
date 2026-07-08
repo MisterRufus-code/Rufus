@@ -230,3 +230,39 @@ def test_run_scheduled_bat_is_task_scheduler_safe():
     # the scheduled run IS the product run — no --skip-upload on any command line
     assert not any("--skip-upload" in l for l in commands)
     assert any("main.py" in l for l in commands)
+
+
+def test_run_scheduled_bat_wires_in_the_feedback_loop():
+    # analytics_fetcher.py + feedback_analyzer.py were built but never invoked
+    # by the schedule — dormant until wired in here. Must run BEFORE main.py
+    # so today's script can actually use freshly updated learnings.json.
+    bat = (Path(__file__).parent.parent / "run_scheduled.bat").read_text()
+    lines = bat.splitlines()
+    idx = {name: next(i for i, l in enumerate(lines) if name in l)
+           for name in ("analytics_fetcher.py", "feedback_analyzer.py", "main.py")}
+    assert idx["analytics_fetcher.py"] < idx["main.py"]
+    assert idx["feedback_analyzer.py"] < idx["main.py"]
+
+
+def test_run_scheduled_bat_propagates_exit_code():
+    # A silently-swallowed failure defeats the whole point of alerting on one —
+    # the script must both capture and ultimately exit with main.py's real code.
+    bat = (Path(__file__).parent.parent / "run_scheduled.bat").read_text()
+    assert "set RUFUS_EXIT=%ERRORLEVEL%" in bat
+    assert "exit /b %RUFUS_EXIT%" in bat
+
+
+def test_run_scheduled_bat_date_var_set_outside_any_conditional_block():
+    # Regression guard for a real batch pitfall caught before shipping: setting
+    # a variable and reading it back with %var% (not !var!) inside the SAME
+    # parenthesized if-block silently sees a stale/empty value, because the
+    # whole block is %-expanded once at parse time before it runs line by line.
+    bat = (Path(__file__).parent.parent / "run_scheduled.bat").read_text()
+    lines = bat.splitlines()
+    set_today_idx = next(i for i, l in enumerate(lines) if l.strip().startswith("for /f") and "set TODAY=" in l)
+    # Nothing before this line may be an unclosed "if ... (" — i.e. no line
+    # above it may open a parenthesized block that hasn't already closed.
+    depth = 0
+    for l in lines[:set_today_idx]:
+        depth += l.count("(") - l.count(")")
+    assert depth == 0
