@@ -282,3 +282,33 @@ def test_prep_init_image_outputs_svd_portrait(tmp_path):
     dst = tmp_path / "init.png"
     assert s._prep_init_image(src, dst) is True
     assert Image.open(dst).size == (s.SVD_W, s.SVD_H)
+
+
+# ── Interpolation mode (mci warps fine detail — regression guard) ────────────
+
+def test_assemble_uses_blend_interpolation_not_motion_compensated(tmp_path):
+    """Live evidence: a newspaper-clipping shot (no face anywhere in frame)
+    came out visibly warped/melted. mi_mode=mci estimates per-pixel motion
+    vectors and warps along them — it mis-tracks fine, high-contrast detail
+    (text, documents, ornate patterns), not just faces. mi_mode=blend
+    cross-fades instead of estimating motion, so it can't produce that
+    warping artifact. Must never regress back to mci/aobmc."""
+    captured = {}
+
+    def fake_run(cmd, **kwargs):
+        if "-filter_complex" in cmd:
+            captured["filter"] = cmd[cmd.index("-filter_complex") + 1]
+        result = type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+        return result
+
+    frames_dir = tmp_path
+    (frames_dir / "pingpong.mp4").write_bytes(b"x" * 60_000)   # pass the size check
+    out_path = tmp_path / "out.mp4"
+    out_path.write_bytes(b"x" * 60_000)
+
+    with patch.object(s.subprocess, "run", side_effect=fake_run):
+        s._assemble(frames_dir, fps=8, out_path=out_path, duration=8.0)
+
+    assert "mi_mode=blend" in captured["filter"]
+    assert "mci" not in captured["filter"]
+    assert "aobmc" not in captured["filter"]

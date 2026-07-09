@@ -374,8 +374,19 @@ def _assemble(frames_dir: Path, fps: int, out_path: Path, duration: float) -> bo
     stream (so the loop point is seamless by construction), and upscales.
     Pass 2 stream-loops that segment out to the requested clip duration."""
     inter = frames_dir / "pingpong.mp4"
+    # mi_mode=blend, NOT mci: mci estimates per-pixel motion vectors and warps
+    # along them — on fine, high-contrast detail (printed text, documents,
+    # ornate patterns) that estimation frequently miscalculates and produces
+    # a melting/warping artifact (confirmed live: a newspaper clipping frame
+    # came out visibly warped, no face anywhere in that shot — this isn't a
+    # face-specific bug, mci can warp ANY fine detail it mis-tracks). blend
+    # cross-fades between frames instead of estimating motion, so it cannot
+    # produce that class of artifact — worst case is mild ghosting on fast
+    # motion, which SVD's own subtle drift rarely produces anyway. Costs a
+    # touch of interpolation smoothness for a real reliability gain, matching
+    # the channel owner's explicit preference for a slower/safer render.
     fc = (
-        f"[0:v]minterpolate=fps={FPS}:mi_mode=mci:mc_mode=aobmc:vsbmc=1[m];"
+        f"[0:v]minterpolate=fps={FPS}:mi_mode=blend[m];"
         f"[m]split[a][b];[b]reverse[r];[a][r]concat=n=2:v=1[pp];"
         f"[pp]scale={OUT_W}:{OUT_H}:flags=lanczos,setsar=1,format=yuv420p[out]"
     )
