@@ -312,3 +312,56 @@ def test_assemble_uses_blend_interpolation_not_motion_compensated(tmp_path):
     assert "mi_mode=blend" in captured["filter"]
     assert "mci" not in captured["filter"]
     assert "aobmc" not in captured["filter"]
+
+
+# ── Encode-quality chain (intermediates near-lossless, warp-safe SVD params) ─────
+
+def test_assemble_intermediates_are_near_lossless(tmp_path):
+    """Both _assemble passes feed a THIRD encode (the final render) — lossy
+    generations compound, which read on screen as 'the still is sharp but the
+    video is mushy'. Intermediates must stay near-lossless (crf <= 16)."""
+    crfs = []
+
+    def fake_run(cmd, **kwargs):
+        if "-crf" in cmd:
+            crfs.append(int(cmd[cmd.index("-crf") + 1]))
+        (tmp_path / "pingpong.mp4").write_bytes(b"x" * 60_000)
+        return type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+
+    out_path = tmp_path / "out.mp4"
+    out_path.write_bytes(b"x" * 60_000)
+    with patch.object(s.subprocess, "run", side_effect=fake_run):
+        s._assemble(tmp_path, fps=8, out_path=out_path, duration=8.0)
+
+    assert len(crfs) == 2
+    assert all(c <= 16 for c in crfs), f"intermediate crf too lossy: {crfs}"
+
+
+def test_assemble_sharpens_after_upscale(tmp_path):
+    # SVD's 576x1024 output is upscaled 1.9x — a mild luma unsharp recovers
+    # the detail Lanczos smears. Chroma must stay untouched (halo safety).
+    captured = {}
+
+    def fake_run(cmd, **kwargs):
+        if "-filter_complex" in cmd:
+            captured["filter"] = cmd[cmd.index("-filter_complex") + 1]
+        (tmp_path / "pingpong.mp4").write_bytes(b"x" * 60_000)
+        return type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+
+    out_path = tmp_path / "out.mp4"
+    out_path.write_bytes(b"x" * 60_000)
+    with patch.object(s.subprocess, "run", side_effect=fake_run):
+        s._assemble(tmp_path, fps=8, out_path=out_path, duration=8.0)
+
+    assert "unsharp" in captured["filter"]
+    assert captured["filter"].index("lanczos") < captured["filter"].index("unsharp")
+
+
+def test_svd_defaults_favor_low_warp_motion(monkeypatch):
+    """motion_bucket_id is SVD's biggest warping lever — the default must stay
+    conservative (<=80 base) and steps generous (>=30), per the channel owner's
+    explicit quality-over-speed preference after repeated warp complaints."""
+    import inspect
+    src = inspect.getsource(s.animate_image)
+    assert '"RUFUS_SVD_MOTION", "70"' in src
+    assert '"RUFUS_SVD_STEPS", "30"' in src

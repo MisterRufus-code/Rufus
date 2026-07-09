@@ -153,10 +153,17 @@ def _ffmpeg_has_nvenc() -> bool:
 
 
 def _video_encoder_args() -> list[str]:
-    """Pick the H.264 encoder: NVENC on GPU instances, libx264 on CPU."""
+    """Pick the H.264 encoder: NVENC on GPU instances, libx264 on CPU.
+
+    This is the DELIVERY encode — the one YouTube ingests and re-compresses.
+    Feeding YouTube's transcoder a higher-quality master measurably improves
+    what viewers see after its re-encode, so spend time here: p7 is NVENC's
+    slowest/highest-quality preset (still fast on a 3090), cq/crf ~18-19
+    instead of 23/20. Intermediates upstream are near-lossless (crf 14) so
+    this is the only real compression the pixels go through on our side."""
     if _GPU and _ffmpeg_has_nvenc():
-        return ["-c:v", "h264_nvenc", "-preset", "p4", "-cq", "23"]
-    return ["-c:v", "libx264", "-preset", "fast", "-crf", "20"]
+        return ["-c:v", "h264_nvenc", "-preset", "p7", "-cq", "19"]
+    return ["-c:v", "libx264", "-preset", "slow", "-crf", "18"]
 
 
 # ── Whisper singleton ────────────────────────────────────────────────────────────

@@ -140,7 +140,9 @@ def _ken_burns(img_path: Path, out_path: Path, duration: float = KEN_BURNS_DUR) 
         ["ffmpeg", "-y", "-loglevel", "error",
          "-i", str(img_path),
          "-vf", random.choice(patterns),
-         "-c:v", "libx264", "-preset", "fast", "-crf", "23",
+         # crf 14: intermediate clip, re-encoded by the final render — keep
+         # near-lossless so generations don't compound (see sd_client).
+         "-c:v", "libx264", "-preset", "fast", "-crf", "14",
          "-r", str(FPS), "-pix_fmt", "yuv420p",
          str(out_path)],
         capture_output=True, timeout=90,

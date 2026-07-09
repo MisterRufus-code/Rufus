@@ -37,8 +37,9 @@ Environment:
   RUFUS_SVD_DIFFUSERS_MODEL stabilityai/stable-video-diffusion-img2vid-xt
   RUFUS_SVD_FRAMES         25   (SVD-XT's native frame count)
   RUFUS_SVD_FPS            8    (conditioning fps; assembled output is 30fps)
-  RUFUS_SVD_MOTION         100  (motion_bucket_id 1-255: higher = more motion)
-  RUFUS_SVD_STEPS          20
+  RUFUS_SVD_MOTION         70   (motion_bucket_id 1-255: higher = more motion
+                                 but also more warping/deformation — keep low)
+  RUFUS_SVD_STEPS          30
 """
 
 import os
@@ -385,16 +386,27 @@ def _assemble(frames_dir: Path, fps: int, out_path: Path, duration: float) -> bo
     # motion, which SVD's own subtle drift rarely produces anyway. Costs a
     # touch of interpolation smoothness for a real reliability gain, matching
     # the channel owner's explicit preference for a slower/safer render.
+    # unsharp after the Lanczos upscale: SVD generates at 576×1024 and gets
+    # blown up 1.9× to 1080×1920, which softens everything — a mild luma-only
+    # sharpen (0.4; halo-safe range) recovers perceived detail the upscale
+    # smeared. Chroma untouched (last three args zeroed).
     fc = (
         f"[0:v]minterpolate=fps={FPS}:mi_mode=blend[m];"
         f"[m]split[a][b];[b]reverse[r];[a][r]concat=n=2:v=1[pp];"
-        f"[pp]scale={OUT_W}:{OUT_H}:flags=lanczos,setsar=1,format=yuv420p[out]"
+        f"[pp]scale={OUT_W}:{OUT_H}:flags=lanczos,unsharp=5:5:0.4:5:5:0.0,"
+        f"setsar=1,format=yuv420p[out]"
     )
     r = subprocess.run(
         ["ffmpeg", "-y", "-loglevel", "error",
          "-framerate", str(fps), "-i", str(frames_dir / "frame_%04d.png"),
          "-filter_complex", fc, "-map", "[out]",
-         "-c:v", "libx264", "-preset", "fast", "-crf", "20",
+         # crf 14, not 20: this is a TEMP intermediate that gets re-encoded
+         # by the loop pass below and AGAIN by the final render — three
+         # lossy generations compounding was a real source of "the still is
+         # sharp but the video is mushy". Intermediates must be near-lossless
+         # (their file size is irrelevant, they're deleted after the render);
+         # only the final delivery encode should spend bits like a delivery.
+         "-c:v", "libx264", "-preset", "fast", "-crf", "14",
          str(inter)],
         # mi_mode=mci (motion-compensated interpolation) is CPU-bound and the
         # heaviest step here — on a live run it timed out at 300s while the
@@ -411,7 +423,9 @@ def _assemble(frames_dir: Path, fps: int, out_path: Path, duration: float) -> bo
         ["ffmpeg", "-y", "-loglevel", "error",
          "-stream_loop", "-1", "-i", str(inter),
          "-t", f"{duration:.2f}",
-         "-c:v", "libx264", "-preset", "fast", "-crf", "20",
+         # Same rationale as pass 1: still an intermediate (the final render
+         # re-encodes it once more) — keep it near-lossless.
+         "-c:v", "libx264", "-preset", "fast", "-crf", "14",
          "-pix_fmt", "yuv420p", str(out_path)],
         capture_output=True, text=True, timeout=180,
     )
@@ -441,11 +455,17 @@ def animate_image(png_path: Path, out_path: Path,
     try:
         frames_n = int(os.environ.get("RUFUS_SVD_FRAMES", "25"))
         fps      = int(os.environ.get("RUFUS_SVD_FPS", "8"))
-        steps    = int(os.environ.get("RUFUS_SVD_STEPS", "20"))
-        motion   = int(os.environ.get("RUFUS_SVD_MOTION", "100"))
+        # steps 30 (was 20): more denoising passes = cleaner frames; worth the
+        # extra GPU seconds per the channel owner's explicit quality-over-speed
+        # preference. motion 70 (was 100): motion_bucket_id is the single
+        # biggest warping/deformation lever in SVD — high motion makes the
+        # model invent larger pixel displacements, which is where structures
+        # smear and melt. Subtle drift reads as "alive" without the damage.
+        steps    = int(os.environ.get("RUFUS_SVD_STEPS", "30"))
+        motion   = int(os.environ.get("RUFUS_SVD_MOTION", "70"))
         # Vary motion per clip so consecutive beats don't share one identical
         # drift energy — same idea as the Ken Burns 4-pattern rotation.
-        motion   = max(1, min(255, motion + (idx % 3) * 20))
+        motion   = max(1, min(255, motion + (idx % 3) * 15))
         seed     = random.randint(1, 2**31 - 1)
 
         with tempfile.TemporaryDirectory(prefix="rufus_svd_") as td:

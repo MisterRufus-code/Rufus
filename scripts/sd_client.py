@@ -387,7 +387,10 @@ def _animate_to_clip(img_path: Path, out_path: Path,
         "-i", str(img_path),
         "-vf", vf,
         "-vframes", str(total_frames),
-        "-c:v", "libx264", "-preset", "fast", "-crf", "20",
+        # crf 14: this clip is an INTERMEDIATE — the final render re-encodes
+        # it, so lossy generations compound. Near-lossless here, delivery
+        # bitrate only at the final encode (audio_gen._video_encoder_args).
+        "-c:v", "libx264", "-preset", "fast", "-crf", "14",
         "-pix_fmt", "yuv420p",
         str(out_path),
     ]
