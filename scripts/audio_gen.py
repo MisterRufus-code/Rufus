@@ -67,9 +67,10 @@ BAR_HEIGHT   = 14          # retention progress bar thickness (px)
 # so it's the one most likely to feel loud/repetitive — kept noticeably quieter
 # than hit/riser, which each play once per video.
 SFX_HIT_GAIN    = 0.90     # sub-bass hit on the hook (once, 0.03s in)
-SFX_WHOOSH_GAIN = 0.15     # transition swoosh into each cut (was 0.65, then 0.35 —
-                           # channel owner reported it's still too loud/fatiguing
-                           # across up to 9 cuts/video; cut hard toward "minimal")
+SFX_WHOOSH_GAIN = 0.05     # transition swoosh into each cut. History: 0.65 → 0.35
+                           # → 0.15 → 0.05, each after channel-owner feedback that
+                           # it was still noticeable across ~9 cuts/video. Now
+                           # near-subliminal: felt more than heard.
 SFX_RISER_GAIN  = 0.55     # riser leading into the final beat (once)
 
 # Cut planning
@@ -658,9 +659,15 @@ def _audio_filter_complex(n: int, audio_dur: float, has_music: bool,
             f"afade=type=in:st=0:d=1.2,"
             f"afade=type=out:st={fade_out_st:.3f}:d=1.8,{fmt}[mbed]"
         )
+        # ratio 4, not 10: a Short's narration is nearly CONTINUOUS, so the
+        # voice keys this compressor ~100% of the runtime — at ratio 10 the
+        # bed was crushed to inaudible for the whole video ("there's no
+        # music"). ratio 4 keeps music clearly present UNDER the voice (like
+        # every professionally-mixed Short) while still yielding to speech;
+        # the gap-breathing behavior at pauses is unchanged.
         parts.append(
             "[mbed][vkey]sidechaincompress="
-            "threshold=0.02:ratio=10:attack=35:release=600[mduck]"
+            "threshold=0.02:ratio=4:attack=35:release=600[mduck]"
         )
         mix_in = ["[vmain]", "[mduck]"]
     else:
