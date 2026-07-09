@@ -1350,6 +1350,85 @@ def _blacklist_key(script: str) -> str:
     return " ".join(script.lower().split()[:20])
 
 
+# ── Semantic near-duplicate gate (embeddings) ────────────────────────────────────
+# The key-based blacklist above only catches an EXACT first-20-words repeat.
+# At daily scale, two different seeds about similar facts produce differently-
+# worded scripts that are still the same video to a viewer — and to YouTube's
+# inauthentic-content reviewers. text-embedding-3-small costs ~$0.000002 per
+# script (free at our scale) and catches paraphrase-level duplication.
+
+EMBEDDINGS_FILE   = CONFIG_DIR / "script_embeddings.json"
+EMBED_MODEL       = "text-embedding-3-small"
+EMBED_HISTORY     = 150     # most-recent embeddings kept per channel
+SIM_THRESHOLD     = 0.90    # cosine similarity above this = same video, reject
+
+
+def _embed_script(script: str) -> list[float] | None:
+    """Embedding for a script, or None on any failure (fail-open — a broken
+    embedding call must never block a render, same policy as the fact gate)."""
+    key = _load_key()
+    if not key:
+        return None
+    try:
+        from openai import OpenAI
+        resp = OpenAI(api_key=key).embeddings.create(
+            model=EMBED_MODEL, input=script[:4000], timeout=20)
+        return resp.data[0].embedding
+    except Exception as e:
+        print(f"[gpt] embedding skipped ({e})")
+        return None
+
+
+def _cosine(a: list[float], b: list[float]) -> float:
+    dot = sum(x * y for x, y in zip(a, b))
+    na  = sum(x * x for x in a) ** 0.5
+    nb  = sum(y * y for y in b) ** 0.5
+    return dot / (na * nb) if na and nb else 0.0
+
+
+def _load_embeddings() -> list[dict]:
+    if not EMBEDDINGS_FILE.exists():
+        return []
+    try:
+        return json.loads(EMBEDDINGS_FILE.read_text())
+    except (json.JSONDecodeError, OSError, UnicodeDecodeError, ValueError):
+        return []
+
+
+def check_similarity(script: str, channel: str = "main_en") -> tuple[bool, float, list | None]:
+    """(is_near_duplicate, max_similarity, embedding). Fail-open on no
+    embedding. The embedding is returned so the caller can store it via
+    add_embedding without paying for a second API call."""
+    vec = _embed_script(script)
+    if vec is None:
+        return False, 0.0, None
+    sims = [_cosine(vec, e["vec"]) for e in _load_embeddings()
+            if e.get("channel") == channel and e.get("vec")]
+    mx = max(sims, default=0.0)
+    return mx >= SIM_THRESHOLD, mx, vec
+
+
+def add_embedding(vec: list | None, channel: str = "main_en") -> None:
+    """Record an accepted script's embedding (rounded — 5dp is plenty for
+    cosine at our threshold and keeps the JSON ~3x smaller). Keeps the most
+    recent EMBED_HISTORY entries PER CHANNEL so one busy channel can't evict
+    another's history."""
+    if not vec:
+        return
+    EMBEDDINGS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    entries = _load_embeddings()
+    entries.append({"channel": channel, "vec": [round(x, 5) for x in vec]})
+    kept: list[dict] = []
+    by_channel: dict[str, int] = {}
+    for e in reversed(entries):                      # newest first
+        ch = e.get("channel", "main_en")
+        if by_channel.get(ch, 0) < EMBED_HISTORY:
+            kept.append(e)
+            by_channel[ch] = by_channel.get(ch, 0) + 1
+    kept.reverse()
+    EMBEDDINGS_FILE.write_text(json.dumps(kept))
+
+
 def check_blacklist(script: str) -> bool:
     if not BLACKLIST_FILE.exists():
         return False

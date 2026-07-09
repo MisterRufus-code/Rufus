@@ -602,7 +602,29 @@ def run(skip_upload: bool = False, niche_override: str = None, output_dir: Path 
             except Exception as _regen_err:
                 print(f"           ⚠ Blacklist regen failed ({_regen_err}) — using original script")
 
+        # Semantic near-duplicate gate: catches paraphrase-level repeats the
+        # exact-match blacklist can't (different seeds, same underlying facts,
+        # differently-worded script — still the same video to a viewer). One
+        # regeneration with the objection fed back, same pattern as fact-gate.
+        from script_writer import check_similarity, add_embedding
+        is_dup, sim, script_vec = check_similarity(script, channel.id)
+        if is_dup:
+            print(f"           ⚠ Script is {sim:.0%} similar to a recent video — regenerating...")
+            try:
+                result = write_script(
+                    scene + " (a recent video already covered this angle — take a "
+                            "DIFFERENT angle: different hook, different examples, "
+                            "different framing of the same facts)",
+                    seed=seed, precomputed_analysis=seed_analysis or None,
+                    run_id=script_run_id)
+                script = result["script"]
+                _, sim2, script_vec = check_similarity(script, channel.id)
+                print(f"           → regenerated ({sim2:.0%} similar now)")
+            except Exception as _sim_err:
+                print(f"           ⚠ similarity regen failed ({_sim_err}) — using original script")
+
         add_to_blacklist(script)
+        add_embedding(script_vec, channel.id)
         preview = script[:100] + "..." if len(script) > 100 else script
         print(f"           → {preview}")
         print(f"           → score {result['score']}/10  attempts={result['attempts_used']}  "
@@ -630,6 +652,11 @@ def run(skip_upload: bool = False, niche_override: str = None, output_dir: Path 
                     run_id=script_run_id)
                 script = result["script"]
                 add_to_blacklist(script)
+                # The corrected script replaced the one whose embedding we
+                # stored — record the correction so future dedup compares
+                # against what actually aired.
+                _, _, _v_fix = check_similarity(script, channel.id)
+                add_embedding(_v_fix, channel.id)
             except Exception as _fc_err:
                 print(f"           ⚠ fact-fix rewrite failed ({_fc_err}) — keeping original")
             ok2, why2 = judge_script_facts(script, seed)

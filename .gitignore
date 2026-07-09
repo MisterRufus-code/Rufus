@@ -23,6 +23,7 @@ rufus.lock*
 
 # Seed deduplication history (runtime state, not source code)
 config/used_seeds.json
+config/script_embeddings.json
 
 # Python
 __pycache__/
