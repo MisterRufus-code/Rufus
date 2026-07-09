@@ -86,8 +86,8 @@ def _probe_duration(video_path: Path) -> float:
                 d = float(stream.get("duration", 0))
                 if d > 0:
                     return d
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"[thumb] duration probe failed ({e}) — assuming 20s for frame picks")
     return 20.0
 
 

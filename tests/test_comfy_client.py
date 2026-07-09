@@ -266,3 +266,15 @@ def test_run_scheduled_bat_date_var_set_outside_any_conditional_block():
     for l in lines[:set_today_idx]:
         depth += l.count("(") - l.count(")")
     assert depth == 0
+
+
+def test_run_scheduled_bat_rotates_and_reports():
+    """--scheduled makes a multi-niche schedule actually rotate (plain main.py
+    silently ignored the schedule); report.py after main.py surfaces KPIs in
+    the daily log instead of requiring a manual invocation nobody does."""
+    bat = (Path(__file__).parent.parent / "run_scheduled.bat").read_text()
+    lines = bat.splitlines()
+    main_idx   = next(i for i, l in enumerate(lines) if "main.py" in l)
+    assert "--scheduled" in lines[main_idx]
+    report_idx = next(i for i, l in enumerate(lines) if "report.py" in l)
+    assert report_idx > main_idx

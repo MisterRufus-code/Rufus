@@ -64,8 +64,8 @@ def extract_frames(video_path: Path, count: int = 3) -> list[Path]:
                 if d > 0:
                     duration = d
                     break
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"[vision] duration probe failed ({e}) — assuming 15s")
 
     fractions = [0.2, 0.5, 0.8][:count]
     frames: list[Path] = []

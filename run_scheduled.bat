@@ -35,14 +35,28 @@ echo Updating analytics + feedback learnings...
 python scripts\analytics_fetcher.py
 python scripts\feedback_analyzer.py
 
-python scripts\main.py %*
+REM --scheduled: pick today's niche from the schedule (rotates when the
+REM schedule has more than one niche; identical to before with a single one).
+REM Extra args from the task can still append via %*.
+python scripts\main.py --scheduled %*
 set RUFUS_EXIT=%ERRORLEVEL%
+
+REM KPI digest into the same daily log (report.py is a real owner-facing
+REM tool — uploaded/held/failed, watch%% by niche — but nothing ran it
+REM automatically until now). Non-fatal like the analytics step above.
+python scripts\report.py --weeks 1
 
 if not "%RUFUS_EXIT%"=="0" (
     echo Rufus run FAILED - exit code %RUFUS_EXIT%
     if not "%RUFUS_NTFY_TOPIC%"=="" (
         curl -s -d "Rufus daily run FAILED (exit %RUFUS_EXIT%) - check logs\rufus_%TODAY%.log" "ntfy.sh/%RUFUS_NTFY_TOPIC%" >nul 2>&1
     )
+)
+
+REM Success digest is OPT-IN (RUFUS_NTFY_DAILY=1): default stays no-news-is-
+REM good-news so the phone only buzzes on failure.
+if "%RUFUS_EXIT%"=="0" if "%RUFUS_NTFY_DAILY%"=="1" if not "%RUFUS_NTFY_TOPIC%"=="" (
+    curl -s -d "Rufus daily run OK - video rendered, see logs\rufus_%TODAY%.log for the KPI digest" "ntfy.sh/%RUFUS_NTFY_TOPIC%" >nul 2>&1
 )
 
 exit /b %RUFUS_EXIT%

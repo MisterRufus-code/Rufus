@@ -31,7 +31,6 @@ CONFIG_DIR  = ROOT / "config"
 NICHES_FILE = CONFIG_DIR / "niches.json"
 OUTPUT_DIR  = Path(os.environ.get("RUFUS_OUTPUT_DIR", ROOT / "media_library" / "output"))
 LOG_DIR     = ROOT / "logs"
-LOCK_FILE   = ROOT / "rufus.lock"
 
 
 # ── Single-instance lock (cron overlap protection) ───────────────────────────────
@@ -41,26 +40,58 @@ LOCK_FILE   = ROOT / "rufus.lock"
 
 from filelock import FileLock, Timeout
 
-_INSTANCE_LOCK = FileLock(str(LOCK_FILE) + ".lock")
+_INSTANCE_LOCK = None   # created per-run by _acquire_lock (per-CHANNEL lock file)
 
 
-def _acquire_lock() -> None:
-    """Refuse to start if another Rufus run is alive (overlapping cron + manual
-    runs corrupt temp files and double-write the DB)."""
+def _acquire_lock(channel_id: str = "main_en") -> None:
+    """Refuse to start if another run of the SAME channel is alive.
+
+    Per-channel, not global: the corruption risk a lock protects against —
+    clashing temp files and double DB writes for one channel's video — only
+    exists within a channel. Different channels are safe to run concurrently
+    (ComfyUI queues their GPU jobs, used_seeds.json has its own lock, SQLite
+    serializes writers), and multi-channel scaling requires it."""
+    global _INSTANCE_LOCK
+    _INSTANCE_LOCK = FileLock(str(ROOT / f"rufus.{channel_id}.lock") + ".lock")
     try:
         _INSTANCE_LOCK.acquire(timeout=0)   # non-blocking
     except Timeout:
-        print(f"ERROR: another Rufus run is in progress (lock held: {LOCK_FILE}.lock). "
+        print(f"ERROR: another Rufus run for channel '{channel_id}' is in progress "
+              f"(lock held: rufus.{channel_id}.lock.lock). "
               f"Wait for it, or delete the .lock file if it crashed.")
         sys.exit(1)
 
 
 def _release_lock() -> None:
     try:
-        if _INSTANCE_LOCK.is_locked:
+        if _INSTANCE_LOCK is not None and _INSTANCE_LOCK.is_locked:
             _INSTANCE_LOCK.release()
     except Exception:
         pass
+
+
+def _sweep_run_temp() -> None:
+    """Delete THIS run's clip temp files on exit (success or failure).
+
+    Clip generators stamp temp names with our pid (comfy/sd _client), so the
+    glob only ever matches our own files — safe under concurrent per-channel
+    runs. After a successful render the clips are already muxed into the
+    final mp4; after a failure they're useless — either way they'd otherwise
+    sit until _housekeeping's 14-day cutoff."""
+    pid = os.getpid()
+    removed = 0
+    for sub in ("comfy", "sd"):
+        d = ROOT / "media_library" / "temp" / sub
+        if not d.exists():
+            continue
+        for f in d.glob(f"*_{pid}_*"):
+            try:
+                f.unlink()
+                removed += 1
+            except Exception:
+                pass
+    if removed:
+        print(f"[cleanup] removed {removed} temp clip file(s) for pid {pid}")
 
 
 # ── Housekeeping (disk + logs never grow unbounded) ──────────────────────────────
@@ -432,14 +463,16 @@ def _all_scheduled_niches() -> list[str]:
 
 def run(skip_upload: bool = False, niche_override: str = None, output_dir: Path = None,
         channel_id: str = None):
-    _acquire_lock()
-    import atexit
-    atexit.register(_release_lock)   # release on any exit path (idempotent)
-
-    # Channel resolution (channel-in-a-box). Legacy installs without
-    # channels.json get a synthesized "main_en" channel — behavior unchanged.
+    # Channel resolution FIRST (read-only) so the instance lock can be
+    # per-channel — see _acquire_lock. Legacy installs without channels.json
+    # get a synthesized "main_en" channel — behavior unchanged.
     from channel_config import load_channel
     channel = load_channel(channel_id)
+
+    _acquire_lock(channel.id)
+    import atexit
+    atexit.register(_release_lock)   # release on any exit path (idempotent)
+    atexit.register(_sweep_run_temp) # this run's clip temps never orphan
     os.environ["RUFUS_CHANNEL"] = channel.id          # sub-modules inherit it
     if channel.voice:
         os.environ.setdefault("RUFUS_EDGE_VOICE", channel.voice)
@@ -812,8 +845,10 @@ def run(skip_upload: bool = False, niche_override: str = None, output_dir: Path 
                 try:
                     from db_manager import mark_upload_failed
                     mark_upload_failed(db_id, str(e))
-                except Exception:
-                    pass
+                except Exception as db_err:
+                    # Losing the failure record silently means report.py
+                    # undercounts failed uploads — say so, don't hide it.
+                    print(f"           ⚠ could not record upload failure in DB: {db_err}")
 
     # ── Done ────────────────────────────────────────────────────────────────────
     elapsed = time.time() - start

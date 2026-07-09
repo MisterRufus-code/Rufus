@@ -386,7 +386,10 @@ def generate_clips(queries: list[str], n: int = 4,
             prompts.append(base[len(prompts) % len(base)] + ", different angle, wider shot")
     prompts = prompts[:n]
 
-    stamp        = int(time.time())
+    # pid in the stamp: with per-channel locks two channels may run
+    # concurrently, and two runs starting the same second would otherwise
+    # collide on identical {stamp}_{i}.png/.mp4 temp names in the shared dir.
+    stamp        = f"{int(time.time())}_{os.getpid()}"
     client_id    = uuid.uuid4().hex
     master_seed  = random.randint(1, 2_000_000_000)
     accepted_hashes: list[int] = []

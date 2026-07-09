@@ -464,7 +464,9 @@ def generate_clips(queries: list[str], n: int = 4,
     tmp_dir.mkdir(parents=True, exist_ok=True)
 
     clips:  list[Path] = []
-    stamp   = int(time.time())
+    # pid in the stamp: concurrent per-channel runs must not collide on
+    # identical temp names in the shared dir (see comfy_client).
+    stamp   = f"{int(time.time())}_{os.getpid()}"
     prompts = list(queries or ["cinematic scene"])
     if len(prompts) < n:
         base = prompts[:]

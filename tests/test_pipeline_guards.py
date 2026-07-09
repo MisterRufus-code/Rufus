@@ -400,3 +400,65 @@ def test_wisdom_quote_author_uniform(monkeypatch, tmp_path):
     authors = [research.pick_wisdom_quote("finance")["source"] for _ in range(200)]
     munger_share = authors.count("Charlie Munger") / len(authors)
     assert 0.3 < munger_share < 0.7   # ~0.5 expected; would be ~0.07 with plain choice
+
+
+# ── Per-channel instance lock (multi-channel concurrency) ────────────────────
+
+def test_acquire_lock_is_per_channel(tmp_path, monkeypatch):
+    """Two DIFFERENT channels must be able to hold their locks concurrently;
+    a second run of the SAME channel must be refused. This is the Phase-1
+    scaling unlock: the old global lock serialized all channels."""
+    import main
+
+    monkeypatch.setattr(main, "ROOT", tmp_path)
+
+    # Channel A acquires
+    main._acquire_lock("main_en")
+    lock_a = main._INSTANCE_LOCK
+    assert lock_a.is_locked
+    assert "main_en" in str(lock_a.lock_file)
+
+    # A different channel is NOT blocked (separate lock file)
+    from filelock import FileLock
+    lock_b = FileLock(str(tmp_path / "rufus.spanish.lock") + ".lock")
+    lock_b.acquire(timeout=0)          # must not raise
+    assert lock_b.is_locked
+    lock_b.release()
+
+    # Same channel IS blocked → sys.exit(1)
+    import subprocess, sys as _sys
+    r = subprocess.run(
+        [_sys.executable, "-c", (
+            "import sys; sys.path.insert(0, r'%s');\n"
+            "import main\n"
+            "from pathlib import Path\n"
+            "main.ROOT = Path(r'%s')\n"
+            "main._acquire_lock('main_en')\n"
+        ) % (str(Path(__file__).parent.parent / "scripts"), str(tmp_path))],
+        capture_output=True, text=True, timeout=30,
+    )
+    assert r.returncode == 1
+    assert "main_en" in r.stdout
+
+    lock_a.release()
+
+
+def test_sweep_run_temp_only_removes_own_pid_files(tmp_path, monkeypatch):
+    """The exit sweep must delete THIS pid's clip temps and never touch a
+    concurrent run's files (identified by a different pid in the stamp)."""
+    import os
+    import main
+
+    monkeypatch.setattr(main, "ROOT", tmp_path)
+    comfy = tmp_path / "media_library" / "temp" / "comfy"
+    comfy.mkdir(parents=True)
+
+    mine   = comfy / f"1751234567_{os.getpid()}_3.png"
+    theirs = comfy / "1751234567_99999_3.png"
+    mine.write_bytes(b"x")
+    theirs.write_bytes(b"x")
+
+    main._sweep_run_temp()
+
+    assert not mine.exists()
+    assert theirs.exists()

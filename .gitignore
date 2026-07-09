@@ -18,6 +18,8 @@ assets/music_synth/
 logs/
 rufus.db
 rufus.db-*
+rufus.*.lock*
+rufus.lock*
 
 # Seed deduplication history (runtime state, not source code)
 config/used_seeds.json
