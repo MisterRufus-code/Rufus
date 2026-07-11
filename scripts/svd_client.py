@@ -260,10 +260,11 @@ def _build_svd_graph(image_name: str, seed: int, model: str,
     }
 
 
-def _await_frames(prompt_id: str) -> list[bytes]:
+def _await_frames(prompt_id: str, timeout: float | None = None) -> list[bytes]:
     """Poll /history until the SaveImage node lists the frame batch, then fetch
-    every frame in order. [] on timeout or any fetch failure."""
-    deadline = time.time() + SVD_TIMEOUT
+    every frame in order. [] on timeout or any fetch failure. `timeout` lets
+    slower engines (wan_client's 14B model) reuse this with a longer deadline."""
+    deadline = time.time() + (timeout or SVD_TIMEOUT)
     while time.time() < deadline:
         try:
             r = requests.get(f"{_host()}/history/{prompt_id}", timeout=15)
@@ -299,7 +300,7 @@ def _await_frames(prompt_id: str) -> list[bytes]:
                 return []
         time.sleep(POLL_INTERVAL)
 
-    print(f"[svd] timed out after {SVD_TIMEOUT}s waiting for frames")
+    print(f"[svd] timed out after {timeout or SVD_TIMEOUT:.0f}s waiting for frames")
     return []
 
 

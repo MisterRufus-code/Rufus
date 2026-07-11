@@ -278,3 +278,44 @@ def test_run_scheduled_bat_rotates_and_reports():
     assert "--scheduled" in lines[main_idx]
     report_idx = next(i for i, l in enumerate(lines) if "report.py" in l)
     assert report_idx > main_idx
+
+
+def test_motion_chain_prefers_wan_then_svd(monkeypatch, tmp_path):
+    """Engine order is wan → svd → Ken Burns: when Wan succeeds, SVD must not
+    run; when Wan fails for an image, SVD gets it; Ken Burns takes the rest."""
+    import types
+    import wan_client
+    import svd_client
+
+    calls = []
+
+    monkeypatch.setattr(wan_client, "enabled", lambda: True)
+    monkeypatch.setattr(wan_client, "ready", lambda: (True, "test"))
+
+    def wan_animate(png, clip, duration=8.0, idx=0, prompt=""):
+        calls.append(("wan", idx))
+        clip.write_bytes(b"x" * 60_000)
+        return idx == 0                      # succeeds only for clip 0
+
+    def svd_animate(png, clip, duration=8.0, idx=0, engine="comfy", prompt=""):
+        calls.append(("svd", idx))
+        clip.write_bytes(b"x" * 60_000)
+        return True                          # picks up what wan dropped
+
+    monkeypatch.setattr(wan_client, "animate_image", wan_animate)
+    monkeypatch.setattr(svd_client, "img2vid_enabled", lambda: True)
+    monkeypatch.setattr(svd_client, "resolve_engine", lambda: ("comfy", "test"))
+    monkeypatch.setattr(svd_client, "animate_image", svd_animate)
+
+    with patch.object(c, "is_available", return_value=True), \
+         patch.object(c, "list_checkpoints", return_value=[]), \
+         patch.object(c, "resolve_face_restore", return_value=None), \
+         patch.object(c, "_render_image", return_value=(b"PNG", False)), \
+         patch.object(c, "_fit_to_portrait", lambda b, p: p.write_bytes(b"i" * 25_000) or True), \
+         patch.object(c, "_avg_hash", return_value=None):
+        clips = c.generate_clips(["prompt one", "prompt two"], n=2)
+
+    assert len(clips) == 2
+    assert ("wan", 0) in calls                       # clip 0 → wan succeeded
+    assert ("svd", 0) not in calls                   # …so svd never touched it
+    assert ("wan", 1) in calls and ("svd", 1) in calls   # clip 1 walked the chain

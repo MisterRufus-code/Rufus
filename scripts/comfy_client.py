@@ -348,20 +348,38 @@ def generate_clips(queries: list[str], n: int = 4,
               f"or set COMFY_MODEL to one of the names above. Falling back.")
         return []
 
-    # Image-to-video (SVD): animate each FLUX still into real motion instead of
-    # the Ken Burns zoom. Engine resolved once per run (ComfyUI checkpoint →
-    # in-process diffusers); any per-image failure falls back to Ken Burns so a
-    # clip is never lost to the fancier path.
-    svd_engine = None
+    # Image-to-video: animate each FLUX still into real motion instead of the
+    # Ken Burns zoom, via an ORDERED engine chain resolved once per run —
+    # Wan 2.2 (best temporal consistency, takes a motion prompt) → SVD →
+    # Ken Burns. Any per-image failure walks down the chain, so a clip is
+    # never lost to a fancier engine.
+    motion_engines: list[tuple[str, object]] = []
+    try:
+        import wan_client
+        if wan_client.enabled():
+            wan_ok, wan_why = wan_client.ready()
+            print(f"[comfy] motion wan 2.2: {'ON' if wan_ok else 'off'} — {wan_why}")
+            if wan_ok:
+                motion_engines.append(("wan", wan_client.animate_image))
+        else:
+            print("[comfy] motion wan 2.2: off — disabled (RUFUS_WAN=0)")
+    except Exception as e:
+        print(f"[comfy] wan unavailable ({e})")
     try:
         import svd_client
         if svd_client.img2vid_enabled():
             svd_engine, svd_why = svd_client.resolve_engine()
-            print(f"[comfy] img2vid (SVD): "
+            print(f"[comfy] motion svd: "
                   f"{'ON via ' + svd_engine if svd_engine else 'off'} — {svd_why}")
+            if svd_engine:
+                def _svd_animate(png, clip, duration=8.0, idx=0, prompt="",
+                                 _engine=svd_engine):
+                    return svd_client.animate_image(png, clip, duration=duration,
+                                                    idx=idx, engine=_engine,
+                                                    prompt=prompt)
+                motion_engines.append(("svd", _svd_animate))
     except Exception as e:
         print(f"[comfy] img2vid unavailable ({e}) — Ken Burns only")
-    use_svd = svd_engine is not None
 
     # Face restoration (optional): clean up FLUX faces if a restore node is
     # installed. Fail-safe — any problem falls back to the plain graph per image.
@@ -451,18 +469,19 @@ def generate_clips(queries: list[str], n: int = 4,
                 print(f"[comfy] debug-save failed for clip {i+1}: {e}")
 
         clip_path = tmp_dir / f"{stamp}_{i}.mp4"
-        via_svd = False
-        if use_svd:
-            via_svd = svd_client.animate_image(png_path, clip_path,
-                                               duration=clip_duration, idx=i,
-                                               engine=svd_engine, prompt=prompt)
-            if not via_svd:
-                print(f"[comfy] SVD failed for clip {i+1} — Ken Burns fallback")
-        made = via_svd or _animate_to_clip(png_path, clip_path,
-                                           duration=clip_duration, idx=i)
+        made_via = None
+        for eng_name, animate in motion_engines:
+            if animate(png_path, clip_path, duration=clip_duration, idx=i,
+                       prompt=prompt):
+                made_via = eng_name
+                break
+            print(f"[comfy] {eng_name} failed for clip {i+1} — trying next engine")
+        made = made_via is not None or _animate_to_clip(png_path, clip_path,
+                                                        duration=clip_duration, idx=i)
         if made:
             clips.append(clip_path)
-            print(f"[comfy] clip {i+1} ready" + (" (SVD motion)" if via_svd else ""))
+            print(f"[comfy] clip {i+1} ready"
+                  + (f" ({made_via} motion)" if made_via else " (Ken Burns)"))
         else:
             print(f"[comfy] animation failed for clip {i+1}")
         png_path.unlink(missing_ok=True)

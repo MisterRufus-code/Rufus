@@ -217,8 +217,18 @@ def run() -> None:
                                 else warn("FLUX checkpoint", msg)
                     except Exception:
                         pass
-                    # SVD img2vid is optional (Ken Burns is the guaranteed
-                    # fallback) → warn-only, never an error.
+                    # Motion engines are optional (Ken Burns is the guaranteed
+                    # fallback) → warn-only, never an error. Chain: wan → svd.
+                    try:
+                        import wan_client
+                        if wan_client.enabled():
+                            _wok, _wwhy = wan_client.ready()
+                            if _wok:
+                                ok(f"Wan 2.2 motion ready  ({_wwhy})")
+                            else:
+                                warn("Wan 2.2 motion", f"{_wwhy} — falls back to SVD")
+                    except Exception:
+                        pass
                     try:
                         from svd_client import img2vid_enabled, resolve_engine
                         if img2vid_enabled():
