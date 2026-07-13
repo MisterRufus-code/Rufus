@@ -365,3 +365,52 @@ def test_svd_defaults_favor_low_warp_motion(monkeypatch):
     src = inspect.getsource(s.animate_image)
     assert '"RUFUS_SVD_MOTION", "70"' in src
     assert '"RUFUS_SVD_STEPS", "30"' in src
+
+
+def test_assemble_timeout_scales_with_frame_count(tmp_path):
+    """Live bug: Wan's 81 frames (vs SVD's 25) need far longer to interpolate/
+    upscale/sharpen than a fixed 480s allows — a real run showed Wan's
+    server-side generation succeed, then this timeout threw the result away
+    and fell back to SVD anyway. Timeout must scale with actual frame count,
+    with 480s as the floor (still fine for SVD's smaller batches). _assemble
+    makes TWO subprocess.run calls (interpolate pass, then a fixed-180s loop
+    pass) — only the FIRST call's timeout is the one under test here."""
+    timeouts = []
+
+    def fake_run(cmd, **kwargs):
+        timeouts.append(kwargs.get("timeout"))
+        (tmp_path / "pingpong.mp4").write_bytes(b"x" * 60_000)
+        return type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+
+    # Simulate a Wan-sized batch: 81 frames on disk.
+    for i in range(81):
+        (tmp_path / f"frame_{i:04d}.png").write_bytes(b"x")
+
+    out_path = tmp_path / "out.mp4"
+    out_path.write_bytes(b"x" * 60_000)
+    with patch.object(s.subprocess, "run", side_effect=fake_run):
+        s._assemble(tmp_path, fps=16, out_path=out_path, duration=8.0)
+
+    assemble_timeout = timeouts[0]
+    assert assemble_timeout >= 81 * 12
+    assert assemble_timeout > 480   # must exceed the old fixed value
+
+
+def test_assemble_timeout_has_a_floor_for_small_batches(tmp_path):
+    # SVD's 25-frame batches must keep the same generous headroom as before.
+    timeouts = []
+
+    def fake_run(cmd, **kwargs):
+        timeouts.append(kwargs.get("timeout"))
+        (tmp_path / "pingpong.mp4").write_bytes(b"x" * 60_000)
+        return type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+
+    for i in range(25):
+        (tmp_path / f"frame_{i:04d}.png").write_bytes(b"x")
+
+    out_path = tmp_path / "out.mp4"
+    out_path.write_bytes(b"x" * 60_000)
+    with patch.object(s.subprocess, "run", side_effect=fake_run):
+        s._assemble(tmp_path, fps=8, out_path=out_path, duration=8.0)
+
+    assert timeouts[0] == 480

@@ -397,6 +397,14 @@ def _assemble(frames_dir: Path, fps: int, out_path: Path, duration: float) -> bo
         f"[pp]scale={OUT_W}:{OUT_H}:flags=lanczos,unsharp=5:5:0.4:5:5:0.0,"
         f"setsar=1,format=yuv420p[out]"
     )
+    # Timeout scales with the actual frame count: SVD feeds 25 frames here but
+    # Wan feeds 81 — after ping-pong that's ~162 frames to interpolate, upscale
+    # and sharpen on the CPU (while the GPU concurrently generates the next
+    # clip). A fixed 480s fit SVD and starved Wan: a live run showed Wan's
+    # server-side generation succeed, then this step's timeout threw the
+    # result away and fell back to SVD anyway.
+    n_frames = len(list(frames_dir.glob("frame_*.png")))
+    assemble_timeout = max(480, n_frames * 12)
     r = subprocess.run(
         ["ffmpeg", "-y", "-loglevel", "error",
          "-framerate", str(fps), "-i", str(frames_dir / "frame_%04d.png"),
@@ -409,12 +417,7 @@ def _assemble(frames_dir: Path, fps: int, out_path: Path, duration: float) -> bo
          # only the final delivery encode should spend bits like a delivery.
          "-c:v", "libx264", "-preset", "fast", "-crf", "14",
          str(inter)],
-        # mi_mode=mci (motion-compensated interpolation) is CPU-bound and the
-        # heaviest step here — on a live run it timed out at 300s while the
-        # GPU was concurrently busy with the next clip's FLUX/SVD generation.
-        # Generous headroom so a slow-but-working pass doesn't get killed and
-        # fall back to Ken Burns unnecessarily.
-        capture_output=True, text=True, timeout=480,
+        capture_output=True, text=True, timeout=assemble_timeout,
     )
     if r.returncode != 0 or not inter.exists():
         print(f"[svd] ffmpeg assemble failed: {r.stderr[-300:]}")
