@@ -96,10 +96,18 @@ def _sweep_run_temp() -> None:
 
 # ── Housekeeping (disk + logs never grow unbounded) ──────────────────────────────
 
-def _housekeeping(max_log_days: int = 90, max_cache_days: int = 14) -> None:
-    """Delete old logs and stale cache/temp media. Cheap, runs every start."""
+def _housekeeping(max_log_days: int = 90, max_cache_days: int = 14,
+                  max_debug_days: int = 30) -> None:
+    """Delete old logs and stale cache/temp/debug media. Cheap, runs every start.
+
+    Debug gets its own, longer window (~a month, not 14 days) — RUFUS_DEBUG
+    output (script/voiceover/keyframes per run) is for reviewing what a run
+    actually produced, so it's worth keeping around longer than throwaway
+    cache/temp, but still needs a cap or it grows forever."""
     cutoff_logs  = time.time() - max_log_days * 86400
     cutoff_cache = time.time() - max_cache_days * 86400
+    cutoff_debug = time.time() - max_debug_days * 86400
+    debug_dir    = ROOT / "media_library" / "debug"
     removed = 0
     for d, cutoff in (
         (LOG_DIR, cutoff_logs),
@@ -107,6 +115,7 @@ def _housekeeping(max_log_days: int = 90, max_cache_days: int = 14) -> None:
         (ROOT / "media_library" / "cache", cutoff_cache),
         (ROOT / "media_library" / "temp", cutoff_cache),
         (ROOT / "media_library" / "music", cutoff_cache),
+        (debug_dir, cutoff_debug),
     ):
         if not d.exists():
             continue
@@ -115,6 +124,15 @@ def _housekeeping(max_log_days: int = 90, max_cache_days: int = 14) -> None:
                 if f.is_file() and f.stat().st_mtime < cutoff:
                     f.unlink()
                     removed += 1
+            except OSError:
+                continue
+    # Debug files live in per-run subfolders (media_library/debug/<run_id>/) —
+    # clean up any now-empty ones the file pass above leaves behind.
+    if debug_dir.exists():
+        for sub in debug_dir.iterdir():
+            try:
+                if sub.is_dir() and not any(sub.iterdir()):
+                    sub.rmdir()
             except OSError:
                 continue
     if removed:
@@ -530,6 +548,14 @@ def run(skip_upload: bool = False, niche_override: str = None, output_dir: Path 
         seed_analysis, script_run_id, _ = preanalyze(seed)
     except Exception as e:
         print(f"           ⚠ Pre-analysis failed (non-fatal): {e}")
+
+    # Debug mode: one human-readable folder per run (media_library/debug/<run_id>/)
+    # shared by every stage — comfy_client's images/prompts, and now the raw
+    # script + pre-mix voiceover from audio_gen — instead of each stage picking
+    # its own timestamp. Env var, not a function param, so it reaches every
+    # sub-module the same way RUFUS_CHANNEL already does.
+    if os.environ.get("RUFUS_DEBUG") and script_run_id:
+        os.environ["RUFUS_DEBUG_RUN_ID"] = script_run_id
 
     # Source resolution: explicit env > per-niche config > default "sd".
     # RUFUS_VIDEO_SOURCE=sd      → Stable Diffusion stills + Ken Burns (GPU), one

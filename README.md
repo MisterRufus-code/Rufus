@@ -82,6 +82,7 @@ Everything is free except OpenAI credits. Mix and match:
 | `RUFUS_IMG2VID_ENGINE` | `auto` / `comfy` / `diffusers` | `auto` | SVD engine — `auto` prefers ComfyUI, falls back to in-process diffusers |
 | `RUFUS_FACE_RESTORE` | `auto` / `0` / `1` | `auto` | Face restoration on FLUX stills if a restore node is installed (see below); `0` forces off |
 | `RUFUS_FACE_RESTORE_MODEL` | weights filename | `GFPGANv1.4.pth` | Restore model file (e.g. `codeformer-v0.1.0.pth`) |
+| `RUFUS_DEBUG` | `1` / unset | unset | Save every run's script, raw voiceover, and FLUX keyframes+prompts to `media_library/debug/<run_id>/` — one folder to review the whole pipeline before it reaches YouTube. Auto-cleaned after ~30 days. |
 
 Each niche picks its own source via `"video_source"` in `config/niches.json`
 (default: all niches → `sd`). `RUFUS_VIDEO_SOURCE` overrides it for one run.

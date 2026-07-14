@@ -14,7 +14,9 @@ Covers:
 """
 
 import json
+import os
 import sys
+import time
 import types
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -462,3 +464,79 @@ def test_sweep_run_temp_only_removes_own_pid_files(tmp_path, monkeypatch):
 
     assert not mine.exists()
     assert theirs.exists()
+
+
+# ── Debug-mode artifacts (RUFUS_DEBUG) ────────────────────────────────────────
+
+def test_housekeeping_cleans_stale_debug_and_empty_dirs(tmp_path, monkeypatch):
+    """Debug output gets its own ~month-long retention window (not the 14-day
+    cache one) since it's for reviewing what a run produced — but it still
+    needs a cap or it grows forever. Stale files AND the now-empty per-run
+    subfolders they leave behind must both get swept."""
+    import main
+
+    monkeypatch.setattr(main, "ROOT", tmp_path)
+    monkeypatch.setattr(main, "LOG_DIR", tmp_path / "logs")
+
+    debug_dir = tmp_path / "media_library" / "debug"
+    old_run   = debug_dir / "20260101-old"
+    new_run   = debug_dir / "20260710-new"
+    old_run.mkdir(parents=True)
+    new_run.mkdir(parents=True)
+
+    old_file = old_run / "script.txt"
+    new_file = new_run / "script.txt"
+    old_file.write_text("old")
+    new_file.write_text("new")
+
+    old_time = time.time() - 40 * 86400   # 40 days ago — past the 30-day default
+    os.utime(old_file, (old_time, old_time))
+
+    main._housekeeping()
+
+    assert not old_file.exists()
+    assert not old_run.exists()           # emptied folder gets swept too
+    assert new_file.exists()
+    assert new_run.exists()
+
+
+def test_save_debug_artifacts_noop_when_debug_off(tmp_path, monkeypatch):
+    import audio_gen as ag
+    monkeypatch.delenv("RUFUS_DEBUG", raising=False)
+    monkeypatch.setattr(ag, "ROOT", tmp_path)
+
+    mp3 = tmp_path / "voice.mp3"
+    mp3.write_bytes(b"x")
+    ag._save_debug_artifacts("a script", mp3)
+
+    assert not (tmp_path / "media_library" / "debug").exists()
+
+
+def test_save_debug_artifacts_saves_script_and_voiceover(tmp_path, monkeypatch):
+    import audio_gen as ag
+    monkeypatch.setenv("RUFUS_DEBUG", "1")
+    monkeypatch.setenv("RUFUS_DEBUG_RUN_ID", "20260710-abc123")
+    monkeypatch.setattr(ag, "ROOT", tmp_path)
+
+    mp3 = tmp_path / "voice.mp3"
+    mp3.write_bytes(b"fake mp3 bytes")
+    ag._save_debug_artifacts("Hook.\nBody.\nCTA.", mp3)
+
+    out = tmp_path / "media_library" / "debug" / "20260710-abc123"
+    assert (out / "script.txt").read_text() == "Hook.\nBody.\nCTA."
+    assert (out / "voiceover.mp3").read_bytes() == b"fake mp3 bytes"
+
+
+def test_save_debug_artifacts_failure_is_non_fatal(tmp_path, monkeypatch):
+    """A debug-save failure (disk full, permissions, whatever) must never
+    break the actual render — render() calls this with no error handling
+    of its own, so the function itself must swallow everything."""
+    import audio_gen as ag
+    monkeypatch.setenv("RUFUS_DEBUG", "1")
+    monkeypatch.setattr(ag, "ROOT", tmp_path)
+    monkeypatch.setattr(ag.shutil, "copy2",
+                        lambda *a, **k: (_ for _ in ()).throw(OSError("disk full")))
+
+    mp3 = tmp_path / "voice.mp3"
+    mp3.write_bytes(b"x")
+    ag._save_debug_artifacts("script", mp3)   # must not raise

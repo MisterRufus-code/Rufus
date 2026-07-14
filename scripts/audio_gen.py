@@ -24,6 +24,7 @@ import json
 import os
 import random
 import re
+import shutil
 import subprocess
 import sys
 import time
@@ -724,6 +725,26 @@ def _audio_filter_simple(n: int, audio_dur: float, has_music: bool,
     )
 
 
+def _save_debug_artifacts(script: str, voiceover_mp3: Path) -> None:
+    """RUFUS_DEBUG=1: save the script text and the raw (pre-mix) voiceover
+    into the same media_library/debug/<run_id>/ folder comfy_client uses for
+    keyframes+prompts — one place to review everything from a run before it
+    ever reaches YouTube. Complements the automated post-publish feedback
+    loop (analytics_fetcher/feedback_analyzer) with a pre-publish, human one.
+    Non-fatal: a debug-save failure must never break the actual render."""
+    if not os.environ.get("RUFUS_DEBUG"):
+        return
+    try:
+        run_id = os.environ.get("RUFUS_DEBUG_RUN_ID") or f"audio_{int(time.time())}"
+        debug_dir = ROOT / "media_library" / "debug" / run_id
+        debug_dir.mkdir(parents=True, exist_ok=True)
+        (debug_dir / "script.txt").write_text(script, encoding="utf-8")
+        shutil.copy2(voiceover_mp3, debug_dir / "voiceover.mp3")
+        print(f"[audio] DEBUG on — saved script + voiceover to {debug_dir}")
+    except Exception as e:
+        print(f"[audio] debug-save failed (non-fatal): {e}")
+
+
 # ── Renderer ─────────────────────────────────────────────────────────────────────
 
 def render(script: str, bg_paths: "Path | list[Path]", out_dir: Path,
@@ -772,6 +793,7 @@ def render(script: str, bg_paths: "Path | list[Path]", out_dir: Path,
         # word timestamps then describe the trimmed audio, so cuts, the 0.03s
         # SFX hit, and the first caption all land on the actual first word.
         _trim_silence(mp3)
+        _save_debug_artifacts(script, mp3)
 
         print("[2/4] Transcribing…")
         segs, _ = _transcribe(mp3)

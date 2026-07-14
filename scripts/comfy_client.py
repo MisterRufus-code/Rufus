@@ -416,7 +416,12 @@ def generate_clips(queries: list[str], n: int = 4,
 
     debug_dir = None
     if os.environ.get("RUFUS_DEBUG"):
-        debug_dir = Path(__file__).parent.parent / "media_library" / "debug" / str(stamp)
+        # Prefer the shared run id main.py sets (RUFUS_DEBUG_RUN_ID) so this
+        # run's images land in the SAME folder as its script/voiceover instead
+        # of a folder named after this stage's own timestamp. Falls back to
+        # the temp-file stamp when comfy_client runs standalone (its __main__).
+        debug_name = os.environ.get("RUFUS_DEBUG_RUN_ID") or str(stamp)
+        debug_dir = Path(__file__).parent.parent / "media_library" / "debug" / debug_name
         debug_dir.mkdir(parents=True, exist_ok=True)
         print(f"[comfy] DEBUG on — keeping keyframes in {debug_dir}")
 
