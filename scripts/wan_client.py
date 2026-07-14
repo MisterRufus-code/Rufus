@@ -39,16 +39,38 @@ Graph (two-stage MoE — high-noise expert then low-noise expert):
   SaveImage frames → svd_client._assemble (16fps → 30fps ping-pong loop
   at 1080×1920).
 
-The lightx2v LoRAs distill generation to 4 steps — that's what makes a 14B
-model practical per-beat on a 3090 (~2-5 min/clip).
+QUALITY MODE, verified against an actual API export of the channel owner's
+proven-good test run (a clean 81-frame clip, zero warping): that run used the
+template's DEFAULT toggle state — "Enable 4steps LoRA?" = false — meaning
+real classifier-free guidance (cfg 3.5) with NO lightx2v LoRA, 20 steps split
+10/10 between the high/low-noise experts. That combination is what's actually
+proven, not a guess. The lightx2v 4-step/cfg-1.0 path this file used to
+hardcode was UNVERIFIED against that quality bar.
+
+Per explicit direction ("good quality and not so long"), the default here
+keeps the proven quality driver (no LoRA, real cfg) but trims steps 20 -> 12
+(RUFUS_WAN_STEPS) — a standard diffusion tradeoff (most models are
+well-converged well before 20 steps; the split point scales with it, so the
+two experts still split the schedule evenly). Measured on the rig: 20 steps
+took ~19 min of sampling per clip; 12 steps should land around ~11-12 min —
+roughly 1.5-2h of motion generation for a 9-10 clip video instead of 3h+.
+The fast lightx2v path (4 steps, cfg 1.0) is kept as an explicit opt-in via
+RUFUS_WAN_LORA=1 for when speed matters more than the verified-quality bar.
 
 Environment:
   RUFUS_WAN          1 (default) — 0 disables Wan (chain continues with SVD)
   RUFUS_WAN_FRAMES   81   (Wan's native 5s at 16fps; ping-pong+loop covers the
                            requested clip duration downstream)
-  RUFUS_WAN_STEPS    4    (lightx2v distilled step count)
+  RUFUS_WAN_STEPS    12   (total steps across both experts, split evenly)
+  RUFUS_WAN_CFG      3.5  (real classifier-free guidance — the proven setting;
+                           only used when RUFUS_WAN_LORA=0, the default)
+  RUFUS_WAN_LORA     0 (default) — 1 switches to the fast lightx2v path
+                           (forces steps=4, cfg=1.0 regardless of the two
+                           settings above — that's the distilled LoRA's only
+                           supported operating point)
   RUFUS_WAN_SHIFT    5.0  (ModelSamplingSD3 shift)
-  RUFUS_WAN_TIMEOUT  900  (seconds to wait for one clip's frames)
+  RUFUS_WAN_TIMEOUT  1800 (seconds to wait for one clip's frames — real CFG
+                           at 12+ steps is much slower than the 4-step path)
   WAN_HIGH_MODEL / WAN_LOW_MODEL / WAN_HIGH_LORA / WAN_LOW_LORA /
   WAN_CLIP_NAME / WAN_VAE_NAME — filename overrides for the six files above.
 """
@@ -76,10 +98,16 @@ LOW_LORA   = os.environ.get("WAN_LOW_LORA",   "wan2.2_i2v_lightx2v_4steps_lora_v
 CLIP_NAME  = os.environ.get("WAN_CLIP_NAME",  "umt5_xxl_fp8_e4m3fn_scaled.safetensors")
 VAE_NAME   = os.environ.get("WAN_VAE_NAME",   "wan_2.1_vae.safetensors")
 
+# The model's own tuned negative prompt (from the ComfyUI Wan 2.2 template's
+# default, in the API export) — this is what the checkpoint was validated
+# against, not a generic English guess. Wan's text encoder (umt5_xxl) is
+# multilingual; using the reference-language prompt is the safer bet for
+# matching known-good behavior.
 NEGATIVE_PROMPT = (
-    "static image, no motion, blurry, distortion, warping, morphing, "
-    "deformed anatomy, extra limbs, flickering, text, watermark, "
-    "jpeg artifacts, oversaturated colors"
+    "色调艳丽，过曝，静态，细节模糊不清，字幕，风格，作品，画作，画面，静止，"
+    "整体发灰，最差质量，低质量，JPEG压缩残留，丑陋的，残缺的，多余的手指，"
+    "画得不好的手部，画得不好的脸部，畸形的，毁容的，形态畸形的肢体，手指融合，"
+    "静止不动的画面，杂乱的背景，三条腿，背景人很多，倒着走"
 )
 
 
@@ -135,25 +163,27 @@ def _motion_prompt(beat_prompt: str) -> str:
             f"composition; cinematic documentary feel; no sudden movements.")
 
 
-def _build_wan_graph(image_name: str, prompt: str, seed: int,
-                     frames: int, steps: int, shift: float) -> dict:
+def _build_wan_graph(image_name: str, prompt: str, seed: int, frames: int,
+                     steps: int, cfg: float, shift: float,
+                     use_lora: bool) -> dict:
     """Native-node Wan 2.2 i2v graph. Two experts split one denoise schedule:
     high-noise model takes the first half of the steps (with leftover noise),
-    low-noise model finishes. cfg 1.0 + euler/simple per the lightx2v recipe."""
+    low-noise model finishes.
+
+    use_lora=False (default): the model output feeds ModelSamplingSD3
+    DIRECTLY — matches the proven-good export's default toggle state exactly
+    (real cfg, no LoRA in the loop at all, not just strength=0).
+    use_lora=True: lightx2v LoRAs applied, forced steps=4/cfg=1.0 (their only
+    supported operating point) regardless of the steps/cfg passed in."""
+    if use_lora:
+        steps, cfg = 4, 1.0
     half = max(1, steps // 2)
-    return {
+
+    g = {
         "1":  {"class_type": "UNETLoader",
                "inputs": {"unet_name": HIGH_MODEL, "weight_dtype": "default"}},
         "2":  {"class_type": "UNETLoader",
                "inputs": {"unet_name": LOW_MODEL, "weight_dtype": "default"}},
-        "3":  {"class_type": "LoraLoaderModelOnly",
-               "inputs": {"model": ["1", 0], "lora_name": HIGH_LORA, "strength_model": 1.0}},
-        "4":  {"class_type": "LoraLoaderModelOnly",
-               "inputs": {"model": ["2", 0], "lora_name": LOW_LORA, "strength_model": 1.0}},
-        "5":  {"class_type": "ModelSamplingSD3",
-               "inputs": {"model": ["3", 0], "shift": shift}},
-        "6":  {"class_type": "ModelSamplingSD3",
-               "inputs": {"model": ["4", 0], "shift": shift}},
         "7":  {"class_type": "CLIPLoader",
                "inputs": {"clip_name": CLIP_NAME, "type": "wan", "device": "default"}},
         "8":  {"class_type": "CLIPTextEncode",
@@ -171,33 +201,48 @@ def _build_wan_graph(image_name: str, prompt: str, seed: int,
                    "positive": ["8", 0], "negative": ["9", 0],
                    "vae": ["10", 0], "start_image": ["11", 0],
                }},
-        "13": {"class_type": "KSamplerAdvanced",
+        "15": {"class_type": "VAEDecode",
+               "inputs": {"samples": ["14", 0], "vae": ["10", 0]}},
+        "16": {"class_type": "SaveImage",
+               "inputs": {"filename_prefix": "rufus_wan", "images": ["15", 0]}},
+    }
+
+    if use_lora:
+        g["3"] = {"class_type": "LoraLoaderModelOnly",
+                  "inputs": {"model": ["1", 0], "lora_name": HIGH_LORA, "strength_model": 1.0}}
+        g["4"] = {"class_type": "LoraLoaderModelOnly",
+                  "inputs": {"model": ["2", 0], "lora_name": LOW_LORA, "strength_model": 1.0}}
+        high_model_src, low_model_src = ["3", 0], ["4", 0]
+    else:
+        high_model_src, low_model_src = ["1", 0], ["2", 0]
+
+    g["5"] = {"class_type": "ModelSamplingSD3",
+              "inputs": {"model": high_model_src, "shift": shift}}
+    g["6"] = {"class_type": "ModelSamplingSD3",
+              "inputs": {"model": low_model_src, "shift": shift}}
+    g["13"] = {"class_type": "KSamplerAdvanced",
                "inputs": {
                    "add_noise": "enable", "noise_seed": seed,
-                   "steps": steps, "cfg": 1.0,
+                   "steps": steps, "cfg": cfg,
                    "sampler_name": "euler", "scheduler": "simple",
                    "start_at_step": 0, "end_at_step": half,
                    "return_with_leftover_noise": "enable",
                    "model": ["5", 0],
                    "positive": ["12", 0], "negative": ["12", 1],
                    "latent_image": ["12", 2],
-               }},
-        "14": {"class_type": "KSamplerAdvanced",
+               }}
+    g["14"] = {"class_type": "KSamplerAdvanced",
                "inputs": {
                    "add_noise": "disable", "noise_seed": seed,
-                   "steps": steps, "cfg": 1.0,
+                   "steps": steps, "cfg": cfg,
                    "sampler_name": "euler", "scheduler": "simple",
                    "start_at_step": half, "end_at_step": 10000,
                    "return_with_leftover_noise": "disable",
                    "model": ["6", 0],
                    "positive": ["12", 0], "negative": ["12", 1],
                    "latent_image": ["13", 0],
-               }},
-        "15": {"class_type": "VAEDecode",
-               "inputs": {"samples": ["14", 0], "vae": ["10", 0]}},
-        "16": {"class_type": "SaveImage",
-               "inputs": {"filename_prefix": "rufus_wan", "images": ["15", 0]}},
-    }
+               }}
+    return g
 
 
 def _submit_verbose(graph: dict, client_id: str) -> str | None:
@@ -225,11 +270,13 @@ def animate_image(png_path: Path, out_path: Path,
     is never lost to this engine. No face-skip here: Wan's temporal
     consistency handles faces (that heuristic was an SVD-weakness patch)."""
     try:
-        frames  = int(os.environ.get("RUFUS_WAN_FRAMES", "81"))
-        steps   = int(os.environ.get("RUFUS_WAN_STEPS", "4"))
-        shift   = float(os.environ.get("RUFUS_WAN_SHIFT", "5.0"))
-        timeout = float(os.environ.get("RUFUS_WAN_TIMEOUT", "900"))
-        seed    = random.randint(1, 2**31 - 1)
+        frames   = int(os.environ.get("RUFUS_WAN_FRAMES", "81"))
+        steps    = int(os.environ.get("RUFUS_WAN_STEPS", "12"))
+        cfg      = float(os.environ.get("RUFUS_WAN_CFG", "3.5"))
+        shift    = float(os.environ.get("RUFUS_WAN_SHIFT", "5.0"))
+        use_lora = os.environ.get("RUFUS_WAN_LORA", "0").strip().lower() in ("1", "true", "yes", "on")
+        timeout  = float(os.environ.get("RUFUS_WAN_TIMEOUT", "1800"))
+        seed     = random.randint(1, 2**31 - 1)
 
         with tempfile.TemporaryDirectory(prefix="rufus_wan_") as td:
             tmp = Path(td)
@@ -241,7 +288,7 @@ def animate_image(png_path: Path, out_path: Path,
                 return False
 
             graph = _build_wan_graph(image_name, _motion_prompt(prompt),
-                                     seed, frames, steps, shift)
+                                     seed, frames, steps, cfg, shift, use_lora)
             pid = _submit_verbose(graph, uuid.uuid4().hex)
             if not pid:
                 return False
@@ -253,8 +300,9 @@ def animate_image(png_path: Path, out_path: Path,
             for j, fb in enumerate(frame_bytes):
                 (tmp / f"frame_{j:04d}.png").write_bytes(fb)
 
+            eff_steps, eff_cfg = (4, 1.0) if use_lora else (steps, cfg)
             print(f"[wan] {len(frame_bytes)} frames in {time.time() - t0:.0f}s "
-                  f"(steps={steps}, {SVD_W}x{SVD_H})")
+                  f"(steps={eff_steps}, cfg={eff_cfg}, lora={use_lora}, {SVD_W}x{SVD_H})")
             return _assemble(tmp, WAN_FPS, out_path, duration)
     except Exception as e:
         print(f"[wan] animate failed: {e}")
