@@ -414,3 +414,103 @@ def test_assemble_timeout_has_a_floor_for_small_batches(tmp_path):
         s._assemble(tmp_path, fps=8, out_path=out_path, duration=8.0)
 
     assert timeouts[0] == 480
+
+
+# ── One-way assembly (ping_pong=False — Wan's directional-motion fix) ────────────
+
+def test_assemble_one_way_uses_single_ffmpeg_pass_no_reverse(tmp_path):
+    """Live glitch report: a one-way action (page turn) visibly undid itself
+    every ping-pong cycle. ping_pong=False must not reverse/concat at all —
+    single pass, no 'reverse' or 'concat' in the filter graph."""
+    captured = {}
+    call_count = [0]
+
+    def fake_run(cmd, **kwargs):
+        call_count[0] += 1
+        if "-filter_complex" in cmd:
+            captured["filter"] = cmd[cmd.index("-filter_complex") + 1]
+        out_path.write_bytes(b"x" * 60_000)
+        return type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+
+    for i in range(81):
+        (tmp_path / f"frame_{i:04d}.png").write_bytes(b"x")
+    out_path = tmp_path / "out.mp4"
+
+    with patch.object(s.subprocess, "run", side_effect=fake_run):
+        ok = s._assemble(tmp_path, fps=16, out_path=out_path, duration=8.0, ping_pong=False)
+
+    assert ok is True
+    assert call_count[0] == 1              # single pass — no separate loop pass
+    assert "reverse" not in captured["filter"]
+    assert "concat" not in captured["filter"]
+    assert "tpad" in captured["filter"]     # freeze-extend instead of looping
+
+
+def test_assemble_one_way_freezes_last_frame_for_remaining_duration(tmp_path):
+    """81 frames @16fps = ~5.06s native; an 8s beat needs ~2.94s more —
+    tpad's stop_duration must cover exactly that gap, not loop or cut."""
+    captured = {}
+
+    def fake_run(cmd, **kwargs):
+        if "-filter_complex" in cmd:
+            captured["filter"] = cmd[cmd.index("-filter_complex") + 1]
+        out_path.write_bytes(b"x" * 60_000)
+        return type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+
+    for i in range(81):
+        (tmp_path / f"frame_{i:04d}.png").write_bytes(b"x")
+    out_path = tmp_path / "out.mp4"
+
+    with patch.object(s.subprocess, "run", side_effect=fake_run):
+        s._assemble(tmp_path, fps=16, out_path=out_path, duration=8.0, ping_pong=False)
+
+    # native_duration = 81/16 = 5.0625; stop_duration = 8.0 - 5.0625 = 2.9375
+    assert "stop_duration=2.938" in captured["filter"] or "stop_duration=2.937" in captured["filter"]
+
+
+def test_assemble_one_way_clamps_stop_duration_when_native_already_longer(tmp_path):
+    """If the native clip is already longer than the requested duration,
+    stop_duration must clamp to 0 (no negative tpad), and the output -t flag
+    trims the excess instead."""
+    captured = {}
+
+    def fake_run(cmd, **kwargs):
+        if "-filter_complex" in cmd:
+            captured["filter"] = cmd[cmd.index("-filter_complex") + 1]
+        out_path.write_bytes(b"x" * 60_000)
+        return type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+
+    for i in range(81):
+        (tmp_path / f"frame_{i:04d}.png").write_bytes(b"x")
+    out_path = tmp_path / "out.mp4"
+
+    with patch.object(s.subprocess, "run", side_effect=fake_run):
+        s._assemble(tmp_path, fps=16, out_path=out_path, duration=2.0, ping_pong=False)
+
+    assert "stop_duration=0.000" in captured["filter"]
+
+
+def test_assemble_ping_pong_default_unchanged_for_svd(tmp_path):
+    """SVD's existing behavior (default ping_pong=True) must be untouched —
+    this fix targets Wan's directional-motion problem specifically."""
+    captured = {}
+    call_count = [0]
+
+    def fake_run(cmd, **kwargs):
+        call_count[0] += 1
+        if "-filter_complex" in cmd:
+            captured["filter"] = cmd[cmd.index("-filter_complex") + 1]
+        (tmp_path / "pingpong.mp4").write_bytes(b"x" * 60_000)
+        return type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+
+    for i in range(25):
+        (tmp_path / f"frame_{i:04d}.png").write_bytes(b"x")
+    out_path = tmp_path / "out.mp4"
+    out_path.write_bytes(b"x" * 60_000)
+
+    with patch.object(s.subprocess, "run", side_effect=fake_run):
+        s._assemble(tmp_path, fps=8, out_path=out_path, duration=8.0)   # ping_pong default
+
+    assert call_count[0] == 2               # interpolate pass + loop pass, as before
+    assert "reverse" in captured["filter"]
+    assert "concat" in captured["filter"]

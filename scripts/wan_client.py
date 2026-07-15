@@ -350,7 +350,11 @@ def animate_image(png_path: Path, out_path: Path,
             eff_steps, eff_cfg = (4, 1.0) if use_lora else (steps, cfg)
             print(f"[wan] {len(frame_bytes)} frames in {time.time() - t0:.0f}s "
                   f"(steps={eff_steps}, cfg={eff_cfg}, lora={use_lora}, {SVD_W}x{SVD_H})")
-            return _assemble(tmp, WAN_FPS, out_path, duration)
+            # ping_pong=False: the motion prompt now asks for camera/ambient
+            # motion only (see _motion_prompt), but a reversed loop still
+            # visibly "undoes" anything with directionality — one-way playback
+            # + freeze-extend has no loop point to go wrong at all.
+            return _assemble(tmp, WAN_FPS, out_path, duration, ping_pong=False)
     except Exception as e:
         print(f"[wan] animate failed: {e}")
         return False

@@ -369,12 +369,48 @@ def _prep_init_image(src_png: Path, dst_png: Path) -> bool:
         return False
 
 
-def _assemble(frames_dir: Path, fps: int, out_path: Path, duration: float) -> bool:
-    """frames → 30fps ping-pong loop → 1080×1920 → looped to `duration`.
+def _assemble(frames_dir: Path, fps: int, out_path: Path, duration: float,
+              ping_pong: bool = True) -> bool:
+    """frames → 30fps → 1080×1920 → extended to `duration`.
 
-    Pass 1 interpolates SVD's low native fps up to FPS, appends the reversed
-    stream (so the loop point is seamless by construction), and upscales.
-    Pass 2 stream-loops that segment out to the requested clip duration."""
+    ping_pong=True (SVD's default): forward+reversed for a seamless loop
+    (pass 1), then stream-looped to fill duration (pass 2). Ideal for
+    ambient drift — a reversed gentle sway still looks natural.
+
+    ping_pong=False (Wan): a live glitch report showed a one-way completing
+    action (a page turn) visibly UNDOING itself every cycle when reversed —
+    the reversal is the bug for this kind of motion, not the interpolation.
+    Neither fix is right for a one-way action: reversing it looks like
+    rewinding a tape, and a hard stream-loop jump-cuts back to frame 0
+    mid-motion. Instead: play forward ONCE, then hold the last frame
+    (tpad) for the remaining time — single ffmpeg pass, no loop point at
+    all to go wrong."""
+    n_frames = len(list(frames_dir.glob("frame_*.png")))
+    assemble_timeout = max(480, n_frames * 12)
+
+    if not ping_pong:
+        native_duration = (n_frames / fps) if fps else 0.0
+        stop_duration = max(0.0, duration - native_duration)
+        fc = (
+            f"[0:v]minterpolate=fps={FPS}:mi_mode=blend,"
+            f"tpad=stop_mode=clone:stop_duration={stop_duration:.3f},"
+            f"scale={OUT_W}:{OUT_H}:flags=lanczos,unsharp=5:5:0.4:5:5:0.0,"
+            f"setsar=1,format=yuv420p[out]"
+        )
+        r = subprocess.run(
+            ["ffmpeg", "-y", "-loglevel", "error",
+             "-framerate", str(fps), "-i", str(frames_dir / "frame_%04d.png"),
+             "-filter_complex", fc, "-map", "[out]",
+             "-t", f"{duration:.2f}",
+             # crf 14: still an intermediate — the final render re-encodes it.
+             "-c:v", "libx264", "-preset", "fast", "-crf", "14",
+             str(out_path)],
+            capture_output=True, text=True, timeout=assemble_timeout,
+        )
+        if r.returncode != 0:
+            print(f"[svd] ffmpeg one-way assemble failed: {r.stderr[-300:]}")
+        return r.returncode == 0 and out_path.exists() and out_path.stat().st_size > 50_000
+
     inter = frames_dir / "pingpong.mp4"
     # mi_mode=blend, NOT mci: mci estimates per-pixel motion vectors and warps
     # along them — on fine, high-contrast detail (printed text, documents,
@@ -397,14 +433,12 @@ def _assemble(frames_dir: Path, fps: int, out_path: Path, duration: float) -> bo
         f"[pp]scale={OUT_W}:{OUT_H}:flags=lanczos,unsharp=5:5:0.4:5:5:0.0,"
         f"setsar=1,format=yuv420p[out]"
     )
-    # Timeout scales with the actual frame count: SVD feeds 25 frames here but
-    # Wan feeds 81 — after ping-pong that's ~162 frames to interpolate, upscale
-    # and sharpen on the CPU (while the GPU concurrently generates the next
-    # clip). A fixed 480s fit SVD and starved Wan: a live run showed Wan's
-    # server-side generation succeed, then this step's timeout threw the
-    # result away and fell back to SVD anyway.
-    n_frames = len(list(frames_dir.glob("frame_*.png")))
-    assemble_timeout = max(480, n_frames * 12)
+    # Timeout scales with the actual frame count (computed above): SVD feeds
+    # 25 frames here but Wan feeds 81 — after ping-pong that's ~162 frames to
+    # interpolate, upscale and sharpen on the CPU (while the GPU concurrently
+    # generates the next clip). A fixed 480s fit SVD and starved Wan: a live
+    # run showed Wan's server-side generation succeed, then this step's
+    # timeout threw the result away and fell back to SVD anyway.
     r = subprocess.run(
         ["ffmpeg", "-y", "-loglevel", "error",
          "-framerate", str(fps), "-i", str(frames_dir / "frame_%04d.png"),
