@@ -5,9 +5,11 @@ wan_client.py — Wan 2.2 14B image-to-video for Rufus (via ComfyUI).
 The successor to svd_client as the PRIMARY motion engine: Wan 2.2 (2025) has
 dramatically better temporal consistency than SVD (2023) — structures keep
 their shape while moving (verified on the rig: 81 frames, zero warping on the
-exact fine-detail content SVD melted), it takes a TEXT motion prompt per clip,
-and it handles faces well enough that the SVD-era face-skip heuristics don't
-apply here.
+exact fine-detail content SVD melted), and it takes a TEXT motion prompt per
+clip. CORRECTION from an earlier version of this note: faces still degrade
+(blur/swim) under Wan motion even though rigid objects don't — a live glitch
+report caught this — so the SVD-era face-skip heuristics are REINSTATED here
+too (see animate_image), default on, opt-out via RUFUS_WAN_FACE_MOTION=1.
 
 Needs the six files the ComfyUI "Wan 2.2 14B Image to Video" template installs
 (~35GB total, one-time):
@@ -71,6 +73,10 @@ Environment:
   RUFUS_WAN_SHIFT    5.0  (ModelSamplingSD3 shift)
   RUFUS_WAN_TIMEOUT  1800 (seconds to wait for one clip's frames — real CFG
                            at 12+ steps is much slower than the 4-step path)
+  RUFUS_WAN_FACE_MOTION  0 (default) — 1 re-allows Wan to animate faces
+                           (blurs/glitches under motion per a live report;
+                           default skips to the next engine, same detectors
+                           as SVD's face-skip)
   WAN_HIGH_MODEL / WAN_LOW_MODEL / WAN_HIGH_LORA / WAN_LOW_LORA /
   WAN_CLIP_NAME / WAN_VAE_NAME — filename overrides for the six files above.
 """
@@ -86,8 +92,10 @@ import requests
 
 from comfy_client import _host
 # Reuse the proven SVD helpers: portrait init prep (576×1024 is a valid Wan
-# bucket too), history polling, and the frames→mp4 assembly pipeline.
-from svd_client import _prep_init_image, _await_frames, _assemble, _upload_image, SVD_W, SVD_H
+# bucket too), history polling, and the frames→mp4 assembly pipeline. Also the
+# face-detection pair — see the RUFUS_WAN_FACE_MOTION note on animate_image.
+from svd_client import (_prep_init_image, _await_frames, _assemble, _upload_image,
+                        SVD_W, SVD_H, _prompt_likely_shows_a_face, _image_shows_a_face)
 
 WAN_FPS = 16   # Wan 2.2's native frame rate (81 frames = ~5s)
 
@@ -156,11 +164,26 @@ def _motion_prompt(beat_prompt: str) -> str:
     """A Wan motion prompt from the beat's image prompt: the subject (so the
     model knows what it's animating) + a consistent subtle-motion direction.
     Wan follows motion text well — this is where SVD's blind drift becomes
-    directed, gentle documentary movement."""
+    directed, gentle documentary movement.
+
+    CRITICAL constraint, found from a real glitch report: every clip is
+    assembled forward-then-REVERSED for a seamless loop (see svd_client.
+    _assemble) — great for ambient drift (a reversed gentle sway still looks
+    natural), but a one-way, completing action (a page turning, a hand
+    finishing a gesture) played backward looks exactly like rewinding a
+    tape. The motion prompt must steer Wan toward camera/ambient motion only,
+    never a subject action with a clear start-and-finish, or the ping-pong
+    loop itself will visibly repeat/undo that action every cycle."""
     subject = " ".join((beat_prompt or "").split())[:220]
     return (f"{subject}. The camera moves slowly and subtly — a gentle push-in "
-            f"or drift. Natural, restrained motion true to the scene; stable "
-            f"composition; cinematic documentary feel; no sudden movements.")
+            f"or drift, or ambient environmental motion (drifting dust, light "
+            f"flicker, fabric sway). Natural, restrained motion true to the "
+            f"scene; stable composition; cinematic documentary feel. NEVER "
+            f"animate a one-way completing action — no page turning, no object "
+            f"handling, no hand gesture that starts and finishes, no walking "
+            f"steps — this clip loops by playing forward then reversed, and any "
+            f"one-way action will visibly undo itself every cycle. No sudden "
+            f"movements.")
 
 
 def _build_wan_graph(image_name: str, prompt: str, seed: int, frames: int,
@@ -262,13 +285,37 @@ def _submit_verbose(graph: dict, client_id: str) -> str | None:
         return None
 
 
+def _skip_face_motion() -> bool:
+    """RUFUS_WAN_FACE_MOTION=1 opts back INTO animating faces with Wan. Default
+    is skip (False) — see animate_image's docstring for why this changed from
+    the original "Wan handles faces fine" assumption."""
+    return os.environ.get("RUFUS_WAN_FACE_MOTION", "0").strip().lower() not in ("1", "true", "yes", "on")
+
+
 def animate_image(png_path: Path, out_path: Path,
                   duration: float = 8.0, idx: int = 0,
                   prompt: str = "") -> bool:
     """FLUX still → Wan 2.2 motion clip at out_path. False on ANY failure —
     the caller walks down the engine chain (SVD, then Ken Burns), so a clip
-    is never lost to this engine. No face-skip here: Wan's temporal
-    consistency handles faces (that heuristic was an SVD-weakness patch)."""
+    is never lost to this engine.
+
+    Face-skip REINSTATED here after a real glitch report: faces that looked
+    clean in the FLUX still came out blurred/swimming once animated — Wan's
+    stronger temporal consistency on rigid objects doesn't fully extend to
+    fine facial detail under motion. Reuses the exact same detectors built
+    for SVD (prompt-text "portrait"/"face", plus a pixel-level Haar-cascade
+    check on the actual image) rather than duplicating that logic. Opt back
+    in with RUFUS_WAN_FACE_MOTION=1 if you want to re-test this once Wan
+    settings/versions change."""
+    if _skip_face_motion():
+        if _prompt_likely_shows_a_face(prompt):
+            print(f"[wan] clip {idx+1}: prompt shows a face — skipping Wan motion "
+                  f"(known to blur/glitch faces under motion), trying next engine")
+            return False
+        if _image_shows_a_face(png_path):
+            print(f"[wan] clip {idx+1}: image contains a detected face — "
+                  f"skipping Wan motion, trying next engine")
+            return False
     try:
         frames   = int(os.environ.get("RUFUS_WAN_FRAMES", "81"))
         steps    = int(os.environ.get("RUFUS_WAN_STEPS", "12"))

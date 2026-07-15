@@ -182,3 +182,60 @@ def test_motion_prompt_includes_subject_and_restraint():
     mp = w._motion_prompt("A 1907 bank run, crowds outside a marble bank")
     assert "1907 bank run" in mp
     assert "slowly" in mp.lower() or "subtle" in mp.lower()
+
+
+def test_motion_prompt_bans_one_way_completing_actions():
+    """Live glitch report: a man reading a newspaper had the page-turn visibly
+    undo itself every cycle. Every clip is assembled forward-then-reversed for
+    a seamless loop (see svd_client._assemble) — fine for ambient drift, but a
+    one-way action (page turn, gesture, walking) played backward looks exactly
+    like rewinding a tape. The prompt must explicitly ban these."""
+    mp = w._motion_prompt("a man reading a newspaper").lower()
+    assert "page turning" in mp or "page-turning" in mp
+    assert "one-way" in mp
+    assert "walking" in mp
+
+
+# ── Face-skip (reinstated after a live glitch report) ────────────────────────
+
+def test_skip_face_motion_default_is_true(monkeypatch):
+    monkeypatch.delenv("RUFUS_WAN_FACE_MOTION", raising=False)
+    assert w._skip_face_motion() is True
+
+
+def test_skip_face_motion_opt_out(monkeypatch):
+    monkeypatch.setenv("RUFUS_WAN_FACE_MOTION", "1")
+    assert w._skip_face_motion() is False
+
+
+def test_animate_image_skips_wan_for_face_prompt(tmp_path, monkeypatch):
+    """Faces looked clean in the FLUX still but blurred/glitched once Wan
+    animated them — regression test for the fix, mirroring SVD's equivalent."""
+    from PIL import Image
+    src = tmp_path / "still.png"
+    Image.new("RGB", (1080, 1920), (120, 90, 60)).save(str(src))
+
+    monkeypatch.delenv("RUFUS_WAN_FACE_MOTION", raising=False)
+    monkeypatch.setattr(w, "_prep_init_image",
+                        lambda a, b: (_ for _ in ()).throw(AssertionError("Wan pipeline touched")))
+    assert w.animate_image(src, tmp_path / "out.mp4",
+                           prompt="a medium portrait of a worried banker") is False
+
+
+def test_animate_image_allows_faces_when_opted_in(tmp_path, monkeypatch):
+    from PIL import Image
+    src = tmp_path / "still.png"
+    Image.new("RGB", (1080, 1920), (120, 90, 60)).save(str(src))
+
+    calls = []
+    monkeypatch.setenv("RUFUS_WAN_FACE_MOTION", "1")
+    monkeypatch.setattr(w, "_prep_init_image", lambda a, b: calls.append(1) or True)
+    monkeypatch.setattr(w, "_upload_image", lambda p: "init.png")
+    monkeypatch.setattr(w, "_submit_verbose", lambda g, c: None)   # stop early, harmlessly
+
+    w.animate_image(src, tmp_path / "out.mp4",
+                    prompt="a medium portrait of a worried banker")
+
+    # The face-skip must NOT have short-circuited — the pipeline was actually
+    # entered (and only failed later, at the stubbed submit step).
+    assert calls == [1]
