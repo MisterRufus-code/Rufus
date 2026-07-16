@@ -97,21 +97,34 @@ def _sweep_run_temp() -> None:
 def _ensure_media_root() -> None:
     """Guard against media_library existing as a stray FILE instead of a
     folder (seen in the wild on Windows — AV quarantine restore, an
-    interrupted download, a manual slip). Every downstream
+    interrupted download, a manual slip, a broken/orphaned reparse point
+    from OneDrive placeholder corruption). Every downstream
     `.mkdir(parents=True, exist_ok=True)` call recurses up to this path, and
     `exist_ok` only suppresses FileExistsError when the existing entry
-    `is_dir()` — so a stray file here hard-crashes EVERY clip-fetch and
-    render path with WinError 183. Rename it aside rather than deleting; it
-    might hold something the user cares about."""
+    `is_dir()` — so anything unhealthy here hard-crashes EVERY clip-fetch
+    and render path with WinError 183.
+
+    Deliberately does NOT gate on `media_root.exists()` first: a broken
+    reparse point can make `os.stat()` (which `.exists()`/`.is_dir()` rely
+    on) report "nothing here" while the name is still very much occupied in
+    the parent directory's index — exactly the case that slips past an
+    exists()-gated check and still blows up the raw CreateDirectory call
+    later. Renaming the raw path only touches the directory-entry name, not
+    the (possibly broken) target, so it works regardless of why the entry
+    is unhealthy. A truly empty spot just raises FileNotFoundError, which is
+    the expected no-op case."""
     media_root = ROOT / "media_library"
-    if media_root.exists() and not media_root.is_dir():
-        backup = media_root.with_name(f"media_library.bak-{int(time.time())}")
-        try:
-            media_root.rename(backup)
-            print(f"[maint] media_library was a file, not a folder — moved aside to {backup.name}")
-        except OSError as e:
-            print(f"[maint] WARNING: media_library is not a directory and could not be "
-                  f"moved aside ({e}) — expect crashes until this is fixed manually")
+    if media_root.is_dir():
+        return   # already healthy — nothing to do
+    backup = media_root.with_name(f"media_library.bak-{int(time.time())}")
+    try:
+        os.rename(str(media_root), str(backup))
+        print(f"[maint] media_library was not a healthy folder — moved aside to {backup.name}")
+    except FileNotFoundError:
+        pass   # nothing was there — fine, a later mkdir(parents=True) creates it fresh
+    except OSError as e:
+        print(f"[maint] WARNING: media_library is unhealthy and could not be moved aside "
+              f"({type(e).__name__}: {e}) — if this recurs, delete it manually: {media_root}")
 
 
 # ── Housekeeping (disk + logs never grow unbounded) ──────────────────────────────
