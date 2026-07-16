@@ -85,6 +85,11 @@ GREEN = "&H0000FF00"
 
 _HIGHLIGHT_RE = re.compile(r'[\d$%]')
 _SENT_END_RE  = re.compile(r'[.!?…]["\')\]]*$')
+# Words whose trailing period is an abbreviation, not a sentence end — without
+# this guard, "the U.S. dollar" put a scene cut + whoosh SFX mid-sentence.
+_ABBREV_RE    = re.compile(
+    r'^(mr|mrs|ms|dr|st|vs|etc|inc|co|jr|sr|prof|gen|col|sgt|no'
+    r'|[a-z](\.[a-z])+)\.$', re.IGNORECASE)
 
 FONT_NAME = "Anton"        # downloaded to assets/fonts/; Arial fallback if missing
 FONT_FILE = FONTS_DIR / "Anton-Regular.ttf"
@@ -270,21 +275,45 @@ def _opinion_words() -> frozenset:
 # ── ASS subtitle builder ─────────────────────────────────────────────────────────
 
 def _ts(sec: float) -> str:
-    h = int(sec // 3600)
-    m = int((sec % 3600) // 60)
-    s = sec % 60
-    return f"{h}:{m:02d}:{s:05.2f}"
+    """ASS timestamp. Integer centisecond math, NOT float %-formatting:
+    `59.998 % 60` formatted with %05.2f produced '0:00:60.00' — an invalid
+    timestamp libass silently mishandles — and start/end could round to the
+    same string (a zero-length event). Carrying centiseconds through divmod
+    rolls 59.998s over to 0:01:00.00 correctly."""
+    cs = max(0, round(sec * 100))
+    h,  rem = divmod(cs, 360000)
+    m,  rem = divmod(rem, 6000)
+    s,  cs  = divmod(rem, 100)
+    return f"{h}:{m:02d}:{s:02d}.{cs:02d}"
+
+
+# Caption display tuning. Whisper word timestamps end each word the instant
+# the sound stops — showing captions for exactly that window makes every
+# inter-word pause a blank screen (strobing, the #1 "dirty captions" look).
+CAPTION_GAP_FILL_S = 1.5    # max seconds a caption may linger past its word to
+                            # bridge the silence to the next word
+CAPTION_MIN_S      = 0.12   # minimum readable display time for any caption
 
 
 def _cluster_words(segments, audio_dur: float):
     words = [w for seg in segments for w in seg.words]
-    for i in range(0, len(words), CLUSTER_SIZE):
+    n = len(words)
+    for i in range(0, n, CLUSTER_SIZE):
         group = words[i:i + CLUSTER_SIZE]
         start = group[0].start
         end   = group[-1].end
         if start >= audio_dur:
             break
+        nxt = words[i + CLUSTER_SIZE].start if i + CLUSTER_SIZE < n else audio_dur
+        # Bridge the gap to the next caption (kills strobing) without ever
+        # overlapping it, and without lingering forever across a long pause.
+        end = max(end, min(nxt, end + CAPTION_GAP_FILL_S))
+        # Enforce a readable minimum, still capped at the next caption's start.
+        if end - start < CAPTION_MIN_S:
+            end = min(start + CAPTION_MIN_S, nxt) if nxt > start else start + CAPTION_MIN_S
         end = min(end, audio_dur)
+        if end <= start:
+            continue
         yield start, end, " ".join(w.word.strip().upper() for w in group)
 
 
@@ -342,11 +371,14 @@ def _tts(script: str, mp3_path: Path) -> None:
 # ── Cut planning (sentence-aligned, editor-grade pacing) ─────────────────────────
 
 def _sentence_ends(segments) -> list[float]:
-    """Timestamps where a spoken sentence ends (word text ends with . ! ? …)."""
+    """Timestamps where a spoken sentence ends (word text ends with . ! ? …).
+    Abbreviations ('U.S.', 'Mr.', 'vs.') are excluded — their periods were
+    counted as sentence ends, landing scene cuts and whoosh SFX mid-sentence."""
     ends = []
     for seg in segments:
         for w in seg.words:
-            if _SENT_END_RE.search(w.word.strip()):
+            token = w.word.strip()
+            if _SENT_END_RE.search(token) and not _ABBREV_RE.match(token.strip('"\')]')):
                 ends.append(round(w.end, 3))
     return ends
 

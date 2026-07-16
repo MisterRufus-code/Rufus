@@ -112,3 +112,31 @@ def test_add_embedding_none_is_noop(monkeypatch, tmp_path):
     monkeypatch.setattr(sw, "EMBEDDINGS_FILE", tmp_path / "emb.json")
     sw.add_embedding(None, "main_en")
     assert not (tmp_path / "emb.json").exists()
+
+
+# ── Hook duplication guard (voice read the hook twice) ───────────────────────
+
+def test_hook_already_present_exact_match():
+    from script_writer import _hook_already_present
+    assert _hook_already_present('"Nixon cost you $50,000."', "Nixon cost you $50,000.")
+
+
+def test_hook_already_present_rephrased_punctuation():
+    """The real bug: GPT changed only punctuation/case, exact-match failed,
+    the original was inserted above the paraphrase, and TTS read the hook
+    TWICE back-to-back."""
+    from script_writer import _hook_already_present
+    assert _hook_already_present("Nixon cost you $50,000!", "Nixon cost you $50,000.")
+    assert _hook_already_present("nixon cost YOU $50,000", "Nixon cost you $50,000.")
+
+
+def test_hook_already_present_light_rephrase_still_counts():
+    from script_writer import _hook_already_present
+    assert _hook_already_present("Nixon's decision cost you $50,000 overnight",
+                                 "Nixon cost you $50,000.")
+
+
+def test_hook_missing_when_first_line_is_body():
+    from script_writer import _hook_already_present
+    assert not _hook_already_present("In 1971, Switzerland cemented its reputation.",
+                                     "Nixon cost you $50,000.")

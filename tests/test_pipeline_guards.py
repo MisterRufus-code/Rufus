@@ -540,3 +540,21 @@ def test_save_debug_artifacts_failure_is_non_fatal(tmp_path, monkeypatch):
     mp3 = tmp_path / "voice.mp3"
     mp3.write_bytes(b"x")
     ag._save_debug_artifacts("script", mp3)   # must not raise
+
+
+# ── TTS speech sanitizer (voice was reading markdown out loud) ────────────────
+
+def test_sanitize_for_speech_strips_markdown_and_stage_directions():
+    import tts_engine as t
+    dirty = "**Nixon** shocked the *world*.\n[pause] Then came (beat) the crash. #history"
+    clean = t._sanitize_for_speech(dirty)
+    assert "*" not in clean and "#" not in clean
+    assert "pause" not in clean.lower() and "beat" not in clean.lower()
+    assert "Nixon shocked the world." in clean
+    assert "Then came" in clean and "the crash." in clean
+
+
+def test_sanitize_for_speech_idempotent_on_clean_text():
+    import tts_engine as t
+    clean = "In 1971, Nixon ended the gold standard.\nYour money changed forever."
+    assert t._sanitize_for_speech(clean) == clean

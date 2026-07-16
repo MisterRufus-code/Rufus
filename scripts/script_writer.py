@@ -376,6 +376,21 @@ def _has_opinion_word(text: str) -> bool:
                for w in _standards()["opinion_pool"])
 
 
+def _hook_already_present(first_line: str, hook: str) -> bool:
+    """Fuzzy, not exact: GPT often rephrases/repunctuates the hook it was
+    given ("…retire." vs "…retire!"), and the old exact-match check then
+    re-inserted the original ABOVE the paraphrase — so the voice read the
+    hook twice back-to-back (a real produced-video bug; nothing downstream
+    caught it because the script *looked* fine). ≥60% of the hook's words
+    appearing in line 1 counts as 'the hook is there'."""
+    def _tokens(s: str) -> set:
+        return set(re.findall(r"[a-z0-9']+", s.lower()))
+    hook_toks = _tokens(hook)
+    if not hook_toks:
+        return True
+    return len(hook_toks & _tokens(first_line)) / len(hook_toks) >= 0.6
+
+
 def _body_pre_check(script: str) -> str | None:
     """Return rejection reason or None for the full body. Runs AFTER banned check."""
     body = _standards()["body"]
@@ -1141,14 +1156,11 @@ def write_script(scene_description: str, seed: dict | None = None,
             ms += ms2
             c  += c2
 
-        # Ensure hook is on line 1 — INSERT if missing (don't replace a body line)
+        # Ensure hook is on line 1 — INSERT if missing (don't replace a body line).
         lines = [l.strip() for l in script.split("\n") if l.strip()]
-        if lines:
-            hook_clean = winning_hook.strip().strip('"').strip("'")
-            if lines[0].strip().strip('"').strip("'") != hook_clean:
-                # Hook not on line 1: insert at top (body-only output or rephrase)
-                lines.insert(0, winning_hook)
-                script = "\n".join(lines)
+        if lines and not _hook_already_present(lines[0], winning_hook):
+            lines.insert(0, winning_hook)
+            script = "\n".join(lines)
 
         # Pre-score regex rejections (cheap)
         _banned = _find_banned(script)

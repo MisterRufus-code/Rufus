@@ -43,6 +43,7 @@ All backends write to the exact output path requested (mp3).
 import asyncio
 import json
 import os
+import re
 import subprocess
 import tempfile
 from pathlib import Path
@@ -306,12 +307,28 @@ def _elevenlabs(script: str, out_path: Path) -> None:
 
 # ── Public API ────────────────────────────────────────────────────────────────
 
+def _sanitize_for_speech(script: str) -> str:
+    """Strip text artifacts a TTS voice would read out loud. GPT occasionally
+    leaks markdown emphasis (**word**), stray asterisks, or bracketed stage
+    directions into a script — every backend received the text verbatim, so
+    the voice would literally say 'asterisk' or read '[pause]'. Cheap, safe,
+    and idempotent on clean scripts."""
+    s = script
+    s = re.sub(r"\*{1,3}([^*]*)\*{1,3}", r"\1", s)   # **bold** / *italic* → bare text
+    s = re.sub(r"[\[\(]\s*(pause|beat|sfx|music|silence)[^\]\)]*[\]\)]", "", s,
+               flags=re.IGNORECASE)                    # [pause], (beat) stage directions
+    s = s.replace("*", "").replace("#", "").replace("`", "")
+    s = re.sub(r"[ \t]{2,}", " ", s)
+    return s.strip()
+
+
 def synthesize(script: str, out_path: Path) -> None:
     """Generate speech for `script` at `out_path` (mp3). Backend per RUFUS_TTS.
 
     Every backend falls back to Edge TTS on any failure so a render never breaks
     over the voice.
     """
+    script   = _sanitize_for_speech(script)
     out_path = Path(out_path)
     backend  = _backend()
 
