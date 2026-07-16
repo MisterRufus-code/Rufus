@@ -466,6 +466,49 @@ def test_sweep_run_temp_only_removes_own_pid_files(tmp_path, monkeypatch):
     assert theirs.exists()
 
 
+def test_ensure_media_root_renames_stray_file(tmp_path, monkeypatch):
+    """media_library existing as a FILE (AV quarantine restore, interrupted
+    download, manual slip) makes every downstream .mkdir(parents=True,
+    exist_ok=True) call hard-crash with WinError 183/FileExistsError, since
+    exist_ok only suppresses the error when the existing entry is_dir().
+    The startup guard must move it aside so a real directory can be created."""
+    import main
+
+    monkeypatch.setattr(main, "ROOT", tmp_path)
+    stray = tmp_path / "media_library"
+    stray.write_bytes(b"oops, not a folder")
+
+    main._ensure_media_root()
+
+    assert not stray.exists() or stray.is_dir()
+    backups = list(tmp_path.glob("media_library.bak-*"))
+    assert len(backups) == 1
+    assert backups[0].read_bytes() == b"oops, not a folder"
+
+
+def test_ensure_media_root_noop_when_already_a_directory(tmp_path, monkeypatch):
+    import main
+
+    monkeypatch.setattr(main, "ROOT", tmp_path)
+    real_dir = tmp_path / "media_library"
+    real_dir.mkdir()
+    (real_dir / "keep.txt").write_text("keep")
+
+    main._ensure_media_root()
+
+    assert real_dir.is_dir()
+    assert (real_dir / "keep.txt").exists()
+    assert not list(tmp_path.glob("media_library.bak-*"))
+
+
+def test_ensure_media_root_noop_when_missing(tmp_path, monkeypatch):
+    import main
+
+    monkeypatch.setattr(main, "ROOT", tmp_path)
+    main._ensure_media_root()   # must not raise when media_library doesn't exist yet
+    assert not (tmp_path / "media_library").exists()
+
+
 # ── Debug-mode artifacts (RUFUS_DEBUG) ────────────────────────────────────────
 
 def test_housekeeping_cleans_stale_debug_and_empty_dirs(tmp_path, monkeypatch):
