@@ -757,3 +757,52 @@ def test_tts_explicit_env_still_wins_over_key(monkeypatch):
     monkeypatch.setenv("RUFUS_TTS", "edge")
     monkeypatch.setattr(tts_engine, "_eleven_key", lambda: "sk-real-key")
     assert tts_engine._backend() == "edge"
+
+
+# ── Beat splitting & prompt echo (Greenback-run bugs) ─────────────────────────
+
+def test_split_beats_does_not_break_on_abbreviations():
+    """'...saw the U.S. government issue...' was split at 'U.S.' into two
+    broken beats (seen live) — abbreviation periods must not end a beat."""
+    import main
+    script = ("During the Civil War, 1862 saw the U.S. government issue "
+              "United States Notes. People clutched these notes tightly. "
+              "Mr. Chase signed every one of them.")
+    beats = main._split_beats(script)
+    assert len(beats) == 3
+    assert "U.S. government issue" in beats[0]
+    assert beats[2].startswith("Mr. Chase")
+
+
+def test_split_beats_normal_sentences_unchanged():
+    import main
+    script = "First sentence here now. Second sentence follows it. Third one closes."
+    assert len(main._split_beats(script)) == 3
+
+
+def test_strip_beat_echo_removes_full_echo():
+    """GPT prefixed prompts with the beat's narration verbatim (seen live) —
+    the deterministic guard must cut it and keep the visual description."""
+    import main
+    beat = "During the Civil War, 1862 saw the U.S. government issue Greenbacks."
+    line = ("During the Civil War, 1862 saw the U.S. government issue Greenbacks. "
+            "A medium portrait of soldiers being paid in fresh green notes.")
+    out = main._strip_beat_echo(line, beat)
+    assert out.startswith("A medium portrait")
+    assert "Civil War, 1862 saw" not in out
+
+
+def test_strip_beat_echo_leaves_clean_prompt_alone():
+    import main
+    beat = "During the Civil War, 1862 saw the U.S. government issue Greenbacks."
+    line = ("A medium portrait of Civil War soldiers being paid in fresh green "
+            "notes, dusk light through the tent canvas.")
+    assert main._strip_beat_echo(line, beat) == line
+
+
+def test_strip_beat_echo_never_leaves_a_stub():
+    """If stripping would leave nothing usable, keep the original line."""
+    import main
+    beat = "People clutched these notes tightly in the market."
+    line = "People clutched these notes tightly in the market. Close-up."
+    assert main._strip_beat_echo(line, beat) == line

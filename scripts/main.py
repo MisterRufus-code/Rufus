@@ -258,7 +258,24 @@ def _split_beats(script: str, max_scenes: int = 10, min_words: int = 3) -> list[
     render time (audio_gen cuts on sentence boundaries in list order).
     """
     import re
-    raw = [s.strip() for s in re.split(r"(?<=[.!?…])\s+", script.strip()) if s.strip()]
+    # Same abbreviation guard as audio_gen._sentence_ends: a naive split on
+    # [.!?] chopped "...saw the U.S. government issue..." into two broken beats
+    # at "U.S." (seen live), giving the prompt-writer garbage like "The
+    # government issue United States Notes" as a "sentence".
+    abbrev = re.compile(
+        r'(mr|mrs|ms|dr|st|vs|etc|inc|co|jr|sr|prof|gen|col|sgt|no'
+        r'|[a-z](\.[a-z])+)\.$', re.IGNORECASE)
+    parts = re.split(r"(?<=[.!?…])\s+", script.strip())
+    raw: list[str] = []
+    for s in (p.strip() for p in parts):
+        if not s:
+            continue
+        # If the previous piece ended on an abbreviation (not a real sentence
+        # end), this piece is its continuation — glue them back together.
+        if raw and abbrev.search(raw[-1].rstrip('"\')]')):
+            raw[-1] = f"{raw[-1]} {s}"
+        else:
+            raw.append(s)
     if not raw:
         return []
 
@@ -281,6 +298,31 @@ def _split_beats(script: str, max_scenes: int = 10, min_words: int = 3) -> list[
         beats[j] = f"{beats[j]} {beats[j + 1]}".strip()
         del beats[j + 1]
     return beats
+
+
+def _strip_beat_echo(line: str, beat: str) -> str:
+    """Remove the beat's narration text if the prompt-writer echoed it.
+
+    Seen live: despite instructions, GPT prefixed each image prompt with its
+    beat's spoken sentence ("During the Civil War, 1862 saw the U.S. A medium
+    portrait of...") — narration text inside a FLUX prompt dilutes the visual
+    description and risks the model painting words. Deterministic guard: if
+    the line starts with the beat's opening words, cut them and keep the rest
+    (only when what remains is still a usable prompt)."""
+    b = beat.strip().rstrip(".!?…").strip()
+    if len(b) < 15:
+        return line
+    # Longest common prefix between the line and the beat (case-insensitive):
+    # cut exactly what was echoed — a full echo, or a partial one.
+    ll, bl = line.lower(), b.lower()
+    lcp = 0
+    while lcp < min(len(ll), len(bl)) and ll[lcp] == bl[lcp]:
+        lcp += 1
+    if lcp >= 15:
+        rest = line[lcp:].lstrip(" .!?…—-")
+        if len(rest) > 20:
+            return rest[0].upper() + rest[1:]
+    return line
 
 
 # ── Cross-run image freshness ────────────────────────────────────────────────
@@ -430,6 +472,11 @@ def _build_sd_prompts(script: str, niche: str, max_scenes: int = 10) -> list[str
             f"{beat_lines}\n\n"
             "RULES:\n"
             "- 2 to 4 vivid natural-language sentences per prompt.\n"
+            "- DESCRIBE ONLY WHAT THE CAMERA SEES. Never quote, repeat, or paraphrase "
+            "the beat's narration text inside the prompt — the narration is the "
+            "voice-over, not the image. A prompt that opens by restating the beat "
+            "('During the Civil War, 1862 saw...') is a FAILURE; open with the shot "
+            "itself ('A medium portrait of...').\n"
             "- LOCK TO THE BEAT'S ANCHOR: find the single most specific noun, proper "
             "noun, number, date, or named object in beat N — the exact thing a viewer "
             "hearing that sentence would picture — and make THAT the subject of prompt "
@@ -565,6 +612,8 @@ def _build_sd_prompts(script: str, niche: str, max_scenes: int = 10) -> list[str
         lines = [re.sub(r"^[\d\.\-\)\s]+", "", l).strip()
                  for l in raw_lines if l.strip()]
         lines = [l for l in lines if len(l) > 20]
+        lines = [_strip_beat_echo(l, beats[i]) if i < len(beats) else l
+                 for i, l in enumerate(lines)]
 
         if not lines:
             raise RuntimeError("GPT returned no valid prompts for SD generation")
