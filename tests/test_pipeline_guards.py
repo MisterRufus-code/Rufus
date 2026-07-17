@@ -234,6 +234,61 @@ def test_sd_upscale_lanczos_fallback():
     assert big_img.size == (1152, 2048)
 
 
+# ── Ken Burns zoom subtlety (stills-only mode) ────────────────────────────────
+
+def test_kenburns_default_zoom_is_subtle(tmp_path, monkeypatch):
+    """Default zoom must be a small ('tiny') range, not the old 20% swing —
+    a heavy pan/zoom reads as fake on top of already-strong FLUX stills when
+    running with Wan/SVD disabled (RUFUS_WAN=0, RUFUS_IMG2VID=0)."""
+    import importlib
+    import sd_client
+    monkeypatch.delenv("RUFUS_KENBURNS_ZOOM", raising=False)
+    importlib.reload(sd_client)
+    assert sd_client.KENBURNS_ZOOM_RANGE == pytest.approx(0.06)
+    assert sd_client.KENBURNS_ZOOM_RANGE < 0.20   # meaningfully subtler than the old default
+    importlib.reload(sd_client)  # restore module state for later tests
+
+
+def test_kenburns_zoom_env_override(monkeypatch):
+    import importlib
+    import sd_client
+    monkeypatch.setenv("RUFUS_KENBURNS_ZOOM", "0.02")
+    importlib.reload(sd_client)
+    try:
+        assert sd_client.KENBURNS_ZOOM_RANGE == pytest.approx(0.02)
+    finally:
+        monkeypatch.delenv("RUFUS_KENBURNS_ZOOM", raising=False)
+        importlib.reload(sd_client)
+
+
+def test_animate_to_clip_uses_subtle_zoom_in_ffmpeg_filter(tmp_path, monkeypatch):
+    """The actual ffmpeg zoompan filter passed to subprocess must cap at the
+    configured zoom (not the old hardcoded 1.20)."""
+    import importlib
+    import sd_client
+    monkeypatch.delenv("RUFUS_KENBURNS_ZOOM", raising=False)
+    importlib.reload(sd_client)
+
+    img = tmp_path / "still.png"
+    from PIL import Image
+    Image.new("RGB", (1080, 1920), color=(10, 20, 30)).save(img)
+    out = tmp_path / "clip.mp4"
+
+    captured = {}
+    def fake_run(cmd, **kwargs):
+        captured["cmd"] = cmd
+        out.write_bytes(b"x" * 100_000)
+        return types.SimpleNamespace(returncode=0, stderr="")
+
+    with patch("sd_client.subprocess.run", side_effect=fake_run):
+        sd_client._animate_to_clip(img, out, duration=2.0, idx=0)
+
+    vf = captured["cmd"][captured["cmd"].index("-vf") + 1]
+    assert "1.0600" in vf
+    assert "1.20" not in vf
+    importlib.reload(sd_client)
+
+
 # ── tts_engine guards ─────────────────────────────────────────────────────────
 
 def test_tts_engine_edge_backend_default():

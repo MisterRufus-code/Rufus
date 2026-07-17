@@ -83,6 +83,7 @@ Everything is free except OpenAI credits. Mix and match:
 | `RUFUS_FACE_RESTORE` | `auto` / `0` / `1` | `auto` | Face restoration on FLUX stills if a restore node is installed (see below); `0` forces off |
 | `RUFUS_FACE_RESTORE_MODEL` | weights filename | `GFPGANv1.4.pth` | Restore model file (e.g. `codeformer-v0.1.0.pth`) |
 | `RUFUS_DEBUG` | `1` / unset | unset | Save every run's script, raw voiceover, and FLUX keyframes+prompts to `media_library/debug/<run_id>/` — one folder to review the whole pipeline before it reaches YouTube. Auto-cleaned after ~30 days. |
+| `RUFUS_KENBURNS_ZOOM` | `0.0`–`1.0` | `0.06` | Ken Burns zoom range on a still (e.g. `0.06` = 1.00x→1.06x); pan drift scales with it too. Kept deliberately subtle by default — a heavy pan/zoom reads as fake on top of strong FLUX stills. |
 
 Each niche picks its own source via `"video_source"` in `config/niches.json`
 (default: all niches → `sd`). `RUFUS_VIDEO_SOURCE` overrides it for one run.
@@ -97,6 +98,8 @@ Each niche picks its own source via `"video_source"` in `config/niches.json`
 - **`pexels`** — free stock footage, 7 candidates, GPT-4o Vision picks the best match. Needs a Pexels key. Automatic fallback when A1111 isn't running.
 
 Fallback chain so a run never dies on footage: **comfy → sd → diffusers → pexels**.
+
+**Stills-only mode** (`RUFUS_WAN=0 RUFUS_IMG2VID=0`): skips Wan and SVD entirely — every beat is just its FLUX still animated with a subtle Ken Burns zoom (`RUFUS_KENBURNS_ZOOM`, default 0.06). Much faster per video (no motion-model GPU time at all) and sidesteps every current motion-engine glitch, at the cost of no real camera/subject motion — a deliberate trade when the FLUX stills alone are already the strongest part of the output.
 
 > _Optional/unwired:_ `scripts/hyperframes_client.py` (HeyGen HyperFrames HTML→MP4 motion-graphics) stays on disk for a possible future data-viz channel but is **not** in the active source routing — the focus is photoreal SD.
 

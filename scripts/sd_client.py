@@ -44,6 +44,13 @@ OUT_W = 1080   # final Shorts width
 OUT_H = 1920   # final Shorts height
 FPS   = 30
 
+# Ken Burns zoom range (e.g. 0.06 = 1.00x -> 1.06x). Pan drift is derived from
+# this same value, so turning it down tones down both at once. Default is a
+# deliberately subtle "tiny zoom" — for stills-only runs (RUFUS_WAN=0,
+# RUFUS_IMG2VID=0) a heavy Ken Burns pan reads as fake/gimmicky on top of
+# already-strong FLUX images; a small zoom is enough to avoid a static frame.
+KENBURNS_ZOOM_RANGE = float(os.environ.get("RUFUS_KENBURNS_ZOOM", "0.06"))
+
 TIMEOUT_GEN = 180   # A1111 generation can be slow on 6GB
 TIMEOUT_UPX = 120   # R-ESRGAN upscale timeout
 
@@ -354,23 +361,24 @@ def _animate_to_clip(img_path: Path, out_path: Path,
       3: zoom out, pan down   (downward weight)
     """
     total_frames = int(duration * FPS)
-    step = round(0.20 / total_frames, 7)  # 20% zoom range — more cinematic than 15%
+    zoom_max = 1.0 + KENBURNS_ZOOM_RANGE
+    step = round(KENBURNS_ZOOM_RANGE / total_frames, 7)
 
     pattern = idx % 4
     if pattern == 0:   # push-in + right drift (subject entering)
-        zoom_expr = f"min(zoom+{step},1.20)"
+        zoom_expr = f"min(zoom+{step},{zoom_max:.4f})"
         x_expr    = f"iw/2-(iw/zoom/2)+({step*total_frames:.4f}*on/{total_frames}*iw/7)"
         y_expr    = "ih/2-(ih/zoom/2)"
     elif pattern == 1: # pull-back + left drift (reveal)
-        zoom_expr = f"if(eq(on,1),1.20,max(zoom-{step},1.0))"
+        zoom_expr = f"if(eq(on,1),{zoom_max:.4f},max(zoom-{step},1.0))"
         x_expr    = f"iw/2-(iw/zoom/2)-({step*total_frames:.4f}*on/{total_frames}*iw/7)"
         y_expr    = "ih/2-(ih/zoom/2)"
     elif pattern == 2: # push-in + upward drift (momentum)
-        zoom_expr = f"min(zoom+{step},1.20)"
+        zoom_expr = f"min(zoom+{step},{zoom_max:.4f})"
         x_expr    = "iw/2-(iw/zoom/2)"
         y_expr    = f"ih/2-(ih/zoom/2)-({step*total_frames:.4f}*on/{total_frames}*ih/10)"
     else:              # pull-back + downward drift (weight)
-        zoom_expr = f"if(eq(on,1),1.20,max(zoom-{step},1.0))"
+        zoom_expr = f"if(eq(on,1),{zoom_max:.4f},max(zoom-{step},1.0))"
         x_expr    = "iw/2-(iw/zoom/2)"
         y_expr    = f"ih/2-(ih/zoom/2)+({step*total_frames:.4f}*on/{total_frames}*ih/10)"
 
