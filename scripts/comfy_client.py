@@ -235,13 +235,44 @@ def _build_flux_graph_face(prompt: str, seed: int, model: str, steps: int,
     return _apply_face_restore(_build_flux_graph(prompt, seed, model, steps), restore)
 
 
+# FLUX.2 stills via a user-exported API workflow (same template pattern as
+# hunyuan_client, same rationale: replay the channel owner's verified graph
+# instead of blind-wiring FLUX.2's new node stack). Setup: run ComfyUI's
+# FLUX.2 template once at portrait 832×1472, set the positive prompt text to
+# RUFUS_PROMPT, Export (API) → config/flux2_api.json. Any failure falls back
+# to the proven FLUX.1 graph with the same seed — an upgrade can never cost
+# a clip. Opt out with RUFUS_FLUX2=0.
+FLUX2_TEMPLATE = Path(__file__).parent.parent / "config" / "flux2_api.json"
+
+
+def _flux2_template() -> dict | None:
+    if os.environ.get("RUFUS_FLUX2", "1").strip().lower() in ("0", "false", "no", "off"):
+        return None
+    import comfy_template
+    tpl = comfy_template.load_template(FLUX2_TEMPLATE)
+    if tpl is None or not comfy_template.has_placeholder(tpl):
+        return None
+    return tpl
+
+
 def _render_image(prompt: str, seed: int, model: str, steps: int,
                   client_id: str, restore: dict | None) -> tuple[bytes | None, bool]:
     """Render one FLUX still → raw PNG bytes (or None). Returns (bytes, used_restore).
 
-    If a face-restore graph is configured and fails at EITHER submit (node/param
-    rejected) or generation, fall back to the plain graph with the SAME seed —
-    so an unusable/misconfigured restore node can never cost a clip."""
+    Engine order: FLUX.2 template (if exported) → face-restore FLUX.1 graph
+    (if configured) → plain FLUX.1 graph, all with the SAME seed — a fancier
+    path failing can never cost a clip."""
+    tpl = _flux2_template()
+    if tpl is not None:
+        import comfy_template
+        g = comfy_template.prepare(tpl, prompt=prompt, seed=seed,
+                                   save_prefix="rufus_flux2")
+        pid = _submit(g, client_id)
+        if pid:
+            img = _await_image(pid)
+            if img:
+                return img, False
+        print(f"[comfy] FLUX.2 template render failed — falling back to FLUX.1 (seed={seed})")
     if restore:
         pid = _submit(_build_flux_graph_face(prompt, seed, model, steps, restore), client_id)
         if pid:
@@ -371,7 +402,9 @@ def generate_clips(queries: list[str], n: int = 4,
     # a batch of doomed jobs. Empty list = endpoint unavailable → can't verify,
     # proceed (fail-open).
     available = list_checkpoints()
-    if available and model not in available:
+    if available and model not in available and _flux2_template() is None:
+        # (With a FLUX.2 template exported, the FLUX.1 checkpoint is only the
+        # fallback engine — don't bail the whole run over it.)
         print(f"[comfy] checkpoint '{model}' not loadable by ComfyUI.")
         print(f"[comfy] it sees: {', '.join(available[:5])}")
         print(f"[comfy] put the file in ComfyUI\\models\\checkpoints\\ (not unet/), "
@@ -395,6 +428,20 @@ def generate_clips(queries: list[str], n: int = 4,
             print("[comfy] motion wan 2.2: off — disabled (RUFUS_WAN=0)")
     except Exception as e:
         print(f"[comfy] wan unavailable ({e})")
+    try:
+        import hunyuan_client
+        if hunyuan_client.enabled():
+            hy_ok, hy_why = hunyuan_client.ready()
+            print(f"[comfy] motion hunyuan 1.5: {'ON' if hy_ok else 'off'} — {hy_why}")
+            if hy_ok:
+                # After Wan on purpose: Wan keeps non-face shots (proven
+                # quality), and its face-skip returns False fast — so face
+                # shots land here instead of falling to static Ken Burns.
+                motion_engines.append(("hunyuan", hunyuan_client.animate_image))
+        else:
+            print("[comfy] motion hunyuan 1.5: off — disabled (RUFUS_HUNYUAN=0)")
+    except Exception as e:
+        print(f"[comfy] hunyuan unavailable ({e})")
     try:
         import svd_client
         if svd_client.img2vid_enabled():
@@ -447,6 +494,9 @@ def generate_clips(queries: list[str], n: int = 4,
     if n_prior:
         print(f"[comfy] freshness: {n_prior} image hash(es) from recent runs loaded")
     clips: list[Path] = []
+    if _flux2_template() is not None:
+        print(f"[comfy] stills: FLUX.2 template (config/flux2_api.json) — "
+              f"FLUX.1 '{model}' is the fallback")
     print(f"[comfy] FLUX model={model} steps={steps} base_seed={master_seed}")
 
     debug_dir = None

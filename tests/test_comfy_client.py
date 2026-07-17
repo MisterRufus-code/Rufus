@@ -319,3 +319,100 @@ def test_motion_chain_prefers_wan_then_svd(monkeypatch, tmp_path):
     assert ("wan", 0) in calls                       # clip 0 → wan succeeded
     assert ("svd", 0) not in calls                   # …so svd never touched it
     assert ("wan", 1) in calls and ("svd", 1) in calls   # clip 1 walked the chain
+
+
+# ── FLUX.2 template stills (config/flux2_api.json) ────────────────────────────
+
+def _flux2_tpl(tmp_path):
+    g = {
+        "1": {"class_type": "CLIPTextEncode", "inputs": {"text": "RUFUS_PROMPT"}},
+        "2": {"class_type": "SaveImage",
+              "inputs": {"filename_prefix": "flux2", "images": ["1", 0]}},
+    }
+    p = tmp_path / "flux2_api.json"
+    p.write_text(json.dumps(g))
+    return p
+
+
+def test_flux2_template_absent_returns_none(monkeypatch, tmp_path):
+    monkeypatch.setattr(c, "FLUX2_TEMPLATE", tmp_path / "missing.json")
+    monkeypatch.delenv("RUFUS_FLUX2", raising=False)
+    assert c._flux2_template() is None
+
+
+def test_flux2_template_env_kill_switch(monkeypatch, tmp_path):
+    monkeypatch.setattr(c, "FLUX2_TEMPLATE", _flux2_tpl(tmp_path))
+    monkeypatch.setenv("RUFUS_FLUX2", "0")
+    assert c._flux2_template() is None
+
+
+def test_flux2_template_loads_with_placeholder(monkeypatch, tmp_path):
+    monkeypatch.setattr(c, "FLUX2_TEMPLATE", _flux2_tpl(tmp_path))
+    monkeypatch.delenv("RUFUS_FLUX2", raising=False)
+    assert c._flux2_template() is not None
+
+
+def test_render_image_prefers_flux2_then_falls_back(monkeypatch, tmp_path):
+    """FLUX.2 template render fails → the SAME seed goes to the FLUX.1 graph;
+    the upgrade can never cost a clip."""
+    monkeypatch.setattr(c, "FLUX2_TEMPLATE", _flux2_tpl(tmp_path))
+    monkeypatch.delenv("RUFUS_FLUX2", raising=False)
+
+    submitted = []
+
+    def fake_submit(graph, client_id):
+        submitted.append(graph)
+        return f"pid{len(submitted)}"
+
+    # First await (FLUX.2) fails, second (FLUX.1) succeeds
+    awaits = iter([None, b"PNGBYTES"])
+    with patch.object(c, "_submit", side_effect=fake_submit), \
+         patch.object(c, "_await_image", side_effect=lambda pid: next(awaits)):
+        img, used_restore = c._render_image("a coin", 123, "m.safetensors", 20,
+                                            "cid", None)
+
+    assert img == b"PNGBYTES"
+    assert len(submitted) == 2
+    # First submit was the template (has our substituted prompt)
+    assert submitted[0]["1"]["inputs"]["text"] == "a coin"
+    # Second submit was the FLUX.1 graph with the same seed
+    assert submitted[1]["3"]["inputs"]["seed"] == 123
+
+
+def test_motion_chain_hunyuan_catches_wan_face_skip(monkeypatch, tmp_path):
+    """Face shots: Wan skips → Hunyuan (the face engine) animates them,
+    instead of falling to static Ken Burns."""
+    import wan_client
+    import hunyuan_client
+    import svd_client
+
+    calls = []
+
+    monkeypatch.setattr(wan_client, "enabled", lambda: True)
+    monkeypatch.setattr(wan_client, "ready", lambda: (True, "test"))
+    monkeypatch.setattr(hunyuan_client, "enabled", lambda: True)
+    monkeypatch.setattr(hunyuan_client, "ready", lambda: (True, "test"))
+    monkeypatch.setattr(svd_client, "img2vid_enabled", lambda: False)
+
+    def wan_animate(png, clip, duration=8.0, idx=0, prompt=""):
+        calls.append(("wan", idx))
+        return False                          # face shot — wan skips
+
+    def hy_animate(png, clip, duration=8.0, idx=0, prompt=""):
+        calls.append(("hunyuan", idx))
+        clip.write_bytes(b"x" * 60_000)
+        return True
+
+    monkeypatch.setattr(wan_client, "animate_image", wan_animate)
+    monkeypatch.setattr(hunyuan_client, "animate_image", hy_animate)
+
+    with patch.object(c, "is_available", return_value=True), \
+         patch.object(c, "list_checkpoints", return_value=[]), \
+         patch.object(c, "resolve_face_restore", return_value=None), \
+         patch.object(c, "_render_image", return_value=(b"PNG", False)), \
+         patch.object(c, "_fit_to_portrait", lambda b, p: p.write_bytes(b"i" * 25_000) or True), \
+         patch.object(c, "_avg_hash", return_value=None):
+        clips = c.generate_clips(["a portrait of a banker"], n=1)
+
+    assert len(clips) == 1
+    assert ("wan", 0) in calls and ("hunyuan", 0) in calls

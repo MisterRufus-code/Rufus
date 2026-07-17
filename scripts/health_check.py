@@ -230,6 +230,17 @@ def run() -> None:
                     except Exception:
                         pass
                     try:
+                        import hunyuan_client
+                        if hunyuan_client.enabled():
+                            _hok, _hwhy = hunyuan_client.ready()
+                            if _hok:
+                                ok(f"Hunyuan 1.5 motion ready  ({_hwhy})")
+                            else:
+                                warn("Hunyuan 1.5 motion",
+                                     f"{_hwhy} — face shots stay Ken Burns")
+                    except Exception:
+                        pass
+                    try:
                         from svd_client import img2vid_enabled, resolve_engine
                         if img2vid_enabled():
                             _eng, _why = resolve_engine()
