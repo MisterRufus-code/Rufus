@@ -4,6 +4,10 @@ REM Differences from run.bat: no pause (a paused cmd hangs a scheduled task), an
 REM no --skip-upload — this IS the product run. Safety comes from the pipeline's
 REM own gates: script score >= 8/10, QC pass required, uploads default PRIVATE.
 
+REM UTF-8 console — same fix as run.bat (mojibake in console + tee'd log).
+chcp 65001 >nul
+set PYTHONIOENCODING=utf-8
+
 cd /d "%~dp0"
 
 REM Computed once, upfront, outside any conditional block — setting a variable

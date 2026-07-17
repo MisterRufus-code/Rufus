@@ -140,3 +140,57 @@ def test_hook_missing_when_first_line_is_body():
     from script_writer import _hook_already_present
     assert not _hook_already_present("In 1971, Switzerland cemented its reputation.",
                                      "Nixon cost you $50,000.")
+
+
+# ── Hook grounding gate (invented numbers / fabricated persona) ───────────────
+# Live failure pattern: the hook factory invented figures ("$3.3 billion lost
+# in hours") and first-person stories ("I escaped $50K in debt bondage") that
+# the downstream fact gate then rejected — capping EVERY run at 5/10 and
+# holding every upload. The grounding gate kills those candidates before
+# scoring so a source-grounded hook wins instead.
+
+SOURCE = ("Black Wednesday, or the 1992 sterling crisis, occurred on "
+          "16 September 1992 when the UK withdrew sterling from the ERM. "
+          "Estimates put the cost at 3.3 billion pounds.")
+
+
+def test_hook_grounding_rejects_first_person_confession():
+    from script_writer import _hook_grounding_check
+    reason = _hook_grounding_check("I escaped $50K in debt bondage—here's how.", SOURCE)
+    assert reason is not None
+    assert "first-person" in reason
+
+
+def test_hook_grounding_rejects_invented_number():
+    from script_writer import _hook_grounding_check
+    reason = _hook_grounding_check("$840,000 vanished on September 16.", SOURCE)
+    assert reason is not None
+    assert "840" in reason
+
+
+def test_hook_grounding_accepts_source_number():
+    from script_writer import _hook_grounding_check
+    assert _hook_grounding_check("3.3 billion lost in one day.", SOURCE) is None
+
+
+def test_hook_grounding_accepts_source_year_and_date():
+    from script_writer import _hook_grounding_check
+    assert _hook_grounding_check("1992: the day the UK lost control.", SOURCE) is None
+
+
+def test_hook_grounding_accepts_no_number_hook():
+    from script_writer import _hook_grounding_check
+    assert _hook_grounding_check("The pound's worst day was self-inflicted.", SOURCE) is None
+
+
+def test_hook_grounding_number_with_commas_matches_source_without():
+    from script_writer import _hook_grounding_check
+    src = "The fund lost 3300000000 dollars that afternoon."
+    assert _hook_grounding_check("3,300,000,000 gone in an afternoon.", src) is None
+
+
+def test_hook_grounding_weimar_not_flagged_as_first_person():
+    """\\bwe\\b must not fire inside words like 'Weimar'."""
+    from script_writer import _hook_grounding_check
+    src = "In 1923 Weimar Germany, hyperinflation destroyed the mark."
+    assert _hook_grounding_check("Weimar burned savings in 1923.", src) is None

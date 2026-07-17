@@ -235,6 +235,12 @@ def _transcribe(mp3: Path):
     except Exception as e:
         if _whisper_device == "cuda":
             print(f"[whisper] CUDA transcribe failed ({e}) — retrying on CPU")
+            if "cublas" in str(e).lower() or "cudnn" in str(e).lower():
+                # The runtime DLLs are a 2-minute pip install away — say so,
+                # instead of silently eating the ~4x CPU transcribe penalty
+                # forever.
+                print("[whisper]   to enable GPU transcribe: "
+                      "pip install nvidia-cublas-cu12 nvidia-cudnn-cu12  (then rerun)")
             _whisper_model = None   # discard the broken CUDA instance
             return _whisper(force_cpu=True).transcribe(str(mp3), word_timestamps=True)
         raise

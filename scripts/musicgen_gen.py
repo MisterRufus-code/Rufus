@@ -113,6 +113,15 @@ def generate_music(niche: str, duration: float = 65.0, force: bool = False) -> P
         print(f"[musicgen] cached ({len(existing)} variants): {chosen.name}")
         return chosen
 
+    # audiocraft is an optional heavyweight dep — when it's absent, every run
+    # was printing a 3-line "generating… failed: No module named 'audiocraft'"
+    # stanza. Check up front: one quiet line, no doomed generation attempt.
+    import importlib.util
+    if importlib.util.find_spec("audiocraft") is None:
+        print("[musicgen] audiocraft not installed — skipping AI music "
+              "(Jamendo/local music is used instead; pip install audiocraft to enable)")
+        return random.choice(existing) if existing else None
+
     # Determine next slot (0-based, wrap around if somehow over cap)
     next_slot = len(existing) % MAX_VARIANTS
     out = SYNTH_DIR / f"musicgen_{niche}_{next_slot}.wav"

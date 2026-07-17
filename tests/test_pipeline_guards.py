@@ -732,3 +732,28 @@ def test_sanitize_for_speech_idempotent_on_clean_text():
     import tts_engine as t
     clean = "In 1971, Nixon ended the gold standard.\nYour money changed forever."
     assert t._sanitize_for_speech(clean) == clean
+
+
+# ── TTS auto-selection (ElevenLabs preferred when key configured) ─────────────
+
+def test_tts_auto_prefers_elevenlabs_when_key_present(monkeypatch):
+    """A configured ElevenLabs key means the user opted into the paid, best
+    voice — auto-selection must use it, not silently pick Kokoro/Edge."""
+    import tts_engine
+    monkeypatch.delenv("RUFUS_TTS", raising=False)
+    monkeypatch.setattr(tts_engine, "_eleven_key", lambda: "sk-real-key")
+    assert tts_engine._backend() == "elevenlabs"
+
+
+def test_tts_auto_without_key_falls_through(monkeypatch):
+    import tts_engine
+    monkeypatch.delenv("RUFUS_TTS", raising=False)
+    monkeypatch.setattr(tts_engine, "_eleven_key", lambda: "")
+    assert tts_engine._backend() in ("kokoro", "edge")
+
+
+def test_tts_explicit_env_still_wins_over_key(monkeypatch):
+    import tts_engine
+    monkeypatch.setenv("RUFUS_TTS", "edge")
+    monkeypatch.setattr(tts_engine, "_eleven_key", lambda: "sk-real-key")
+    assert tts_engine._backend() == "edge"

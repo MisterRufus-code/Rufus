@@ -340,6 +340,33 @@ def _hook_pre_check(hook: str) -> str | None:
     return None
 
 
+# Faceless channel: a first-person "confession" hook is by definition a
+# fabricated personal story — nobody behind this channel escaped debt bondage
+# or earned $1.2M. These sailed through scoring, then the fact gate rejected
+# the script built on them, capping every run at 5/10 and holding every upload.
+_HOOK_FIRST_PERSON_RE = re.compile(
+    r"(?i)\b(i|i'm|i'd|i've|my|mine|we|we're|we've|our|ours)\b")
+
+_HOOK_NUMBER_RE = re.compile(r"\d+(?:[.,]\d+)*")
+
+
+def _hook_grounding_check(hook: str, source_text: str) -> str | None:
+    """Reject hooks the fact gate is guaranteed to kill later. Deterministic.
+
+    Two failure modes seen live: (1) first-person fabricated experience
+    ('I escaped $50K in debt bondage'), (2) numbers invented from thin air
+    ('$3.3 billion lost in hours' — nowhere in the source). Catching them
+    BEFORE scoring means the factory's other candidates get their shot,
+    instead of the script being built on a doomed hook."""
+    if _HOOK_FIRST_PERSON_RE.search(hook):
+        return "first-person confession (faceless channel — fabricated persona)"
+    src_norm = source_text.replace(",", "")
+    for num in _HOOK_NUMBER_RE.findall(hook):
+        if num.replace(",", "") not in src_norm:
+            return f"number '{num}' not in source/analysis (invented figure)"
+    return None
+
+
 def _specificity_density(text: str) -> float:
     """Specifics per 25 words. ≥1.0 means the body is grounded."""
     words = len(_word_tokens(text))
@@ -551,26 +578,33 @@ def _hook_factory(client: OpenAI, seed: dict, analysis: str, niche_name: str,
         f"HOOK RULES — every line must obey ALL of these:\n"
         f"- Length: {hs['min_words']}–{hs['max_words']} words (HARD CAP {hs['hard_max_words']})\n"
         f"- Must contain at least one of: a number, a dollar amount, a proper noun (real person/place), or a year\n"
+        f"- GROUNDING (NON-NEGOTIABLE): every number, name, date, and claim must come "
+        f"straight from the SOURCE / PRE-ANALYSIS above. NEVER invent a statistic, "
+        f"dollar amount, 'secret', or personal story — a fabricated hook fails the "
+        f"downstream fact-check and kills the whole video. NEVER write in first "
+        f"person ('I', 'my', 'we') — this is a faceless channel with no narrator persona.\n"
         f"- Must surface a contradiction, paradox, or pattern interrupt — not a report\n"
         f"- Must NOT start with any of: {forbidden_str}\n"
         f"- Must NOT use vague generalities — every word earns its place\n\n"
-        f"Each of the {n_hooks} hooks should attack the source from a DIFFERENT angle:\n"
-        "1. Number-first  — lead with the specific, devastating number. "
-        "(e.g. '$2.4M by 38. Still scared to retire.' — the tension is in the contradiction, not the number)\n"
-        "2. Name-first    — real person's name makes it immediately credible. "
+        f"Each of the {n_hooks} hooks should attack the source from a DIFFERENT angle "
+        f"(every example below assumes its number/name IS in the source — always use "
+        f"the source's own figures, never these):\n"
+        "1. Number-first  — lead with the source's most devastating number. "
+        "(the tension is in the contradiction, not the number itself)\n"
+        "2. Name-first    — the source's real person/place makes it instantly credible. "
         "(e.g. 'Buffett's worst trade made him $25B.' — the reversal IS the hook)\n"
-        "3. Time-contrast — a date reveals how long the pattern has existed. "
-        "(e.g. '2,000 years ago, Seneca described your 2024 anxiety exactly.' — the gap creates the itch)\n"
-        "4. Identity hit  — names what the viewer is actually doing wrong. "
-        "(e.g. 'You're not broke. You're making one $340/month mistake.' — blame+specificity+fix)\n"
-        "5. Counter-claim — the thing everyone believes that is factually backwards. "
-        "(e.g. 'The less you work, the more you earn. Here's the math.' — must be provable)\n"
-        "6. Scene-drop    — drop the viewer into a specific moment, no context given. "
-        "(e.g. '3am. $840K in debt. He opened his laptop and typed one email.' — mystery drives completion)\n"
-        "7. Loaded question — a question the viewer cannot NOT answer. "
-        "(e.g. 'Why do doctors have the lowest savings rate of any profession?' — specific, counterintuitive)\n"
-        "8. Confession    — first-person, specific cost, earned credibility. "
-        "(e.g. 'I earned $1.2M in 18 months and had $14 in checking.' — the gap is the hook)\n\n"
+        "3. Time-contrast — the source's date reveals how long the pattern has existed. "
+        "(e.g. '2,000 years ago, Seneca described your anxiety exactly.' — the gap creates the itch)\n"
+        "4. Identity hit  — names what the viewer is actually doing wrong, using the "
+        "source's insight. (blame + specificity + fix)\n"
+        "5. Counter-claim — the thing everyone believes that the source shows is backwards. "
+        "(must be provable FROM the source)\n"
+        "6. Scene-drop    — drop the viewer into a moment the source actually documents, "
+        "with its real date/place. (mystery drives completion — but the moment must be real)\n"
+        "7. Loaded question — a question about the source's facts the viewer cannot NOT answer. "
+        "(specific, counterintuitive)\n"
+        "8. Aftermath     — the source's documented consequence, stated cold. "
+        "(the verified outcome IS the hook — no embellishment needed)\n\n"
         f"Output FORMAT — exactly one hook per line, numbered 1-{n_hooks}, no commentary:\n"
         f"1. <hook>\n2. <hook>\n...\n{n_hooks}. <hook>"
     )
@@ -619,16 +653,24 @@ def _hook_factory(client: OpenAI, seed: dict, analysis: str, niche_name: str,
 # ── Phase B: Hook scorer ────────────────────────────────────────────────────────
 
 def _hook_scorer(client: OpenAI, hooks: list[str], seed: dict, niche_name: str,
-                 run_id: str) -> tuple[int, float, str, float]:
+                 run_id: str, analysis: str = "") -> tuple[int, float, str, float]:
     """Score hooks (regex pre-filter then LLM). Returns (winner_idx, score, reason, cost)."""
     std       = _standards()
     model     = std["models"]["hook_score"]
     seed_text = (seed.get("content") or "")[:300] if seed else ""
+    # Full grounding corpus for the invented-number check — the whole seed
+    # (not the 300-char scoring excerpt) plus the pre-analysis, since a
+    # legitimate hook may cite a figure the analysis surfaced from the source.
+    grounding = " ".join(filter(None, [
+        (seed.get("content") or "") if seed else "",
+        (seed.get("title") or "") if seed else "",
+        analysis or "",
+    ]))
 
     # 1. Regex pre-filter
     survivors: list[tuple[int, str]] = []
     for i, h in enumerate(hooks):
-        reason = _hook_pre_check(h)
+        reason = _hook_pre_check(h) or _hook_grounding_check(h, grounding)
         if reason:
             save_attempt(run_id=run_id, niche=niche_name,
                          seed_type=seed.get("type") if seed else None,
@@ -1008,7 +1050,8 @@ def write_script(scene_description: str, seed: dict | None = None,
             print(f"[gpt] only {len(hooks)} parsed — retrying" if hook_attempt == 1 else "[gpt] ⚠ still too few hooks")
             continue
 
-        idx, score, reason, c = _hook_scorer(client, hooks, seed, active, run_id)
+        idx, score, reason, c = _hook_scorer(client, hooks, seed, active, run_id,
+                                             analysis=analysis)
         total_cost += c
         if idx < 0:
             print(f"[gpt] Phase B: {reason}")

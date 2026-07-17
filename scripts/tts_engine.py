@@ -79,7 +79,11 @@ def _backend() -> str:
     explicit = os.environ.get("RUFUS_TTS", "").strip().lower()
     if explicit:
         return explicit
-    # Auto-select best available: Kokoro (human-quality, free) > Edge (robotic)
+    # Auto-select best available, matching the documented quality ranking:
+    # ElevenLabs (most natural, key configured = user opted in and pays for
+    # it — use it) > Kokoro (human-quality, free) > Edge (robotic).
+    if _eleven_key():
+        return "elevenlabs"
     try:
         import kokoro  # noqa: F401
         return "kokoro"
@@ -357,6 +361,11 @@ def synthesize(script: str, out_path: Path) -> None:
             return
         except Exception as e:
             print(f"[tts] Kokoro failed ({e}) — falling back to Edge TTS")
+            if "cannot interpret" in str(e).lower() and "data type" in str(e).lower():
+                # Kokoro's deps predate numpy 2 — the classic symptom is numpy
+                # refusing torch dtypes. One pip command fixes it permanently.
+                print("[tts]   this is the numpy-2 incompatibility — fix with: "
+                      "pip install \"numpy<2\"  (then rerun)")
 
     if backend == "xtts":
         try:
@@ -371,6 +380,11 @@ def synthesize(script: str, out_path: Path) -> None:
             return
         except Exception as e:
             print(f"[tts] Kokoro failed ({e}) — falling back to Edge TTS")
+            if "cannot interpret" in str(e).lower() and "data type" in str(e).lower():
+                # Kokoro's deps predate numpy 2 — the classic symptom is numpy
+                # refusing torch dtypes. One pip command fixes it permanently.
+                print("[tts]   this is the numpy-2 incompatibility — fix with: "
+                      "pip install \"numpy<2\"  (then rerun)")
 
     if backend not in ("elevenlabs", "kokoro", "xtts"):
         print(f"[tts] backend: Edge TTS ({EDGE_VOICE})")
