@@ -68,10 +68,11 @@ BAR_HEIGHT   = 14          # retention progress bar thickness (px)
 # so it's the one most likely to feel loud/repetitive — kept noticeably quieter
 # than hit/riser, which each play once per video.
 SFX_HIT_GAIN    = 0.90     # sub-bass hit on the hook (once, 0.03s in)
-SFX_WHOOSH_GAIN = 0.05     # transition swoosh into each cut. History: 0.65 → 0.35
-                           # → 0.15 → 0.05, each after channel-owner feedback that
-                           # it was still noticeable across ~9 cuts/video. Now
-                           # near-subliminal: felt more than heard.
+# Transition swoosh into each cut. History: 0.65 → 0.35 → 0.15 → 0.05 → 0.02,
+# each step after channel-owner feedback that it was still noticeable across
+# ~9 cuts/video. Now effectively subliminal; env-tunable so the next adjustment
+# (either direction, incl. "0" = off) needs no code change.
+SFX_WHOOSH_GAIN = float(os.environ.get("RUFUS_WHOOSH_GAIN", "0.02"))
 SFX_RISER_GAIN  = 0.55     # riser leading into the final beat (once)
 
 # Cut planning

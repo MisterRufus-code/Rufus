@@ -141,3 +141,28 @@ def test_sentence_ends_skips_abbreviations():
     assert 2.2 not in ends      # Mr. is not a sentence end
     assert 1.5 in ends
     assert 3.0 in ends
+
+
+# ── Whoosh gain (repeated channel-owner feedback: quieter every time) ─────────
+
+def test_whoosh_gain_default_near_subliminal(monkeypatch):
+    """Default must stay at the latest requested level (0.02) — it plays on
+    every cut (~9x/video) so any audible level compounds fast."""
+    import importlib
+    import audio_gen as ag
+    monkeypatch.delenv("RUFUS_WHOOSH_GAIN", raising=False)
+    importlib.reload(ag)
+    assert ag.SFX_WHOOSH_GAIN == pytest.approx(0.02)
+    importlib.reload(ag)
+
+
+def test_whoosh_gain_env_override(monkeypatch):
+    import importlib
+    import audio_gen as ag
+    monkeypatch.setenv("RUFUS_WHOOSH_GAIN", "0")
+    importlib.reload(ag)
+    try:
+        assert ag.SFX_WHOOSH_GAIN == 0.0
+    finally:
+        monkeypatch.delenv("RUFUS_WHOOSH_GAIN", raising=False)
+        importlib.reload(ag)
