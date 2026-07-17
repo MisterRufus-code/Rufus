@@ -83,6 +83,36 @@ POLL_INTERVAL = 1.5    # seconds between /history polls
 GEN_TIMEOUT   = 300    # max seconds to wait for one image (FLUX ~20-30s on a 3090)
 GEN_ERROR_BACKOFF = 3.0  # pause before resubmitting after a submit/generation failure
 
+# Cross-run visual freshness: perceptual hashes of images accepted in RECENT
+# runs are persisted and pre-seeded into the dup check, so a new image that
+# merely LOOKS like one from a previous video triggers a regen retry — the
+# prompt-level DO-NOT-REPEAT list (main._freshness_block) catches repeated
+# ideas, this catches repeated pixels. Disable with RUFUS_FRESH_IMAGES=0.
+FRESH_HASH_FILE = Path(__file__).parent.parent / "config" / "recent_image_hashes.json"
+FRESH_HASH_CAP  = 120   # ~12 runs of history — enough to stop déjà vu, small file
+
+
+def _fresh_images_enabled() -> bool:
+    return os.environ.get("RUFUS_FRESH_IMAGES", "1").strip().lower() \
+        not in ("0", "false", "no", "off")
+
+
+def _load_prior_hashes() -> list[int]:
+    try:
+        data = json.loads(FRESH_HASH_FILE.read_text())
+        return [int(h) for h in data.get("hashes", [])][-FRESH_HASH_CAP:]
+    except (OSError, json.JSONDecodeError, ValueError):
+        return []
+
+
+def _save_hashes(hashes: list[int]) -> None:
+    try:
+        FRESH_HASH_FILE.parent.mkdir(parents=True, exist_ok=True)
+        FRESH_HASH_FILE.write_text(
+            json.dumps({"hashes": hashes[-FRESH_HASH_CAP:]}))
+    except OSError as e:
+        print(f"[comfy] couldn't save image-hash history: {e}")
+
 
 def _host() -> str:
     return os.environ.get("COMFY_HOST", "http://localhost:8188").rstrip("/")
@@ -410,7 +440,12 @@ def generate_clips(queries: list[str], n: int = 4,
     stamp        = f"{int(time.time())}_{os.getpid()}"
     client_id    = uuid.uuid4().hex
     master_seed  = random.randint(1, 2_000_000_000)
-    accepted_hashes: list[int] = []
+    # Seed the dup check with prior runs' hashes so cross-run look-alikes
+    # regen too, not just within-run ones. n_prior marks where history ends.
+    accepted_hashes: list[int] = _load_prior_hashes() if _fresh_images_enabled() else []
+    n_prior = len(accepted_hashes)
+    if n_prior:
+        print(f"[comfy] freshness: {n_prior} image hash(es) from recent runs loaded")
     clips: list[Path] = []
     print(f"[comfy] FLUX model={model} steps={steps} base_seed={master_seed}")
 
@@ -491,6 +526,8 @@ def generate_clips(queries: list[str], n: int = 4,
             print(f"[comfy] animation failed for clip {i+1}")
         png_path.unlink(missing_ok=True)
 
+    if _fresh_images_enabled() and len(accepted_hashes) > n_prior:
+        _save_hashes(accepted_hashes)
     print(f"[comfy] {len(clips)}/{len(prompts)} clips ready")
     return clips
 

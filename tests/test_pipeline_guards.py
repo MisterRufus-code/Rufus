@@ -234,6 +234,82 @@ def test_sd_upscale_lanczos_fallback():
     assert big_img.size == (1152, 2048)
 
 
+# ── Cross-run image freshness ─────────────────────────────────────────────────
+
+def test_image_prompt_history_roundtrip_and_channel_scoping(tmp_path, monkeypatch):
+    """Prompts remembered for one channel must come back for that channel only —
+    two channels must never censor each other's visual ideas."""
+    import main
+    monkeypatch.setattr(main, "RECENT_PROMPTS_FILE", tmp_path / "recent.json")
+
+    monkeypatch.setenv("RUFUS_CHANNEL", "main_en")
+    main._remember_image_prompts(["a coin on a desk", "a 1948 street market"])
+    monkeypatch.setenv("RUFUS_CHANNEL", "other_ch")
+    main._remember_image_prompts(["a rocket launch"])
+
+    monkeypatch.setenv("RUFUS_CHANNEL", "main_en")
+    got = main._recent_image_prompts()
+    assert "a coin on a desk" in got
+    assert "a rocket launch" not in got
+
+
+def test_image_prompt_history_is_capped(tmp_path, monkeypatch):
+    import main
+    monkeypatch.setattr(main, "RECENT_PROMPTS_FILE", tmp_path / "recent.json")
+    monkeypatch.setenv("RUFUS_CHANNEL", "main_en")
+
+    for i in range(30):   # far past the 24-run cap
+        main._remember_image_prompts([f"prompt {i}"])
+
+    data = json.loads((tmp_path / "recent.json").read_text())
+    assert len(data["runs"]) == 24
+    # oldest runs dropped, newest kept
+    assert data["runs"][-1]["prompts"] == ["prompt 29"]
+
+
+def test_freshness_block_empty_on_first_run(tmp_path, monkeypatch):
+    import main
+    monkeypatch.setattr(main, "RECENT_PROMPTS_FILE", tmp_path / "missing.json")
+    assert main._freshness_block() == ""
+
+
+def test_freshness_block_lists_recent_prompts(tmp_path, monkeypatch):
+    import main
+    monkeypatch.setattr(main, "RECENT_PROMPTS_FILE", tmp_path / "recent.json")
+    monkeypatch.setenv("RUFUS_CHANNEL", "main_en")
+    main._remember_image_prompts(["a wheelbarrow of banknotes on a cobbled street"])
+
+    block = main._freshness_block()
+    assert "DO NOT REPEAT" in block
+    assert "wheelbarrow of banknotes" in block
+
+
+def test_comfy_prior_hashes_roundtrip_and_cap(tmp_path, monkeypatch):
+    """Accepted-image hashes must persist across runs (capped) so the dup
+    check can regen a new image that looks like one from a previous video."""
+    import comfy_client
+    monkeypatch.setattr(comfy_client, "FRESH_HASH_FILE", tmp_path / "hashes.json")
+
+    comfy_client._save_hashes(list(range(200)))         # over the 120 cap
+    got = comfy_client._load_prior_hashes()
+    assert len(got) == comfy_client.FRESH_HASH_CAP
+    assert got[-1] == 199                                # newest kept, oldest dropped
+
+
+def test_comfy_prior_hashes_missing_file_is_empty(tmp_path, monkeypatch):
+    import comfy_client
+    monkeypatch.setattr(comfy_client, "FRESH_HASH_FILE", tmp_path / "nope.json")
+    assert comfy_client._load_prior_hashes() == []
+
+
+def test_fresh_images_env_kill_switch(monkeypatch):
+    import comfy_client
+    monkeypatch.delenv("RUFUS_FRESH_IMAGES", raising=False)
+    assert comfy_client._fresh_images_enabled() is True
+    monkeypatch.setenv("RUFUS_FRESH_IMAGES", "0")
+    assert comfy_client._fresh_images_enabled() is False
+
+
 # ── Ken Burns zoom subtlety (stills-only mode) ────────────────────────────────
 
 def test_kenburns_default_zoom_is_subtle(tmp_path, monkeypatch):

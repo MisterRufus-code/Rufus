@@ -283,6 +283,70 @@ def _split_beats(script: str, max_scenes: int = 10, min_words: int = 3) -> list[
     return beats
 
 
+# ── Cross-run image freshness ────────────────────────────────────────────────
+# The script side already blocks repeats (blacklist + embedding gate), but
+# nothing stopped every money_history video from opening on the same "vintage
+# banknote close-up". A rolling log of recent runs' image prompts is fed back
+# into the prompt-writer as a DO-NOT-REPEAT list, so each run must find new
+# visual angles. Channel-scoped: two channels never censor each other's ideas.
+
+RECENT_PROMPTS_FILE = CONFIG_DIR / "recent_image_prompts.json"
+
+
+def _recent_image_prompts(limit_runs: int = 8, max_lines: int = 25) -> list[str]:
+    """Last few runs' image prompts for the active channel, oldest first."""
+    try:
+        data = json.loads(RECENT_PROMPTS_FILE.read_text())
+    except (OSError, json.JSONDecodeError):
+        return []
+    ch = os.environ.get("RUFUS_CHANNEL", "main_en")
+    runs = [r for r in data.get("runs", []) if r.get("channel", "main_en") == ch]
+    prompts: list[str] = []
+    for r in runs[-limit_runs:]:
+        prompts.extend(r.get("prompts", []))
+    return prompts[-max_lines:]
+
+
+def _remember_image_prompts(prompts: list[str], cap_runs: int = 24) -> None:
+    """Append this run's accepted image prompts to the rolling log (capped)."""
+    if not prompts:
+        return
+    data: dict = {}
+    if RECENT_PROMPTS_FILE.exists():
+        try:
+            data = json.loads(RECENT_PROMPTS_FILE.read_text())
+        except (OSError, json.JSONDecodeError):
+            data = {}
+    runs = data.get("runs", [])
+    runs.append({
+        "ts": int(time.time()),
+        "channel": os.environ.get("RUFUS_CHANNEL", "main_en"),
+        "prompts": [p[:160] for p in prompts],
+    })
+    data["runs"] = runs[-cap_runs:]
+    try:
+        RECENT_PROMPTS_FILE.parent.mkdir(parents=True, exist_ok=True)
+        RECENT_PROMPTS_FILE.write_text(json.dumps(data, indent=2))
+    except OSError as e:
+        print(f"[fresh] couldn't save image-prompt history: {e}")
+
+
+def _freshness_block() -> str:
+    """DO-NOT-REPEAT block for the prompt-writer, or '' on a channel's first runs."""
+    recent = _recent_image_prompts()
+    if not recent:
+        return ""
+    lines = "\n".join(f"  - {p[:90]}" for p in recent)
+    return (
+        "\nFRESHNESS — DO NOT REPEAT RECENT VIDEOS:\n"
+        "The visual ideas below already appeared in this channel's recent videos. "
+        "Do NOT reuse or closely echo any of these subjects/compositions. If a beat "
+        "naturally suggests one of them, pick a DIFFERENT literal subject from that "
+        "beat, or a sharply different moment, composition, era-detail, or setting:\n"
+        f"{lines}\n"
+    )
+
+
 def _build_sd_prompts(script: str, niche: str, max_scenes: int = 10) -> list[str]:
     """One ultra-detailed SD prompt per spoken beat, in narration order.
 
@@ -350,6 +414,8 @@ def _build_sd_prompts(script: str, niche: str, max_scenes: int = 10) -> list[str
             except Exception:
                 is_flux = False
 
+        fresh_block = _freshness_block()
+
         _FLUX_INSTRUCTION = (
             "You write prompts for FLUX.1-dev, which understands full "
             "natural-language sentences (NOT comma tag-soup).\n"
@@ -397,9 +463,19 @@ def _build_sd_prompts(script: str, niche: str, max_scenes: int = 10) -> list[str
             "plastic-looking skin, or an overly clean/staged composition.\n"
             "- Apply this exact color grade to EVERY prompt: "
             f"{color_grade}.\n"
+            "- MAKE THE FRAME ALIVE — every image must contain a story, not a catalog "
+            "shot: something mid-action or freshly happened (hands mid-motion, a crowd "
+            "blurred in a rush, smoke still rising, ink still wet, a chair just pushed "
+            "back), atmosphere the viewer can feel (dust motes in a shaft of light, "
+            "rain-slick cobblestones, steam off a cup, harsh low winter sun), and "
+            "cinematic light with real contrast (chiaroscuro, a single lamp in the dark, "
+            "golden hour through a window) — never flat, even lighting. A static object "
+            "centered on a plain surface is a FAILURE; give the subject context, scale, "
+            "and consequence.\n"
             "- NO on-screen text, captions, watermarks, or written numbers in the image "
             "(Rufus overlays its own captions).\n"
-            "- All prompts must be visually distinct.\n\n"
+            "- All prompts must be visually distinct.\n"
+            f"{fresh_block}\n"
             f"Output EXACTLY {n} prompts, one per line. No numbering, no labels, no blank lines."
         )
 
@@ -455,7 +531,8 @@ def _build_sd_prompts(script: str, niche: str, max_scenes: int = 10) -> list[str
                     "• NO quality tokens (8k, masterpiece, best quality) — those are appended separately.\n"
                     f"• All {n} prompts must be completely distinct: different subjects, settings, framings.\n"
                     "• BAN: posed, smiling at camera, corporate handshake, generic silhouette, "
-                    "stock photo, perfect unblemished skin, catalog pose.\n\n"
+                    "stock photo, perfect unblemished skin, catalog pose.\n"
+                    f"{fresh_block}\n"
                     "90–110 words per prompt. Dense comma-separated tokens only — zero full sentences.\n\n"
                     f"Output EXACTLY {n} lines. No numbering, no labels, no blank lines. Beat order."
                 ),
@@ -759,6 +836,13 @@ def run(skip_upload: bool = False, niche_override: str = None, output_dir: Path 
                     print(f"           → retry prompts {'accepted' if ok2 else 'used anyway'} ({reason2})")
             except Exception as e:
                 print(f"           ⚠ footage supervisor skipped (non-fatal): {e}")
+
+            # Remember what this run is about to render so the NEXT run's
+            # prompt-writer is told not to repeat these visual ideas.
+            try:
+                _remember_image_prompts(prompts)
+            except Exception as e:
+                print(f"           ⚠ image-prompt history save failed (non-fatal): {e}")
 
             if video_source == "comfy":
                 # ComfyUI + FLUX.1-dev (best quality, needs ~24GB VRAM / RTX 3090).
