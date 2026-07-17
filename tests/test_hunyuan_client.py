@@ -86,3 +86,32 @@ def test_motion_prompt_face_stability_language():
 def test_motion_prompt_truncates_long_subjects():
     p = hy._motion_prompt("word " * 200)
     assert len(p) < 700
+
+
+def test_animate_snaps_invalid_frame_count(monkeypatch, tmp_path, capsys):
+    """Hunyuan's VAE needs 4n+1 frames — a misconfigured 120 must snap to 117,
+    not fail the generation."""
+    p = _write_template(tmp_path)
+    monkeypatch.setenv("RUFUS_HUNYUAN_TEMPLATE", str(p))
+    monkeypatch.setenv("RUFUS_HUNYUAN_FRAMES", "120")
+
+    captured_dims = {}
+
+    def fake_prepare(tpl, **kw):
+        captured_dims.update(kw)
+        return {}
+
+    import os as _os
+    from PIL import Image
+    src = tmp_path / "still.png"
+    # Noisy pixels: a solid-color PNG compresses under _prep_init's 5KB
+    # sanity floor and would fail the prep step instead of testing the snap.
+    Image.frombytes("RGB", (256, 448), _os.urandom(256 * 448 * 3)).resize(
+        (1080, 1920)).save(src)
+
+    with patch.object(hy.comfy_template, "prepare", side_effect=fake_prepare), \
+         patch.object(hy, "_upload_image", return_value="up.png"), \
+         patch.object(hy, "_submit_verbose", return_value=None):
+        assert hy.animate_image(src, tmp_path / "o.mp4") is False  # submit=None → False
+
+    assert captured_dims["dims"][2] == 117

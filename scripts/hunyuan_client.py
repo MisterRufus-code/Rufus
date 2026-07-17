@@ -151,6 +151,13 @@ def animate_image(png_path: Path, out_path: Path, duration: float = 8.0,
         h       = int(os.environ.get("RUFUS_HUNYUAN_H", "832"))
         frames  = int(os.environ.get("RUFUS_HUNYUAN_FRAMES", "121"))
         timeout = float(os.environ.get("RUFUS_HUNYUAN_TIMEOUT", "1200"))
+        # Hunyuan's 3D causal VAE requires 4n+1 frames (121 ok, 120 not) —
+        # snap a misconfigured count down to the nearest valid one instead of
+        # letting the whole generation fail.
+        if frames % 4 != 1:
+            snapped = max(5, ((frames - 1) // 4) * 4 + 1)
+            print(f"[hunyuan] frames={frames} invalid (must be 4n+1) — using {snapped}")
+            frames = snapped
 
         with tempfile.TemporaryDirectory(prefix="rufus_hy_") as td:
             tmp = Path(td)
