@@ -84,6 +84,7 @@ Everything is free except OpenAI credits. Mix and match:
 | `RUFUS_FACE_RESTORE_MODEL` | weights filename | `GFPGANv1.4.pth` | Restore model file (e.g. `codeformer-v0.1.0.pth`) |
 | `RUFUS_DEBUG` | `1` / unset | unset | Save every run's script, raw voiceover, and FLUX keyframes+prompts to `media_library/debug/<run_id>/` — one folder to review the whole pipeline before it reaches YouTube. Auto-cleaned after ~30 days. |
 | `RUFUS_KENBURNS_ZOOM` | `0.0`–`1.0` | `0.06` | Ken Burns zoom range on a still (e.g. `0.06` = 1.00x→1.06x); pan drift scales with it too. Kept deliberately subtle by default — a heavy pan/zoom reads as fake on top of strong FLUX stills. |
+| `RUFUS_FRESH_IMAGES` | `0`/`1` | `1` | Cross-run visual freshness: recent runs' image prompts are fed to the prompt-writer as a do-not-repeat list, and perceptual hashes of past images pre-seed the dup check so look-alike frames regenerate. `0` disables both. |
 
 Each niche picks its own source via `"video_source"` in `config/niches.json`
 (default: all niches → `sd`). `RUFUS_VIDEO_SOURCE` overrides it for one run.
