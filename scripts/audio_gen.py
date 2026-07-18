@@ -216,9 +216,25 @@ def _whisper(force_cpu: bool = False) -> WhisperModel:
                 return _whisper_model
             except Exception as e:
                 print(f"[whisper] CUDA init failed ({e}) — falling back to CPU")
-        _whisper_model  = WhisperModel(model_name, device="cpu", compute_type="int8")
+        _whisper_model  = _load_whisper_cpu(model_name)
         _whisper_device = "cpu"
     return _whisper_model
+
+
+def _load_whisper_cpu(model_name: str) -> WhisperModel:
+    """CPU model with an offline retry: constructing WhisperModel re-checks
+    HuggingFace for the model revision, and a transient network blip there
+    ('Server disconnected without sending a response', seen live) killed a
+    whole render — even though the model files were already cached on disk
+    (the CUDA attempt had loaded them seconds earlier). On any load failure,
+    retry from the local cache only; if the model genuinely isn't cached,
+    that retry raises the real error."""
+    try:
+        return WhisperModel(model_name, device="cpu", compute_type="int8")
+    except Exception as e:
+        print(f"[whisper] CPU model load failed ({e}) — retrying from local cache")
+        return WhisperModel(model_name, device="cpu", compute_type="int8",
+                            local_files_only=True)
 
 
 def _transcribe(mp3: Path):

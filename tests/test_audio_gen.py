@@ -166,3 +166,41 @@ def test_whoosh_gain_env_override(monkeypatch):
     finally:
         monkeypatch.delenv("RUFUS_WHOOSH_GAIN", raising=False)
         importlib.reload(ag)
+
+
+# ── Whisper CPU load: offline retry (live "Server disconnected" failure) ──────
+
+def test_whisper_cpu_load_retries_from_local_cache(monkeypatch):
+    """Constructing WhisperModel re-checks HuggingFace; a transient network
+    drop killed a whole render even though the model was cached. The CPU
+    loader must retry with local_files_only=True."""
+    import audio_gen as ag
+
+    calls = []
+
+    class FakeModel:
+        def __init__(self, name, device=None, compute_type=None,
+                     local_files_only=False):
+            calls.append(local_files_only)
+            if not local_files_only:
+                raise RuntimeError("Server disconnected without sending a response.")
+
+    monkeypatch.setattr(ag, "WhisperModel", FakeModel)
+    model = ag._load_whisper_cpu("small")
+    assert isinstance(model, FakeModel)
+    assert calls == [False, True]      # online attempt, then cached-only retry
+
+
+def test_whisper_cpu_load_no_retry_when_first_attempt_works(monkeypatch):
+    import audio_gen as ag
+
+    calls = []
+
+    class FakeModel:
+        def __init__(self, name, device=None, compute_type=None,
+                     local_files_only=False):
+            calls.append(local_files_only)
+
+    monkeypatch.setattr(ag, "WhisperModel", FakeModel)
+    ag._load_whisper_cpu("small")
+    assert calls == [False]
