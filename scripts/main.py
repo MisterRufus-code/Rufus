@@ -999,6 +999,24 @@ def run(skip_upload: bool = False, niche_override: str = None, output_dir: Path 
         print(f"           ⚠ QC skipped (non-fatal): {e}")
     print()
 
+    # WHY this video will (or won't) auto-upload — computed here, once, so the
+    # DB row (and the dashboard reading it) records the real reason instead of
+    # main.py's users having to re-derive it from a scrolling log. Mirrors the
+    # actual gate order in Step 7 below; kept as a separate small block rather
+    # than refactoring Step 7 itself, so the real upload gating logic (which
+    # also handles --skip-upload) is untouched.
+    _hold_min_score = int(os.environ.get("RUFUS_MIN_UPLOAD_SCORE",
+                          str(channel.upload.get("min_score", 8))))
+    _hold_score = result.get("score", 0)
+    if qc is not None and not qc.get("ok", True):
+        hold_reason = f"QC failed: {'; '.join(qc['critical'])}"
+    elif facts_hold:
+        hold_reason = f"factual integrity: {facts_hold}"
+    elif _hold_score < _hold_min_score:
+        hold_reason = f"score {_hold_score}/10 < {_hold_min_score}/10 threshold"
+    else:
+        hold_reason = None
+
     # ── Step 6: Save to DB ──────────────────────────────────────────────────────
     print("[ 6 / 7 ]  Saving to database...")
     db_id = None
@@ -1020,6 +1038,7 @@ def run(skip_upload: bool = False, niche_override: str = None, output_dir: Path 
             final_temperature=result.get("final_temperature"),
             score_reasoning=(result.get("reasoning") or "")[:2000],
             channel=channel.id,
+            hold_reason=hold_reason,
         )
         print(f"           → saved (id={db_id})\n")
     except Exception as e:

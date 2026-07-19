@@ -38,6 +38,9 @@ opencv-python-headless>=4.8,<5
 # cross-platform locking (single-instance + seed history)
 filelock>=3.12
 
+# status dashboard (scripts/dashboard.py) — self-contained, no other deps
+flask>=3.0
+
 # YouTube upload
 google-api-python-client>=2.100
 google-auth>=2.20

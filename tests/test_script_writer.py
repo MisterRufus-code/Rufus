@@ -194,3 +194,128 @@ def test_hook_grounding_weimar_not_flagged_as_first_person():
     from script_writer import _hook_grounding_check
     src = "In 1923 Weimar Germany, hyperinflation destroyed the mark."
     assert _hook_grounding_check("Weimar burned savings in 1923.", src) is None
+
+
+# ── _fixes_from_crits: closes the "LLM score just retries cold" gap ──────────
+# Real bug behind observed score volatility (10/10 one video, 5/10 the next
+# on similar source material): _fix_for() already turns a pre-filter
+# rejection into a concrete instruction carried into every later attempt, but
+# a low LLM SCORE only added a numeric summary to the retry prompt — no
+# actual correction. _fixes_from_crits closes that gap.
+
+def _std():
+    from script_writer import _standards
+    return _standards()
+
+
+def test_fixes_from_crits_empty_when_all_criteria_pass():
+    from script_writer import _fixes_from_crits
+    crits = {"specificity": 3, "hook": 2, "compression": 2, "loop": 2, "human": 1}
+    assert _fixes_from_crits(crits, _std(), "worst, smartest, wrong") == []
+
+
+def test_fixes_from_crits_flags_low_specificity():
+    from script_writer import _fixes_from_crits
+    crits = {"specificity": 0, "hook": 2, "compression": 2, "loop": 2, "human": 1}
+    fixes = _fixes_from_crits(crits, _std(), "worst, smartest, wrong")
+    assert any("ground EVERY claim" in f for f in fixes)
+
+
+def test_fixes_from_crits_flags_low_loop():
+    from script_writer import _fixes_from_crits
+    crits = {"specificity": 3, "hook": 2, "compression": 2, "loop": 0, "human": 1}
+    fixes = _fixes_from_crits(crits, _std(), "worst, smartest, wrong")
+    assert any("mirror the hook" in f for f in fixes)
+
+
+def test_fixes_from_crits_flags_low_human_and_includes_opinion_words():
+    from script_writer import _fixes_from_crits
+    crits = {"specificity": 3, "hook": 2, "compression": 2, "loop": 2, "human": 0}
+    fixes = _fixes_from_crits(crits, _std(), "worst, smartest, wrong")
+    assert any("worst, smartest, wrong" in f for f in fixes)
+
+
+def test_fixes_from_crits_multiple_weak_criteria_all_reported():
+    from script_writer import _fixes_from_crits
+    crits = {"specificity": 0, "hook": 0, "compression": 0, "loop": 0, "human": 0}
+    fixes = _fixes_from_crits(crits, _std(), "worst")
+    assert len(fixes) == 5
+
+
+def test_fixes_from_crits_missing_keys_treated_as_passing():
+    """A criterion the scorer failed to parse (missing from crits dict) must
+    not be treated as a failure — only genuinely low/parsed scores flag."""
+    from script_writer import _fixes_from_crits
+    fixes = _fixes_from_crits({}, _std(), "worst")
+    assert fixes == []
+
+
+# ── Story architect: plan-before-prose pre-pass ───────────────────────────────
+
+def test_architect_enabled_default_on(monkeypatch):
+    from script_writer import _architect_enabled
+    monkeypatch.delenv("RUFUS_SCRIPT_ARCHITECT", raising=False)
+    assert _architect_enabled() is True
+
+
+def test_architect_enabled_env_off(monkeypatch):
+    from script_writer import _architect_enabled
+    monkeypatch.setenv("RUFUS_SCRIPT_ARCHITECT", "0")
+    assert _architect_enabled() is False
+
+
+def test_story_architect_noop_when_disabled(monkeypatch):
+    from script_writer import _story_architect
+    monkeypatch.setenv("RUFUS_SCRIPT_ARCHITECT", "0")
+    plan, cost = _story_architect(None, {"content": "x"}, "analysis", "hook",
+                                  "run1", "finance")
+    assert plan == "" and cost == 0.0
+
+
+def test_story_architect_returns_empty_on_api_failure(monkeypatch):
+    """Fail-open: an API error must not crash script writing — just skip
+    the plan and proceed exactly as before this feature existed."""
+    from script_writer import _story_architect
+    monkeypatch.delenv("RUFUS_SCRIPT_ARCHITECT", raising=False)
+
+    class FakeClient:
+        class chat:
+            class completions:
+                @staticmethod
+                def create(**kw):
+                    raise RuntimeError("API down")
+
+    plan, cost = _story_architect(FakeClient(), {"content": "x"}, "analysis",
+                                  "hook", "run1", "finance")
+    assert plan == "" and cost == 0.0
+
+
+def test_story_architect_returns_plan_and_cost(monkeypatch):
+    from script_writer import _story_architect
+    monkeypatch.delenv("RUFUS_SCRIPT_ARCHITECT", raising=False)
+
+    class Usage:
+        prompt_tokens = 100
+        completion_tokens = 50
+
+    class Msg:
+        content = "SPINE FACT: x\nTHE TURN: y\nWHY NOW: z"
+
+    class Choice:
+        message = Msg()
+
+    class Resp:
+        choices = [Choice()]
+        usage = Usage()
+
+    class FakeClient:
+        class chat:
+            class completions:
+                @staticmethod
+                def create(**kw):
+                    return Resp()
+
+    plan, cost = _story_architect(FakeClient(), {"content": "x"}, "analysis",
+                                  "hook", "run1", "finance")
+    assert "SPINE FACT" in plan
+    assert cost >= 0.0

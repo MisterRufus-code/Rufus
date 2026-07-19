@@ -59,6 +59,10 @@ def init_db():
             "ALTER TABLE videos ADD COLUMN title TEXT",
             # Phase 2 (scale plan): multi-channel attribution
             "ALTER TABLE videos ADD COLUMN channel TEXT",
+            # Dashboard: WHY a video wasn't auto-uploaded (QC fail / factual
+            # hold / below score threshold). NULL means it uploaded cleanly
+            # (or the run predates this column).
+            "ALTER TABLE videos ADD COLUMN hold_reason TEXT",
         ):
             try:
                 c.execute(ddl)
@@ -123,7 +127,8 @@ def save_video(niche: str, script_hook: str, scene_desc: str,
                final_temperature: float = None,
                score_reasoning: str = None,
                title: str = None,
-               channel: str = "main_en") -> int:
+               channel: str = "main_en",
+               hold_reason: str = None) -> int:
     crits = criterion_scores or {}
     with _conn() as c:
         cur = c.execute(
@@ -133,8 +138,8 @@ def save_video(niche: str, script_hook: str, scene_desc: str,
             " youtube_id, video_file, score, "
             " run_id, score_specificity, score_hook, score_compression, "
             " score_loop, score_human, attempts_used, final_temperature, "
-            " score_reasoning, title, channel) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            " score_reasoning, title, channel, hold_reason) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (niche, script_hook, script_full, scene_desc,
              seed_type, seed_source, seed_content,
              youtube_id, video_file, score,
@@ -142,7 +147,7 @@ def save_video(niche: str, script_hook: str, scene_desc: str,
              crits.get("specificity"), crits.get("hook"),
              crits.get("compression"), crits.get("loop"), crits.get("human"),
              attempts_used, final_temperature, score_reasoning,
-             title, channel),
+             title, channel, hold_reason),
         )
         return cur.lastrowid
 

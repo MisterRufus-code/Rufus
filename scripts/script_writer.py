@@ -778,6 +778,61 @@ def _hook_scorer(client: OpenAI, hooks: list[str], seed: dict, niche_name: str,
     return best_idx, best_score, best_reason, cost
 
 
+# ── Story architect: plan before prose ────────────────────────────────────────
+# One cheap pass BEFORE any drafting: pins down the single most compelling,
+# source-grounded angle, the exact moment the reversal should hinge on, and
+# why THIS telling matters right now — instead of Phase C writing blind from
+# raw pre-analysis and hoping a good shape falls out. Feeds every attempt (not
+# just the first), so retries have a real plan to hew to, not just corrections.
+# RUFUS_SCRIPT_ARCHITECT=0 disables (fail-open — a plan-less run just writes
+# exactly as before).
+
+def _architect_enabled() -> bool:
+    return os.environ.get("RUFUS_SCRIPT_ARCHITECT", "1").strip().lower() \
+        not in ("0", "false", "no", "off")
+
+
+def _story_architect(client: OpenAI, seed: dict, analysis: str, hook: str,
+                     run_id: str, niche_name: str) -> tuple[str, float]:
+    """Returns (plan_text, cost_usd). '' plan on any failure — fail-open."""
+    if not _architect_enabled():
+        return "", 0.0
+    model = _standards()["models"].get("architect", "gpt-4o-mini")
+    seed_text = (seed.get("content") or "")[:600] if seed else ""
+    prompt = (
+        f"HOOK (already chosen, will not change): \"{hook}\"\n"
+        f"SOURCE: \"{seed_text}\"\n"
+        f"PRE-ANALYSIS:\n{analysis}\n\n"
+        "You are planning a 35-50 second video BEFORE any prose is written. "
+        "In under 100 words, reply in exactly 3 short labeled lines:\n"
+        "SPINE FACT: the one specific, source-grounded detail everything else "
+        "must hang on — not a theme, an actual fact.\n"
+        "THE TURN: the exact moment or fact the reversal should hinge on — a "
+        "MOMENT the viewer can picture, not a statistic restated.\n"
+        "WHY NOW: the single sharpest, most concrete reason a viewer should "
+        "care about THIS today — not a generic 'this matters', the real stake.\n"
+        "Be concrete. No fluff, no restating the hook."
+    )
+    try:
+        t0 = time.time()
+        resp = client.chat.completions.create(
+            model=model, messages=[{"role": "user", "content": prompt}],
+            temperature=0.6, max_tokens=220, timeout=60)
+        ms    = int((time.time() - t0) * 1000)
+        usage = resp.usage
+        cost  = estimate_cost(model, usage.prompt_tokens, usage.completion_tokens)
+        plan  = resp.choices[0].message.content.strip()
+        log_attempt({
+            "run_id": run_id, "niche": niche_name, "phase": "story_architect",
+            "attempt_n": 1, "model": model, "cost_usd": cost, "ms": ms,
+            "body": plan, "accepted": True,
+        })
+        return plan, cost
+    except Exception as e:
+        print(f"[gpt] story architect skipped (non-fatal): {e}")
+        return "", 0.0
+
+
 # ── Phase C: Body generator ─────────────────────────────────────────────────────
 
 def _build_system(niche_cfg: dict, niche_name: str, cta: str, hook: str) -> str:
@@ -849,6 +904,39 @@ HEDGING — never use any of: {hedging_all}
 
 Output ONLY the script text. No labels. No "Here is the script:". No quotes around it.
 {gold_block}"""
+
+
+def _fixes_from_crits(crits: dict, std: dict, opinion_all: str) -> list[str]:
+    """Turn a low LLM score into concrete corrections for the NEXT attempt.
+
+    Real gap this closes: _fix_for() already converts a pre-filter rejection
+    (banned phrase, no loop echo, etc.) into a specific instruction carried
+    into every later attempt — but a LOW LLM SCORE previously only added a
+    compact numeric summary ("spec=1, hook=1, loop=0") to the retry prompt,
+    with no actual correction. So a weak attempt just retried "cold" at a
+    different temperature instead of fixing the specific flaw the critic
+    found — the likely reason scores swing hard between videos (10 on one
+    seed, 5 on the next) even when the pre-filter never rejected anything.
+    Mirrors _fix_for's style so both paths carry equal weight in the prompt."""
+    fixes = []
+    body = std["body"]
+    if crits.get("specificity", 3) < 2:
+        fixes.append("CRITICAL: ground EVERY claim in a real number, name, or date "
+                     "from the source — the critic found this too vague/unsupported.")
+    if crits.get("hook", 2) < 2:
+        fixes.append("CRITICAL: the body must directly pay off the hook's specific "
+                     "claim by the loop line — the critic found it unresolved.")
+    if crits.get("compression", 2) < 2:
+        fixes.append(f"CRITICAL: cut padding — every sentence must reveal a fact or "
+                     f"build tension, avg sentence length under "
+                     f"{body['max_avg_sentence_words']} words.")
+    if crits.get("loop", 2) < 2:
+        fixes.append("CRITICAL: the second-to-last line must structurally mirror the "
+                     "hook (echo one of its concrete words), not just share a theme.")
+    if crits.get("human", 1) < 1:
+        fixes.append(f"CRITICAL: sound like a person with a real opinion — use one "
+                     f"of: {opinion_all}. No neutral, encyclopedia-style description.")
+    return fixes
 
 
 def _generate(client: OpenAI, system: str, user: str, model: str,
@@ -1086,16 +1174,25 @@ def write_script(scene_description: str, seed: dict | None = None,
         else:
             raise RuntimeError("Hook factory produced zero parseable hooks across 2 attempts")
 
+    # ── Story architect: plan before prose (see _story_architect docstring) ────
+    story_plan, architect_cost = _story_architect(client, seed, analysis,
+                                                  winning_hook, run_id, active)
+    total_cost += architect_cost
+    if story_plan:
+        print(f"[gpt] story architect:\n{story_plan}")
+
     # ── Phase C: body generation ──────────────────────────────────────────────
     system = _build_system(niche, active, cta, winning_hook)
     seed_blk       = _seed_block(seed) if seed else ""
     hook_tokens    = _content_tokens(winning_hook)
     hook_token_str = ", ".join(sorted(hook_tokens)) or "(none)"
     opinion_all    = ", ".join(std["opinion_pool"])
+    plan_blk       = f"STORY PLAN (write to this shape):\n{story_plan}\n\n" if story_plan else ""
     base_usr = (
         f"{seed_blk}\n"
         f"Background scene: {scene_description}\n\n"
         f"PRE-ANALYSIS:\n{analysis}\n\n"
+        f"{plan_blk}"
         f"Write the COMPLETE SCRIPT — all lines from hook through CTA.\n"
         f"Line 1 must be exactly: {winning_hook}\n"
         f"Total word count: {std['body']['min_words']}-{std['body']['max_words']} words.\n"
@@ -1275,6 +1372,13 @@ def write_script(scene_description: str, seed: dict | None = None,
 
         if total >= score_min:
             break
+
+        # See _fixes_from_crits' docstring: convert THIS attempt's specific weak
+        # criteria into corrections the next attempt must satisfy, same as the
+        # pre-filter path already does — a low LLM score must not just retry cold.
+        for fix in _fixes_from_crits(crits, std, opinion_all):
+            if fix not in accumulated_fixes:
+                accumulated_fixes.append(fix)
 
     if not best["script"]:
         # No attempt cleared the pre-filter. Salvage the rejected attempt closest to
