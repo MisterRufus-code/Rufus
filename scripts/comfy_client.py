@@ -235,44 +235,58 @@ def _build_flux_graph_face(prompt: str, seed: int, model: str, steps: int,
     return _apply_face_restore(_build_flux_graph(prompt, seed, model, steps), restore)
 
 
-# FLUX.2 stills via a user-exported API workflow (same template pattern as
-# hunyuan_client, same rationale: replay the channel owner's verified graph
-# instead of blind-wiring FLUX.2's new node stack). Setup: run ComfyUI's
-# FLUX.2 template once at portrait 832×1472, set the positive prompt text to
-# RUFUS_PROMPT, Export (API) → config/flux2_api.json. Any failure falls back
-# to the proven FLUX.1 graph with the same seed — an upgrade can never cost
-# a clip. Opt out with RUFUS_FLUX2=0.
-FLUX2_TEMPLATE = Path(__file__).parent.parent / "config" / "flux2_api.json"
+# PRIMARY-STILLS TEMPLATE — swap the image model without touching code.
+# Same template pattern as hunyuan_client: replay a user-exported, verified
+# ComfyUI graph instead of blind-wiring each new model's node stack. Drop in
+# ANY image model this way — Z-Image-Turbo, Qwen-Image, FLUX.2, etc.: run its
+# ComfyUI workflow once at portrait ~832×1472, set the positive prompt text to
+# RUFUS_PROMPT, Export (API) → config/stills_api.json. Any failure falls back
+# to the built-in FLUX.1 graph with the SAME seed — an upgrade can never cost
+# a clip. Opt out with RUFUS_STILLS_TEMPLATE=0.
+#   config/stills_api.json  — the current/primary image model (model-agnostic)
+#   config/flux2_api.json   — kept as a fallback name for back-compat
+STILLS_TEMPLATE = Path(__file__).parent.parent / "config" / "stills_api.json"
+FLUX2_TEMPLATE  = Path(__file__).parent.parent / "config" / "flux2_api.json"
 
 
-def _flux2_template() -> dict | None:
-    if os.environ.get("RUFUS_FLUX2", "1").strip().lower() in ("0", "false", "no", "off"):
+def _stills_template() -> dict | None:
+    """The exported image workflow to use for every still, or None. Honors the
+    new RUFUS_STILLS_TEMPLATE kill-switch and the legacy RUFUS_FLUX2 one."""
+    off = ("0", "false", "no", "off")
+    if os.environ.get("RUFUS_STILLS_TEMPLATE", "1").strip().lower() in off:
+        return None
+    if os.environ.get("RUFUS_FLUX2", "1").strip().lower() in off:
         return None
     import comfy_template
-    tpl = comfy_template.load_template(FLUX2_TEMPLATE)
-    if tpl is None or not comfy_template.has_placeholder(tpl):
-        return None
-    return tpl
+    for path in (STILLS_TEMPLATE, FLUX2_TEMPLATE):
+        tpl = comfy_template.load_template(path)
+        if tpl is not None and comfy_template.has_placeholder(tpl):
+            return tpl
+    return None
+
+
+# Back-compat alias — older references / tests still call _flux2_template().
+_flux2_template = _stills_template
 
 
 def _render_image(prompt: str, seed: int, model: str, steps: int,
                   client_id: str, restore: dict | None) -> tuple[bytes | None, bool]:
-    """Render one FLUX still → raw PNG bytes (or None). Returns (bytes, used_restore).
+    """Render one still → raw PNG bytes (or None). Returns (bytes, used_restore).
 
-    Engine order: FLUX.2 template (if exported) → face-restore FLUX.1 graph
-    (if configured) → plain FLUX.1 graph, all with the SAME seed — a fancier
-    path failing can never cost a clip."""
-    tpl = _flux2_template()
+    Engine order: primary-stills template (if exported — Z-Image/Qwen/FLUX.2/
+    etc.) → face-restore FLUX.1 graph (if configured) → plain FLUX.1 graph,
+    all with the SAME seed — a fancier path failing can never cost a clip."""
+    tpl = _stills_template()
     if tpl is not None:
         import comfy_template
         g = comfy_template.prepare(tpl, prompt=prompt, seed=seed,
-                                   save_prefix="rufus_flux2")
+                                   save_prefix="rufus_stills")
         pid = _submit(g, client_id)
         if pid:
             img = _await_image(pid)
             if img:
                 return img, False
-        print(f"[comfy] FLUX.2 template render failed — falling back to FLUX.1 (seed={seed})")
+        print(f"[comfy] stills-template render failed — falling back to FLUX.1 (seed={seed})")
     if restore:
         pid = _submit(_build_flux_graph_face(prompt, seed, model, steps, restore), client_id)
         if pid:
@@ -418,8 +432,8 @@ def generate_clips(queries: list[str], n: int = 4,
     # a batch of doomed jobs. Empty list = endpoint unavailable → can't verify,
     # proceed (fail-open).
     available = list_checkpoints()
-    if available and model not in available and _flux2_template() is None:
-        # (With a FLUX.2 template exported, the FLUX.1 checkpoint is only the
+    if available and model not in available and _stills_template() is None:
+        # (With a stills template exported, the FLUX.1 checkpoint is only the
         # fallback engine — don't bail the whole run over it.)
         print(f"[comfy] checkpoint '{model}' not loadable by ComfyUI.")
         print(f"[comfy] it sees: {', '.join(available[:5])}")
@@ -510,8 +524,8 @@ def generate_clips(queries: list[str], n: int = 4,
     if n_prior:
         print(f"[comfy] freshness: {n_prior} image hash(es) from recent runs loaded")
     clips: list[Path] = []
-    if _flux2_template() is not None:
-        print(f"[comfy] stills: FLUX.2 template (config/flux2_api.json) — "
+    if _stills_template() is not None:
+        print(f"[comfy] stills: custom template (config/stills_api.json) — "
               f"FLUX.1 '{model}' is the fallback")
     print(f"[comfy] FLUX model={model} steps={steps} base_seed={master_seed}")
 

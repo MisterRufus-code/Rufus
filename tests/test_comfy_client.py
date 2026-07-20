@@ -335,9 +335,49 @@ def _flux2_tpl(tmp_path):
 
 
 def test_flux2_template_absent_returns_none(monkeypatch, tmp_path):
+    monkeypatch.setattr(c, "STILLS_TEMPLATE", tmp_path / "missing1.json")
     monkeypatch.setattr(c, "FLUX2_TEMPLATE", tmp_path / "missing.json")
     monkeypatch.delenv("RUFUS_FLUX2", raising=False)
+    monkeypatch.delenv("RUFUS_STILLS_TEMPLATE", raising=False)
     assert c._flux2_template() is None
+
+
+def _stills_tpl(tmp_path, name="stills_api.json"):
+    g = {
+        "1": {"class_type": "CLIPTextEncode", "inputs": {"text": "RUFUS_PROMPT"}},
+        "2": {"class_type": "SaveImage",
+              "inputs": {"filename_prefix": "s", "images": ["1", 0]}},
+    }
+    p = tmp_path / name
+    p.write_text(json.dumps(g))
+    return p
+
+
+def test_generic_stills_template_loads_any_model_export(monkeypatch, tmp_path):
+    """A stills_api.json export (Z-Image/Qwen/anything) is picked up model-
+    agnostically, not just flux2_api.json."""
+    monkeypatch.setattr(c, "STILLS_TEMPLATE", _stills_tpl(tmp_path))
+    monkeypatch.setattr(c, "FLUX2_TEMPLATE", tmp_path / "no_flux2.json")
+    monkeypatch.delenv("RUFUS_FLUX2", raising=False)
+    monkeypatch.delenv("RUFUS_STILLS_TEMPLATE", raising=False)
+    assert c._stills_template() is not None
+
+
+def test_stills_template_env_kill_switch(monkeypatch, tmp_path):
+    monkeypatch.setattr(c, "STILLS_TEMPLATE", _stills_tpl(tmp_path))
+    monkeypatch.setattr(c, "FLUX2_TEMPLATE", tmp_path / "no_flux2.json")
+    monkeypatch.setenv("RUFUS_STILLS_TEMPLATE", "0")
+    assert c._stills_template() is None
+
+
+def test_stills_template_falls_back_to_flux2_name(monkeypatch, tmp_path):
+    """Back-compat: an existing flux2_api.json still works when there's no
+    stills_api.json."""
+    monkeypatch.setattr(c, "STILLS_TEMPLATE", tmp_path / "no_stills.json")
+    monkeypatch.setattr(c, "FLUX2_TEMPLATE", _flux2_tpl(tmp_path))
+    monkeypatch.delenv("RUFUS_FLUX2", raising=False)
+    monkeypatch.delenv("RUFUS_STILLS_TEMPLATE", raising=False)
+    assert c._stills_template() is not None
 
 
 def test_flux2_template_env_kill_switch(monkeypatch, tmp_path):
