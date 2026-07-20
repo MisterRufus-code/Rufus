@@ -7,6 +7,8 @@ import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
 
 import research
@@ -221,3 +223,100 @@ def test_get_seed_tries_reddit_when_flag_unset(monkeypatch, tmp_path):
         research.get_seed("money_history")
 
     reddit_mock.assert_called_once_with("badeconomics", used_ids=set())
+
+
+# ── Manual topic injection (backlog item #6) ──────────────────────────────────
+
+def _wiki_search_response(hits):
+    resp = MagicMock()
+    resp.raise_for_status = MagicMock()
+    resp.json.return_value = {"query": {"search": hits}}
+    return resp
+
+
+def test_fetch_wikipedia_by_title_exact_match_fast_path():
+    extract = "Bretton Woods was a 1944 conference. " * 10
+    with patch.object(research.httpx, "get",
+                      return_value=_wiki_response(extract, title="Bretton Woods")) as get:
+        seed = research.fetch_wikipedia_by_title("Bretton Woods")
+    assert seed is not None
+    assert seed["type"] == "wikipedia"
+    assert seed["title"] == "Bretton Woods"
+    assert "1944" in seed["content"]
+    # exact-title fast path: only ONE call (the summary endpoint), no search fallback
+    assert get.call_count == 1
+
+
+def test_fetch_wikipedia_by_title_falls_back_to_search():
+    """An imprecise query ('bretton woods conference' lowercase, or a partial
+    phrase) must not just fail — it should find the real article via search."""
+    summary_404 = MagicMock()
+    summary_404.raise_for_status.side_effect = Exception("404")
+    search_hit = _wiki_search_response([{"title": "Bretton Woods Conference"}])
+    good_summary = _wiki_response("The Bretton Woods Conference of 1944. " * 10,
+                                  title="Bretton Woods Conference")
+
+    with patch.object(research.httpx, "get",
+                      side_effect=[summary_404, search_hit, good_summary]) as get:
+        seed = research.fetch_wikipedia_by_title("bretton woods conference thing")
+
+    assert seed is not None
+    assert seed["title"] == "Bretton Woods Conference"
+    assert get.call_count == 3   # failed direct attempt, search, then the resolved title
+
+
+def test_fetch_wikipedia_by_title_returns_none_when_nothing_matches():
+    summary_404 = MagicMock()
+    summary_404.raise_for_status.side_effect = Exception("404")
+    empty_search = _wiki_search_response([])
+    with patch.object(research.httpx, "get",
+                      side_effect=[summary_404, empty_search]):
+        seed = research.fetch_wikipedia_by_title("complete gibberish query xyz123")
+    assert seed is None
+
+
+def test_fetch_wikipedia_by_title_empty_query_returns_none_no_network():
+    with patch.object(research.httpx, "get") as get:
+        seed = research.fetch_wikipedia_by_title("   ")
+    assert seed is None
+    get.assert_not_called()
+
+
+def test_fetch_wikipedia_by_title_rejects_short_extract_then_tries_search():
+    short = "Too short."
+    search_hit = _wiki_search_response([{"title": "Real Article"}])
+    good = _wiki_response("A real, long enough extract about the topic. " * 10,
+                          title="Real Article")
+    with patch.object(research.httpx, "get",
+                      side_effect=[_wiki_response(short), search_hit, good]):
+        seed = research.fetch_wikipedia_by_title("some query")
+    assert seed is not None
+    assert seed["title"] == "Real Article"
+
+
+def test_get_seed_with_topic_bypasses_auto_source_chain(monkeypatch, tmp_path):
+    """--topic must not fall through Reddit/StackExchange/random-Wikipedia —
+    it goes straight to the resolved topic, and marks it used like any seed."""
+    monkeypatch.setattr(research, "NICHES_FILE", None, raising=False)
+
+    def fake_load_niche():
+        return {"subreddits": []}, "money_history"
+    monkeypatch.setattr(research, "_load_niche", fake_load_niche)
+    monkeypatch.setattr(research, "get_trending_context", lambda name: "")
+
+    marked = []
+    monkeypatch.setattr(research, "_mark_seed_used", lambda s: marked.append(s))
+
+    fake_seed = {"type": "wikipedia", "source": "Wikipedia", "title": "Bretton Woods",
+                "content": "x" * 300, "url": "https://en.wikipedia.org/wiki/Bretton_Woods"}
+    monkeypatch.setattr(research, "fetch_wikipedia_by_title", lambda q: fake_seed)
+
+    seed = research.get_seed(topic="Bretton Woods")
+    assert seed["title"] == "Bretton Woods"
+    assert marked == [fake_seed]
+
+
+def test_get_seed_with_topic_raises_when_unresolvable(monkeypatch):
+    monkeypatch.setattr(research, "fetch_wikipedia_by_title", lambda q: None)
+    with pytest.raises(RuntimeError, match="No Wikipedia article found"):
+        research.get_seed(niche_name="money_history", topic="complete gibberish xyz")

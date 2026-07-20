@@ -36,6 +36,7 @@ Environment:
 import html
 import os
 import sys
+import time
 from contextlib import contextmanager
 from pathlib import Path
 from urllib.parse import quote as _urlquote
@@ -393,6 +394,16 @@ def _videos_table(videos: list[dict]) -> str:
             f"<th>Score</th><th>Status</th></tr>{rows}</table>")
 
 
+def _msg_banner() -> str:
+    ok_msg  = request.args.get("ok")
+    err_msg = request.args.get("error")
+    if ok_msg:
+        return f'<div class="msg ok">{_esc(ok_msg)}</div>'
+    if err_msg:
+        return f'<div class="msg error">{_esc(err_msg)}</div>'
+    return ""
+
+
 @app.route("/")
 def index():
     channel = request.args.get("channel") or None
@@ -412,6 +423,26 @@ def index():
             links.append(f'<a href="/?channel={_esc(ch)}">{_esc(ch)}</a>')
         filt_html = f'<div class="filters">{"".join(links)}</div>'
 
+    channel_options = "".join(f'<option value="{_esc(ch)}">{_esc(ch)}</option>' for ch in channels)
+    topic_form = f"""
+    <h2>🎯 Make a video about a specific topic</h2>
+    <p class="muted">Runs in the background (can take a while) — resolved to a
+       real Wikipedia article so it's still fact-grounded, then shows up in
+       the pending list below like any other video. Never auto-uploads.</p>
+    <form method="post" action="/request-topic" style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;margin-bottom:24px">
+      <div style="flex:1;min-width:220px">
+        <label for="topic">Topic</label>
+        <input class="field" style="margin:6px 0 0" type="text" id="topic" name="topic"
+               placeholder="e.g. Bretton Woods, Tulip mania..." required>
+      </div>
+      {f'''<div><label for="channel">Channel</label>
+        <select class="field" style="margin:6px 0 0" id="channel" name="channel">
+          <option value="">(default)</option>{channel_options}
+        </select></div>''' if channels else ""}
+      <button class="btn save" type="submit" style="height:38px">Queue it</button>
+    </form>
+    """
+
     cards = f"""
     <div class="cards">
       <div class="card"><div class="num">{stats['pending']}</div><div class="label">awaiting review</div></div>
@@ -429,6 +460,8 @@ def index():
         reject_html = "<p class='muted'>No rejected attempts recorded yet.</p>"
 
     body = f"""
+    {_msg_banner()}
+    {topic_form}
     {filt_html}
     {cards}
     <h2>⏳ Awaiting your review ({len(pending)})</h2>
@@ -507,6 +540,49 @@ def failures():
     return PAGE_HEAD + body + PAGE_TAIL
 
 
+@app.route("/request-topic", methods=["POST"])
+def request_topic():
+    """Kick off a real Rufus run for a topic YOU chose, in the background.
+    Never blocks the request (a run takes minutes to hours) and never
+    auto-uploads — it lands in the normal pending-review queue like any
+    other video, going through every existing gate (fact-check, QC, score)
+    exactly the same way. main.py's own per-channel FileLock is what
+    actually prevents two overlapping runs of the same channel; this route
+    doesn't need to duplicate that check."""
+    topic = request.form.get("topic", "").strip()
+    channel = request.form.get("channel", "").strip() or None
+    if not topic:
+        return _redirect_index(error="topic is required")
+
+    import subprocess
+    main_py = str(ROOT / "scripts" / "main.py")
+    cmd = [sys.executable, main_py, "--topic", topic]
+    if channel:
+        cmd += ["--channel", channel]
+
+    log_dir = ROOT / "logs"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    log_path = log_dir / f"topic_request_{int(time.time())}.log"
+    try:
+        with open(log_path, "wb") as logf:
+            subprocess.Popen(cmd, cwd=str(ROOT), stdout=logf,
+                             stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL)
+        return _redirect_index(
+            ok=f'Queued "{topic}" — this can take a while. It will appear in '
+               f'the pending list below when done. Log: logs/{log_path.name}')
+    except Exception as e:
+        return _redirect_index(error=f"failed to start the run: {e}")
+
+
+def _redirect_index(ok: str = None, error: str = None):
+    url = "/"
+    if ok:
+        url += f"?ok={_urlquote(ok)}"
+    elif error:
+        url += f"?error={_urlquote(error)}"
+    return redirect(url)
+
+
 @contextmanager
 def _scoped_env(**overrides):
     """Set env vars for the duration of the block, then restore exactly what
@@ -564,13 +640,7 @@ def video_detail(video_id):
         status_html += (f'<div class="muted" style="margin-top:6px">auto-gate note: '
                         f'{_esc(v["hold_reason"])}</div>')
 
-    msg_html = ""
-    ok_msg  = request.args.get("ok")
-    err_msg = request.args.get("error")
-    if ok_msg:
-        msg_html = f'<div class="msg ok">{_esc(ok_msg)}</div>'
-    elif err_msg:
-        msg_html = f'<div class="msg error">{_esc(err_msg)}</div>'
+    msg_html = _msg_banner()
 
     actions_html = ""
     if v["upload_status"] != "approved":

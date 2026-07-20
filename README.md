@@ -243,6 +243,18 @@ a live run — WAL mode), never crashes on a missing or partial DB row. The
 approve action is the only place this app talks to the network (the real
 YouTube upload call) — everything else is local.
 
+**Make a video about a specific topic** (backlog item #6): a box right on
+the homepage, or `python scripts\main.py --topic "Bretton Woods"` from the
+command line. Your input is resolved to a real Wikipedia article (exact
+title first, then a search fallback for an imprecise phrase like "bretton
+woods conference thing") instead of being handed to the script writer as
+free text — a raw string with no real source would just get its claims
+rejected by the fact-gate anyway, so this keeps the same grounding
+guarantee as an auto-picked topic. From the dashboard it runs in the
+background (`subprocess.Popen`, non-blocking — a render can take a while)
+and lands in the normal pending-review queue like anything else; it never
+auto-uploads either.
+
 **Failures & rejected attempts** (`/failures`, linked top-right): every
 mistake the automation made, not just its successes. Two sections: **crashed
 runs** — `RUFUS_DEBUG` folders with no matching database row at all, i.e. a

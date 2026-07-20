@@ -707,6 +707,72 @@ def fetch_wikipedia_story(niche_name: str, used_ids: set | None = None) -> dict 
     return None
 
 
+def fetch_wikipedia_by_title(query: str) -> dict | None:
+    """Grounded seed from a USER-CHOSEN topic instead of the automatic pool —
+    still real Wikipedia facts, never invented text, so the fact-gate and
+    hook-grounding checks work exactly the same as an auto-picked topic (a
+    free-typed topic with no real source would just get invented claims
+    rejected downstream, which is why this resolves to a real article
+    instead of handing the raw string straight to the script writer).
+
+    Two-step resolution: try the query as an exact title first (fast path
+    when it's typed precisely), then fall back to Wikipedia's search API for
+    an imprecise/partial query ("bretton woods" -> "Bretton Woods Conference").
+    Returns None only if nothing usable is found either way.
+    """
+    query = (query or "").strip()
+    if not query:
+        return None
+
+    def _try_title(title: str) -> dict | None:
+        url_title = title.strip().replace(" ", "_")
+        if not url_title:
+            return None
+        page_url = f"https://en.wikipedia.org/wiki/{url_title}"
+        try:
+            r = httpx.get(
+                f"https://en.wikipedia.org/api/rest_v1/page/summary/{url_title}",
+                headers=WIKI_HEADERS, timeout=WIKI_TIMEOUT, follow_redirects=True,
+            )
+            r.raise_for_status()
+            data = r.json()
+        except Exception:
+            return None
+        extract = _clean_text(data.get("extract") or "")
+        if len(extract) < WIKI_MIN_EXTRACT:
+            return None
+        return {
+            "type": "wikipedia", "source": "Wikipedia",
+            "title": data.get("title") or title,
+            "content": extract, "url": page_url,
+        }
+
+    direct = _try_title(query)
+    if direct:
+        return direct
+
+    try:
+        r = httpx.get(
+            "https://en.wikipedia.org/w/api.php",
+            params={"action": "query", "list": "search", "srsearch": query,
+                   "format": "json", "srlimit": 5},
+            headers=WIKI_HEADERS, timeout=WIKI_TIMEOUT,
+        )
+        r.raise_for_status()
+        hits = r.json().get("query", {}).get("search", [])
+    except Exception as e:
+        print(f"[research] Wikipedia search failed for '{query}': {e}")
+        return None
+
+    for hit in hits:
+        result = _try_title(hit.get("title", ""))
+        if result:
+            return result
+
+    print(f"[research] no Wikipedia article found for topic '{query}'")
+    return None
+
+
 def fetch_hackernews_story(niche_name: str, used_ids: set | None = None) -> dict | None:
     """Fetch a substantive Ask HN post relevant to the niche, skipping seen IDs.
 
@@ -963,13 +1029,34 @@ def _skip_reddit() -> bool:
     return os.environ.get("RUFUS_SKIP_REDDIT", "0").strip().lower() in ("1", "true", "yes", "on")
 
 
-def get_seed(niche_name: str | None = None) -> dict:
+def get_seed(niche_name: str | None = None, topic: str | None = None) -> dict:
     """Get a seed for the script writer. Tracks history so seeds never repeat.
 
     Order: Reddit → StackExchange → Wikipedia → RSS → Hacker News → wisdom fallback.
     Set RUFUS_SKIP_REDDIT=1 to skip straight past Reddit (e.g. no OAuth app set up).
     All sources skip anything already in used_seeds.json (last MAX_USED_HISTORY items).
+
+    `topic`: bypass the automatic source chain entirely and build the seed
+    from a topic YOU chose (main.py --topic "..."), resolved to a real
+    Wikipedia article so it's still grounded in real facts, not free text —
+    a raw user string handed straight to the script writer would just get
+    its invented claims rejected by the fact-gate downstream anyway. Raises
+    if nothing matches, rather than silently falling through to a random
+    topic — a failed manual request should be obvious, not swapped out.
     """
+    if topic:
+        seed = fetch_wikipedia_by_title(topic)
+        if not seed:
+            raise RuntimeError(
+                f"No Wikipedia article found for topic '{topic}' — try a more "
+                f"specific or differently-worded topic.")
+        print(f"[research] using YOUR topic → Wikipedia: \"{seed['title'][:60]}\"")
+        _mark_seed_used(seed)
+        trending_context = get_trending_context(niche_name or _load_niche()[1])
+        if trending_context:
+            seed["trending_context"] = trending_context
+        return seed
+
     niche, active = _load_niche()
     name      = niche_name or active
     used_list = _load_used_seeds()

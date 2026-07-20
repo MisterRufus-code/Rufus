@@ -525,3 +525,66 @@ def test_orphaned_debug_runs_handles_missing_directory(client, tmp_path, monkeyp
 def test_nav_link_to_failures_present_on_homepage(client):
     r = client.get("/")
     assert b"/failures" in r.data
+
+
+# ── Manual topic request (backlog item #6) ─────────────────────────────────────
+
+def test_request_topic_launches_background_process(client, monkeypatch, tmp_path):
+    import subprocess
+    captured = {}
+    class FakeProc:
+        pass
+    def fake_popen(cmd, **kwargs):
+        captured["cmd"] = cmd
+        captured["kwargs"] = kwargs
+        return FakeProc()
+    monkeypatch.setattr(subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(dashboard, "ROOT", tmp_path)
+
+    r = client.post("/request-topic", data={"topic": "Bretton Woods"},
+                    follow_redirects=True)
+    assert r.status_code == 200
+    assert "Bretton Woods" in r.data.decode()
+    assert "--topic" in captured["cmd"]
+    assert "Bretton Woods" in captured["cmd"]
+    assert captured["cmd"][0] == sys.executable
+    assert str(tmp_path / "scripts" / "main.py") in captured["cmd"]
+
+
+def test_request_topic_passes_channel_when_given(client, monkeypatch, tmp_path):
+    import subprocess
+    captured = {}
+    def fake_popen(cmd, **kwargs):
+        captured["cmd"] = cmd
+        class P: pass
+        return P()
+    monkeypatch.setattr(subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(dashboard, "ROOT", tmp_path)
+
+    client.post("/request-topic", data={"topic": "Tulip mania", "channel": "side_channel"})
+    assert "--channel" in captured["cmd"]
+    assert "side_channel" in captured["cmd"]
+
+
+def test_request_topic_rejects_empty_topic(client):
+    r = client.post("/request-topic", data={"topic": "  "}, follow_redirects=True)
+    assert "topic is required" in r.data.decode()
+
+
+def test_request_topic_handles_popen_failure_gracefully(client, monkeypatch, tmp_path):
+    import subprocess
+    def fake_popen(cmd, **kwargs):
+        raise OSError("no such file")
+    monkeypatch.setattr(subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(dashboard, "ROOT", tmp_path)
+
+    r = client.post("/request-topic", data={"topic": "Bretton Woods"},
+                    follow_redirects=True)
+    assert "failed to start" in r.data.decode()
+
+
+def test_index_has_topic_request_form(client):
+    r = client.get("/")
+    body = r.data.decode()
+    assert 'action="/request-topic"' in body
+    assert 'name="topic"' in body

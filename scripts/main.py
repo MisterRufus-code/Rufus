@@ -659,7 +659,7 @@ def _all_scheduled_niches() -> list[str]:
 
 
 def run(skip_upload: bool = False, niche_override: str = None, output_dir: Path = None,
-        channel_id: str = None):
+        channel_id: str = None, topic: str = None):
     # Channel resolution FIRST (read-only) so the instance lock can be
     # per-channel — see _acquire_lock. Legacy installs without channels.json
     # get a synthesized "main_en" channel — behavior unchanged.
@@ -691,9 +691,12 @@ def run(skip_upload: bool = False, niche_override: str = None, output_dir: Path 
     init_db()
 
     # ── Step 1: Research seed + pre-analyse ────────────────────────────────────
-    print("[ 1 / 7 ]  Researching real source material...")
+    if topic:
+        print(f"[ 1 / 7 ]  Researching your topic: \"{topic}\"...")
+    else:
+        print("[ 1 / 7 ]  Researching real source material...")
     try:
-        seed = get_seed(active)
+        seed = get_seed(active, topic=topic)
         if seed.get("type") == "reddit":
             print(f"           → Reddit: {seed.get('title', '')[:80]}")
         elif seed.get("type") == "hackernews":
@@ -715,7 +718,9 @@ def run(skip_upload: bool = False, niche_override: str = None, output_dir: Path 
         ok, reason = judge_seed(seed, active)
         if not ok:
             print(f"           ⚠ supervisor rejected seed ({reason}) — trying one more...")
-            seed = get_seed(active)
+            # Manual --topic runs must never silently swap to a random topic
+            # on a supervisor rejection — re-resolve the SAME requested topic.
+            seed = get_seed(active, topic=topic)
             ok2, reason2 = judge_seed(seed, active)
             print(f"           → retry seed {'accepted' if ok2 else 'used anyway'} ({reason2})")
     except Exception as e:
@@ -1149,10 +1154,14 @@ if __name__ == "__main__":
     parser.add_argument("--rotate",      action="store_true", help="Run one video per unique niche in the schedule")
     parser.add_argument("--output-dir",  type=str,            help="Directory to write rendered mp4 files (overrides RUFUS_OUTPUT_DIR env var)")
     parser.add_argument("--channel",     type=str,            help="Channel id from config/channels.json (default: default_channel / legacy)")
+    parser.add_argument("--topic",       type=str,            help="Make a video about THIS topic instead of an auto-picked one (resolved to a real Wikipedia article, e.g. --topic \"Bretton Woods\")")
     args = parser.parse_args()
 
     if sum(bool(x) for x in (args.niche, args.scheduled, args.rotate)) > 1:
         print("Use only one of --niche, --scheduled, --rotate")
+        sys.exit(1)
+    if args.topic and args.rotate:
+        print("--topic makes one specific video — it can't be combined with --rotate")
         sys.exit(1)
 
     out_dir_arg = Path(args.output_dir) if args.output_dir else None
@@ -1187,7 +1196,7 @@ if __name__ == "__main__":
         n        = schedule[(doy - 1) % len(schedule)]
         print(f"\n[scheduled] today's niche: {n}\n")
         run(skip_upload=args.skip_upload, niche_override=n,
-            output_dir=out_dir_arg, channel_id=args.channel)
+            output_dir=out_dir_arg, channel_id=args.channel, topic=args.topic)
     else:
         run(skip_upload=args.skip_upload, niche_override=args.niche,
-            output_dir=out_dir_arg, channel_id=args.channel)
+            output_dir=out_dir_arg, channel_id=args.channel, topic=args.topic)
