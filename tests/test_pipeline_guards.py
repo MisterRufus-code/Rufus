@@ -891,3 +891,43 @@ def test_housekeep_output_skips_when_db_unavailable(tmp_path, monkeypatch, capsy
     monkeypatch.setattr(db_manager, "_conn",
                         lambda: (_ for _ in ()).throw(RuntimeError("locked")))
     assert main._housekeep_output(max_output_days=1) == 0   # fail-safe: no deletions
+
+
+# ── Audit H4: scheduled runs wait for the lock instead of dropping the slot ────
+
+def test_acquire_lock_waits_when_wait_seconds_given(tmp_path, monkeypatch):
+    """A scheduled run must WAIT for a held lock (up to wait_seconds), not
+    sys.exit(1) instantly — otherwise overlapping 5/day triggers silently
+    lose slots. Verifies the timeout is actually passed through to filelock."""
+    import main
+    monkeypatch.setattr(main, "ROOT", tmp_path)
+    monkeypatch.setattr(main, "_INSTANCE_LOCK", None, raising=False)
+
+    captured = {}
+    class FakeLock:
+        def __init__(self, path): captured["path"] = path
+        def acquire(self, timeout=0): captured["timeout"] = timeout
+        def release(self): pass
+        @property
+        def is_locked(self): return True
+    monkeypatch.setattr(main, "FileLock", FakeLock)
+
+    main._acquire_lock("chan_x", wait_seconds=1800)
+    assert captured["timeout"] == 1800
+
+
+def test_acquire_lock_default_is_nonblocking(tmp_path, monkeypatch):
+    """A manual (non-scheduled) run keeps the old fail-fast behavior."""
+    import main
+    monkeypatch.setattr(main, "ROOT", tmp_path)
+    monkeypatch.setattr(main, "_INSTANCE_LOCK", None, raising=False)
+    captured = {}
+    class FakeLock:
+        def __init__(self, path): pass
+        def acquire(self, timeout=0): captured["timeout"] = timeout
+        def release(self): pass
+        @property
+        def is_locked(self): return True
+    monkeypatch.setattr(main, "FileLock", FakeLock)
+    main._acquire_lock("chan_x")
+    assert captured["timeout"] == 0

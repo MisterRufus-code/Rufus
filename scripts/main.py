@@ -44,21 +44,32 @@ from filelock import FileLock, Timeout
 _INSTANCE_LOCK = None   # created per-run by _acquire_lock (per-CHANNEL lock file)
 
 
-def _acquire_lock(channel_id: str = "main_en") -> None:
+def _acquire_lock(channel_id: str = "main_en", wait_seconds: float = 0) -> None:
     """Refuse to start if another run of the SAME channel is alive.
 
     Per-channel, not global: the corruption risk a lock protects against —
     clashing temp files and double DB writes for one channel's video — only
     exists within a channel. Different channels are safe to run concurrently
     (ComfyUI queues their GPU jobs, used_seeds.json has its own lock, SQLite
-    serializes writers), and multi-channel scaling requires it."""
+    serializes writers), and multi-channel scaling requires it.
+
+    wait_seconds > 0 (used by --scheduled): a full-motion video can run
+    1.5-2h, so 5 daily triggers spaced 3-4h apart WILL sometimes overlap.
+    With the old timeout=0 the later trigger died instantly and that slot
+    was silently lost (output quietly dropped from 5/day to 2-3/day, no
+    alert). Waiting for the predecessor instead keeps the slot — the queue
+    just serializes."""
     global _INSTANCE_LOCK
     _INSTANCE_LOCK = FileLock(str(ROOT / f"rufus.{channel_id}.lock") + ".lock")
+    if wait_seconds > 0:
+        print(f"[lock] channel '{channel_id}' busy — waiting up to "
+              f"{wait_seconds/3600:.1f}h for the current run to finish...")
     try:
-        _INSTANCE_LOCK.acquire(timeout=0)   # non-blocking
+        _INSTANCE_LOCK.acquire(timeout=wait_seconds)
     except Timeout:
         print(f"ERROR: another Rufus run for channel '{channel_id}' is in progress "
               f"(lock held: rufus.{channel_id}.lock.lock). "
+              f"{'Waited ' + str(int(wait_seconds/60)) + ' min, giving up. ' if wait_seconds else ''}"
               f"Wait for it, or delete the .lock file if it crashed.")
         sys.exit(1)
 
@@ -740,14 +751,14 @@ def _all_scheduled_niches() -> list[str]:
 
 
 def run(skip_upload: bool = False, niche_override: str = None, output_dir: Path = None,
-        channel_id: str = None, topic: str = None):
+        channel_id: str = None, topic: str = None, lock_wait: float = 0):
     # Channel resolution FIRST (read-only) so the instance lock can be
     # per-channel — see _acquire_lock. Legacy installs without channels.json
     # get a synthesized "main_en" channel — behavior unchanged.
     from channel_config import load_channel
     channel = load_channel(channel_id)
 
-    _acquire_lock(channel.id)
+    _acquire_lock(channel.id, wait_seconds=lock_wait)
     import atexit
     atexit.register(_release_lock)   # release on any exit path (idempotent)
     atexit.register(_sweep_run_temp) # this run's clip temps never orphan
@@ -1331,8 +1342,14 @@ if __name__ == "__main__":
         doy      = datetime.now().timetuple().tm_yday
         n        = schedule[(doy - 1) % len(schedule)]
         print(f"\n[scheduled] today's niche: {n}\n")
+        # Scheduled triggers can overlap when a video takes 1.5-2h (full
+        # motion) and slots are 3-4h apart — wait for the predecessor instead
+        # of dying and silently dropping the slot. RUFUS_SCHED_LOCK_WAIT
+        # (seconds) tunes the cap; default 3h.
+        _sched_wait = float(os.environ.get("RUFUS_SCHED_LOCK_WAIT", str(3 * 3600)))
         run(skip_upload=args.skip_upload, niche_override=n,
-            output_dir=out_dir_arg, channel_id=args.channel, topic=args.topic)
+            output_dir=out_dir_arg, channel_id=args.channel, topic=args.topic,
+            lock_wait=_sched_wait)
     else:
         run(skip_upload=args.skip_upload, niche_override=args.niche,
             output_dir=out_dir_arg, channel_id=args.channel, topic=args.topic)
