@@ -196,10 +196,17 @@ def _build_wan_graph(image_name: str, prompt: str, seed: int, frames: int,
     use_lora=False (default): the model output feeds ModelSamplingSD3
     DIRECTLY — matches the proven-good export's default toggle state exactly
     (real cfg, no LoRA in the loop at all, not just strength=0).
-    use_lora=True: lightx2v LoRAs applied, forced steps=4/cfg=1.0 (their only
-    supported operating point) regardless of the steps/cfg passed in."""
+    use_lora=True: lightx2v distill LoRAs applied, cfg forced to 1.0 (the
+    distill's only supported guidance). Steps come from RUFUS_WAN_LORA_STEPS
+    (default 8, split 4+4) — NOT the old hardcoded 4: the documented failure
+    of the 4-step lightx2v distill is reduced/slow motion, worst on the
+    high-noise expert, and the community fix is 8 steps (4+4) plus a REDUCED
+    high-noise LoRA strength (RUFUS_WAN_LORA_HIGH_STRENGTH, default 0.8) so
+    the high-noise expert regains motion range while the low-noise LoRA stays
+    at full strength for detail."""
     if use_lora:
-        steps, cfg = 4, 1.0
+        cfg = 1.0
+        steps = int(os.environ.get("RUFUS_WAN_LORA_STEPS", "8"))
     half = max(1, steps // 2)
 
     g = {
@@ -231,8 +238,10 @@ def _build_wan_graph(image_name: str, prompt: str, seed: int, frames: int,
     }
 
     if use_lora:
+        high_strength = float(os.environ.get("RUFUS_WAN_LORA_HIGH_STRENGTH", "0.8"))
         g["3"] = {"class_type": "LoraLoaderModelOnly",
-                  "inputs": {"model": ["1", 0], "lora_name": HIGH_LORA, "strength_model": 1.0}}
+                  "inputs": {"model": ["1", 0], "lora_name": HIGH_LORA,
+                             "strength_model": high_strength}}
         g["4"] = {"class_type": "LoraLoaderModelOnly",
                   "inputs": {"model": ["2", 0], "lora_name": LOW_LORA, "strength_model": 1.0}}
         high_model_src, low_model_src = ["3", 0], ["4", 0]
@@ -347,7 +356,8 @@ def animate_image(png_path: Path, out_path: Path,
             for j, fb in enumerate(frame_bytes):
                 (tmp / f"frame_{j:04d}.png").write_bytes(fb)
 
-            eff_steps, eff_cfg = (4, 1.0) if use_lora else (steps, cfg)
+            eff_steps, eff_cfg = ((int(os.environ.get("RUFUS_WAN_LORA_STEPS", "8")), 1.0)
+                                  if use_lora else (steps, cfg))
             print(f"[wan] {len(frame_bytes)} frames in {time.time() - t0:.0f}s "
                   f"(steps={eff_steps}, cfg={eff_cfg}, lora={use_lora}, {SVD_W}x{SVD_H})")
             # ping_pong=False: the motion prompt now asks for camera/ambient

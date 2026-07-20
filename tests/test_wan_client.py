@@ -49,10 +49,12 @@ def test_wan_graph_default_matches_proven_export_no_lora():
     assert hi["cfg"] == 3.5 and lo["cfg"] == 3.5    # real CFG, the proven setting
 
 
-def test_wan_graph_lora_mode_forces_4steps_cfg1():
-    """use_lora=True is the fast opt-in — it must force steps=4/cfg=1.0
-    regardless of what's passed in (the LoRA's only supported operating
-    point), and DOES chain LoraLoaderModelOnly onto each UNET."""
+def test_wan_graph_lora_mode_forces_cfg1_and_8_steps_by_default(monkeypatch):
+    """use_lora=True is the fast opt-in — it forces cfg=1.0 (the distill's
+    only supported guidance) and now defaults to 8 steps (4+4), NOT the old
+    hardcoded 4: 4-step lightx2v produces documented slow/reduced motion,
+    8 steps is the community fix. Chains LoraLoaderModelOnly onto each UNET."""
+    monkeypatch.delenv("RUFUS_WAN_LORA_STEPS", raising=False)
     g = _graph(steps=12, cfg=3.5, use_lora=True)   # deliberately "wrong" inputs
     json.dumps(g)
     assert g["3"]["inputs"]["model"] == ["1", 0]
@@ -62,8 +64,31 @@ def test_wan_graph_lora_mode_forces_4steps_cfg1():
     assert g["5"]["inputs"]["model"] == ["3", 0]    # ModelSamplingSD3 <- LoRA output
     assert g["6"]["inputs"]["model"] == ["4", 0]
     hi, lo = g["13"]["inputs"], g["14"]["inputs"]
-    assert hi["steps"] == 4 and hi["cfg"] == 1.0     # forced, ignoring the 12/3.5 passed in
-    assert lo["steps"] == 4 and lo["cfg"] == 1.0
+    assert hi["cfg"] == 1.0 and lo["cfg"] == 1.0    # cfg forced, ignoring the 3.5 passed in
+    assert hi["steps"] == 8 and lo["steps"] == 8    # 8, not the passed-in 12 or the old 4
+    assert hi["end_at_step"] == 4                   # split 4+4
+
+
+def test_wan_lora_steps_env_override(monkeypatch):
+    monkeypatch.setenv("RUFUS_WAN_LORA_STEPS", "6")
+    g = _graph(use_lora=True)
+    assert g["13"]["inputs"]["steps"] == 6
+    assert g["13"]["inputs"]["end_at_step"] == 3    # split 3+3
+
+
+def test_wan_lora_high_noise_strength_reduced_by_default(monkeypatch):
+    """The high-noise LoRA is applied at reduced strength (default 0.8) to
+    restore motion range the 4-step distill loses; low-noise stays at 1.0."""
+    monkeypatch.delenv("RUFUS_WAN_LORA_HIGH_STRENGTH", raising=False)
+    g = _graph(use_lora=True)
+    assert g["3"]["inputs"]["strength_model"] == 0.8   # high-noise, reduced
+    assert g["4"]["inputs"]["strength_model"] == 1.0   # low-noise, full
+
+
+def test_wan_lora_high_noise_strength_env_override(monkeypatch):
+    monkeypatch.setenv("RUFUS_WAN_LORA_HIGH_STRENGTH", "0.6")
+    g = _graph(use_lora=True)
+    assert g["3"]["inputs"]["strength_model"] == 0.6
 
 
 def test_wan_graph_is_json_serializable_and_two_stage():
