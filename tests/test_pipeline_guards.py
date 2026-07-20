@@ -806,3 +806,32 @@ def test_strip_beat_echo_never_leaves_a_stub():
     beat = "People clutched these notes tightly in the market."
     line = "People clutched these notes tightly in the market. Close-up."
     assert main._strip_beat_echo(line, beat) == line
+
+
+# ── Audit fixes: lock re-acquire (--rotate), unified OAuth scopes ─────────────
+
+def test_lock_release_allows_reacquire_in_same_process(tmp_path, monkeypatch):
+    """Audit C1: filelock's FileLock is NOT reentrant across instances — in
+    --rotate, run() #2 re-acquired the same per-channel lock file and died,
+    so rotate could only ever produce its first video. run() now releases on
+    normal completion; this verifies the release actually unblocks a fresh
+    acquire in the same process."""
+    import main
+    monkeypatch.setattr(main, "ROOT", tmp_path)
+    monkeypatch.setattr(main, "_INSTANCE_LOCK", None, raising=False)
+
+    main._acquire_lock("chan_x")      # run #1 acquires
+    main._release_lock()              # run #1 completes normally
+    main._acquire_lock("chan_x")      # run #2 must NOT sys.exit
+    main._release_lock()
+
+
+def test_analytics_and_uploader_share_one_scope_list():
+    """Audit C3: analytics_fetcher declared its own scope list against the
+    SAME token file the uploader writes — the mismatch forced an interactive
+    OAuth flow that hung unattended scheduled runs forever (analytics runs
+    BEFORE main.py in run_scheduled.bat)."""
+    import analytics_fetcher
+    import youtube_uploader
+    assert analytics_fetcher.SCOPES is youtube_uploader.SCOPES
+    assert "https://www.googleapis.com/auth/yt-analytics.readonly" in youtube_uploader.SCOPES

@@ -29,12 +29,18 @@ NICHES_FILE     = CONFIG_DIR / "niches.json"
 CLIENT_SECRETS  = CONFIG_DIR / "client_secrets.json"
 TOKEN_FILE      = CONFIG_DIR / "youtube_token.json"
 
-# force-ssl is needed for commentThreads().insert (the post-upload CTA comment).
+# force-ssl is needed for commentThreads().insert (the post-upload CTA comment);
+# yt-analytics.readonly lets analytics_fetcher reuse the SAME token — it used to
+# declare its own 3-scope list against the same token file, so the first
+# scheduled run after an uploader auth hit an interactive OAuth prompt and hung
+# the Task Scheduler job forever (run_scheduled.bat runs analytics BEFORE main).
+# One superset, declared once, imported by analytics_fetcher.
 # NOTE: adding a scope invalidates the old token — delete config/youtube_token.json
 # and run one manual upload to re-OAuth (one time only).
 SCOPES = [
     "https://www.googleapis.com/auth/youtube.upload",
     "https://www.googleapis.com/auth/youtube.force-ssl",
+    "https://www.googleapis.com/auth/yt-analytics.readonly",
 ]
 
 # YouTube category IDs by niche (overridable via niches.json "youtube_category_id")

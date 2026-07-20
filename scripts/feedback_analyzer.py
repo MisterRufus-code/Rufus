@@ -56,11 +56,19 @@ def _analyze_channel(channel):
     if len(rows) < 5:
         print(f"[feedback] {channel.id}: ⚠ small sample ({len(rows)}) – patterns may be noisy")
 
-    # Engagement score = CTR × watch_pct × log(likes+2)
+    # Engagement score = watch_pct × log(likes+2), views-weighted (log-damped
+    # so one viral outlier doesn't drown everything).
+    #
+    # CTR was REMOVED from the formula: the fetcher's CTR source
+    # (annotationClickThroughRate) was retired by YouTube in 2019 and returned
+    # 0 for every video — multiplying by it zeroed EVERY score, the sort
+    # became a stable no-op, and "winning_hooks" injected into the hook
+    # prompt were just the newest 20% of videos. The flywheel was silently
+    # learning noise.
     scored = []
     for row in rows:
         vid_id, niche, hook, title, scene, views, watch_pct, ctr, likes = row
-        engagement = ctr * watch_pct * math.log(likes + 2)
+        engagement = watch_pct * math.log(likes + 2) * math.log((views or 0) + 2)
         scored.append({
             "id":         vid_id,
             "niche":      niche,

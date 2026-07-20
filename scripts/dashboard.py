@@ -665,12 +665,13 @@ def _redirect_index(ok: str = None, error: str = None):
 @contextmanager
 def _scoped_env(**overrides):
     """Set env vars for the duration of the block, then restore exactly what
-    was there before (including "unset" if the key didn't exist). Flask's dev
-    server handles one request at a time by default (no threaded=True here),
-    so this is safe, but mutating os.environ permanently — as a naive
-    assignment would — leaks across every later request in this same
-    long-lived process (confirmed live: it leaked into an unrelated test
-    suite run in the same process)."""
+    was there before (including "unset" if the key didn't exist). SAFE ONLY
+    because app.run() below passes threaded=False — Flask 3.x defaults the
+    dev server to threaded=True, under which two overlapping requests would
+    interleave these mutations (audit finding: wrong-channel upload). Also,
+    mutating os.environ permanently — as a naive assignment would — leaks
+    across every later request in this long-lived process (confirmed live:
+    it leaked into an unrelated test suite run in the same process)."""
     prev = {k: os.environ.get(k) for k in overrides}
     os.environ.update(overrides)
     try:
@@ -855,9 +856,12 @@ def edit_video(video_id):
 def debug_file(run_id, filename):
     """Read-only static file serving for ONE run's debug folder — the real
     value of remote access (see the FLUX images / hear the voiceover from
-    your phone). send_from_directory guards path traversal internally."""
-    folder = DEBUG_ROOT / run_id
-    if not folder.is_dir():
+    your phone). send_from_directory guards traversal in `filename`, but
+    `run_id` is OUR path segment — an audit showed run_id=".." resolved to
+    media_library/ itself, serving any rendered (incl. rejected) video. The
+    resolve() check pins the folder to a direct child of DEBUG_ROOT."""
+    folder = (DEBUG_ROOT / run_id).resolve()
+    if folder.parent != DEBUG_ROOT.resolve() or not folder.is_dir():
         abort(404)
     return send_from_directory(folder, filename)
 
@@ -872,4 +876,9 @@ if __name__ == "__main__":
     port = int(os.environ.get("RUFUS_DASHBOARD_PORT", "8765"))
     db_manager.init_db()
     print(f"[dashboard] http://localhost:{port}  (LAN: http://<this PC's IP>:{port})")
-    app.run(host=host, port=port, debug=False)
+    # threaded=False is LOAD-BEARING: approve_video mutates process env via
+    # _scoped_env, which is only safe when requests are serialized. Flask 3.x
+    # app.run() defaults threaded=True — two overlapping approvals could
+    # interleave RUFUS_CHANNEL mutations and upload a video to the WRONG
+    # channel. Single-threaded is fine for a 1-2 person review tool.
+    app.run(host=host, port=port, debug=False, threaded=False)

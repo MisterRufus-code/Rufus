@@ -29,6 +29,11 @@ NICHE_KEYWORDS = {
     "mindset":              ["mindset", "psychology", "habits"],
     "business":             ["business", "entrepreneur", "startup"],
     "personal_development": ["habits", "self improvement", "growth"],
+    # The ACTIVE scheduled niche — its absence made the fallback [niche_name]
+    # kick in, so the title prompt literally instructed GPT to "include the
+    # keyword 'money_history' naturally" and underscore tokens leaked into
+    # real video titles.
+    "money_history":        ["money", "history", "gold", "inflation", "currency"],
 }
 
 

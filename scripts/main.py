@@ -855,8 +855,14 @@ def run(skip_upload: bool = False, niche_override: str = None, output_dir: Path 
                         seed=seed, precomputed_analysis=seed_analysis or None,
                         run_id=script_run_id)
                     script = result["script"]
-                    core_topic2 = extract_core_topic(seed_analysis)
-                    _, topic_sim2, topic_vec = check_topic_similarity(core_topic2, channel.id)
+                    # Measure the REGENERATED script, not the frozen
+                    # pre-analysis — seed_analysis doesn't change on regen, so
+                    # re-extracting CORE from it would always re-measure the
+                    # old topic and the gate could never verify the rewrite
+                    # actually moved. The new script's hook line is the best
+                    # cheap proxy for what topic it now covers.
+                    new_hook = script.strip().split("\n")[0]
+                    _, topic_sim2, topic_vec = check_topic_similarity(new_hook, channel.id)
                     print(f"           → regenerated (topic {topic_sim2:.0%} similar now)")
                     # The regenerated script also needs a fresh full-script
                     # embedding recorded — the one from the ORIGINAL draft
@@ -868,8 +874,6 @@ def run(skip_upload: bool = False, niche_override: str = None, output_dir: Path 
         except Exception as e:
             print(f"           ⚠ topic-clustering gate skipped (non-fatal): {e}")
 
-        add_to_blacklist(script)
-        add_embedding(script_vec, channel.id)
         preview = script[:100] + "..." if len(script) > 100 else script
         print(f"           → {preview}")
         print(f"           → score {result['score']}/10  attempts={result['attempts_used']}  "
@@ -896,12 +900,10 @@ def run(skip_upload: bool = False, niche_override: str = None, output_dir: Path 
                     seed=seed, precomputed_analysis=seed_analysis or None,
                     run_id=script_run_id)
                 script = result["script"]
-                add_to_blacklist(script)
-                # The corrected script replaced the one whose embedding we
-                # stored — record the correction so future dedup compares
-                # against what actually aired.
-                _, _, _v_fix = check_similarity(script, channel.id)
-                add_embedding(_v_fix, channel.id)
+                # Re-embed the corrected script — the original draft's vector
+                # no longer matches what will actually air. Recording happens
+                # once, below, after this gate.
+                _, _, script_vec = check_similarity(script, channel.id)
             except Exception as _fc_err:
                 print(f"           ⚠ fact-fix rewrite failed ({_fc_err}) — keeping original")
             ok2, why2 = judge_script_facts(script, seed, niche_name=active, run_id=script_run_id)
@@ -912,6 +914,16 @@ def run(skip_upload: bool = False, niche_override: str = None, output_dir: Path 
                 print(f"           → rewrite passed fact-check ({why2})")
     except Exception as e:
         print(f"           ⚠ fact-check supervisor skipped (non-fatal): {e}")
+
+    # Record dedup memory ONCE, after the LAST gate that can change the script
+    # (the fact-check rewrite above). Recording before it stored blacklist
+    # entries + embeddings for drafts that never aired — future scripts got
+    # rejected as "similar to a recent video" against text no viewer ever saw.
+    try:
+        add_to_blacklist(script)
+        add_embedding(script_vec, channel.id)
+    except Exception as e:
+        print(f"           ⚠ dedup-memory save failed (non-fatal): {e}")
 
     # ── Step 2.5: Generate one content-matched SD image per spoken beat ─────────
     # Each prompt depicts what the narrator says during that beat, in order, so
@@ -1176,6 +1188,15 @@ def run(skip_upload: bool = False, niche_override: str = None, output_dir: Path 
         print(f"  YouTube: {yt_url}")
     print(f"  File:    {output_path}")
     print(f"{'='*52}\n")
+
+    # Release the per-channel lock on NORMAL completion — critical for
+    # --rotate, which calls run() again in the same process: filelock's
+    # FileLock is not reentrant across instances, so without this the second
+    # iteration sees its own predecessor's lock and dies with "another Rufus
+    # run in progress" — --rotate could only ever produce its FIRST video.
+    # Abnormal exits (sys.exit mid-run) terminate the whole process, where
+    # the atexit-registered _release_lock covers it.
+    _release_lock()
 
     return {"video": str(output_path), "youtube_url": yt_url, "script": script, "seed": seed}
 

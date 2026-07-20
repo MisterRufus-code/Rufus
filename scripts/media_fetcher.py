@@ -237,7 +237,10 @@ def fetch_video() -> Path:
     cache_dir.mkdir(parents=True, exist_ok=True)
 
     ordered = SOURCES[:]
-    random.shuffle(ordered[:2])
+    # Rotate which of the first two sources leads. (Audit fix: the old
+    # `random.shuffle(ordered[:2])` shuffled a slice COPY — a silent no-op,
+    # so the intended source rotation never actually happened.)
+    ordered[:2] = random.sample(ordered[:2], k=min(2, len(ordered)))
 
     for name, fetcher in ordered:
         try:

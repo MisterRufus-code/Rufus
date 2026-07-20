@@ -718,3 +718,23 @@ def test_failures_page_shows_supervisor_gate_categories(client):
     body = r.data.decode()
     assert "accuracy" in body
     assert "fact_check" in body
+
+
+def test_debug_route_blocks_run_id_traversal(client, tmp_path):
+    """Audit C2: run_id=".." resolved to media_library/ itself, serving any
+    rendered (incl. rejected/unapproved) video via /debug/../output/x.mp4."""
+    outside = dashboard.DEBUG_ROOT.parent / "output"
+    outside.mkdir(parents=True)
+    (outside / "secret_video.mp4").write_bytes(b"unpublished")
+    dashboard.DEBUG_ROOT.mkdir(parents=True, exist_ok=True)
+
+    r = client.get("/debug/../output/secret_video.mp4")
+    assert r.status_code in (404, 403)
+
+
+def test_dashboard_runs_single_threaded():
+    """Audit H3: _scoped_env's env mutation is only safe when requests are
+    serialized — Flask 3.x defaults threaded=True, so the explicit
+    threaded=False in app.run() is load-bearing. Guard it textually."""
+    src = (Path(__file__).parent.parent / "scripts" / "dashboard.py").read_text()
+    assert "threaded=False" in src
