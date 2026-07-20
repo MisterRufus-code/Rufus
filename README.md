@@ -86,6 +86,7 @@ Everything is free except OpenAI credits. Mix and match:
 | `RUFUS_KENBURNS_ZOOM` | `0.0`–`1.0` | `0.06` | Ken Burns zoom range on a still (e.g. `0.06` = 1.00x→1.06x); pan drift scales with it too. Kept deliberately subtle by default — a heavy pan/zoom reads as fake on top of strong FLUX stills. |
 | `RUFUS_FRESH_IMAGES` | `0`/`1` | `1` | Cross-run visual freshness: recent runs' image prompts are fed to the prompt-writer as a do-not-repeat list, and perceptual hashes of past images pre-seed the dup check so look-alike frames regenerate. `0` disables both. |
 | `RUFUS_SCRIPT_ARCHITECT` | `0`/`1` | `1` | One extra cheap GPT call before drafting: plans the spine fact, the turn, and why the story matters *now* — the draft writes to that plan instead of blind. `0` skips it (draft goes straight from pre-analysis, as before this feature). |
+| `RUFUS_AUTO_UPLOAD` | `0`/`1` | `0` | `0` (default): nothing uploads automatically — every video is queued `pending` for approval in the dashboard. `1`: restores the old fully-automatic behavior (uploads immediately once score/QC/facts all pass). |
 | `RUFUS_HUNYUAN` | `0`/`1` | `1` | HunyuanVideo 1.5 as the FACE motion engine (animates the face shots Wan skips). Needs a one-time ComfyUI template export to `config/hunyuan_i2v_api.json` — see `hunyuan_client.py` header. Knobs: `RUFUS_HUNYUAN_W/H` (480×832), `RUFUS_HUNYUAN_FRAMES` (121), `RUFUS_HUNYUAN_TIMEOUT` (1200s). |
 | `RUFUS_FLUX2` | `0`/`1` | `1` | FLUX.2 stills via a one-time ComfyUI template export to `config/flux2_api.json` (positive prompt set to `RUFUS_PROMPT`, portrait 832×1472). Any failure falls back to the FLUX.1 graph with the same seed. Without the export file this is inert. |
 
@@ -206,36 +207,53 @@ video + its `.qc.json` → if it's good, it publishes itself at the scheduled
 peak hour (or flip it public in YouTube Studio); if it's held, the log says
 exactly why (`logs\rufus_YYYYMMDD.log`).
 
-### Dashboard
+### Dashboard — approval queue
 
-A scrolling PowerShell log isn't a good way to answer "is this actually
-working" — the dashboard is:
+**Nothing uploads automatically.** Every rendered video lands as `pending`;
+a human has to click **Approve** in the dashboard for it to actually
+publish to YouTube. This is the intended workflow for handing upload/review
+off to someone else (e.g. a channel partner) without giving them shell
+access to the machine.
 
 ```powershell
 python scripts\dashboard.py
 ```
 
-Open `http://localhost:8765`. Shows: recent videos with score + upload/hold
-status, a score trend line, the most common script-rejection reasons (so a
-pattern like "fact-gate keeps flagging invented numbers" is visible instead
-of rediscovered by scrolling), and — per video — the full script, the
-critic's reasoning, and (if `RUFUS_DEBUG=1` was on for that run) the actual
-FLUX keyframes and voiceover mp3 from `media_library\debug\<run_id>\`.
+Open `http://localhost:8765`. The homepage leads with **"Awaiting your
+review"** — the actual to-do list. Per video: score, the critic's full
+reasoning, the auto-gate's opinion (shown as a note, not a decision anymore),
+an editable **title/description** (persisted before any upload happens, so
+edits are never lost or overwritten), **Approve & Upload** / **Reject**
+buttons, a full recent-videos table, a score trend line, the most common
+script-rejection reasons, and — per video — direct links to that run's
+actual FLUX keyframes/voiceover mp3 (when `RUFUS_DEBUG=1` was on) from
+`media_library\debug\<run_id>\`.
 
-Self-contained: no external CSS/JS, reads read-only from `rufus.db` (safe
-to browse while a run is writing — WAL mode), never crashes on a missing
-or partial DB row.
+Approving reconstructs the video's own original channel/niche context (not
+whatever's active today) so the right voice/CTA-pool/category still apply
+even if you approve days after it rendered.
+
+**Escape hatch**: `RUFUS_AUTO_UPLOAD=1` restores the old fully-automatic
+behavior (uploads immediately if score/QC/facts all pass, exactly as
+before this feature existed) for anyone who decides they don't want the
+manual step after all.
+
+Self-contained: no external CSS/JS. Reads/writes `rufus.db` (safe alongside
+a live run — WAL mode), never crashes on a missing or partial DB row. The
+approve action is the only place this app talks to the network (the real
+YouTube upload call) — everything else is local.
 
 **Access from your phone at home**: it already binds to `0.0.0.0`, so
 `http://<this PC's LAN IP>:8765` works from any device on the same wifi —
 find the IP with `ipconfig` (look for "IPv4 Address").
 
-**Access from away from home**: do **not** port-forward this — it has no
-login, so that exposes it (and your PC) to the open internet. Install
-[Tailscale](https://tailscale.com) on this PC and on your phone instead
-(free, ~2 minutes, no router changes) — it's a private VPN mesh, so the
-dashboard becomes reachable at this PC's Tailscale address from anywhere,
-with zero public exposure.
+**Access from away from home (e.g. a reviewer who isn't you)**: do **not**
+port-forward this — it has no login, so that exposes both the dashboard
+and its real upload capability to the open internet. Install
+[Tailscale](https://tailscale.com) on this PC and share just this one
+machine with the reviewer's own Tailscale account (Machines → your PC →
+Share) — free, ~2 minutes, no router changes, no public exposure, and no
+need for them to see your whole network.
 
 Knobs: `RUFUS_DASHBOARD_PORT` (8765), `RUFUS_DASHBOARD_HOST` (`0.0.0.0`;
 set to `127.0.0.1` to force local-only even on the LAN).

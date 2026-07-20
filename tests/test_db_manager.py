@@ -52,3 +52,67 @@ def test_save_video_hold_reason_defaults_to_none(isolated_db):
     with isolated_db._conn() as c:
         row = c.execute("SELECT hold_reason FROM videos WHERE id=?", (vid,)).fetchone()
     assert row[0] is None
+
+
+# ── Approval queue: upload_status + description ────────────────────────────
+
+def test_new_video_defaults_to_pending(isolated_db):
+    vid = isolated_db.save_video(niche="finance", script_hook="H", scene_desc="s",
+                                 video_file="v.mp4", score=9)
+    with isolated_db._conn() as c:
+        row = c.execute("SELECT upload_status FROM videos WHERE id=?", (vid,)).fetchone()
+    assert row[0] == "pending"
+
+
+def test_backfill_marks_already_uploaded_rows_approved(isolated_db, tmp_path, monkeypatch):
+    """A pre-existing row with a youtube_id (uploaded under the old auto-upload
+    flow, before this column existed) must not show as 'pending' just because
+    the new column's DEFAULT applies to it too."""
+    with isolated_db._conn() as c:
+        c.execute("INSERT INTO videos (niche, youtube_id) VALUES ('finance', 'ytXYZ')")
+    isolated_db.init_db()   # re-run migrations, including the backfill
+    with isolated_db._conn() as c:
+        row = c.execute("SELECT upload_status FROM videos WHERE youtube_id='ytXYZ'").fetchone()
+    assert row[0] == "approved"
+
+
+def test_save_video_persists_description(isolated_db):
+    vid = isolated_db.save_video(niche="finance", script_hook="H", scene_desc="s",
+                                 video_file="v.mp4", score=9,
+                                 description="A description with #hashtags")
+    with isolated_db._conn() as c:
+        row = c.execute("SELECT description FROM videos WHERE id=?", (vid,)).fetchone()
+    assert row[0] == "A description with #hashtags"
+
+
+def test_update_metadata_updates_title_and_description(isolated_db):
+    vid = isolated_db.save_video(niche="finance", script_hook="H", scene_desc="s",
+                                 video_file="v.mp4", score=9,
+                                 title="Old title", description="Old desc")
+    isolated_db.update_metadata(vid, title="New title", description="New desc")
+    with isolated_db._conn() as c:
+        row = c.execute("SELECT title, description FROM videos WHERE id=?", (vid,)).fetchone()
+    assert row == ("New title", "New desc")
+
+
+def test_update_metadata_partial_update_leaves_other_field(isolated_db):
+    vid = isolated_db.save_video(niche="finance", script_hook="H", scene_desc="s",
+                                 video_file="v.mp4", score=9,
+                                 title="Old title", description="Old desc")
+    isolated_db.update_metadata(vid, title="New title")
+    with isolated_db._conn() as c:
+        row = c.execute("SELECT title, description FROM videos WHERE id=?", (vid,)).fetchone()
+    assert row == ("New title", "Old desc")
+
+
+def test_set_upload_status_transitions(isolated_db):
+    vid = isolated_db.save_video(niche="finance", script_hook="H", scene_desc="s",
+                                 video_file="v.mp4", score=9)
+    isolated_db.set_upload_status(vid, "approved")
+    with isolated_db._conn() as c:
+        row = c.execute("SELECT upload_status FROM videos WHERE id=?", (vid,)).fetchone()
+    assert row[0] == "approved"
+    isolated_db.set_upload_status(vid, "rejected")
+    with isolated_db._conn() as c:
+        row = c.execute("SELECT upload_status FROM videos WHERE id=?", (vid,)).fetchone()
+    assert row[0] == "rejected"

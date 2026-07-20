@@ -999,12 +999,10 @@ def run(skip_upload: bool = False, niche_override: str = None, output_dir: Path 
         print(f"           ⚠ QC skipped (non-fatal): {e}")
     print()
 
-    # WHY this video will (or won't) auto-upload — computed here, once, so the
-    # DB row (and the dashboard reading it) records the real reason instead of
-    # main.py's users having to re-derive it from a scrolling log. Mirrors the
-    # actual gate order in Step 7 below; kept as a separate small block rather
-    # than refactoring Step 7 itself, so the real upload gating logic (which
-    # also handles --skip-upload) is untouched.
+    # WHY the OLD auto-gate would (or wouldn't) have cleared this video — still
+    # computed and shown to the human reviewer as a signal, even though NOTHING
+    # auto-uploads anymore (see Step 7): a friend approving/rejecting in the
+    # dashboard benefits from knowing "the gate would have held this for X".
     _hold_min_score = int(os.environ.get("RUFUS_MIN_UPLOAD_SCORE",
                           str(channel.upload.get("min_score", 8))))
     _hold_score = result.get("score", 0)
@@ -1016,6 +1014,25 @@ def run(skip_upload: bool = False, niche_override: str = None, output_dir: Path 
         hold_reason = f"score {_hold_score}/10 < {_hold_min_score}/10 threshold"
     else:
         hold_reason = None
+
+    # Metadata (title/description) + thumbnail — generated ALWAYS now, right
+    # after render, so the approval queue has something to show/edit before
+    # any upload decision exists (previously only built if the old auto-gate
+    # already passed, i.e. never persisted for a held video at all).
+    thumb_path = None
+    meta = None
+    if not skip_upload:
+        try:
+            from thumbnail_gen import make_thumbnail
+            thumb_path = make_thumbnail(output_path, script)
+            print(f"           thumbnail: {thumb_path.name}")
+        except Exception as e:
+            print(f"           ⚠ thumbnail generation skipped: {e}")
+        try:
+            from youtube_uploader import build_metadata
+            meta = build_metadata(script, active, niche_cfg)
+        except Exception as e:
+            print(f"           ⚠ metadata generation skipped: {e}")
 
     # ── Step 6: Save to DB ──────────────────────────────────────────────────────
     print("[ 6 / 7 ]  Saving to database...")
@@ -1039,21 +1056,34 @@ def run(skip_upload: bool = False, niche_override: str = None, output_dir: Path 
             score_reasoning=(result.get("reasoning") or "")[:2000],
             channel=channel.id,
             hold_reason=hold_reason,
+            title=(meta or {}).get("title"),
+            description=(meta or {}).get("description"),
+            upload_status="pending",
         )
         print(f"           → saved (id={db_id})\n")
     except Exception as e:
         print(f"           ⚠ DB save failed (non-fatal): {e}\n")
 
-    # ── Step 7: Upload (with custom thumbnail) ─────────────────────────────────
-    # Quality gate: only auto-upload videos whose script cleared the bar. A weak
-    # script never reaches YouTube — it's saved locally for review instead.
+    # ── Step 7: Review queue — NOTHING uploads without a human approving it in
+    # the dashboard. RUFUS_AUTO_UPLOAD=1 is an explicit opt-out escape hatch
+    # back to the old fully-automatic behavior (gated exactly as before), for
+    # anyone who decides later they don't want a manual step after all.
     yt_url = None
-    yt_id  = None   # guard: upload() may not be reached if quality gate holds
-    min_score = int(os.environ.get("RUFUS_MIN_UPLOAD_SCORE",
-                                   str(channel.upload.get("min_score", 8))))
+    yt_id  = None
+    auto_upload = os.environ.get("RUFUS_AUTO_UPLOAD", "0").strip().lower() in \
+        ("1", "true", "yes", "on")
+    min_score = _hold_min_score
     final_score = result.get("score", 0)
+
     if skip_upload:
         print("[ 7 / 7 ]  Upload skipped (--skip-upload)\n")
+    elif not auto_upload:
+        print(f"[ 7 / 7 ]  Queued for review (id={db_id}) — approve in the "
+              f"dashboard to upload.")
+        if hold_reason:
+            print(f"           note for reviewer: the auto-gate would also "
+                  f"have held this — {hold_reason}")
+        print(f"           Video: {output_path}\n")
     elif qc is not None and not qc.get("ok", True):
         print(f"[ 7 / 7 ]  Upload held — output failed QC: {'; '.join(qc['critical'])}")
         print(f"           Video saved for review: {output_path}\n")
@@ -1065,34 +1095,24 @@ def run(skip_upload: bool = False, niche_override: str = None, output_dir: Path 
         print(f"[ 7 / 7 ]  Upload held — score {final_score}/10 < {min_score}/10 threshold.")
         print(f"           Video saved for review: {output_path}\n")
     else:
-        print(f"[ 7 / 7 ]  Score {final_score}/10 ≥ {min_score} — generating thumbnail + uploading...")
+        print(f"[ 7 / 7 ]  Score {final_score}/10 ≥ {min_score} — "
+              f"RUFUS_AUTO_UPLOAD=1, uploading...")
         try:
-            from thumbnail_gen    import make_thumbnail
-            from youtube_uploader import upload, build_metadata
+            from youtube_uploader import upload
 
-            thumb = None
-            try:
-                thumb = make_thumbnail(output_path, script)
-                print(f"           thumbnail: {thumb.name}")
-            except Exception as e:
-                print(f"           ⚠ thumbnail generation skipped: {e}")
+            if db_id and meta and meta.get("title"):
+                from db_manager import update_title
+                update_title(db_id, meta["title"])
 
-            # GPT title/description once here, persisted for CTR learning
-            meta = None
-            try:
-                meta = build_metadata(script, active, niche_cfg)
-                if db_id and meta.get("title"):
-                    from db_manager import update_title
-                    update_title(db_id, meta["title"])
-            except Exception as e:
-                print(f"           ⚠ metadata pre-build failed (uploader will retry): {e}")
-
-            yt_url, yt_id = upload(output_path, script, thumbnail_path=thumb, metadata=meta)
+            yt_url, yt_id = upload(output_path, script, thumbnail_path=thumb_path,
+                                   metadata=meta)
             print(f"           → {yt_url}\n")
 
             if db_id and yt_id:
                 try:
                     update_youtube_id(db_id, yt_id)
+                    from db_manager import set_upload_status
+                    set_upload_status(db_id, "approved")
                 except Exception as e:
                     print(f"           ⚠ DB youtube_id update failed (video IS uploaded): {e}")
         except Exception as e:

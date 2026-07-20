@@ -63,11 +63,25 @@ def init_db():
             # hold / below score threshold). NULL means it uploaded cleanly
             # (or the run predates this column).
             "ALTER TABLE videos ADD COLUMN hold_reason TEXT",
+            # Approval queue: nothing uploads without a human clicking Approve
+            # in the dashboard. 'pending' (default) / 'approved' (uploaded) /
+            # 'rejected' (will never upload).
+            "ALTER TABLE videos ADD COLUMN upload_status TEXT DEFAULT 'pending'",
+            # Description was generated fresh at upload time and never saved —
+            # the approval queue needs it persisted so it can be reviewed/
+            # edited BEFORE the upload decision, not only after.
+            "ALTER TABLE videos ADD COLUMN description TEXT",
         ):
             try:
                 c.execute(ddl)
             except Exception:
                 pass  # column already exists
+        # Backfill: rows already live on YouTube (from before the approval
+        # queue existed) must not appear as "pending" just because the new
+        # column's DEFAULT applied to them too.
+        c.execute("UPDATE videos SET upload_status='approved' "
+                  "WHERE youtube_id IS NOT NULL "
+                  "AND (upload_status IS NULL OR upload_status='pending')")
         c.execute("""
             CREATE TABLE IF NOT EXISTS metrics (
                 id         INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -128,7 +142,9 @@ def save_video(niche: str, script_hook: str, scene_desc: str,
                score_reasoning: str = None,
                title: str = None,
                channel: str = "main_en",
-               hold_reason: str = None) -> int:
+               hold_reason: str = None,
+               description: str = None,
+               upload_status: str = "pending") -> int:
     crits = criterion_scores or {}
     with _conn() as c:
         cur = c.execute(
@@ -138,8 +154,9 @@ def save_video(niche: str, script_hook: str, scene_desc: str,
             " youtube_id, video_file, score, "
             " run_id, score_specificity, score_hook, score_compression, "
             " score_loop, score_human, attempts_used, final_temperature, "
-            " score_reasoning, title, channel, hold_reason) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            " score_reasoning, title, channel, hold_reason, description, "
+            " upload_status) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (niche, script_hook, script_full, scene_desc,
              seed_type, seed_source, seed_content,
              youtube_id, video_file, score,
@@ -147,7 +164,7 @@ def save_video(niche: str, script_hook: str, scene_desc: str,
              crits.get("specificity"), crits.get("hook"),
              crits.get("compression"), crits.get("loop"), crits.get("human"),
              attempts_used, final_temperature, score_reasoning,
-             title, channel, hold_reason),
+             title, channel, hold_reason, description, upload_status),
         )
         return cur.lastrowid
 
@@ -183,6 +200,26 @@ def update_youtube_id(video_id: int, youtube_id: str):
 def update_title(video_id: int, title: str):
     with _conn() as c:
         c.execute("UPDATE videos SET title=? WHERE id=?", (title, video_id))
+
+
+def update_metadata(video_id: int, title: str = None, description: str = None):
+    """Dashboard edit form: update whichever of title/description was given."""
+    sets, args = [], []
+    if title is not None:
+        sets.append("title=?");       args.append(title)
+    if description is not None:
+        sets.append("description=?"); args.append(description)
+    if not sets:
+        return
+    args.append(video_id)
+    with _conn() as c:
+        c.execute(f"UPDATE videos SET {', '.join(sets)} WHERE id=?", args)
+
+
+def set_upload_status(video_id: int, status: str):
+    """status: 'pending' | 'approved' | 'rejected'."""
+    with _conn() as c:
+        c.execute("UPDATE videos SET upload_status=? WHERE id=?", (status, video_id))
 
 
 def mark_upload_failed(video_id: int, error: str):
