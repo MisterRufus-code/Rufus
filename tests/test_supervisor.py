@@ -4,6 +4,8 @@ Mirrors the mocking pattern in test_metadata_writer.py: _load_key is
 monkeypatched so these tests never depend on (or hit) a real OpenAI key.
 """
 
+import pytest
+
 import supervisor as sup
 
 SEED = {"type": "reddit", "title": "Guy saved $4 a day for 30 years",
@@ -236,3 +238,101 @@ def test_judge_seed_rejects_flat_accurate_seed(monkeypatch):
     ok, reason = sup.judge_seed(SEED, "finance")
     assert ok is False
     assert "knowledge gap" in reason.lower()
+
+
+# ── Verdict logging (so the dashboard can compare gate bottlenecks) ───────────
+# Real gap this closes: none of the three supervisor gates wrote anything to
+# script_attempts — only script_writer's hook_gen/body_gen phases did. That
+# means the dashboard's bottleneck breakdown could never actually answer
+# "is Hook Scorer or Fact-check the real bottleneck" — the fact-check verdict
+# simply didn't exist anywhere queryable.
+
+@pytest.fixture(autouse=False)
+def _isolated_attempts_db(tmp_path, monkeypatch):
+    monkeypatch.setattr(sup.db_manager, "DB_FILE", tmp_path / "test.db")
+    sup.db_manager.init_db()
+    return sup.db_manager
+
+
+def _attempt_rows(dbm):
+    with dbm._conn() as c:
+        return c.execute(
+            "SELECT phase, niche, accepted, rejected_reason FROM script_attempts"
+        ).fetchall()
+
+
+def test_judge_seed_logs_approval(monkeypatch, _isolated_attempts_db):
+    monkeypatch.setattr(sup, "_load_key", lambda: "sk-test")
+    monkeypatch.setattr("openai.OpenAI",
+                        lambda api_key=None: _FakeClient("APPROVE|has a real surprise"),
+                        raising=False)
+    sup.judge_seed(SEED, "finance", run_id="run1")
+    rows = _attempt_rows(_isolated_attempts_db)
+    assert len(rows) == 1
+    assert rows[0][0] == "seed_gate"
+    assert rows[0][1] == "finance"
+    assert rows[0][2] == 1
+    assert rows[0][3] is None
+
+
+def test_judge_seed_logs_rejection_with_reason(monkeypatch, _isolated_attempts_db):
+    monkeypatch.setattr(sup, "_load_key", lambda: "sk-test")
+    monkeypatch.setattr("openai.OpenAI",
+                        lambda api_key=None: _FakeClient("REJECT|no counter-intuitive angle"),
+                        raising=False)
+    sup.judge_seed(SEED, "finance")
+    rows = _attempt_rows(_isolated_attempts_db)
+    assert rows[0][0] == "seed_gate"
+    assert rows[0][2] == 0
+    assert "counter-intuitive" in rows[0][3]
+
+
+def test_judge_script_facts_logs_as_fact_check_phase(monkeypatch, _isolated_attempts_db):
+    monkeypatch.setattr(sup, "_load_key", lambda: "sk-test")
+    monkeypatch.setattr("openai.OpenAI",
+                        lambda api_key=None: _FakeClient("REJECT|invented figure"),
+                        raising=False)
+    sup.judge_script_facts("some script", SEED, niche_name="finance", run_id="run2")
+    rows = _attempt_rows(_isolated_attempts_db)
+    assert rows[0][0] == "fact_check"
+    assert rows[0][2] == 0
+    assert "invented" in rows[0][3]
+
+
+def test_judge_footage_prompts_logs_as_footage_gate_phase(monkeypatch, _isolated_attempts_db):
+    monkeypatch.setattr(sup, "_load_key", lambda: "sk-test")
+    monkeypatch.setattr("openai.OpenAI",
+                        lambda api_key=None: _FakeClient("APPROVE|on topic"),
+                        raising=False)
+    sup.judge_footage_prompts(["a prompt"], "finance", "some hook", run_id="run3")
+    rows = _attempt_rows(_isolated_attempts_db)
+    assert rows[0][0] == "footage_gate"
+    assert rows[0][2] == 1
+
+
+def test_disabled_supervisor_does_not_log(monkeypatch, _isolated_attempts_db):
+    monkeypatch.setenv("RUFUS_SUPERVISOR", "0")
+    sup.judge_seed(SEED, "finance")
+    assert _attempt_rows(_isolated_attempts_db) == []
+
+
+def test_footage_prompts_empty_list_does_not_log(monkeypatch, _isolated_attempts_db):
+    """The early-return for an empty prompt list isn't a real gate
+    evaluation — it must not pollute the bottleneck stats."""
+    monkeypatch.setattr(sup, "_load_key", lambda: "sk-test")
+    sup.judge_footage_prompts([], "finance", "hook")
+    assert _attempt_rows(_isolated_attempts_db) == []
+
+
+def test_logging_failure_never_breaks_the_actual_verdict(monkeypatch, _isolated_attempts_db):
+    """A DB write failure in the logging path must not affect the real
+    APPROVE/REJECT the caller depends on."""
+    monkeypatch.setattr(sup, "_load_key", lambda: "sk-test")
+    monkeypatch.setattr("openai.OpenAI",
+                        lambda api_key=None: _FakeClient("APPROVE|fine"),
+                        raising=False)
+    monkeypatch.setattr(sup.db_manager, "save_attempt",
+                        lambda **kw: (_ for _ in ()).throw(RuntimeError("db locked")))
+    ok, reason = sup.judge_seed(SEED, "finance")
+    assert ok is True
+    assert "fine" in reason

@@ -665,3 +665,56 @@ def test_failures_page_shows_category_per_row(client):
     r = client.get("/failures")
     body = r.data.decode()
     assert "accuracy" in body
+
+
+# ── Supervisor-gate categorization (phase-driven, not keyword-driven) ─────────
+
+def test_categorize_rejection_seed_gate_is_weak_seed():
+    assert dashboard._categorize_rejection(
+        "no counter-intuitive angle, knowledge gap test fails", "seed_gate") == "weak_seed"
+
+
+def test_categorize_rejection_fact_check_is_accuracy_regardless_of_wording():
+    """fact_check verdicts are free-form LLM prose, not the controlled
+    vocabulary keyword-matching relies on — phase alone must decide."""
+    assert dashboard._categorize_rejection(
+        "the claim about Nixon's motives isn't supported", "fact_check") == "accuracy"
+
+
+def test_categorize_rejection_footage_gate_is_footage_drift():
+    assert dashboard._categorize_rejection(
+        "near-duplicate prompts with no visual variety", "footage_gate") == "footage_drift"
+
+
+def test_categorize_rejection_body_gen_keyword_matching_still_works():
+    """Phase-driven override must not swallow the existing keyword-based
+    path for script_writer's own phases."""
+    assert dashboard._categorize_rejection("low specificity (0.2/25w)", "body_gen") == "accuracy"
+    assert dashboard._categorize_rejection("cadence: missing a short sentence", "body_gen") == "loose_structure"
+
+
+def test_rejection_category_counts_includes_supervisor_gates(client):
+    db_manager.save_attempt(run_id="r1", niche="finance", seed_type="wisdom",
+                            phase="seed_gate", attempt_n=1,
+                            rejected_reason="no surprise", accepted=False)
+    db_manager.save_attempt(run_id="r1", niche="finance", seed_type="wisdom",
+                            phase="fact_check", attempt_n=1,
+                            rejected_reason="invented figure", accepted=False)
+    db_manager.save_attempt(run_id="r1", niche="finance", seed_type="wisdom",
+                            phase="footage_gate", attempt_n=1,
+                            rejected_reason="off-topic imagery", accepted=False)
+    counts = dashboard._rejection_category_counts()
+    by_cat = {c["category"]: c["count"] for c in counts}
+    assert by_cat["weak_seed"] == 1
+    assert by_cat["accuracy"] == 1
+    assert by_cat["footage_drift"] == 1
+
+
+def test_failures_page_shows_supervisor_gate_categories(client):
+    db_manager.save_attempt(run_id="r1", niche="finance", seed_type="wisdom",
+                            phase="fact_check", attempt_n=1,
+                            rejected_reason="invented figure", accepted=False)
+    r = client.get("/failures")
+    body = r.data.decode()
+    assert "accuracy" in body
+    assert "fact_check" in body

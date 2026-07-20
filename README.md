@@ -198,9 +198,27 @@ still be flat. Four checks target the second problem specifically:
   something nobody notices without actually reading the DB.
 - **Bottleneck breakdown** — the dashboard's `/failures` page groups every
   rejected attempt, all-time, into a fixed taxonomy (safety / accuracy /
-  weak_hook / loose_structure / boring) instead of counting distinct
-  free-text strings — after enough volume, this answers "which stage of
-  the pipeline is actually the bottleneck" at a glance.
+  weak_hook / loose_structure / boring / weak_seed / footage_drift)
+  instead of counting distinct free-text strings — after enough volume,
+  this answers "which stage of the pipeline is actually the bottleneck"
+  at a glance. This now covers ALL five gates, not just the two inside
+  `script_writer.py` — `supervisor.py`'s three judge calls (seed
+  knowledge-gap, fact-check, footage-prompt drift) previously verdicted
+  silently to the console and left no queryable trace at all.
+- **Story Architect, strengthened** — the plan now includes a STAKES GAP
+  ("what does the viewer specifically lose by not knowing this") alongside
+  the spine fact and the turn, and the turn is explicitly required to be a
+  *direct consequence* of the spine fact, not a separate idea grafted on.
+- **Sensory anchor, timed** — the disqualifier now requires the sensory
+  detail specifically in the first third of the body, not just present
+  anywhere — a detail buried near the end doesn't stop the swipe.
+- **Topic clustering** (`check_topic_similarity` / `add_topic_embedding`)
+  — a second dedup layer alongside the full-script similarity gate. Two
+  scripts can be semantically distinct (different examples, different
+  framing) and still cover the same underlying topic within a couple of
+  weeks — this embeds just the pre-analysis CORE line and checks it
+  against a **time-windowed** (14-day, not count-windowed) history per
+  channel, so the same topic is fair game again once it's not recent.
 
 ---
 

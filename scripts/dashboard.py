@@ -234,8 +234,23 @@ _REJECTION_CATEGORIES = [
     ("boring",          ("boring", "no tension", "flat")),
 ]
 
+# supervisor.py's three gates (seed_gate, fact_check, footage_gate) return
+# free-form LLM prose, not script_writer's controlled-vocabulary strings —
+# keyword matching against that prose would be unreliable. Their PHASE alone
+# already says exactly what kind of failure it is, so those are categorized
+# directly instead of by keyword.
+_PHASE_CATEGORY = {
+    "seed_gate":    "weak_seed",
+    "fact_check":   "accuracy",
+    "footage_gate": "footage_drift",
+}
+_CATEGORY_ORDER = ([c for c, _ in _REJECTION_CATEGORIES]
+                  + ["weak_seed", "footage_drift", "other"])
 
-def _categorize_rejection(reason: str) -> str:
+
+def _categorize_rejection(reason: str, phase: str | None = None) -> str:
+    if phase in _PHASE_CATEGORY:
+        return _PHASE_CATEGORY[phase]
     r = (reason or "").lower()
     for category, keywords in _REJECTION_CATEGORIES:
         if any(k in r for k in keywords):
@@ -245,14 +260,16 @@ def _categorize_rejection(reason: str) -> str:
 
 def _rejection_category_counts(channel: str | None = None) -> list[dict]:
     """Aggregate ALL rejected attempts (not just the last N shown in the
-    browser) into the fixed taxonomy above."""
+    browser) into the fixed taxonomy above — covers every gate in the
+    pipeline (hook/body phases AND the three supervisor gates), so this
+    can answer e.g. "is Hook Scorer or Fact-check the real bottleneck"."""
     reasons = _rejected_attempts(limit=100_000, channel=channel)
     from collections import Counter
-    counts = Counter(_categorize_rejection(r["rejected_reason"]) for r in reasons)
+    counts = Counter(_categorize_rejection(r["rejected_reason"], r["phase"]) for r in reasons)
     total = sum(counts.values())
     if not total:
         return []
-    order = [c for c, _ in _REJECTION_CATEGORIES] + ["other"]
+    order = _CATEGORY_ORDER
     return [{"category": c, "count": counts[c],
             "pct": round(100 * counts[c] / total, 1)}
            for c in order if counts.get(c)]
@@ -561,7 +578,7 @@ def failures():
         rows = ""
         for r in rejects:
             preview = _esc((r["body"] or r["hook"] or "")[:90])
-            cat = _esc(_categorize_rejection(r["rejected_reason"]))
+            cat = _esc(_categorize_rejection(r["rejected_reason"], r["phase"]))
             rows += (f"<tr><td class='muted'>{_esc(r['ts'])}</td>"
                      f"<td>{_esc(r['niche'])}</td><td>{_esc(r['phase'])}</td>"
                      f"<td><span class='badge pending'>{cat}</span></td>"

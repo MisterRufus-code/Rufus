@@ -20,7 +20,11 @@ a broken judge must never block a render.
 
 import json
 import os
+import sys
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parent))
+import db_manager
 
 CONFIG_DIR = Path(__file__).parent.parent / "config"
 KEYS_FILE  = CONFIG_DIR / "keys.json"
@@ -41,12 +45,36 @@ def _load_key() -> str:
     return ""
 
 
-def _judge(prompt: str) -> tuple[bool, str]:
+def _log_verdict(phase: str, ok: bool, reason: str, niche: str = None,
+                 seed_type: str = None, run_id: str = None) -> None:
+    """Persist a supervisor gate's verdict to script_attempts, same table the
+    hook/body phases already log to — so the dashboard's bottleneck breakdown
+    can actually answer "is Hook Scorer or Fact-check the real bottleneck",
+    instead of only ever seeing script_writer's own two phases. Best-effort:
+    a logging failure must never affect the actual gate decision."""
+    try:
+        db_manager.save_attempt(
+            run_id=run_id or "", niche=niche or "", seed_type=seed_type or "",
+            phase=phase, attempt_n=1,
+            rejected_reason=(None if ok else reason),
+            accepted=ok, cost_usd=0.0, ms=0,
+        )
+    except Exception:
+        pass
+
+
+def _judge(prompt: str, *, phase: str = None, niche: str = None,
+          seed_type: str = None, run_id: str = None) -> tuple[bool, str]:
     """Ask gpt-4o-mini an APPROVE|REJECT question. Returns (approved, reason).
     Fails open (approved=True) on missing key, API error, or any malformed
-    reply — only an explicit, well-formed REJECT holds up the pipeline."""
+    reply — only an explicit, well-formed REJECT holds up the pipeline.
+
+    Pass `phase` to also log the verdict (see _log_verdict) — omitted by
+    default so this stays a pure function for anyone calling it directly."""
     key = _load_key()
     if not key:
+        if phase:
+            _log_verdict(phase, True, "no OpenAI key", niche, seed_type, run_id)
         return True, "no OpenAI key — supervisor skipped"
     try:
         from openai import OpenAI
@@ -62,14 +90,18 @@ def _judge(prompt: str) -> tuple[bool, str]:
         verdict, _, reason = raw.partition("|")
         verdict = verdict.strip().upper()
         reason  = reason.strip() or raw[:150]
-        if verdict.startswith("REJECT"):
-            return False, reason
-        return True, reason
+        ok = not verdict.startswith("REJECT")
+        if phase:
+            _log_verdict(phase, ok, reason, niche, seed_type, run_id)
+        return ok, reason
     except Exception as e:
-        return True, f"supervisor error ({e}) — fail-open, approved"
+        reason = f"supervisor error ({e}) — fail-open, approved"
+        if phase:
+            _log_verdict(phase, True, reason, niche, seed_type, run_id)
+        return True, reason
 
 
-def judge_seed(seed: dict, niche_name: str) -> tuple[bool, str]:
+def judge_seed(seed: dict, niche_name: str, run_id: str = None) -> tuple[bool, str]:
     """Reject a research seed that's too thin/generic/off-topic to build a
     real story on, OR that has no genuine "knowledge gap" — cheaper to catch
     here than after a full script + render.
@@ -102,10 +134,12 @@ def judge_seed(seed: dict, niche_name: str) -> tuple[bool, str]:
         "Reply with EXACTLY: APPROVE|<one-sentence reason>  or  REJECT|<one-sentence reason "
         "naming which of the two failed>"
     )
-    return _judge(prompt)
+    return _judge(prompt, phase="seed_gate", niche=niche_name,
+                 seed_type=stype, run_id=run_id)
 
 
-def judge_script_facts(script: str, seed: dict) -> tuple[bool, str]:
+def judge_script_facts(script: str, seed: dict, niche_name: str = None,
+                       run_id: str = None) -> tuple[bool, str]:
     """Factual-integrity gate: does the finished script contradict or fabricate
     beyond its source material? The script-writer PROMPT forbids inventing
     names/numbers/dates — this verifies it actually complied. The one judge
@@ -151,10 +185,12 @@ def judge_script_facts(script: str, seed: dict) -> tuple[bool, str]:
         "Reply with EXACTLY: APPROVE|<one-sentence reason>  or  "
         "REJECT|<the specific false/fabricated claim>"
     )
-    return _judge(prompt)
+    return _judge(prompt, phase="fact_check", niche=niche_name,
+                 seed_type=stype, run_id=run_id)
 
 
-def judge_footage_prompts(prompts: list[str], niche_name: str, hook: str) -> tuple[bool, str]:
+def judge_footage_prompts(prompts: list[str], niche_name: str, hook: str,
+                          run_id: str = None) -> tuple[bool, str]:
     """Reject a batch of beat-image prompts that clearly won't track the
     story. Checked against the PROMPTS (text), not rendered pixels — cheap,
     and catches prompt-builder drift before burning FLUX/SD generation time."""
@@ -173,4 +209,4 @@ def judge_footage_prompts(prompts: list[str], niche_name: str, hook: str) -> tup
         "coarse safety net, not a taste judge.\n\n"
         "Reply with EXACTLY: APPROVE|<one-sentence reason>  or  REJECT|<one-sentence reason>"
     )
-    return _judge(prompt)
+    return _judge(prompt, phase="footage_gate", niche=niche_name, run_id=run_id)

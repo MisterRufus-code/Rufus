@@ -545,3 +545,203 @@ def test_novelty_block_no_opener_section_when_diverse(monkeypatch):
     monkeypatch.setattr(sw, "_overused_hook_openers", lambda n: [])
     block = sw._novelty_block("money_history")
     assert "OPENER RESET" not in block
+
+
+# ── Story architect: STAKES GAP + turn-must-follow-spine-fact ─────────────────
+
+def test_story_architect_prompt_includes_stakes_gap(monkeypatch):
+    from script_writer import _story_architect
+    monkeypatch.delenv("RUFUS_SCRIPT_ARCHITECT", raising=False)
+    captured = {}
+
+    class FakeClient:
+        class chat:
+            class completions:
+                @staticmethod
+                def create(**kw):
+                    captured.update(kw)
+                    msg = type("M", (), {"content": "SPINE FACT: x\nTHE TURN: y\n"
+                                                     "STAKES GAP: z\nWHY NOW: w"})()
+                    choice = type("C", (), {"message": msg})()
+                    usage = type("U", (), {"prompt_tokens": 10, "completion_tokens": 5})()
+                    return type("R", (), {"choices": [choice], "usage": usage})()
+
+    plan, _ = _story_architect(FakeClient(), {"content": "x"}, "analysis",
+                               "hook", "run1", "finance")
+    prompt = captured["messages"][0]["content"]
+    assert "STAKES GAP" in prompt
+    assert "STAKES GAP" in plan
+
+
+def test_story_architect_prompt_requires_turn_follows_spine_fact(monkeypatch):
+    from script_writer import _story_architect
+    monkeypatch.delenv("RUFUS_SCRIPT_ARCHITECT", raising=False)
+    captured = {}
+
+    class FakeClient:
+        class chat:
+            class completions:
+                @staticmethod
+                def create(**kw):
+                    captured.update(kw)
+                    msg = type("M", (), {"content": "SPINE FACT: x"})()
+                    choice = type("C", (), {"message": msg})()
+                    usage = type("U", (), {"prompt_tokens": 5, "completion_tokens": 2})()
+                    return type("R", (), {"choices": [choice], "usage": usage})()
+
+    _story_architect(FakeClient(), {"content": "x"}, "analysis", "hook", "run1", "finance")
+    prompt = captured["messages"][0]["content"].lower()
+    assert "direct consequence of the spine fact" in prompt
+
+
+# ── Sensory disqualifier: early placement, not just presence ──────────────────
+
+def test_score_prompt_requires_sensory_detail_in_first_third():
+    from script_writer import _score
+    captured = {}
+
+    class FakeClient:
+        class chat:
+            class completions:
+                @staticmethod
+                def create(**kw):
+                    captured.update(kw)
+                    msg = type("M", (), {"content": "DISQUALIFIERS: none\nTOTAL: 8/10"})()
+                    choice = type("C", (), {"message": msg})()
+                    usage = type("U", (), {"prompt_tokens": 10, "completion_tokens": 5})()
+                    return type("R", (), {"choices": [choice], "usage": usage})()
+
+    _score(FakeClient(), "some script", {"type": "wikipedia", "content": "x"},
+          "some hook", "run1", "finance")
+    prompt = captured["messages"][0]["content"].lower()
+    assert "first third" in prompt
+
+
+def test_fixes_from_crits_sensory_fix_mentions_first_third():
+    from script_writer import _fixes_from_crits, _standards
+    crits = {"specificity": 3, "hook": 2, "compression": 2, "loop": 2, "human": 1}
+    reasoning = "DISQUALIFIERS: NO EARLY SENSORY DETAIL\nTOTAL: 4/10"
+    fixes = _fixes_from_crits(crits, _standards(), "worst", reasoning=reasoning)
+    assert any("first third" in f.lower() for f in fixes)
+
+
+# ── Topic clustering (dedup beyond wording-level similarity) ──────────────────
+
+def test_extract_core_topic_parses_numbered_line():
+    from script_writer import extract_core_topic
+    analysis = (
+        "1. CONTRADICTION: something\n"
+        "2. HOOK ANGLE: something else\n"
+        "3. CORE: Compound interest rewards patience over speed\n"
+        "4. EMOTIONAL STAKES: whatever\n"
+    )
+    assert extract_core_topic(analysis) == "Compound interest rewards patience over speed"
+
+
+def test_extract_core_topic_case_insensitive_and_no_number():
+    from script_writer import extract_core_topic
+    assert extract_core_topic("CORE: The gold standard ended in 1971") == \
+        "The gold standard ended in 1971"
+
+
+def test_extract_core_topic_falls_back_to_first_line_when_missing():
+    from script_writer import extract_core_topic
+    analysis = "Just some unstructured text\nwith no labeled fields"
+    assert extract_core_topic(analysis) == "Just some unstructured text"
+
+
+def test_extract_core_topic_empty_input():
+    from script_writer import extract_core_topic
+    assert extract_core_topic("") == ""
+    assert extract_core_topic(None) == ""
+
+
+def test_check_topic_similarity_fails_open_without_embedding(monkeypatch, tmp_path):
+    import script_writer as sw
+    monkeypatch.setattr(sw, "TOPIC_EMBEDDINGS_FILE", tmp_path / "topics.json")
+    monkeypatch.setattr(sw, "_embed_script", lambda s: None)
+    is_dup, sim, vec = sw.check_topic_similarity("some topic", "main_en")
+    assert (is_dup, sim, vec) == (False, 0.0, None)
+
+
+def test_check_topic_similarity_empty_topic_short_circuits(monkeypatch, tmp_path):
+    import script_writer as sw
+    monkeypatch.setattr(sw, "TOPIC_EMBEDDINGS_FILE", tmp_path / "topics.json")
+    called = []
+    monkeypatch.setattr(sw, "_embed_script", lambda s: called.append(s) or [1.0])
+    is_dup, sim, vec = sw.check_topic_similarity("", "main_en")
+    assert (is_dup, sim, vec) == (False, 0.0, None)
+    assert called == []   # no API call wasted on an empty topic
+
+
+def test_check_topic_similarity_flags_recent_same_topic(monkeypatch, tmp_path):
+    import script_writer as sw
+    monkeypatch.setattr(sw, "TOPIC_EMBEDDINGS_FILE", tmp_path / "topics.json")
+    monkeypatch.setattr(sw, "_embed_script", lambda s: [0.6, 0.8, 0.0])
+    now = 1_000_000.0
+    sw.add_topic_embedding([0.6, 0.8, 0.0], "main_en", now=now)
+
+    is_dup, sim, _ = sw.check_topic_similarity("compound interest explainer",
+                                               "main_en", now=now + 3600)
+    assert is_dup is True
+    assert sim > 0.99
+
+
+def test_check_topic_similarity_ignores_topics_outside_window(monkeypatch, tmp_path):
+    """The same topic covered 3 months ago must NOT block a new video on it —
+    this gate is time-windowed, not a permanent ban."""
+    import script_writer as sw
+    monkeypatch.setattr(sw, "TOPIC_EMBEDDINGS_FILE", tmp_path / "topics.json")
+    monkeypatch.setattr(sw, "_embed_script", lambda s: [0.6, 0.8, 0.0])
+    now = 1_000_000.0
+    sw.add_topic_embedding([0.6, 0.8, 0.0], "main_en", now=now)
+
+    far_future = now + (sw.TOPIC_WINDOW_DAYS + 5) * 86400
+    is_dup, sim, _ = sw.check_topic_similarity("compound interest explainer",
+                                               "main_en", now=far_future)
+    assert is_dup is False
+
+
+def test_check_topic_similarity_is_per_channel(monkeypatch, tmp_path):
+    import script_writer as sw
+    monkeypatch.setattr(sw, "TOPIC_EMBEDDINGS_FILE", tmp_path / "topics.json")
+    monkeypatch.setattr(sw, "_embed_script", lambda s: [1.0, 0.0])
+    now = 1_000_000.0
+    sw.add_topic_embedding([1.0, 0.0], "spanish", now=now)
+
+    is_dup, sim, _ = sw.check_topic_similarity("x", "main_en", now=now + 10)
+    assert is_dup is False
+
+
+def test_add_topic_embedding_none_is_noop(monkeypatch, tmp_path):
+    import script_writer as sw
+    monkeypatch.setattr(sw, "TOPIC_EMBEDDINGS_FILE", tmp_path / "topics.json")
+    sw.add_topic_embedding(None, "main_en")
+    assert not (tmp_path / "topics.json").exists()
+
+
+def test_add_topic_embedding_prunes_stale_entries(monkeypatch, tmp_path):
+    import json as _json
+    import script_writer as sw
+    monkeypatch.setattr(sw, "TOPIC_EMBEDDINGS_FILE", tmp_path / "topics.json")
+    now = 1_000_000.0
+    stale = now - (sw.TOPIC_WINDOW_DAYS + 1) * 86400
+    sw.add_topic_embedding([1.0, 0.0], "main_en", now=stale)
+    sw.add_topic_embedding([0.0, 1.0], "main_en", now=now)
+
+    entries = _json.loads((tmp_path / "topics.json").read_text())
+    assert len(entries) == 1
+    assert entries[0]["vec"] == [0.0, 1.0]
+
+
+def test_add_topic_embedding_respects_history_cap(monkeypatch, tmp_path):
+    import json as _json
+    import script_writer as sw
+    monkeypatch.setattr(sw, "TOPIC_EMBEDDINGS_FILE", tmp_path / "topics.json")
+    monkeypatch.setattr(sw, "TOPIC_HISTORY_CAP", 3)
+    now = 1_000_000.0
+    for i in range(6):
+        sw.add_topic_embedding([float(i)], "main_en", now=now)
+    entries = _json.loads((tmp_path / "topics.json").read_text())
+    assert len(entries) == 3
+    assert entries[-1]["vec"] == [5.0]   # newest kept

@@ -834,6 +834,40 @@ def run(skip_upload: bool = False, niche_override: str = None, output_dir: Path 
             except Exception as _sim_err:
                 print(f"           ⚠ similarity regen failed ({_sim_err}) — using original script")
 
+        # Topic-clustering gate: catches a script that's WORDED distinctly
+        # (passes the similarity gate above) but keeps landing on the same
+        # underlying topic within the last two weeks — e.g. three separately
+        # written videos all about "compound interest". Time-windowed, not
+        # count-windowed: the same topic is fair game again once it's stale.
+        try:
+            from script_writer import (extract_core_topic, check_topic_similarity,
+                                       add_topic_embedding, TOPIC_WINDOW_DAYS)
+            core_topic = extract_core_topic(seed_analysis)
+            is_dup_topic, topic_sim, topic_vec = check_topic_similarity(core_topic, channel.id)
+            if is_dup_topic:
+                print(f"           ⚠ Topic \"{core_topic[:60]}\" covered "
+                      f"{topic_sim:.0%} similarly in the last {TOPIC_WINDOW_DAYS} days — regenerating...")
+                try:
+                    result = write_script(
+                        scene + f" (a recent video already covered this same core "
+                                f"topic — \"{core_topic}\" — pick a genuinely DIFFERENT "
+                                f"topic from the source, not just different wording)",
+                        seed=seed, precomputed_analysis=seed_analysis or None,
+                        run_id=script_run_id)
+                    script = result["script"]
+                    core_topic2 = extract_core_topic(seed_analysis)
+                    _, topic_sim2, topic_vec = check_topic_similarity(core_topic2, channel.id)
+                    print(f"           → regenerated (topic {topic_sim2:.0%} similar now)")
+                    # The regenerated script also needs a fresh full-script
+                    # embedding recorded — the one from the ORIGINAL draft
+                    # (script_vec) no longer corresponds to what's shipping.
+                    _, _, script_vec = check_similarity(script, channel.id)
+                except Exception as _topic_err:
+                    print(f"           ⚠ topic regen failed ({_topic_err}) — using original script")
+            add_topic_embedding(topic_vec, channel.id)
+        except Exception as e:
+            print(f"           ⚠ topic-clustering gate skipped (non-fatal): {e}")
+
         add_to_blacklist(script)
         add_embedding(script_vec, channel.id)
         preview = script[:100] + "..." if len(script) > 100 else script
@@ -852,7 +886,7 @@ def run(skip_upload: bool = False, niche_override: str = None, output_dir: Path 
     facts_hold = None
     try:
         from supervisor import judge_script_facts
-        ok_f, why_f = judge_script_facts(script, seed)
+        ok_f, why_f = judge_script_facts(script, seed, niche_name=active, run_id=script_run_id)
         if not ok_f:
             print(f"           ⚠ fact-check flagged: {why_f} — rewriting once...")
             try:
@@ -870,7 +904,7 @@ def run(skip_upload: bool = False, niche_override: str = None, output_dir: Path 
                 add_embedding(_v_fix, channel.id)
             except Exception as _fc_err:
                 print(f"           ⚠ fact-fix rewrite failed ({_fc_err}) — keeping original")
-            ok2, why2 = judge_script_facts(script, seed)
+            ok2, why2 = judge_script_facts(script, seed, niche_name=active, run_id=script_run_id)
             if not ok2:
                 facts_hold = why2
                 print(f"           ⚠ still flagged ({why2}) — upload will be HELD for review")
@@ -901,11 +935,11 @@ def run(skip_upload: bool = False, niche_override: str = None, output_dir: Path 
             try:
                 from supervisor import judge_footage_prompts
                 hook = script.strip().split("\n")[0]
-                ok, reason = judge_footage_prompts(prompts, active, hook)
+                ok, reason = judge_footage_prompts(prompts, active, hook, run_id=script_run_id)
                 if not ok:
                     print(f"           ⚠ supervisor rejected prompts ({reason}) — rewriting once...")
                     retry_prompts = _build_sd_prompts(script, active, max_scenes=max_scenes)
-                    ok2, reason2 = judge_footage_prompts(retry_prompts, active, hook)
+                    ok2, reason2 = judge_footage_prompts(retry_prompts, active, hook, run_id=script_run_id)
                     prompts = retry_prompts
                     print(f"           → retry prompts {'accepted' if ok2 else 'used anyway'} ({reason2})")
             except Exception as e:

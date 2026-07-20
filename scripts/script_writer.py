@@ -876,11 +876,18 @@ def _story_architect(client: OpenAI, seed: dict, analysis: str, hook: str,
         f"SOURCE: \"{seed_text}\"\n"
         f"PRE-ANALYSIS:\n{analysis}\n\n"
         "You are planning a 35-50 second video BEFORE any prose is written. "
-        "In under 100 words, reply in exactly 3 short labeled lines:\n"
+        "In under 130 words, reply in exactly 4 short labeled lines:\n"
         "SPINE FACT: the one specific, source-grounded detail everything else "
         "must hang on — not a theme, an actual fact.\n"
         "THE TURN: the exact moment or fact the reversal should hinge on — a "
-        "MOMENT the viewer can picture, not a statistic restated.\n"
+        "MOMENT the viewer can picture, not a statistic restated. This must be "
+        "a DIRECT CONSEQUENCE of the SPINE FACT, not a separate idea — if it "
+        "doesn't follow logically from the spine fact, pick a different turn "
+        "that does.\n"
+        "STAKES GAP: what does the viewer specifically LOSE by not knowing "
+        "this — a concrete cost of staying ignorant of it (a mistake they'd "
+        "keep making, a decision they'd get wrong, a belief that's actually "
+        "backwards), not a vague 'this matters'.\n"
         "WHY NOW: the single sharpest, most concrete reason a viewer should "
         "care about THIS today — not a generic 'this matters', the real stake.\n"
         "Be concrete. No fluff, no restating the hook."
@@ -1056,10 +1063,11 @@ def _fixes_from_crits(crits: dict, std: dict, opinion_all: str,
     # scorer prompt asks for "DISQUALIFIERS: [list, or 'none']"), so this
     # checks the text directly rather than a crits dict key.
     if "sensory" in (reasoning or "").lower():
-        fixes.append("CRITICAL: include at least one concrete sensory/physical "
-                     "detail — something a viewer could see, hear, feel, smell, "
-                     "or taste. The critic found the body entirely abstract, "
-                     "nothing to actually picture.")
+        fixes.append("CRITICAL: put a concrete sensory/physical detail — something "
+                     "a viewer could see, hear, feel, smell, or taste — in the "
+                     "FIRST THIRD of the body, right after the hook. The critic "
+                     "found the setup too abstract this early, nothing to "
+                     "picture before the viewer decides whether to keep watching.")
     return fixes
 
 
@@ -1126,8 +1134,10 @@ def _score(client: OpenAI, script: str, seed: dict, hook: str, run_id: str,
         "□ Script has zero specifics (no number, name, date, or verbatim detail)\n"
         "□ Loop line (second-to-last) shares zero content words with the hook\n"
         "□ BORING: Body has no tension, contradiction, or turning point — reads like a neutral Wikipedia summary\n"
-        "□ NO SENSORY DETAIL: zero concrete physical detail a viewer could see, hear, feel, "
-        "smell, or taste — entirely abstract summary with nothing to picture\n\n"
+        "□ NO EARLY SENSORY DETAIL: zero concrete physical detail a viewer could see, hear, "
+        "feel, smell, or taste appears in the FIRST THIRD of the body (the setup, right after "
+        "the hook) — a sensory detail buried near the end doesn't stop the swipe; it has to "
+        "land while the viewer is still deciding whether to keep watching\n\n"
         "STEP 2 — SCORE EACH (only if no disqualifiers):\n"
         + specificity_criterion +
         "HOOK 0-2: Does the body deliver on the cognitive itch the hook opened? 0=unanswered, 1=partial, 2=paid off in loop.\n"
@@ -1692,6 +1702,98 @@ def add_embedding(vec: list | None, channel: str = "main_en") -> None:
             by_channel[ch] = by_channel.get(ch, 0) + 1
     kept.reverse()
     EMBEDDINGS_FILE.write_text(json.dumps(kept))
+
+
+# ── Topic clustering (beyond wording-level dedup) ─────────────────────────────
+# check_similarity/add_embedding above catch a script that's WORDED
+# differently but says the same thing. They can still miss a script that's
+# semantically distinct — different examples, different framing — but keeps
+# landing on the same underlying topic (three videos on "compound interest"
+# in two weeks, each written differently). This clusters by TOPIC instead of
+# by full-script wording, and is time-windowed rather than count-windowed —
+# covering the same topic is fine again once it's not recent anymore.
+
+TOPIC_EMBEDDINGS_FILE = CONFIG_DIR / "topic_embeddings.json"
+TOPIC_SIM_THRESHOLD   = 0.88   # short-phrase embeddings run hotter than full-script ones
+TOPIC_WINDOW_DAYS     = 14
+TOPIC_HISTORY_CAP     = 500    # defensive cap per channel regardless of window (high-frequency schedules)
+
+_CORE_LINE_RE = re.compile(r"(?im)^\s*\d*\.?\s*CORE:\s*(.+)$")
+
+
+def extract_core_topic(analysis: str) -> str:
+    """Pull the CORE line out of pre-analysis's structured output ('3. CORE:
+    ...'). Falls back to the first non-empty line if the format ever drifts
+    (fail-open — a missing topic tag just means this check silently no-ops,
+    never blocks a render)."""
+    if not analysis:
+        return ""
+    m = _CORE_LINE_RE.search(analysis)
+    if m:
+        return m.group(1).strip()
+    for line in analysis.splitlines():
+        if line.strip():
+            return line.strip()
+    return ""
+
+
+def _load_topic_embeddings() -> list[dict]:
+    if not TOPIC_EMBEDDINGS_FILE.exists():
+        return []
+    try:
+        return json.loads(TOPIC_EMBEDDINGS_FILE.read_text())
+    except (json.JSONDecodeError, OSError, UnicodeDecodeError, ValueError):
+        return []
+
+
+def check_topic_similarity(core_topic: str, channel: str = "main_en",
+                           now: float = None) -> tuple[bool, float, list | None]:
+    """(is_recent_duplicate_topic, max_similarity, embedding). Only compares
+    against entries within TOPIC_WINDOW_DAYS — the same topic is fair game
+    again once it's not recent. Fail-open (no embedding, no history) like
+    every other gate in this file. `now` is injectable for tests (this
+    module avoids datetime.now() churn in the same spirit as the rest of the
+    codebase's fail-open timing checks)."""
+    if not core_topic:
+        return False, 0.0, None
+    vec = _embed_script(core_topic)
+    if vec is None:
+        return False, 0.0, None
+    now = now if now is not None else time.time()
+    cutoff = now - TOPIC_WINDOW_DAYS * 86400
+    sims = [
+        _cosine(vec, e["vec"]) for e in _load_topic_embeddings()
+        if e.get("channel") == channel and e.get("vec")
+        and e.get("ts", 0) >= cutoff
+    ]
+    mx = max(sims, default=0.0)
+    return mx >= TOPIC_SIM_THRESHOLD, mx, vec
+
+
+def add_topic_embedding(vec: list | None, channel: str = "main_en",
+                        now: float = None) -> None:
+    """Record an accepted script's core-topic embedding with a timestamp.
+    Prunes entries older than the window PLUS a defensive per-channel count
+    cap (a multi-run-per-day schedule could otherwise grow this file
+    unbounded even with time-pruning if the window were ever misconfigured)."""
+    if not vec:
+        return
+    now = now if now is not None else time.time()
+    TOPIC_EMBEDDINGS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    entries = _load_topic_embeddings()
+    entries.append({"channel": channel, "vec": [round(x, 5) for x in vec], "ts": now})
+    cutoff = now - TOPIC_WINDOW_DAYS * 86400
+    kept: list[dict] = []
+    by_channel: dict[str, int] = {}
+    for e in reversed(entries):   # newest first
+        ch = e.get("channel", "main_en")
+        if e.get("ts", 0) < cutoff:
+            continue
+        if by_channel.get(ch, 0) < TOPIC_HISTORY_CAP:
+            kept.append(e)
+            by_channel[ch] = by_channel.get(ch, 0) + 1
+    kept.reverse()
+    TOPIC_EMBEDDINGS_FILE.write_text(json.dumps(kept))
 
 
 def check_blacklist(script: str) -> bool:
