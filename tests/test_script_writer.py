@@ -319,3 +319,229 @@ def test_story_architect_returns_plan_and_cost(monkeypatch):
                                   "hook", "run1", "finance")
     assert "SPINE FACT" in plan
     assert cost >= 0.0
+
+
+# ── Sensory-anchor disqualifier feeding into _fixes_from_crits ────────────────
+# The disqualifier isn't a parsed criterion (only SPECIFICITY/HOOK/etc. are
+# regex-parsed) — it's only visible in the raw reasoning text the scorer
+# echoes back ("DISQUALIFIERS: [list, or 'none']"), so this checks the text
+# directly rather than a crits dict key.
+
+def test_fixes_from_crits_detects_sensory_disqualifier_from_reasoning():
+    from script_writer import _fixes_from_crits, _standards
+    crits = {"specificity": 3, "hook": 2, "compression": 2, "loop": 2, "human": 1}
+    reasoning = "DISQUALIFIERS: NO SENSORY DETAIL — entirely abstract summary\nTOTAL: 4/10"
+    fixes = _fixes_from_crits(crits, _standards(), "worst", reasoning=reasoning)
+    assert any("sensory" in f.lower() for f in fixes)
+
+
+def test_fixes_from_crits_no_sensory_fix_when_not_flagged():
+    from script_writer import _fixes_from_crits, _standards
+    crits = {"specificity": 3, "hook": 2, "compression": 2, "loop": 2, "human": 1}
+    fixes = _fixes_from_crits(crits, _standards(), "worst", reasoning="DISQUALIFIERS: none\nTOTAL: 10/10")
+    assert not any("sensory" in f.lower() for f in fixes)
+
+
+def test_score_prompt_includes_sensory_disqualifier():
+    """The rubric sent to the LLM must actually ask about sensory detail —
+    otherwise the reasoning-text check above has nothing to ever find."""
+    from script_writer import _score
+    captured = {}
+
+    class FakeClient:
+        class chat:
+            class completions:
+                @staticmethod
+                def create(**kw):
+                    captured.update(kw)
+                    msg = type("M", (), {"content": "DISQUALIFIERS: none\nTOTAL: 8/10"})()
+                    choice = type("C", (), {"message": msg})()
+                    usage = type("U", (), {"prompt_tokens": 10, "completion_tokens": 5})()
+                    return type("R", (), {"choices": [choice], "usage": usage})()
+
+    _score(FakeClient(), "some script", {"type": "wikipedia", "content": "x"},
+          "some hook", "run1", "finance")
+    prompt = captured["messages"][0]["content"].lower()
+    assert "sensory" in prompt
+
+
+# ── Cadence pattern-interrupt (_cadence_violation) ─────────────────────────────
+
+def test_cadence_violation_none_when_mixed_lengths():
+    from script_writer import _cadence_violation
+    script = (
+        "Short line here now. "
+        "This much longer sentence goes on for quite a while to build real atmosphere and tension. "
+        "Another one."
+    )
+    assert _cadence_violation(script) is None
+
+
+def test_cadence_violation_flags_uniform_sentence_lengths():
+    from script_writer import _cadence_violation
+    script = (
+        "This sentence has exactly nine little words in it. "
+        "This one also has exactly nine little words too. "
+        "And this one also has exactly nine words here."
+    )
+    reason = _cadence_violation(script)
+    assert reason is not None
+    assert "cadence" in reason
+
+
+def test_cadence_violation_skipped_for_very_short_scripts():
+    from script_writer import _cadence_violation
+    assert _cadence_violation("One sentence only here.") is None
+
+
+def test_body_pre_check_chains_to_cadence(monkeypatch):
+    """The cadence check must actually run as part of the full pre-filter
+    chain — every EARLIER check is mocked to force-pass so a genuinely
+    uniform-sentence-length script is rejected specifically because of
+    cadence, proving the wiring (not just testing cadence in isolation)."""
+    from script_writer import _body_pre_check
+    import script_writer as sw
+    monkeypatch.setattr(sw, "_specificity_density", lambda s: 999)
+    monkeypatch.setattr(sw, "_sentence_stats", lambda s: (9.0, 5))
+    monkeypatch.setattr(sw, "_loop_echoes_hook", lambda s: (True, "x"))
+    monkeypatch.setattr(sw, "_has_opinion_word", lambda s: True)
+    monkeypatch.setattr(sw, "_find_hedging", lambda s: None)
+
+    std = sw._standards()
+    # Five real sentences, each exactly nine words -> genuinely uniform
+    # cadence. Unpunctuated padding words after them satisfy the (real,
+    # unmocked) total word-count check without being parsed as additional
+    # sentences by _SENTENCE_RE (which requires terminal punctuation).
+    sentence = "This sentence has exactly nine little words right now."
+    core = " ".join([sentence] * 5)
+    pad_needed = max(0, std["body"]["min_words"] - len(core.split()))
+    script = core + " " + " ".join(["filler"] * pad_needed)
+
+    result = _body_pre_check(script)
+    assert result is not None
+    assert "cadence" in result
+
+
+def test_fix_for_rejection_cadence_message():
+    from script_writer import _fix_for_rejection, _standards
+    rejection = "cadence: missing a short, punchy sentence (≤6 words) — every sentence is a similar length"
+    fix = _fix_for_rejection(rejection, _standards(), "hook,tokens", "worst")
+    assert "vary sentence rhythm" in fix
+
+
+def test_fix_for_rejection_sentences_too_short_not_confused_with_total_length():
+    """Regression: 'sentences too short' contains 'too short' as a substring
+    — the generic 'too short' branch used to win first and told the model to
+    add MORE total words, instead of the real fix (lengthen sentences)."""
+    from script_writer import _fix_for_rejection, _standards
+    fix = _fix_for_rejection("sentences too short (avg 4.0 words, floor 6.0)",
+                             _standards(), "hook,tokens", "worst")
+    assert "lengthen sentences" in fix
+    assert "write at least" not in fix   # the wrong (total-word-count) message
+
+
+def test_fix_for_rejection_sentences_too_long_not_confused_with_total_length():
+    from script_writer import _fix_for_rejection, _standards
+    fix = _fix_for_rejection("sentences too long (avg 20.0 words, cap 12.0)",
+                             _standards(), "hook,tokens", "worst")
+    assert "shorten sentences" in fix
+    assert "keep it under" not in fix   # the wrong (total-word-count) message
+
+
+def test_fix_for_rejection_whole_body_too_short_still_works():
+    from script_writer import _fix_for_rejection, _standards
+    fix = _fix_for_rejection("too short (40 words, need ≥80)", _standards(),
+                             "hook,tokens", "worst")
+    assert "write at least" in fix
+
+
+def test_fix_for_rejection_banned_phrase():
+    from script_writer import _fix_for_rejection, _standards
+    fix = _fix_for_rejection("banned phrase: 'crucial'", _standards(), "h", "o")
+    assert "crucial" in fix and "BANNED" in fix
+
+
+def test_fix_for_rejection_unknown_returns_empty():
+    from script_writer import _fix_for_rejection, _standards
+    assert _fix_for_rejection("something unrecognized", _standards(), "h", "o") == ""
+
+
+# ── Hook-opener diversity (_overused_hook_openers) ─────────────────────────────
+
+def test_overused_hook_openers_empty_with_no_data(monkeypatch, tmp_path):
+    import script_writer as sw
+    import db_manager
+    monkeypatch.setattr(db_manager, "DB_FILE", tmp_path / "empty.db")
+    assert sw._overused_hook_openers("money_history") == []
+
+
+def test_overused_hook_openers_flags_dominant_opener(monkeypatch, tmp_path):
+    import script_writer as sw
+    import db_manager
+    monkeypatch.setattr(db_manager, "DB_FILE", tmp_path / "test.db")
+    monkeypatch.setenv("RUFUS_CHANNEL", "main_en")
+    db_manager.init_db()
+
+    # 15 hooks opening with "Why", 5 with distinct openers -> "why" dominates
+    for i in range(15):
+        db_manager.save_video(niche="money_history", channel="main_en",
+                              script_hook=f"Why did event {i} happen so fast?",
+                              scene_desc="s", video_file=f"v{i}.mp4")
+    for i in range(5):
+        db_manager.save_video(niche="money_history", channel="main_en",
+                              script_hook=f"Distinct opener {i} appears here now.",
+                              scene_desc="s", video_file=f"d{i}.mp4")
+
+    overused = sw._overused_hook_openers("money_history")
+    assert "why" in overused
+
+
+def test_overused_hook_openers_ignores_other_channels(monkeypatch, tmp_path):
+    import script_writer as sw
+    import db_manager
+    monkeypatch.setattr(db_manager, "DB_FILE", tmp_path / "test.db")
+    monkeypatch.setenv("RUFUS_CHANNEL", "main_en")
+    db_manager.init_db()
+
+    for i in range(15):
+        db_manager.save_video(niche="money_history", channel="other_channel",
+                              script_hook=f"Why did event {i} happen so fast?",
+                              scene_desc="s", video_file=f"v{i}.mp4")
+
+    assert sw._overused_hook_openers("money_history") == []
+
+
+def test_overused_hook_openers_needs_minimum_history(monkeypatch, tmp_path):
+    """Fewer than 10 shipped hooks isn't enough to draw a real conclusion —
+    must not flag on a tiny, noisy sample."""
+    import script_writer as sw
+    import db_manager
+    monkeypatch.setattr(db_manager, "DB_FILE", tmp_path / "test.db")
+    monkeypatch.setenv("RUFUS_CHANNEL", "main_en")
+    db_manager.init_db()
+
+    for i in range(5):
+        db_manager.save_video(niche="money_history", channel="main_en",
+                              script_hook=f"Why did event {i} happen so fast?",
+                              scene_desc="s", video_file=f"v{i}.mp4")
+
+    assert sw._overused_hook_openers("money_history") == []
+
+
+def test_novelty_block_includes_opener_reset_when_overused(monkeypatch):
+    import script_writer as sw
+    monkeypatch.setattr(sw, "_recent_video_rows", lambda n, limit=12: [])
+    monkeypatch.setattr(sw, "_load_learnings", lambda: {})
+    monkeypatch.setattr(sw, "_overused_hook_openers", lambda n: ["why", "how"])
+    block = sw._novelty_block("money_history")
+    assert "OPENER RESET" in block
+    assert "why" in block and "how" in block
+
+
+def test_novelty_block_no_opener_section_when_diverse(monkeypatch):
+    import script_writer as sw
+    monkeypatch.setattr(sw, "_recent_video_rows", lambda n, limit=12: [])
+    monkeypatch.setattr(sw, "_load_learnings", lambda: {})
+    monkeypatch.setattr(sw, "_overused_hook_openers", lambda n: [])
+    block = sw._novelty_block("money_history")
+    assert "OPENER RESET" not in block

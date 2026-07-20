@@ -26,6 +26,7 @@ from openai import OpenAI
 # Local imports
 sys.path.insert(0, str(Path(__file__).parent))
 from script_logger import new_run_id, log_attempt, estimate_cost
+import db_manager
 from db_manager    import save_attempt
 
 CONFIG_DIR          = Path(__file__).parent.parent / "config"
@@ -103,6 +104,44 @@ def _recent_video_rows(niche_name: str, limit: int = 12) -> list[tuple[str, str]
         return []
 
 
+def _overused_hook_openers(niche_name: str, lookback: int = 30, top_n: int = 5,
+                           share_threshold: float = 0.15) -> list[str]:
+    """Long-term semantic-decay guard: if a small set of hook OPENING WORDS
+    dominates the last `lookback` shipped hooks in this niche, name the worst
+    offenders so the factory is told to avoid them. Without this, hooks
+    slowly converge on the model's favorite few shapes over hundreds of
+    videos, and _novelty_block's "don't resemble the last 10" alone doesn't
+    catch a slow drift across dozens/hundreds — nobody notices until someone
+    actually reads the DB. Read-only peek at rufus.db (via db_manager, so
+    tests can monkeypatch db_manager.DB_FILE the same way test_db_manager.py
+    already does); [] on any failure or with too little history to draw a
+    real conclusion (fail-open, same pattern as _recent_video_rows)."""
+    try:
+        chan = os.environ.get("RUFUS_CHANNEL", "main_en")
+        with db_manager._conn() as c:
+            rows = c.execute(
+                "SELECT script_hook FROM videos WHERE niche=? "
+                "AND (channel=? OR channel IS NULL) ORDER BY id DESC LIMIT ?",
+                (niche_name, chan, lookback),
+            ).fetchall()
+    except Exception:
+        return []
+
+    hooks = [r[0].strip() for r in rows if r[0] and r[0].strip()]
+    if len(hooks) < 10:
+        return []
+
+    from collections import Counter
+    openers = Counter(
+        h.split()[0].lower().strip(".,!?\"'’")
+        for h in hooks if h.split()
+    )
+    total = sum(openers.values())
+    if not total:
+        return []
+    return [w for w, n in openers.most_common(top_n) if n / total >= share_threshold]
+
+
 def _novelty_block(niche_name: str) -> str:
     """Prompt block: recent hooks to avoid + analytics winners/losers to learn from.
 
@@ -117,6 +156,13 @@ def _novelty_block(niche_name: str) -> str:
         parts.append(
             "ALREADY PUBLISHED — your hooks must NOT resemble these in topic, "
             f"structure, or rhythm (write something a returning viewer would see as NEW):\n{listed}"
+        )
+
+    overused = _overused_hook_openers(niche_name)
+    if overused:
+        parts.append(
+            "OPENER RESET — your recent hooks have leaned too heavily on these "
+            f"opening words; do NOT start any hook with: {', '.join(overused)}"
         )
 
     learnings = _load_learnings()
@@ -449,7 +495,33 @@ def _body_pre_check(script: str) -> str | None:
     if (h := _find_hedging(script)):
         return f"hedging word: '{h}'"
 
-    return None
+    return _cadence_violation(script)
+
+
+def _cadence_violation(script: str) -> str | None:
+    """Pattern-interrupt check: a script whose sentences are all a similar
+    length reads as monotone/algorithmic even with perfect content and a
+    passing avg-sentence-length check (min/max avg says nothing about
+    VARIETY — five 10-word sentences average the same as one 4-word and one
+    16-word sentence). Requires at least one short, punchy sentence
+    (≤6 words — the hook line itself usually already provides this) AND one
+    longer, flowing one (≥15 words) somewhere in the body. Deliberately
+    loose: not every sentence needs to hit these, just some contrast must
+    exist somewhere in the script."""
+    sentences = [s.strip() for s in _SENTENCE_RE.findall(script) if s.strip()]
+    if len(sentences) < 3:
+        return None   # too short a script to meaningfully judge rhythm
+    lengths = [len(s.split()) for s in sentences]
+    has_short = any(n <= 6 for n in lengths)
+    has_long  = any(n >= 15 for n in lengths)
+    if has_short and has_long:
+        return None
+    missing = []
+    if not has_short:
+        missing.append("a short, punchy sentence (≤6 words)")
+    if not has_long:
+        missing.append("a longer, flowing sentence (≥15 words)")
+    return f"cadence: missing {' and '.join(missing)} — every sentence is a similar length"
 
 
 # ── Pre-analysis ────────────────────────────────────────────────────────────────
@@ -835,6 +907,48 @@ def _story_architect(client: OpenAI, seed: dict, analysis: str, hook: str,
 
 # ── Phase C: Body generator ─────────────────────────────────────────────────────
 
+def _fix_for_rejection(rejection: str, std: dict, hook_token_str: str,
+                       opinion_all: str) -> str:
+    """Map a pre-filter rejection reason → a one-line CRITICAL correction for
+    the next attempt. A module-level function (not a write_script closure)
+    specifically so it's directly unit-testable — extracted while fixing a
+    real ordering bug below.
+
+    Order matters: "sentences too long"/"sentences too short" must be
+    checked BEFORE the plain "too long"/"too short" (whole-body word count)
+    — both contain "too short"/"too long" as a substring, and the generic
+    check used to win first, so a script with fine total length but
+    overly-short individual sentences got told to "write more words total"
+    instead of the actual fix (lengthen sentences)."""
+    if rejection.startswith("banned"):
+        bad = rejection.split("'")[1] if "'" in rejection else ""
+        return f"CRITICAL: '{bad}' is a BANNED phrase — never use it or any variation."
+    if "loop no echo" in rejection:
+        return (f"CRITICAL: the second-to-last line must echo a word from the hook "
+                f"({hook_token_str}).")
+    if "opinion word" in rejection:
+        return f"CRITICAL: include at least one opinion word: {opinion_all}."
+    if "hedging" in rejection:
+        bad = rejection.split("'")[1] if "'" in rejection else ""
+        return f"CRITICAL: remove '{bad}' — no hedging language."
+    if "sentences too long" in rejection:
+        return f"CRITICAL: shorten sentences (avg ≤{std['body']['max_avg_sentence_words']} words)."
+    if "sentences too short" in rejection:
+        return (f"CRITICAL: lengthen sentences (avg ≥{std['body']['min_avg_sentence_words']} "
+                f"words) — add detail, don't just add more short sentences.")
+    if "cadence" in rejection:
+        return ("CRITICAL: vary sentence rhythm — include at least one short, punchy "
+                "sentence (4-6 words) AND one longer, flowing sentence (15+ words). "
+                "Right now every sentence is roughly the same length, which reads as "
+                "monotone even with good content.")
+    if "too short" in rejection:
+        return f"CRITICAL: write at least {std['body']['min_words']} words total (aim for ~100)."
+    if "too long" in rejection:
+        return f"CRITICAL: keep it under {std['body']['max_words']} words."
+    if "specificity" in rejection:
+        return "CRITICAL: add concrete specifics — a name, year, or dollar amount per sentence."
+    return ""
+
 def _build_system(niche_cfg: dict, niche_name: str, cta: str, hook: str) -> str:
     gold_examples = _load_gold_examples(niche_name)
     gold_block    = _build_gold_block(gold_examples)
@@ -906,7 +1020,8 @@ Output ONLY the script text. No labels. No "Here is the script:". No quotes arou
 {gold_block}"""
 
 
-def _fixes_from_crits(crits: dict, std: dict, opinion_all: str) -> list[str]:
+def _fixes_from_crits(crits: dict, std: dict, opinion_all: str,
+                      reasoning: str = "") -> list[str]:
     """Turn a low LLM score into concrete corrections for the NEXT attempt.
 
     Real gap this closes: _fix_for() already converts a pre-filter rejection
@@ -936,6 +1051,15 @@ def _fixes_from_crits(crits: dict, std: dict, opinion_all: str) -> list[str]:
     if crits.get("human", 1) < 1:
         fixes.append(f"CRITICAL: sound like a person with a real opinion — use one "
                      f"of: {opinion_all}. No neutral, encyclopedia-style description.")
+    # The disqualifier list isn't parsed into structured criteria like
+    # SPECIFICITY/HOOK/etc. — it's echoed in the raw reasoning text (the
+    # scorer prompt asks for "DISQUALIFIERS: [list, or 'none']"), so this
+    # checks the text directly rather than a crits dict key.
+    if "sensory" in (reasoning or "").lower():
+        fixes.append("CRITICAL: include at least one concrete sensory/physical "
+                     "detail — something a viewer could see, hear, feel, smell, "
+                     "or taste. The critic found the body entirely abstract, "
+                     "nothing to actually picture.")
     return fixes
 
 
@@ -1001,7 +1125,9 @@ def _score(client: OpenAI, script: str, seed: dict, hook: str, run_id: str,
         "□ Script adopts first-person voice of someone in the source\n"
         "□ Script has zero specifics (no number, name, date, or verbatim detail)\n"
         "□ Loop line (second-to-last) shares zero content words with the hook\n"
-        "□ BORING: Body has no tension, contradiction, or turning point — reads like a neutral Wikipedia summary\n\n"
+        "□ BORING: Body has no tension, contradiction, or turning point — reads like a neutral Wikipedia summary\n"
+        "□ NO SENSORY DETAIL: zero concrete physical detail a viewer could see, hear, feel, "
+        "smell, or taste — entirely abstract summary with nothing to picture\n\n"
         "STEP 2 — SCORE EACH (only if no disqualifiers):\n"
         + specificity_criterion +
         "HOOK 0-2: Does the body deliver on the cognitive itch the hook opened? 0=unanswered, 1=partial, 2=paid off in loop.\n"
@@ -1212,27 +1338,7 @@ def write_script(scene_description: str, seed: dict | None = None,
     rejected_pool: list[tuple[int, str]] = []   # (word_count, script) for salvage fallback
 
     def _fix_for(rejection: str) -> str:
-        """Map a rejection reason → a one-line CRITICAL correction for the next prompt."""
-        if rejection.startswith("banned"):
-            bad = rejection.split("'")[1] if "'" in rejection else ""
-            return (f"CRITICAL: '{bad}' is a BANNED phrase — never use it or any variation.")
-        if "loop no echo" in rejection:
-            return (f"CRITICAL: the second-to-last line must echo a word from the hook "
-                    f"({hook_token_str}).")
-        if "opinion word" in rejection:
-            return f"CRITICAL: include at least one opinion word: {opinion_all}."
-        if "hedging" in rejection:
-            bad = rejection.split("'")[1] if "'" in rejection else ""
-            return f"CRITICAL: remove '{bad}' — no hedging language."
-        if "too short" in rejection:
-            return f"CRITICAL: write at least {std['body']['min_words']} words total (aim for ~100)."
-        if "too long" in rejection:
-            return f"CRITICAL: keep it under {std['body']['max_words']} words."
-        if "specificity" in rejection:
-            return "CRITICAL: add concrete specifics — a name, year, or dollar amount per sentence."
-        if "sentences too long" in rejection:
-            return f"CRITICAL: shorten sentences (avg ≤{std['body']['max_avg_sentence_words']} words)."
-        return ""
+        return _fix_for_rejection(rejection, std, hook_token_str, opinion_all)
 
     best = {"script": "", "score": 0, "crits": {}, "reasoning": "",
             "temperature": temps[0], "attempt_n": 0}
@@ -1376,7 +1482,7 @@ def write_script(scene_description: str, seed: dict | None = None,
         # See _fixes_from_crits' docstring: convert THIS attempt's specific weak
         # criteria into corrections the next attempt must satisfy, same as the
         # pre-filter path already does — a low LLM score must not just retry cold.
-        for fix in _fixes_from_crits(crits, std, opinion_all):
+        for fix in _fixes_from_crits(crits, std, opinion_all, reasoning=reasoning):
             if fix not in accumulated_fixes:
                 accumulated_fixes.append(fix)
 

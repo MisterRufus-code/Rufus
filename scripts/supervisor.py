@@ -71,7 +71,15 @@ def _judge(prompt: str) -> tuple[bool, str]:
 
 def judge_seed(seed: dict, niche_name: str) -> tuple[bool, str]:
     """Reject a research seed that's too thin/generic/off-topic to build a
-    real story on — cheaper to catch here than after a full script + render."""
+    real story on, OR that has no genuine "knowledge gap" — cheaper to catch
+    here than after a full script + render.
+
+    The knowledge-gap check (added after a fresh-eyes review): accuracy
+    alone doesn't make content interesting. A seed can be perfectly
+    concrete/on-topic and still be a flat restatement of something the
+    viewer already assumes — no surprise, no reason to keep watching. This
+    asks the SAME judge call to also confirm the seed contains something
+    that contradicts a viewer's likely mental model, not just a fact."""
     if not enabled():
         return True, "supervisor disabled"
 
@@ -83,11 +91,16 @@ def judge_seed(seed: dict, niche_name: str) -> tuple[bool, str]:
     prompt = (
         f"You are a strict story editor for a {niche_name} YouTube Shorts channel.\n"
         f"SEED (type={stype}, source={source}):\nTITLE: {title}\nCONTENT: {content}\n\n"
-        "Reject this seed ONLY if it is genuinely unusable: no concrete facts/numbers/names "
-        "to build a story on, generic filler with no hook potential, or clearly off-topic "
-        "for the niche. Do NOT reject just because it's a modest story — modest but concrete "
-        "beats vague.\n\n"
-        "Reply with EXACTLY: APPROVE|<one-sentence reason>  or  REJECT|<one-sentence reason>"
+        "Reject this seed if EITHER is true:\n"
+        "1. It's genuinely unusable: no concrete facts/numbers/names to build a story on, "
+        "generic filler with no hook potential, or clearly off-topic for the niche. Do NOT "
+        "reject just because it's a modest story — modest but concrete beats vague.\n"
+        "2. KNOWLEDGE GAP TEST: it contains no counter-intuitive fact that would break a "
+        "typical viewer's mental model — i.e. nothing here would make someone stop and think "
+        "\"wait, really?\". A seed can be accurate and on-topic and still fail this if it's "
+        "just a flat, expected restatement of common knowledge with no surprise in it.\n\n"
+        "Reply with EXACTLY: APPROVE|<one-sentence reason>  or  REJECT|<one-sentence reason "
+        "naming which of the two failed>"
     )
     return _judge(prompt)
 

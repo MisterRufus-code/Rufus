@@ -588,3 +588,80 @@ def test_index_has_topic_request_form(client):
     body = r.data.decode()
     assert 'action="/request-topic"' in body
     assert 'name="topic"' in body
+
+
+# ── Root-cause attribution (backlog: bottleneck breakdown) ────────────────────
+
+def test_categorize_rejection_safety():
+    assert dashboard._categorize_rejection("banned phrase: 'crucial'") == "safety"
+    assert dashboard._categorize_rejection("hedging word: 'maybe'") == "safety"
+
+
+def test_categorize_rejection_accuracy():
+    assert dashboard._categorize_rejection("low specificity (0.20/25w, need >=1.0)") == "accuracy"
+    assert dashboard._categorize_rejection("DISQUALIFIERS: NO SENSORY DETAIL") == "accuracy"
+
+
+def test_categorize_rejection_weak_hook():
+    assert dashboard._categorize_rejection("forbidden opener: 'did you know'") == "weak_hook"
+    assert dashboard._categorize_rejection("hook too short (2 words, need >=4)") == "weak_hook"
+
+
+def test_categorize_rejection_loose_structure():
+    assert dashboard._categorize_rejection("loop no echo (second-to-last line shares no content tokens with hook)") == "loose_structure"
+    assert dashboard._categorize_rejection("cadence: missing a short, punchy sentence") == "loose_structure"
+    assert dashboard._categorize_rejection("sentences too long (avg 20.0 words, cap 14)") == "loose_structure"
+
+
+def test_categorize_rejection_boring():
+    assert dashboard._categorize_rejection("BORING: reads like a neutral Wikipedia summary") == "boring"
+
+
+def test_categorize_rejection_unknown_falls_to_other():
+    assert dashboard._categorize_rejection("some completely novel reason never seen before") == "other"
+
+
+def test_categorize_rejection_empty_string():
+    assert dashboard._categorize_rejection("") == "other"
+    assert dashboard._categorize_rejection(None) == "other"
+
+
+def test_rejection_category_counts_aggregates_correctly(client):
+    db_manager.save_attempt(run_id="r1", niche="finance", seed_type="wisdom",
+                            phase="body_gen", attempt_n=1, rejected_reason="low specificity",
+                            accepted=False)
+    db_manager.save_attempt(run_id="r1", niche="finance", seed_type="wisdom",
+                            phase="body_gen", attempt_n=2, rejected_reason="banned phrase: 'crucial'",
+                            accepted=False)
+    db_manager.save_attempt(run_id="r1", niche="finance", seed_type="wisdom",
+                            phase="body_gen", attempt_n=3, rejected_reason="banned phrase: 'vital'",
+                            accepted=False)
+    counts = dashboard._rejection_category_counts()
+    by_cat = {c["category"]: c["count"] for c in counts}
+    assert by_cat["safety"] == 2
+    assert by_cat["accuracy"] == 1
+    total_pct = sum(c["pct"] for c in counts)
+    assert 99.0 <= total_pct <= 101.0   # rounding tolerance
+
+
+def test_rejection_category_counts_empty():
+    assert dashboard._rejection_category_counts() == []
+
+
+def test_failures_page_shows_bottleneck_breakdown(client):
+    db_manager.save_attempt(run_id="r1", niche="finance", seed_type="wisdom",
+                            phase="hook_gen", attempt_n=1, rejected_reason="forbidden opener: 'imagine'",
+                            accepted=False)
+    r = client.get("/failures")
+    body = r.data.decode()
+    assert "Bottleneck breakdown" in body
+    assert "weak_hook" in body
+
+
+def test_failures_page_shows_category_per_row(client):
+    db_manager.save_attempt(run_id="r1", niche="finance", seed_type="wisdom",
+                            phase="body_gen", attempt_n=1, body="x",
+                            rejected_reason="low specificity", accepted=False)
+    r = client.get("/failures")
+    body = r.data.decode()
+    assert "accuracy" in body

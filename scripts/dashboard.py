@@ -218,6 +218,46 @@ def _rejected_attempts(limit: int = 200, channel: str | None = None,
     return [dict(zip(cols, r)) for r in rows]
 
 
+# Root-cause taxonomy for script_attempts.rejected_reason — a fixed, small
+# set of buckets instead of counting distinct free-text strings (which
+# mostly differ only by which specific word got banned). After enough
+# volume this answers "which STAGE of the pipeline is actually the
+# bottleneck" at a glance instead of requiring someone to read every row.
+# Order matters: checked top-to-bottom, first match wins (e.g. a banned-
+# phrase rejection on a hook attempt is "safety", not "weak_hook").
+_REJECTION_CATEGORIES = [
+    ("safety",          ("banned phrase", "hedging", "conspiracy")),
+    ("accuracy",        ("specificity", "invented", "fabricat", "sensory")),
+    ("weak_hook",       ("forbidden opener", "hook too short", "hook too long")),
+    ("loose_structure", ("loop no echo", "opinion word", "sentences too long",
+                        "sentences too short", "cadence", "too few sentences")),
+    ("boring",          ("boring", "no tension", "flat")),
+]
+
+
+def _categorize_rejection(reason: str) -> str:
+    r = (reason or "").lower()
+    for category, keywords in _REJECTION_CATEGORIES:
+        if any(k in r for k in keywords):
+            return category
+    return "other"
+
+
+def _rejection_category_counts(channel: str | None = None) -> list[dict]:
+    """Aggregate ALL rejected attempts (not just the last N shown in the
+    browser) into the fixed taxonomy above."""
+    reasons = _rejected_attempts(limit=100_000, channel=channel)
+    from collections import Counter
+    counts = Counter(_categorize_rejection(r["rejected_reason"]) for r in reasons)
+    total = sum(counts.values())
+    if not total:
+        return []
+    order = [c for c, _ in _REJECTION_CATEGORIES] + ["other"]
+    return [{"category": c, "count": counts[c],
+            "pct": round(100 * counts[c] / total, 1)}
+           for c in order if counts.get(c)]
+
+
 def _distinct(column: str) -> list[str]:
     try:
         with db_manager._conn() as c:
@@ -493,6 +533,7 @@ def failures():
 
     orphans = _orphaned_debug_runs()
     rejects = _rejected_attempts(channel=channel, niche=niche, phase=phase)
+    categories = _rejection_category_counts(channel=channel)
 
     niche_links = "".join(
         f'<a href="/failures?niche={_esc(n)}">{_esc(n)}</a> ' for n in _distinct("niche"))
@@ -520,11 +561,26 @@ def failures():
         rows = ""
         for r in rejects:
             preview = _esc((r["body"] or r["hook"] or "")[:90])
+            cat = _esc(_categorize_rejection(r["rejected_reason"]))
             rows += (f"<tr><td class='muted'>{_esc(r['ts'])}</td>"
                      f"<td>{_esc(r['niche'])}</td><td>{_esc(r['phase'])}</td>"
+                     f"<td><span class='badge pending'>{cat}</span></td>"
                      f"<td>{_esc(r['rejected_reason'])}</td><td>{preview}</td></tr>\n")
         reject_html = (f"<table><tr><th>When</th><th>Niche</th><th>Phase</th>"
-                       f"<th>Reason</th><th>Preview</th></tr>{rows}</table>")
+                       f"<th>Category</th><th>Reason</th><th>Preview</th></tr>{rows}</table>")
+
+    category_html = "<p class='muted'>Not enough rejected attempts yet to show a breakdown.</p>"
+    if categories:
+        bars = ""
+        for c in categories:
+            bars += (f"<div style='margin:6px 0'>"
+                     f"<span style='display:inline-block;width:130px'>{_esc(c['category'])}</span>"
+                     f"<span style='display:inline-block;width:200px;background:#2a2d34;"
+                     f"border-radius:4px;overflow:hidden;vertical-align:middle'>"
+                     f"<span style='display:block;height:10px;width:{c['pct']}%;"
+                     f"background:#3b82f6'></span></span> "
+                     f"<b>{c['count']}</b> <span class='muted'>({c['pct']}%)</span></div>\n")
+        category_html = bars
 
     body = f"""
     <a class="back" href="/">← back</a>
@@ -533,6 +589,12 @@ def failures():
        started (RUFUS_DEBUG was on) but never finished (Step 4/5 failure,
        crash, or a stopped process).</p>
     {orphan_html}
+    <h2>Bottleneck breakdown (all-time)</h2>
+    <p class="muted">Every rejected attempt, ever, grouped into a fixed
+       taxonomy instead of counted by exact wording — this is what actually
+       answers "which stage of the pipeline is the bottleneck" once there's
+       enough volume.</p>
+    {category_html}
     <h2>Rejected script attempts</h2>
     {filt_html}
     {reject_html}

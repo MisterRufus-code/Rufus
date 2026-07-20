@@ -191,3 +191,48 @@ def test_judge_script_facts_covers_conspiracy_framing():
     src = inspect.getsource(supervisor.judge_script_facts)
     assert "conspiracy" in src.lower()
     assert "misinformation" in src.lower()
+
+
+# ── judge_seed: knowledge-gap requirement (not just thin/off-topic) ───────────
+
+class _CapturingClient:
+    """Like _FakeClient but records the prompt actually sent, so tests can
+    assert on what the model was asked, not just how a canned reply parses."""
+    def __init__(self, content):
+        self._content = content
+        self.last_kwargs = None
+    @property
+    def chat(self): return self
+    @property
+    def completions(self): return self
+    def create(self, **kwargs):
+        self.last_kwargs = kwargs
+        return _FakeResp(self._content)
+
+
+def test_judge_seed_prompt_includes_knowledge_gap_requirement(monkeypatch):
+    """Accuracy alone must not be enough to pass — the prompt has to demand
+    a genuinely counter-intuitive angle, not just concrete/on-topic facts."""
+    monkeypatch.setattr(sup, "_load_key", lambda: "sk-test")
+    client = _CapturingClient("APPROVE|has a real surprise")
+    monkeypatch.setattr("openai.OpenAI", lambda api_key=None: client, raising=False)
+
+    sup.judge_seed(SEED, "finance")
+
+    prompt = client.last_kwargs["messages"][0]["content"].lower()
+    assert "knowledge gap" in prompt
+    assert "counter-intuitive" in prompt
+
+
+def test_judge_seed_rejects_flat_accurate_seed(monkeypatch):
+    """A seed can be concrete and on-topic and still fail the knowledge-gap
+    half of the check — this must still come through as a real REJECT."""
+    monkeypatch.setattr(sup, "_load_key", lambda: "sk-test")
+    monkeypatch.setattr(
+        "openai.OpenAI",
+        lambda api_key=None: _FakeClient(
+            "REJECT|accurate and on-topic but no counter-intuitive angle, knowledge gap test fails"),
+        raising=False)
+    ok, reason = sup.judge_seed(SEED, "finance")
+    assert ok is False
+    assert "knowledge gap" in reason.lower()

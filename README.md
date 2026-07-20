@@ -165,13 +165,42 @@ seed or off-target image prompts burn a full render before anything catches
 them. `scripts/supervisor.py` adds two early gpt-4o-mini judge calls that can
 reject and force **one** retry of just that stage:
 
-- **After research** — rejects a seed with no concrete facts to build a story on (retries `get_seed`).
+- **After research** — rejects a seed with no concrete facts to build a story on, **or** one that passes a "knowledge gap" test: does it contain a counter-intuitive fact that would break a typical viewer's mental model? A seed can be accurate and on-topic and still get rejected here for being a flat, expected restatement of common knowledge with no surprise in it (retries `get_seed`).
 - **After scripting** — a **fact-check**: compares the finished script's names/numbers/dates against the source seed (the script prompt forbids inventing them; this verifies GPT complied). On rejection the script is rewritten once with the objection fed back; if the rewrite is *still* flagged, the video renders but the **upload is held** with the specific claim printed — wrong facts never publish themselves. Wisdom-quote seeds keep their documented-history allowance.
 - **After beat-prompt writing, before FLUX/SD/diffusers generation** — rejects near-duplicate or off-topic image prompts (retries `_build_sd_prompts`, which is non-deterministic so a retry actually differs).
 
 Each call is a few hundred tokens (a fraction of a cent) and fails **open** —
 no key, an API error, or a malformed reply always approves, so a broken judge
 can never block a render. Set `RUFUS_SUPERVISOR=0` to skip it entirely.
+
+---
+
+## Script depth (beyond grounding)
+
+Grounding (never inventing a fact) and interest (making a viewer actually
+care) are different problems — a script can pass every accuracy check and
+still be flat. Four checks target the second problem specifically:
+
+- **Sensory-anchor disqualifier** — the body critic (`_score`) rejects
+  (caps score ≤4) a script with zero concrete physical detail — nothing a
+  viewer could see, hear, feel, smell, or taste. Abstract summary, however
+  accurate, is a critic failure now, not just a missed opportunity.
+- **Cadence pattern-interrupt** (`_cadence_violation`) — a script whose
+  sentences are all a similar length reads as monotone even with perfect
+  content; the pre-filter chain now requires at least one short, punchy
+  sentence (≤6 words) and one longer, flowing one (≥15 words) somewhere in
+  the body before it's accepted.
+- **Hook-opener diversity** (`_overused_hook_openers`) — a long-term
+  semantic-decay guard: if a small set of opening words dominates the last
+  30 shipped hooks in a niche (≥15% share), those words are named and
+  banned in the next hook-factory prompt. Catches slow convergence toward
+  the model's favorite few hook shapes across dozens/hundreds of videos —
+  something nobody notices without actually reading the DB.
+- **Bottleneck breakdown** — the dashboard's `/failures` page groups every
+  rejected attempt, all-time, into a fixed taxonomy (safety / accuracy /
+  weak_hook / loose_structure / boring) instead of counting distinct
+  free-text strings — after enough volume, this answers "which stage of
+  the pipeline is actually the bottleneck" at a glance.
 
 ---
 
