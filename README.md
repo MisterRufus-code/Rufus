@@ -20,7 +20,7 @@ python scripts/main.py --skip-upload   # render only, nothing leaves the machine
 4. **Script** — hook-first, 3-beat arc (Setup → Turn → Payoff), scored 0–10.
 5. **Render** — TTS voice + Whisper word-captions + Ken Burns + music → 1080×1920 mp4.
 6. **Save** — every video + script + score logged to `rufus.db` (SQLite).
-7. **Upload** — YouTube **private**, scheduled to the next peak ET hour. Only scripts ≥ the quality bar upload.
+7. **Review queue** — nothing uploads automatically. Every video lands `pending` in the dashboard; approving there uploads to YouTube **private**, scheduled to the next peak ET hour. (`RUFUS_AUTO_UPLOAD=1` restores the old fully-automatic behavior, gated on the same quality bar.)
 
 ---
 
@@ -188,24 +188,36 @@ python -m pytest tests/ -q            # test suite
 
 ### Go live (daily automation, Windows)
 
-One command turns the machine autonomous — one Short per day, hands-off:
+One command turns the machine autonomous, one or several Shorts per day, hands-off:
 
 ```powershell
-.\schedule_daily.ps1                 # every day at 13:00
-.\schedule_daily.ps1 -Time "09:30"   # or pick the hour
-.\schedule_daily.ps1 -Unregister     # stop
+.\schedule_daily.ps1                              # one run/day at 13:00
+.\schedule_daily.ps1 -Time "09:30"                # one run/day, your hour
+.\schedule_daily.ps1 -Times "09:00,13:00,17:00,20:00,23:00"   # 5 runs/day
+.\schedule_daily.ps1 -Unregister                  # stop ALL Rufus daily runs
 ```
 
-Requirements at run time: PC on, ComfyUI running (FLUX engine). The scheduled
-run uses `run_scheduled.bat` — full pipeline **including upload**, protected by
-the built-in gates: script must score ≥8/10, output must pass QC, and uploads
-are **private** (scheduled to the next peak hour) so nothing goes public
-without you.
+Each trigger is registered as its **own** Windows Task Scheduler task (`Rufus
+Daily Short 1`, `2`, ...) rather than an in-process loop — one crashing or
+running long can't take the rest of the day down with it, since Task
+Scheduler fires each one independently. Re-running `-Times` with a different
+count clears any stale extra tasks from a previous run automatically.
 
-**Daily 2-minute checklist:** open `media_library\output\` → skim the newest
-video + its `.qc.json` → if it's good, it publishes itself at the scheduled
-peak hour (or flip it public in YouTube Studio); if it's held, the log says
-exactly why (`logs\rufus_YYYYMMDD.log`).
+At higher daily counts, one channel burns through its Wikipedia topic pool
+proportionally faster (money_history's ~155 topics ≈ 1 month at 5/day
+instead of 5 months at 1/day) — nothing breaks when it runs low (the source
+chain just falls through to StackExchange/RSS/the wisdom-quote fallback more
+often), but it's worth knowing before picking a high number.
+
+Requirements at run time: PC on, ComfyUI running (FLUX engine). The scheduled
+run uses `run_scheduled.bat` — full render pipeline through scoring/QC, then
+queues for review (see Dashboard below) rather than uploading itself.
+
+**Daily 2-minute checklist:** open the dashboard → approve or reject whatever
+landed in "Awaiting your review" (edit title/description first if you want)
+→ approving uploads **private**, scheduled to the next peak hour. If a video
+scored low or failed a gate, that reason is right there on its page instead
+of buried in `logs\rufus_YYYYMMDD.log`.
 
 ### Dashboard — approval queue
 
