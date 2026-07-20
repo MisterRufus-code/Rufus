@@ -149,6 +149,90 @@ def _top_rejections(limit: int = 8, channel: str | None = None) -> list[dict]:
     return [{"reason": r[0], "count": r[1]} for r in rows]
 
 
+def _orphaned_debug_runs(limit: int = 40) -> list[dict]:
+    """Debug folders with NO matching videos.run_id — a run that started
+    (RUFUS_DEBUG wrote script/keyframes) but crashed before reaching Step 6's
+    DB save. These are invisible everywhere else in the app; that's exactly
+    the "every failure, not just the successes" gap this page closes."""
+    if not DEBUG_ROOT.is_dir():
+        return []
+    try:
+        with db_manager._conn() as c:
+            known = {r[0] for r in c.execute(
+                "SELECT run_id FROM videos WHERE run_id IS NOT NULL").fetchall()}
+    except Exception:
+        known = set()
+
+    orphans = []
+    try:
+        entries = sorted((d for d in DEBUG_ROOT.iterdir() if d.is_dir()),
+                         key=lambda p: p.stat().st_mtime, reverse=True)
+    except OSError:
+        return []
+    for d in entries:
+        if d.name in known:
+            continue
+        try:
+            files = sorted(f.name for f in d.iterdir() if f.is_file())
+        except OSError:
+            files = []
+        preview = ""
+        script_file = d / "script.txt"
+        if script_file.exists():
+            try:
+                preview = script_file.read_text(encoding="utf-8", errors="replace")[:300]
+            except OSError:
+                pass
+        orphans.append({"run_id": d.name, "mtime": d.stat().st_mtime,
+                        "files": files, "preview": preview})
+        if len(orphans) >= limit:
+            break
+    return orphans
+
+
+def _rejected_attempts(limit: int = 200, channel: str | None = None,
+                       niche: str | None = None, phase: str | None = None) -> list[dict]:
+    """Every rejected hook/body attempt (script_attempts already logs these —
+    the homepage only ever showed the top-8 aggregate; this is the full,
+    filterable browser."""
+    q = ("SELECT ts, niche, phase, attempt_n, hook, body, rejected_reason, channel "
+         "FROM script_attempts WHERE accepted = 0 AND rejected_reason IS NOT NULL "
+         "AND rejected_reason != ''")
+    args: list = []
+    if channel:
+        q += " AND channel = ?"; args.append(channel)
+    if niche:
+        q += " AND niche = ?"; args.append(niche)
+    if phase:
+        q += " AND phase = ?"; args.append(phase)
+    q += " ORDER BY id DESC LIMIT ?"
+    args.append(limit)
+    try:
+        with db_manager._conn() as c:
+            rows = c.execute(q, args).fetchall()
+    except Exception:
+        return []
+    cols = ["ts", "niche", "phase", "attempt_n", "hook", "body",
+            "rejected_reason", "channel"]
+    return [dict(zip(cols, r)) for r in rows]
+
+
+def _distinct(column: str) -> list[str]:
+    try:
+        with db_manager._conn() as c:
+            rows = c.execute(
+                f"SELECT DISTINCT {column} FROM script_attempts "
+                f"WHERE {column} IS NOT NULL ORDER BY {column}").fetchall()
+        return [r[0] for r in rows]
+    except Exception:
+        return []
+
+
+def _fmt_ts(epoch: float) -> str:
+    from datetime import datetime
+    return datetime.fromtimestamp(epoch).strftime("%Y-%m-%d %H:%M")
+
+
 def _debug_assets(run_id: str | None) -> list[dict]:
     """Files in this run's debug folder (script/voiceover/keyframes), if
     RUFUS_DEBUG was on for that run and the ~30-day retention hasn't swept it."""
@@ -268,8 +352,14 @@ PAGE_HEAD = """<!doctype html><html><head><meta charset="utf-8">
   @media (max-width: 700px) { .grid2 { grid-template-columns: 1fr; } }
   .assets a { display: inline-block; margin: 4px 8px 4px 0; font-size: 13px;
               color: #3b82f6; text-decoration: none; }
+  .navlink { color: #9ca3af; text-decoration: none; font-size: 14px; margin-left: 16px; }
+  .navlink:hover { color: #3b82f6; }
+  .orphan { background: #171a21; border: 1px solid #2a2d34; border-radius: 8px;
+            padding: 12px 14px; margin-bottom: 10px; }
+  @media (prefers-color-scheme: light) { .orphan { background: #fff; border-color: #e5e7eb; } }
 </style></head><body>
-<header><a href="/"><h1>🎬 Rufus Dashboard</h1></a></header>
+<header><a href="/"><h1>🎬 Rufus Dashboard</h1></a>
+<a class="navlink" href="/failures">⚠ Failures &amp; rejected attempts</a></header>
 <main>
 """
 PAGE_TAIL = "</main></body></html>"
@@ -355,6 +445,64 @@ def index():
         {reject_html}
       </div>
     </div>
+    """
+    return PAGE_HEAD + body + PAGE_TAIL
+
+
+@app.route("/failures")
+def failures():
+    """Every failure the automation produced, not just the successes — a
+    crashed run has NO row in `videos` at all (it never reached Step 6), so
+    without this page it's invisible everywhere else in the app."""
+    channel = request.args.get("channel") or None
+    niche   = request.args.get("niche") or None
+    phase   = request.args.get("phase") or None
+
+    orphans = _orphaned_debug_runs()
+    rejects = _rejected_attempts(channel=channel, niche=niche, phase=phase)
+
+    niche_links = "".join(
+        f'<a href="/failures?niche={_esc(n)}">{_esc(n)}</a> ' for n in _distinct("niche"))
+    phase_links = "".join(
+        f'<a href="/failures?phase={_esc(p)}">{_esc(p)}</a> ' for p in _distinct("phase"))
+    filt_html = (f'<div class="filters"><a href="/failures">all niches</a> {niche_links}'
+                f'<br><a href="/failures">all phases</a> {phase_links}</div>')
+
+    orphan_html = "<p class='muted'>No crashed/incomplete runs found — every RUFUS_DEBUG run reached the database.</p>"
+    if orphans:
+        blocks = ""
+        for o in orphans:
+            file_links = "".join(
+                f'<a href="/debug/{_esc(o["run_id"])}/{_esc(f)}" target="_blank">{_esc(f)}</a> '
+                for f in o["files"]
+            ) or "<span class='muted'>(no files saved)</span>"
+            preview = f"<div class='muted' style='margin:6px 0'>{_esc(o['preview'])}</div>" if o["preview"] else ""
+            blocks += (f'<div class="orphan"><b>{_esc(o["run_id"])}</b> '
+                      f'<span class="muted">· {_fmt_ts(o["mtime"])}</span>'
+                      f'{preview}<div class="assets">{file_links}</div></div>\n')
+        orphan_html = blocks
+
+    reject_html = "<p class='muted'>No rejected attempts recorded.</p>"
+    if rejects:
+        rows = ""
+        for r in rejects:
+            preview = _esc((r["body"] or r["hook"] or "")[:90])
+            rows += (f"<tr><td class='muted'>{_esc(r['ts'])}</td>"
+                     f"<td>{_esc(r['niche'])}</td><td>{_esc(r['phase'])}</td>"
+                     f"<td>{_esc(r['rejected_reason'])}</td><td>{preview}</td></tr>\n")
+        reject_html = (f"<table><tr><th>When</th><th>Niche</th><th>Phase</th>"
+                       f"<th>Reason</th><th>Preview</th></tr>{rows}</table>")
+
+    body = f"""
+    <a class="back" href="/">← back</a>
+    <h2 style="margin-top:14px">Crashed / incomplete runs ({len(orphans)})</h2>
+    <p class="muted">Debug folders with no matching database row — the run
+       started (RUFUS_DEBUG was on) but never finished (Step 4/5 failure,
+       crash, or a stopped process).</p>
+    {orphan_html}
+    <h2>Rejected script attempts</h2>
+    {filt_html}
+    {reject_html}
     """
     return PAGE_HEAD + body + PAGE_TAIL
 

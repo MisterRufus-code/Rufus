@@ -417,3 +417,111 @@ def test_approve_restores_env_vars_even_on_failure(client, tmp_path, monkeypatch
     monkeypatch.setattr(youtube_uploader, "upload", fake_upload)
     client.post(f"/video/{vid}/approve")
     assert "RUFUS_NICHE_OVERRIDE" not in _os.environ
+
+
+# ── Failures page: crashed runs + rejected attempts browser ───────────────────
+
+def test_failures_page_loads_empty(client):
+    r = client.get("/failures")
+    assert r.status_code == 200
+    assert b"No crashed" in r.data
+    assert b"No rejected attempts" in r.data
+
+
+def test_failures_lists_orphaned_debug_run_not_in_db(client, tmp_path):
+    """A run that started (RUFUS_DEBUG wrote files) but crashed before Step 6
+    has NO videos row — it must still show up here, unlike everywhere else."""
+    run_dir = dashboard.DEBUG_ROOT / "crashed-run-1"
+    run_dir.mkdir(parents=True)
+    (run_dir / "script.txt").write_text("This script never made it to render.")
+    (run_dir / "01.png").write_bytes(b"x" * 1000)
+
+    r = client.get("/failures")
+    body = r.data.decode()
+    assert "crashed-run-1" in body
+    assert "This script never made it to render." in body
+    assert "01.png" in body
+
+
+def test_failures_excludes_runs_that_did_reach_db(client, tmp_path):
+    """A debug folder WITH a matching videos.run_id is a normal completed
+    run, not a failure — must not appear in the crashed-runs section."""
+    run_dir = dashboard.DEBUG_ROOT / "completed-run"
+    run_dir.mkdir(parents=True)
+    (run_dir / "script.txt").write_text("finished fine")
+    db_manager.save_video(niche="finance", script_hook="Hook", scene_desc="s",
+                          video_file="v.mp4", score=9, run_id="completed-run")
+
+    r = client.get("/failures")
+    body = r.data.decode()
+    section = body.split("Crashed / incomplete runs")[1].split("Rejected script attempts")[0]
+    assert "completed-run" not in section
+
+
+def test_failures_shows_rejected_script_attempts(client):
+    db_manager.save_attempt(run_id="r1", niche="finance", seed_type="wisdom",
+                            phase="hook_gen", attempt_n=1, hook="A bad hook",
+                            rejected_reason="banned phrase: crucial",
+                            accepted=False)
+    db_manager.save_attempt(run_id="r1", niche="finance", seed_type="wisdom",
+                            phase="body_gen", attempt_n=2, body="Some rejected body text",
+                            rejected_reason="specificity too low",
+                            accepted=False)
+    r = client.get("/failures")
+    body = r.data.decode()
+    assert "banned phrase: crucial" in body
+    assert "specificity too low" in body
+    assert "Some rejected body text" in body
+
+
+def test_failures_excludes_accepted_attempts(client):
+    db_manager.save_attempt(run_id="r1", niche="finance", seed_type="wisdom",
+                            phase="body_gen", attempt_n=1, body="A fine script",
+                            total_score=9, accepted=True)
+    r = client.get("/failures")
+    assert b"A fine script" not in r.data
+
+
+def test_failures_niche_filter(client):
+    db_manager.save_attempt(run_id="r1", niche="finance", seed_type="wisdom",
+                            phase="hook_gen", attempt_n=1, hook="Finance hook",
+                            rejected_reason="reason A", accepted=False)
+    db_manager.save_attempt(run_id="r2", niche="money_history", seed_type="wisdom",
+                            phase="hook_gen", attempt_n=1, hook="History hook",
+                            rejected_reason="reason B", accepted=False)
+    r = client.get("/failures?niche=finance")
+    body = r.data.decode()
+    assert "Finance hook" in body
+    assert "History hook" not in body
+
+
+def test_failures_phase_filter(client):
+    db_manager.save_attempt(run_id="r1", niche="finance", seed_type="wisdom",
+                            phase="hook_gen", attempt_n=1, hook="A hook",
+                            rejected_reason="hook reason", accepted=False)
+    db_manager.save_attempt(run_id="r1", niche="finance", seed_type="wisdom",
+                            phase="body_gen", attempt_n=1, body="A body",
+                            rejected_reason="body reason", accepted=False)
+    r = client.get("/failures?phase=hook_gen")
+    body = r.data.decode()
+    assert "hook reason" in body
+    assert "body reason" not in body
+
+
+def test_failures_escapes_xss_in_script_preview(client, tmp_path):
+    run_dir = dashboard.DEBUG_ROOT / "xss-run"
+    run_dir.mkdir(parents=True)
+    (run_dir / "script.txt").write_text("<script>alert(1)</script>")
+    r = client.get("/failures")
+    assert b"<script>alert(1)</script>" not in r.data
+    assert b"&lt;script&gt;" in r.data
+
+
+def test_orphaned_debug_runs_handles_missing_directory(client, tmp_path, monkeypatch):
+    monkeypatch.setattr(dashboard, "DEBUG_ROOT", tmp_path / "does-not-exist")
+    assert dashboard._orphaned_debug_runs() == []
+
+
+def test_nav_link_to_failures_present_on_homepage(client):
+    r = client.get("/")
+    assert b"/failures" in r.data

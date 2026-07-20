@@ -243,6 +243,16 @@ a live run — WAL mode), never crashes on a missing or partial DB row. The
 approve action is the only place this app talks to the network (the real
 YouTube upload call) — everything else is local.
 
+**Failures & rejected attempts** (`/failures`, linked top-right): every
+mistake the automation made, not just its successes. Two sections: **crashed
+runs** — `RUFUS_DEBUG` folders with no matching database row at all, i.e. a
+run that started but died before Step 6 (bad script, failed render) and
+would otherwise leave zero trace anywhere in the app; and **rejected script
+attempts** — the full, filterable (by niche/phase) list of every hook/body
+`script_writer.py` tried and threw away, with its exact rejection reason
+(already logged to `script_attempts` for every run; the homepage only ever
+showed the top-8 aggregate, this is the full browser).
+
 **Access from your phone at home**: it already binds to `0.0.0.0`, so
 `http://<this PC's LAN IP>:8765` works from any device on the same wifi —
 find the IP with `ipconfig` (look for "IPv4 Address").
