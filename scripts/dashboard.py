@@ -822,11 +822,29 @@ def approve_video(video_id):
             yt_url, yt_id = yt_mod.upload(video_file, v["script_full"] or "",
                                           thumbnail_path=thumb if thumb.exists() else None,
                                           metadata=meta)
+    except Exception as e:
+        # Upload itself failed — the video did NOT go up, so re-approving is
+        # safe. Record it like main.py does so report.py's FAILED count sees
+        # dashboard failures too (it used to miss them entirely).
+        try:
+            db_manager.mark_upload_failed(video_id, str(e))
+        except Exception:
+            pass
+        return _redirect_detail(video_id, error=f"Upload failed (not uploaded, safe to retry): {e}")
+
+    # The upload SUCCEEDED. A DB failure past this point must NOT read as
+    # "upload failed" — that would tempt a re-approve and publish a DUPLICATE
+    # public video. Separate block, explicit do-not-retry message.
+    try:
         db_manager.update_youtube_id(video_id, yt_id)
         db_manager.set_upload_status(video_id, "approved")
-        return _redirect_detail(video_id, ok=f"Uploaded: {yt_url}")
-    except Exception as e:
-        return _redirect_detail(video_id, error=f"Upload failed: {e}")
+    except Exception as db_err:
+        return _redirect_detail(
+            video_id,
+            error=(f"UPLOADED OK ({yt_url}) but the status update failed "
+                   f"({db_err}). Do NOT re-approve — it's already live. Fix "
+                   f"the DB row manually if needed."))
+    return _redirect_detail(video_id, ok=f"Uploaded: {yt_url}")
 
 
 @app.route("/video/<int:video_id>/reject", methods=["POST"])

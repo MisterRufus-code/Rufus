@@ -738,3 +738,41 @@ def test_dashboard_runs_single_threaded():
     threaded=False in app.run() is load-bearing. Guard it textually."""
     src = (Path(__file__).parent.parent / "scripts" / "dashboard.py").read_text()
     assert "threaded=False" in src
+
+
+# ── Audit M4: upload-success-then-DB-failure must NOT read as failure ──────────
+
+def test_approve_db_failure_after_successful_upload_warns_do_not_retry(client, tmp_path, monkeypatch):
+    """If upload() succeeds but the DB status update then fails, the message
+    must NOT say "upload failed" (that tempts a re-approve → duplicate public
+    video). It must say uploaded-OK-do-not-retry."""
+    vf = tmp_path / "v.mp4"; vf.write_bytes(b"x")
+    vid = db_manager.save_video(niche="finance", script_hook="H", scene_desc="s",
+                                video_file=str(vf), score=9)
+    monkeypatch.setattr(youtube_uploader, "upload",
+                        lambda *a, **k: ("https://youtu.be/LIVE", "LIVE"))
+    monkeypatch.setattr(db_manager, "update_youtube_id",
+                        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("db locked")))
+    r = client.post(f"/video/{vid}/approve", follow_redirects=True)
+    body = r.data.decode()
+    assert "UPLOADED OK" in body
+    assert "Do NOT re-approve" in body
+
+
+def test_approve_upload_failure_records_mark_upload_failed(client, tmp_path, monkeypatch):
+    """A genuine upload failure should be recorded (report.py's FAILED count
+    used to miss dashboard failures entirely) and say it's safe to retry."""
+    vf = tmp_path / "v.mp4"; vf.write_bytes(b"x")
+    vid = db_manager.save_video(niche="finance", script_hook="H", scene_desc="s",
+                                video_file=str(vf), score=9)
+    recorded = []
+    monkeypatch.setattr(youtube_uploader, "upload",
+                        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("quota")))
+    monkeypatch.setattr(db_manager, "mark_upload_failed",
+                        lambda vid_, err: recorded.append((vid_, err)))
+    r = client.post(f"/video/{vid}/approve", follow_redirects=True)
+    assert "safe to retry" in r.data.decode()
+    assert recorded and recorded[0][0] == vid
+    with db_manager._conn() as c:
+        row = c.execute("SELECT upload_status FROM videos WHERE id=?", (vid,)).fetchone()
+    assert row[0] == "pending"                    # still retryable

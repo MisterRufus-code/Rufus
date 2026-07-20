@@ -131,7 +131,7 @@ def _ensure_media_root() -> None:
 # ── Housekeeping (disk + logs never grow unbounded) ──────────────────────────────
 
 def _housekeeping(max_log_days: int = 90, max_cache_days: int = 14,
-                  max_debug_days: int = 30) -> None:
+                  max_debug_days: int = 30, max_output_days: int = 14) -> None:
     """Delete old logs and stale cache/temp/debug media. Cheap, runs every start.
 
     Debug gets its own, longer window (~a month, not 14 days) — RUFUS_DEBUG
@@ -169,8 +169,53 @@ def _housekeeping(max_log_days: int = 90, max_cache_days: int = 14,
                     sub.rmdir()
             except OSError:
                 continue
+
+    removed += _housekeep_output(max_output_days)
+
     if removed:
         print(f"[maint] cleaned {removed} stale file(s)")
+
+
+def _housekeep_output(max_output_days: int) -> int:
+    """Delete rendered videos + their thumbnail/QC sidecars older than the
+    window — output/ was NOT covered before, so at 5 videos/day it grew
+    without bound (mp4s + .thumb.jpg + .mp4.qc.json forever).
+
+    CRITICAL protection: a video still `pending` review is NEVER deleted,
+    regardless of age — the reviewer (possibly a different person, days
+    later) needs the file to approve it. Only approved (already on YouTube,
+    so the local copy is a disposable backup) and rejected (never shipping)
+    videos are swept. Fail-safe: any DB error skips output cleanup entirely
+    rather than risk deleting a file whose status we can't confirm."""
+    out_dir = OUTPUT_DIR
+    if not out_dir.exists():
+        return 0
+    cutoff = time.time() - max_output_days * 86400
+    try:
+        from db_manager import _conn
+        with _conn() as c:
+            protected = {r[0] for r in c.execute(
+                "SELECT video_file FROM videos WHERE upload_status='pending' "
+                "AND video_file IS NOT NULL").fetchall()}
+    except Exception as e:
+        print(f"[maint] output cleanup skipped (DB unavailable: {e})")
+        return 0
+
+    removed = 0
+    for mp4 in out_dir.rglob("*.mp4"):
+        try:
+            if str(mp4) in protected:
+                continue                       # awaiting review — never delete
+            if mp4.stat().st_mtime >= cutoff:
+                continue                       # still within the keep window
+            for sidecar in (mp4, mp4.with_suffix(".thumb.jpg"),
+                           Path(str(mp4) + ".qc.json")):
+                if sidecar.exists():
+                    sidecar.unlink()
+                    removed += 1
+        except OSError:
+            continue
+    return removed
 
 
 # ── Tee stdout/stderr to a daily log file ───────────────────────────────────────

@@ -835,3 +835,59 @@ def test_analytics_and_uploader_share_one_scope_list():
     import youtube_uploader
     assert analytics_fetcher.SCOPES is youtube_uploader.SCOPES
     assert "https://www.googleapis.com/auth/yt-analytics.readonly" in youtube_uploader.SCOPES
+
+
+# ── Audit H5: output/ housekeeping (never grew before) ────────────────────────
+
+def test_housekeep_output_deletes_old_approved_but_protects_pending(tmp_path, monkeypatch):
+    """output/ was never cleaned — at 5/day it grew forever. Now old approved/
+    rejected videos are swept, but a PENDING video (awaiting review) is never
+    deleted regardless of age — the reviewer still needs it."""
+    import main, db_manager, time as _t
+    monkeypatch.setattr(main, "OUTPUT_DIR", tmp_path / "output")
+    monkeypatch.setattr(db_manager, "DB_FILE", tmp_path / "test.db")
+    db_manager.init_db()
+    (tmp_path / "output").mkdir()
+
+    old = _t.time() - 40 * 86400
+    def mk(name, status):
+        f = tmp_path / "output" / name
+        f.write_bytes(b"video")
+        (tmp_path / "output" / name.replace(".mp4", ".thumb.jpg")).write_bytes(b"t")
+        os.utime(f, (old, old))
+        db_manager.save_video(niche="finance", script_hook="h", scene_desc="s",
+                              video_file=str(f), score=9, upload_status=status)
+        return f
+
+    approved = mk("short_1.mp4", "approved")
+    pending  = mk("short_2.mp4", "pending")
+
+    removed = main._housekeep_output(max_output_days=14)
+    assert removed >= 1
+    assert not approved.exists()                 # old + approved → swept
+    assert not approved.with_suffix(".thumb.jpg").exists()
+    assert pending.exists()                      # pending → protected even though old
+
+
+def test_housekeep_output_keeps_recent_videos(tmp_path, monkeypatch):
+    import main, db_manager
+    monkeypatch.setattr(main, "OUTPUT_DIR", tmp_path / "output")
+    monkeypatch.setattr(db_manager, "DB_FILE", tmp_path / "test.db")
+    db_manager.init_db()
+    (tmp_path / "output").mkdir()
+    f = tmp_path / "output" / "short_new.mp4"
+    f.write_bytes(b"video")                       # fresh mtime
+    db_manager.save_video(niche="finance", script_hook="h", scene_desc="s",
+                          video_file=str(f), score=9, upload_status="approved")
+    main._housekeep_output(max_output_days=14)
+    assert f.exists()                             # within window → kept
+
+
+def test_housekeep_output_skips_when_db_unavailable(tmp_path, monkeypatch, capsys):
+    import main, db_manager
+    monkeypatch.setattr(main, "OUTPUT_DIR", tmp_path / "output")
+    (tmp_path / "output").mkdir()
+    (tmp_path / "output" / "short_x.mp4").write_bytes(b"v")
+    monkeypatch.setattr(db_manager, "_conn",
+                        lambda: (_ for _ in ()).throw(RuntimeError("locked")))
+    assert main._housekeep_output(max_output_days=1) == 0   # fail-safe: no deletions
