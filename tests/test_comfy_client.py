@@ -416,3 +416,99 @@ def test_motion_chain_hunyuan_catches_wan_face_skip(monkeypatch, tmp_path):
 
     assert len(clips) == 1
     assert ("wan", 0) in calls and ("hunyuan", 0) in calls
+
+
+# ── Two-phase generation: stills first, then motion (24GB thrash fix) ─────────
+
+def test_two_phase_all_renders_before_any_motion(monkeypatch, tmp_path):
+    """Interleaving image→animate per clip forced ComfyUI to swap FLUX in and
+    out for EVERY clip on a card that can't hold both models. All stills must
+    now complete before the first motion call."""
+    import wan_client
+
+    order = []
+    monkeypatch.setattr(wan_client, "enabled", lambda: True)
+    monkeypatch.setattr(wan_client, "ready", lambda: (True, "test"))
+
+    def wan_animate(png, clip, duration=8.0, idx=0, prompt=""):
+        order.append(("animate", idx))
+        clip.write_bytes(b"x" * 60_000)
+        return True
+
+    def fake_render(prompt, seed, model, steps, client_id, restore):
+        order.append(("render", None))
+        return (b"PNG", False)
+
+    monkeypatch.setattr(wan_client, "animate_image", wan_animate)
+    import svd_client
+    monkeypatch.setattr(svd_client, "img2vid_enabled", lambda: False)
+
+    freed = []
+    with patch.object(c, "is_available", return_value=True), \
+         patch.object(c, "list_checkpoints", return_value=[]), \
+         patch.object(c, "resolve_face_restore", return_value=None), \
+         patch.object(c, "_render_image", side_effect=fake_render), \
+         patch.object(c, "_fit_to_portrait", lambda b, p: p.write_bytes(b"i" * 25_000) or True), \
+         patch.object(c, "_avg_hash", return_value=None), \
+         patch.object(c, "_free_comfy_memory", side_effect=lambda: freed.append(1)):
+        clips = c.generate_clips(["p1", "p2", "p3"], n=3)
+
+    assert len(clips) == 3
+    renders  = [i for i, ev in enumerate(order) if ev[0] == "render"]
+    animates = [i for i, ev in enumerate(order) if ev[0] == "animate"]
+    assert max(renders) < min(animates)          # every render precedes every animate
+    assert freed == [1]                          # /free called exactly once, at the boundary
+
+
+def test_failed_image_reuses_previous_still_for_beat_alignment(monkeypatch, tmp_path):
+    """A failed image used to be SKIPPED, shifting every later clip one beat
+    ahead of its narration. It must now reuse the previous still so clip[i]
+    keeps matching beat[i]."""
+    calls = {"n": 0}
+
+    def fake_render(prompt, seed, model, steps, client_id, restore):
+        calls["n"] += 1
+        # Fail every render attempt for the SECOND prompt only
+        if "SECOND" in prompt:
+            return (None, False)
+        return (b"PNG", False)
+
+    def fake_kenburns(png, clip, duration=8.0, idx=0):
+        clip.write_bytes(b"x" * 60_000)
+        return True
+
+    with patch.object(c, "is_available", return_value=True), \
+         patch.object(c, "list_checkpoints", return_value=[]), \
+         patch.object(c, "resolve_face_restore", return_value=None), \
+         patch.object(c, "_render_image", side_effect=fake_render), \
+         patch.object(c, "_fit_to_portrait", lambda b, p: p.write_bytes(b"i" * 25_000) or True), \
+         patch.object(c, "_avg_hash", return_value=None), \
+         patch.object(c, "_animate_to_clip", side_effect=fake_kenburns), \
+         patch.object(c, "GEN_ERROR_BACKOFF", 0):
+        clips = c.generate_clips(["FIRST prompt", "SECOND prompt", "THIRD prompt"], n=3)
+
+    # All 3 beats still get a clip — beat 2 reuses beat 1's image
+    assert len(clips) == 3
+
+
+def test_free_not_called_in_stills_only_mode(monkeypatch, tmp_path):
+    """No motion engines (RUFUS_WAN=0 etc.) → no model switch → no /free."""
+    freed = []
+    monkeypatch.setenv("RUFUS_WAN", "0")
+    monkeypatch.setenv("RUFUS_HUNYUAN", "0")
+    monkeypatch.setenv("RUFUS_IMG2VID", "0")
+    def fake_kenburns(png, clip, duration=8.0, idx=0):
+        clip.write_bytes(b"x" * 60_000)
+        return True
+
+    with patch.object(c, "is_available", return_value=True), \
+         patch.object(c, "list_checkpoints", return_value=[]), \
+         patch.object(c, "resolve_face_restore", return_value=None), \
+         patch.object(c, "_render_image", return_value=(b"PNG", False)), \
+         patch.object(c, "_fit_to_portrait", lambda b, p: p.write_bytes(b"i" * 25_000) or True), \
+         patch.object(c, "_avg_hash", return_value=None), \
+         patch.object(c, "_animate_to_clip", side_effect=fake_kenburns), \
+         patch.object(c, "_free_comfy_memory", side_effect=lambda: freed.append(1)):
+        clips = c.generate_clips(["p1", "p2"], n=2)
+    assert len(clips) == 2
+    assert freed == []

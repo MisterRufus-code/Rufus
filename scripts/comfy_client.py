@@ -319,6 +319,22 @@ def _build_flux_graph(prompt: str, seed: int, model: str, steps: int) -> dict:
     }
 
 
+def _free_comfy_memory() -> None:
+    """Ask ComfyUI to unload models + free VRAM/RAM (its /free endpoint).
+    Used at the stills→motion phase boundary: a 24GB card can't hold FLUX and
+    a 14B/8B video model together, and letting ComfyUI evict lazily under
+    pressure is exactly the documented RAM-leak/degradation pattern. Best
+    effort — an older ComfyUI without /free just ignores this."""
+    try:
+        r = requests.post(f"{_host()}/free",
+                          json={"unload_models": True, "free_memory": True},
+                          timeout=30)
+        if r.status_code == 200:
+            print("[comfy] freed ComfyUI model memory (stills done — loading motion model)")
+    except Exception:
+        pass
+
+
 def _submit(graph: dict, client_id: str) -> str | None:
     """POST a workflow to /prompt. Returns prompt_id or None."""
     try:
@@ -510,6 +526,8 @@ def generate_clips(queries: list[str], n: int = 4,
         debug_dir.mkdir(parents=True, exist_ok=True)
         print(f"[comfy] DEBUG on — keeping keyframes in {debug_dir}")
 
+    # ── Phase 1: generate every still (FLUX stays loaded the whole time) ────
+    stills: list[tuple[int, Path, str]] = []   # (beat index, png path, prompt)
     for i, prompt in enumerate(prompts):
         print(f"[comfy] {i+1}/{len(prompts)}: {prompt[:70]}")
         png_path = tmp_dir / f"{stamp}_{i}.png"
@@ -547,8 +565,19 @@ def generate_clips(queries: list[str], n: int = 4,
             break
 
         if not accepted:
-            print(f"[comfy] no usable image for clip {i+1} — skipping")
-            continue
+            # BEAT ALIGNMENT: skipping would shift every LATER clip one beat
+            # earlier than its narration (clip lists are positional — the
+            # renderer cuts assume clip[i] ↔ beat[i]). Reuse the previous
+            # accepted still instead: a repeated image with a different
+            # Ken Burns/motion treatment is far less damaging than every
+            # subsequent image narrating the wrong sentence.
+            if stills:
+                print(f"[comfy] no usable image for clip {i+1} — reusing "
+                      f"previous still to keep images aligned with narration")
+                png_path.write_bytes(stills[-1][1].read_bytes())
+            else:
+                print(f"[comfy] no usable image for clip {i+1} — skipping")
+                continue
 
         if debug_dir is not None:
             try:
@@ -558,6 +587,20 @@ def generate_clips(queries: list[str], n: int = 4,
             except Exception as e:
                 print(f"[comfy] debug-save failed for clip {i+1}: {e}")
 
+        stills.append((i, png_path, prompt))
+
+    # ── Phase 2: animate every still ────────────────────────────────────────
+    # Two phases instead of image→animate per clip: interleaving forced
+    # ComfyUI to swap FLUX in and out for EVERY clip (10 model swaps per
+    # video on a 24GB card that can't hold both), thrashing RAM/VRAM and —
+    # per a ComfyUI-reliability audit — degrading until every clip silently
+    # fell through to Ken Burns. Batching stills first means exactly ONE
+    # switch, with an explicit /free between so the motion model loads into
+    # a clean card.
+    if motion_engines and stills:
+        _free_comfy_memory()
+
+    for i, png_path, prompt in stills:
         clip_path = tmp_dir / f"{stamp}_{i}.mp4"
         made_via = None
         for eng_name, animate in motion_engines:
@@ -573,7 +616,8 @@ def generate_clips(queries: list[str], n: int = 4,
             print(f"[comfy] clip {i+1} ready"
                   + (f" ({made_via} motion)" if made_via else " (Ken Burns)"))
         else:
-            print(f"[comfy] animation failed for clip {i+1}")
+            print(f"[comfy] animation failed for clip {i+1} — later images may "
+                  f"drift ahead of narration")
         png_path.unlink(missing_ok=True)
 
     if _fresh_images_enabled() and len(accepted_hashes) > n_prior:

@@ -128,3 +128,39 @@ def test_flux_instruction_pushes_photorealism_over_illustration(tmp_path, monkey
     assert "not a painting" in prompt.lower() or "never a painting" in prompt.lower()
     assert "film grain" in prompt.lower()
     assert "lens" in prompt.lower()
+
+
+# ── No-readable-text net (_defuse_readable_text) ──────────────────────────────
+# Seen live: "calendar page turning to December 31, 2022", "newspaper
+# headlines about the crisis", "'Follow' button with Bitcoin graphics" —
+# diffusion models render these as garbled AI gibberish, the single most
+# recognizable giveaway in the finished videos.
+
+def test_defuse_appends_clause_for_text_props():
+    import main
+    p = main._defuse_readable_text(
+        "An extreme close-up of a newspaper headline about the crisis")
+    assert "no" in p.lower() and "readable text" in p.lower()
+
+
+def test_defuse_covers_screens_and_buttons():
+    import main
+    for risky in ("a smartphone screen showing a Follow button",
+                  "a calendar page turning to December 31",
+                  "a weathered ledger open on a desk",
+                  "a stock ticker board with numbers"):
+        out = main._defuse_readable_text(risky)
+        assert "readable text" in out.lower(), risky
+
+
+def test_defuse_leaves_clean_prompts_untouched():
+    import main
+    clean = "A wide establishing shot of a misty mountain valley at dawn"
+    assert main._defuse_readable_text(clean) == clean
+
+
+def test_defuse_is_idempotent():
+    import main
+    once  = main._defuse_readable_text("a newspaper on a desk")
+    twice = main._defuse_readable_text(once)
+    assert once == twice

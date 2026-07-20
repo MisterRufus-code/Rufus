@@ -22,6 +22,7 @@ Usage:
 import argparse
 import json
 import os
+import re
 import sys
 import time
 from pathlib import Path
@@ -300,6 +301,34 @@ def _split_beats(script: str, max_scenes: int = 10, min_words: int = 3) -> list[
     return beats
 
 
+# Text-bearing props that diffusion models render as instantly-recognizable
+# AI gibberish (garbled headlines, fake UI, nonsense digits). The prompt
+# instruction bans making them readable, but GPT drifts — seen live:
+# "calendar page turning to December 31, 2022", "newspaper headlines about
+# the crisis", "'Follow' button with Bitcoin graphics". This deterministic
+# net catches every prompt that mentions one and appends a defusing clause,
+# regardless of whether the instruction was obeyed.
+_TEXT_PROP_RE = re.compile(
+    r"(?i)\b(newspaper|headline|calendar|screen|smartphone|phone|laptop|monitor|"
+    r"button|sign|signage|label|poster|banner|document|ledger|letter|scroll|"
+    r"parchment|statement|contract|certificate|chart|graph|ticker|keyboard|"
+    r"billboard|menu|book|page|note)\b")
+
+_DETEXT_CLAUSE = (
+    " Any paper, screen, sign, or lettering in the frame appears only at a "
+    "distance, at an oblique angle, or softly out of focus — absolutely no "
+    "readable text, numbers, or interface elements anywhere in the image.")
+
+
+def _defuse_readable_text(prompt: str) -> str:
+    """Append the no-readable-text clause to prompts that mention a
+    text-bearing prop. Only when triggered — a clean prompt stays untouched
+    (keeps token budgets tight and avoids diluting every prompt)."""
+    if _TEXT_PROP_RE.search(prompt) and "no readable text" not in prompt.lower():
+        return prompt.rstrip() + _DETEXT_CLAUSE
+    return prompt
+
+
 def _strip_beat_echo(line: str, beat: str) -> str:
     """Remove the beat's narration text if the prompt-writer echoed it.
 
@@ -535,8 +564,14 @@ def _build_sd_prompts(script: str, niche: str, max_scenes: int = 10) -> list[str
             "people, or object) through the sequence and let its CONDITION evolve with "
             "the story: pristine → strained → transformed. The last frame should feel "
             "like the consequence of the first, not an unrelated image.\n"
-            "- NO on-screen text, captions, watermarks, or written numbers in the image "
-            "(Rufus overlays its own captions).\n"
+            "- NO READABLE TEXT, EVER — this model garbles written words and the "
+            "gibberish instantly exposes the image as AI. Never make a text-bearing "
+            "object the subject: no readable newspaper headlines, calendar dates, "
+            "phone/computer screens with UI or buttons, signs, labels, ledgers with "
+            "legible writing, or documents shot close enough to read. If the beat "
+            "involves such an object, show it OBLIQUELY — at a distance, at a sharp "
+            "angle, partially out of focus, or from behind — so no lettering or "
+            "numerals are legible. (Rufus overlays its own captions.)\n"
             "- All prompts must be visually distinct.\n"
             f"{fresh_block}\n"
             f"Output EXACTLY {n} prompts, one per line. No numbering, no labels, no blank lines."
@@ -614,6 +649,7 @@ def _build_sd_prompts(script: str, niche: str, max_scenes: int = 10) -> list[str
         lines = [l for l in lines if len(l) > 20]
         lines = [_strip_beat_echo(l, beats[i]) if i < len(beats) else l
                  for i, l in enumerate(lines)]
+        lines = [_defuse_readable_text(l) for l in lines]
 
         if not lines:
             raise RuntimeError("GPT returned no valid prompts for SD generation")
