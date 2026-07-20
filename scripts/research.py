@@ -648,6 +648,110 @@ WIKI_TIMEOUT       = 10.0
 WIKI_MIN_EXTRACT   = 200   # a summary shorter than this can't carry a 45s script
 WIKI_MAX_ATTEMPTS  = 8     # bound network fetches per run
 
+# Auto-replenish: below this many UNUSED topics left for a niche, propose more
+# before the pool actually runs dry. At 1 video/day the ~155-topic pool lasts
+# ~5 months; at 5/day (multi-run scheduling) that's ~1 month — this is what
+# keeps a scaled-up schedule from just running out.
+WIKI_REPLENISH_THRESHOLD = 30
+WIKI_REPLENISH_COUNT     = 40
+
+
+def _unused_wiki_topic_count(niche_name: str, used_ids: set) -> int:
+    try:
+        topics = json.loads(WIKI_TOPICS_FILE.read_text()).get(niche_name, [])
+    except (OSError, json.JSONDecodeError):
+        return 0
+    n = 0
+    for title in topics:
+        url_title = title.strip().replace(" ", "_")
+        page_url  = f"https://en.wikipedia.org/wiki/{url_title}"
+        if "wiki:" + page_url not in used_ids:
+            n += 1
+    return n
+
+
+def replenish_wiki_topics(niche_name: str, count: int = WIKI_REPLENISH_COUNT) -> int:
+    """GPT proposes `count` new real Wikipedia article titles for this niche,
+    each VALIDATED by actually fetching its summary before being trusted
+    (GPT invents plausible-sounding titles that don't exist often enough to
+    matter) — anything that doesn't resolve to a real, sufficiently long
+    article is silently dropped, never appended. Returns how many were added.
+    Non-fatal on any failure (missing key, GPT error, all-invalid response):
+    the pool just doesn't grow this run, exactly as if this function didn't
+    exist — a topic-pool refill failure must never block a video from being
+    made from whatever topics remain.
+    """
+    try:
+        keys = _load_keys()
+        key  = keys.get("openai", "")
+        if not key or key.startswith("YOUR_") or key.startswith("FILL_"):
+            return 0
+
+        try:
+            data = json.loads(WIKI_TOPICS_FILE.read_text())
+        except (OSError, json.JSONDecodeError):
+            data = {}
+        existing = list(data.get(niche_name, []))
+
+        from openai import OpenAI
+        client = OpenAI(api_key=key)
+        existing_sample = ", ".join(existing[-60:])   # keep the prompt bounded
+        resp = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[{
+                "role": "user",
+                "content": (
+                    f"List {count} REAL, EXISTING English Wikipedia article "
+                    f"titles about the history of money/currency/finance "
+                    f"('{niche_name}' niche) — specific historical events, "
+                    f"currencies, financial crises, institutions, or figures. "
+                    f"Exact, correctly-spelled article titles only, one per "
+                    f"line, no numbering, no commentary. Do NOT repeat any of "
+                    f"these already-used topics: {existing_sample}"
+                ),
+            }],
+            temperature=0.8,
+            max_tokens=900,
+            timeout=60,
+        )
+        proposed = [l.strip().lstrip("-•").strip() for l in
+                   resp.choices[0].message.content.strip().split("\n")]
+        proposed = [t for t in proposed if t and t not in existing]
+    except Exception as e:
+        print(f"[research] topic replenish skipped (non-fatal): {e}")
+        return 0
+
+    validated = []
+    for title in proposed:
+        if len(validated) >= count:
+            break
+        try:
+            url_title = title.replace(" ", "_")
+            r = httpx.get(
+                f"https://en.wikipedia.org/api/rest_v1/page/summary/{url_title}",
+                headers=WIKI_HEADERS, timeout=WIKI_TIMEOUT, follow_redirects=True,
+            )
+            r.raise_for_status()
+            extract = _clean_text(r.json().get("extract") or "")
+            if len(extract) >= WIKI_MIN_EXTRACT:
+                validated.append(title)
+        except Exception:
+            continue   # GPT invented a title, or it's a disambiguation/stub page
+
+    if not validated:
+        return 0
+    try:
+        data.setdefault(niche_name, [])
+        data[niche_name].extend(validated)
+        WIKI_TOPICS_FILE.write_text(json.dumps(data, indent=2))
+        print(f"[research] topic pool: added {len(validated)} validated "
+              f"topic(s) to '{niche_name}' ({len(proposed) - len(validated)} "
+              f"proposed titles didn't resolve to real articles)")
+    except OSError as e:
+        print(f"[research] topic replenish: couldn't write wiki_topics.json: {e}")
+        return 0
+    return len(validated)
+
 
 def fetch_wikipedia_story(niche_name: str, used_ids: set | None = None) -> dict | None:
     """Self-directed, grounded seed source: the machine picks a topic from the
@@ -661,6 +765,9 @@ def fetch_wikipedia_story(niche_name: str, used_ids: set | None = None) -> dict 
     """
     if used_ids is None:
         used_ids = set()
+
+    if _unused_wiki_topic_count(niche_name, used_ids) < WIKI_REPLENISH_THRESHOLD:
+        replenish_wiki_topics(niche_name)   # non-fatal no-op on any failure
 
     try:
         topics = json.loads(WIKI_TOPICS_FILE.read_text()).get(niche_name, [])

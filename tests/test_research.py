@@ -320,3 +320,140 @@ def test_get_seed_with_topic_raises_when_unresolvable(monkeypatch):
     monkeypatch.setattr(research, "fetch_wikipedia_by_title", lambda q: None)
     with pytest.raises(RuntimeError, match="No Wikipedia article found"):
         research.get_seed(niche_name="money_history", topic="complete gibberish xyz")
+
+
+# ── Topic pool auto-replenish (prevents 5-videos/day from exhausting it) ──────
+
+def test_unused_wiki_topic_count_excludes_used(monkeypatch, tmp_path):
+    topics = tmp_path / "wiki_topics.json"
+    topics.write_text('{"money_history": ["A", "B", "C"]}')
+    monkeypatch.setattr(research, "WIKI_TOPICS_FILE", topics)
+    used = {"wiki:https://en.wikipedia.org/wiki/A"}
+    assert research._unused_wiki_topic_count("money_history", used) == 2
+
+
+def test_unused_wiki_topic_count_missing_niche_is_zero(monkeypatch, tmp_path):
+    topics = tmp_path / "wiki_topics.json"
+    topics.write_text('{"money_history": ["A"]}')
+    monkeypatch.setattr(research, "WIKI_TOPICS_FILE", topics)
+    assert research._unused_wiki_topic_count("nonexistent_niche", set()) == 0
+
+
+def test_replenish_noop_without_openai_key(monkeypatch, tmp_path):
+    topics = tmp_path / "wiki_topics.json"
+    topics.write_text('{"money_history": ["A"]}')
+    monkeypatch.setattr(research, "WIKI_TOPICS_FILE", topics)
+    monkeypatch.setattr(research, "_load_keys", lambda: {})
+    with patch.object(research.httpx, "get") as get:
+        added = research.replenish_wiki_topics("money_history")
+    assert added == 0
+    get.assert_not_called()   # no key -> no network calls at all
+
+
+def test_replenish_validates_before_trusting_gpt(monkeypatch, tmp_path):
+    """GPT invents plausible-sounding titles that don't exist often enough to
+    matter — only titles that actually resolve on Wikipedia get appended."""
+    topics = tmp_path / "wiki_topics.json"
+    topics.write_text('{"money_history": ["Existing Topic"]}')
+    monkeypatch.setattr(research, "WIKI_TOPICS_FILE", topics)
+    monkeypatch.setattr(research, "_load_keys", lambda: {"openai": "sk-real"})
+
+    class FakeResp:
+        class choices:
+            pass
+    fake_msg = MagicMock()
+    fake_msg.content = "Real Article\nFake Nonexistent Article\nAnother Real One"
+    fake_completion = MagicMock()
+    fake_completion.choices = [MagicMock(message=fake_msg)]
+
+    fake_openai_client = MagicMock()
+    fake_openai_client.chat.completions.create.return_value = fake_completion
+
+    def fake_wiki_get(url, **kwargs):
+        resp = MagicMock()
+        if "Fake_Nonexistent_Article" in url:
+            resp.raise_for_status.side_effect = Exception("404")
+        else:
+            resp.raise_for_status = MagicMock()
+            resp.json.return_value = {"extract": "A real long extract. " * 15}
+        return resp
+
+    with patch("openai.OpenAI", return_value=fake_openai_client), \
+         patch.object(research.httpx, "get", side_effect=fake_wiki_get):
+        added = research.replenish_wiki_topics("money_history", count=3)
+
+    assert added == 2   # only the two real articles
+    data = json.loads(topics.read_text())
+    assert "Real Article" in data["money_history"]
+    assert "Another Real One" in data["money_history"]
+    assert "Fake Nonexistent Article" not in data["money_history"]
+    assert "Existing Topic" in data["money_history"]   # original list preserved
+
+
+def test_replenish_never_duplicates_existing_topics(monkeypatch, tmp_path):
+    topics = tmp_path / "wiki_topics.json"
+    topics.write_text('{"money_history": ["Already Here"]}')
+    monkeypatch.setattr(research, "WIKI_TOPICS_FILE", topics)
+    monkeypatch.setattr(research, "_load_keys", lambda: {"openai": "sk-real"})
+
+    fake_msg = MagicMock()
+    fake_msg.content = "Already Here\nNew One"
+    fake_completion = MagicMock()
+    fake_completion.choices = [MagicMock(message=fake_msg)]
+    fake_openai_client = MagicMock()
+    fake_openai_client.chat.completions.create.return_value = fake_completion
+
+    def fake_wiki_get(url, **kwargs):
+        resp = MagicMock()
+        resp.raise_for_status = MagicMock()
+        resp.json.return_value = {"extract": "A real long extract. " * 15}
+        return resp
+
+    with patch("openai.OpenAI", return_value=fake_openai_client), \
+         patch.object(research.httpx, "get", side_effect=fake_wiki_get):
+        research.replenish_wiki_topics("money_history", count=2)
+
+    data = json.loads(topics.read_text())
+    assert data["money_history"].count("Already Here") == 1   # not duplicated
+
+
+def test_replenish_returns_zero_and_does_not_crash_on_gpt_error(monkeypatch, tmp_path):
+    topics = tmp_path / "wiki_topics.json"
+    topics.write_text('{"money_history": ["A"]}')
+    monkeypatch.setattr(research, "WIKI_TOPICS_FILE", topics)
+    monkeypatch.setattr(research, "_load_keys", lambda: {"openai": "sk-real"})
+
+    fake_client = MagicMock()
+    fake_client.chat.completions.create.side_effect = RuntimeError("API down")
+    with patch("openai.OpenAI", return_value=fake_client):
+        added = research.replenish_wiki_topics("money_history")
+    assert added == 0
+
+
+def test_fetch_wikipedia_story_triggers_replenish_when_pool_low(monkeypatch, tmp_path):
+    topics = tmp_path / "wiki_topics.json"
+    topics.write_text('{"money_history": ["Nixon shock"]}')   # 1 topic < threshold
+    monkeypatch.setattr(research, "WIKI_TOPICS_FILE", topics)
+
+    called = []
+    monkeypatch.setattr(research, "replenish_wiki_topics", lambda n, count=40: called.append(n))
+    extract = "x" * (research.WIKI_MIN_EXTRACT + 10)
+    with patch.object(research.httpx, "get", return_value=_wiki_response(extract)):
+        research.fetch_wikipedia_story("money_history")
+
+    assert called == ["money_history"]
+
+
+def test_fetch_wikipedia_story_skips_replenish_when_pool_healthy(monkeypatch, tmp_path):
+    topics = tmp_path / "wiki_topics.json"
+    many = [f"Topic {i}" for i in range(research.WIKI_REPLENISH_THRESHOLD + 10)]
+    topics.write_text(json.dumps({"money_history": many}))
+    monkeypatch.setattr(research, "WIKI_TOPICS_FILE", topics)
+
+    called = []
+    monkeypatch.setattr(research, "replenish_wiki_topics", lambda n, count=40: called.append(n))
+    extract = "x" * (research.WIKI_MIN_EXTRACT + 10)
+    with patch.object(research.httpx, "get", return_value=_wiki_response(extract)):
+        research.fetch_wikipedia_story("money_history")
+
+    assert called == []

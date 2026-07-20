@@ -205,9 +205,14 @@ count clears any stale extra tasks from a previous run automatically.
 
 At higher daily counts, one channel burns through its Wikipedia topic pool
 proportionally faster (money_history's ~155 topics ≈ 1 month at 5/day
-instead of 5 months at 1/day) — nothing breaks when it runs low (the source
-chain just falls through to StackExchange/RSS/the wisdom-quote fallback more
-often), but it's worth knowing before picking a high number.
+instead of 5 months at 1/day) — **the pool now auto-replenishes**: whenever
+a niche's unused-topic count drops under 30, GPT proposes ~40 more real
+article titles, each one individually *validated* by actually fetching its
+Wikipedia summary before being trusted (GPT invents plausible-sounding
+titles that don't exist — those are silently dropped, never added). Costs
+a few cents, happens automatically inline in a run, fails open (no key /
+GPT error / everything invented → the pool just doesn't grow that run,
+never blocks the video being made from whatever topics remain).
 
 Requirements at run time: PC on, ComfyUI running (FLUX engine). The scheduled
 run uses `run_scheduled.bat` — full render pipeline through scoring/QC, then
