@@ -294,6 +294,84 @@ def test_fetch_wikipedia_by_title_rejects_short_extract_then_tries_search():
     assert seed["title"] == "Real Article"
 
 
+# ── Trend-driven topic selection ──────────────────────────────────────────────
+
+def test_fetch_trending_wikipedia_resolves_rising_query(monkeypatch):
+    """A rising Google Trends query is resolved to a real Wikipedia article, so
+    the video's SUBJECT tracks demand — with the query recorded as provenance."""
+    monkeypatch.setattr(research, "_trending_queries",
+                        lambda n: ["gold standard collapse"])
+    fake = {"type": "wikipedia", "source": "Wikipedia", "title": "Gold standard",
+            "content": "x" * 300, "url": "https://en.wikipedia.org/wiki/Gold_standard"}
+    monkeypatch.setattr(research, "fetch_wikipedia_by_title", lambda q: fake)
+
+    seed = research.fetch_trending_wikipedia("money_history", used_ids=set())
+    assert seed["title"] == "Gold standard"
+    assert seed["trend_query"] == "gold standard collapse"
+
+
+def test_fetch_trending_wikipedia_skips_used_and_tries_next(monkeypatch):
+    used = {"wiki:https://en.wikipedia.org/wiki/Gold_standard"}
+    seen = {"type": "wikipedia", "source": "Wikipedia", "title": "Gold standard",
+            "content": "x" * 300, "url": "https://en.wikipedia.org/wiki/Gold_standard"}
+    fresh = {"type": "wikipedia", "source": "Wikipedia", "title": "Hyperinflation",
+             "content": "x" * 300, "url": "https://en.wikipedia.org/wiki/Hyperinflation"}
+    monkeypatch.setattr(research, "_trending_queries", lambda n: ["gold", "hyperinflation"])
+    monkeypatch.setattr(research, "fetch_wikipedia_by_title",
+                        lambda q: seen if q == "gold" else fresh)
+
+    seed = research.fetch_trending_wikipedia("money_history", used_ids=used)
+    assert seed["title"] == "Hyperinflation"   # skipped the already-used one
+
+
+def test_fetch_trending_wikipedia_none_when_no_trends(monkeypatch):
+    monkeypatch.setattr(research, "_trending_queries", lambda n: [])
+    assert research.fetch_trending_wikipedia("money_history", used_ids=set()) is None
+
+
+def test_get_seed_prefers_trending_topic_when_enabled(monkeypatch):
+    """With RUFUS_TREND_TOPICS on (default), a resolved trending topic is used
+    BEFORE the Reddit/SE/random-Wikipedia chain."""
+    monkeypatch.setenv("RUFUS_TREND_TOPICS", "1")
+    monkeypatch.setattr(research, "_load_niche", lambda: ({"subreddits": ["x"]}, "money_history"))
+    monkeypatch.setattr(research, "_load_used_seeds", lambda: [])
+    monkeypatch.setattr(research, "get_trending_context", lambda n: None)
+    monkeypatch.setattr(research, "_mark_seed_used", lambda s: None)
+    trend_seed = {"type": "wikipedia", "source": "Wikipedia", "title": "Roman denarius",
+                  "content": "x" * 300, "url": "https://en.wikipedia.org/wiki/Denarius",
+                  "trend_query": "roman coins"}
+    monkeypatch.setattr(research, "fetch_trending_wikipedia", lambda n, used_ids=None: trend_seed)
+    # If the chain were reached it would blow up — assert it is NOT.
+    monkeypatch.setattr(research, "fetch_reddit_story",
+                        lambda *a, **k: (_ for _ in ()).throw(AssertionError("reached chain")))
+
+    seed = research.get_seed(niche_name="money_history")
+    assert seed["title"] == "Roman denarius"
+
+
+def test_get_seed_trend_disabled_falls_to_chain(monkeypatch):
+    """RUFUS_TREND_TOPICS=0 must skip the trend-first path entirely."""
+    monkeypatch.setenv("RUFUS_TREND_TOPICS", "0")
+    monkeypatch.setattr(research, "_load_niche", lambda: ({"subreddits": []}, "money_history"))
+    monkeypatch.setattr(research, "_load_used_seeds", lambda: [])
+    monkeypatch.setattr(research, "get_trending_context", lambda n: None)
+    monkeypatch.setattr(research, "_mark_seed_used", lambda s: None)
+    monkeypatch.setattr(research, "_skip_reddit", lambda: True)
+    called = {"trend": False}
+    def _trend(*a, **k):
+        called["trend"] = True
+        return {"type": "wikipedia", "title": "X", "content": "x" * 300, "url": "u"}
+    monkeypatch.setattr(research, "fetch_trending_wikipedia", _trend)
+    monkeypatch.setattr(research, "fetch_stackexchange_story", lambda *a, **k: None)
+    wiki_seed = {"type": "wikipedia", "source": "Wikipedia", "title": "Chain topic",
+                 "content": "x" * 300, "url": "https://en.wikipedia.org/wiki/Chain"}
+    monkeypatch.setattr(research, "fetch_wikipedia_story", lambda *a, **k: wiki_seed)
+
+    seed = research.get_seed(niche_name="money_history")
+    assert called["trend"] is False        # trend path never invoked
+    assert seed["title"] == "Chain topic"
+
+
 def test_get_seed_with_topic_bypasses_auto_source_chain(monkeypatch, tmp_path):
     """--topic must not fall through Reddit/StackExchange/random-Wikipedia —
     it goes straight to the resolved topic, and marks it used like any seed."""

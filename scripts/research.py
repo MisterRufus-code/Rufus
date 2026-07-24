@@ -280,22 +280,22 @@ NICHE_TREND_SEEDS: dict[str, list[str]] = {
 }
 
 
-def get_trending_context(niche_name: str) -> str | None:
-    """Return a comma-separated string of rising Google Trends queries for this niche.
+def _trending_queries(niche_name: str) -> list[str]:
+    """Rising Google Trends queries for this niche, as a list (deduped, generic
+    single words dropped, capped at 5). [] if pytrends isn't installed, is
+    rate-limited, the niche has no trend seeds, or anything fails — every caller
+    treats [] as "no trend signal" and carries on.
 
-    Uses pytrends (unofficial Google Trends scraper — pip install pytrends).
-    Returns None gracefully if not installed, rate-limited, or any failure.
-    Injected into pre-analysis so hooks can reference what people are actively
-    searching this week — the single most reliable signal of viral potential.
-    """
+    Shared core behind BOTH get_trending_context (prompt flavour) and
+    fetch_trending_wikipedia (topic SELECTION), so the two can't drift apart."""
     try:
         from pytrends.request import TrendReq
     except ImportError:
-        return None
+        return []
 
     seeds = NICHE_TREND_SEEDS.get(niche_name)
     if not seeds:
-        return None
+        return []
 
     try:
         pt = TrendReq(hl="en-US", tz=300, timeout=(5, 15))
@@ -317,9 +317,6 @@ def get_trending_context(niche_name: str) -> str | None:
                     if df is not None and not df.empty:
                         trending.extend(df["query"].head(2).tolist())
 
-        if not trending:
-            return None
-
         # Deduplicate, remove generic single-word terms, cap at 5
         seen: set[str] = set()
         unique: list[str] = []
@@ -328,14 +325,24 @@ def get_trending_context(niche_name: str) -> str | None:
             if len(t_norm) > 4 and t_norm not in seen:
                 seen.add(t_norm)
                 unique.append(t.strip())
-
-        result = ", ".join(unique[:5])
-        print(f"[research] Google Trends ({niche_name}): {result}")
-        return result
+        return unique[:5]
 
     except Exception as e:
         print(f"[research] pytrends failed (non-fatal): {e}")
+        return []
+
+
+def get_trending_context(niche_name: str) -> str | None:
+    """Comma-separated rising Google Trends queries for this niche, for prompt
+    CONTEXT — hooks can reference what people are actively searching this week.
+    None if unavailable. See _trending_queries for the raw list, and
+    fetch_trending_wikipedia for using trends to pick the topic itself."""
+    queries = _trending_queries(niche_name)
+    if not queries:
         return None
+    result = ", ".join(queries)
+    print(f"[research] Google Trends ({niche_name}): {result}")
+    return result
 
 
 def _load_niche():
@@ -880,6 +887,34 @@ def fetch_wikipedia_by_title(query: str) -> dict | None:
     return None
 
 
+def fetch_trending_wikipedia(niche_name: str, used_ids: set | None = None) -> dict | None:
+    """TREND-DRIVEN topic selection: resolve THIS WEEK's rising Google Trends
+    queries for the niche into a real Wikipedia article, so the video's SUBJECT
+    tracks what people are actually searching — the single biggest reach lever,
+    ahead of script polish.
+
+    This is the crucial difference from get_trending_context, which only attaches
+    the trending terms as prompt flavour while the topic itself stays random: here
+    the trend actually PICKS the topic. Each rising query is resolved through the
+    same grounded title→search path as a user-chosen --topic, so the fact-gate and
+    hook-grounding checks still apply (a trend term with no real article just gets
+    skipped, never handed to the writer as free text). Skips already-used seeds;
+    returns None so the caller falls through to the normal source chain whenever
+    trends are unavailable (pytrends not installed, rate-limited, or nothing
+    resolves to a fresh article)."""
+    if used_ids is None:
+        used_ids = set()
+    for query in _trending_queries(niche_name):
+        seed = fetch_wikipedia_by_title(query)
+        if not seed:
+            continue
+        if _seed_id(seed) in used_ids:
+            continue
+        seed["trend_query"] = query   # provenance: which rising search picked this
+        return seed
+    return None
+
+
 def fetch_hackernews_story(niche_name: str, used_ids: set | None = None) -> dict | None:
     """Fetch a substantive Ask HN post relevant to the niche, skipping seen IDs.
 
@@ -1183,6 +1218,19 @@ def get_seed(niche_name: str | None = None, topic: str | None = None) -> dict:
         if trending_context:
             s["trending_context"] = trending_context
         return s
+
+    # TREND-FIRST topic selection: before the standard source chain, try to build
+    # the topic FROM this week's rising searches (fetch_trending_wikipedia). This
+    # makes the video's subject track demand, not just its hook. Fully graceful —
+    # returns None (falls straight through to the chain below) whenever pytrends
+    # is absent/rate-limited or nothing resolves. Opt out with RUFUS_TREND_TOPICS=0.
+    if os.environ.get("RUFUS_TREND_TOPICS", "1").strip().lower() not in ("0", "false", "no", "off"):
+        seed = fetch_trending_wikipedia(name, used_ids=used_set)
+        if seed:
+            print(f"[research] TREND-DRIVEN topic → Wikipedia: "
+                  f"\"{seed['title'][:60]}\" (rising: {seed.get('trend_query', '?')})")
+            _mark_seed_used(seed)
+            return _with_trending(seed)
 
     if _skip_reddit():
         print("[research] RUFUS_SKIP_REDDIT=1 — skipping Reddit, trying StackExchange next")
