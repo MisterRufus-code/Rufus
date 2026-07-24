@@ -299,8 +299,9 @@ def _fmt_ts(epoch: float) -> str:
 
 
 def _debug_assets(run_id: str | None) -> list[dict]:
-    """Files in this run's debug folder (script/voiceover/keyframes), if
-    RUFUS_DEBUG was on for that run and the ~30-day retention hasn't swept it."""
+    """Files in this run's debug folder (script/voiceover/keyframes). Every run
+    keeps these now (not just RUFUS_DEBUG=1 runs), and they're retained
+    permanently as the quality-review record."""
     if not run_id:
         return []
     d = DEBUG_ROOT / run_id
@@ -310,6 +311,34 @@ def _debug_assets(run_id: str | None) -> list[dict]:
     for f in sorted(d.iterdir()):
         if f.is_file():
             out.append({"name": f.name, "size_kb": max(1, f.stat().st_size // 1024)})
+    return out
+
+
+def _image_prompts(run_id: str | None) -> list[dict]:
+    """The per-beat image-generation prompts for this run, paired with their
+    keyframe. comfy_client/sd_client write NN.png (the still) + NN.txt (the
+    exact FLUX/SD prompt that produced it) per beat. This surfaces the full
+    script→images chain on the review page instead of leaving each prompt as a
+    file the reviewer has to download one by one.
+
+    Returns [{n, prompt, image}] ordered by beat, where `image` is the NN.png
+    name (served via /debug/<run_id>/<image>) or None if only the prompt exists."""
+    if not run_id:
+        return []
+    d = DEBUG_ROOT / run_id
+    if not d.is_dir():
+        return []
+    out = []
+    for txt in sorted(d.glob("[0-9]*.txt")):
+        try:
+            raw = txt.read_text(encoding="utf-8", errors="replace").strip()
+        except OSError:
+            continue
+        # Files are written as "FLUX PROMPT:\n<prompt>" — strip the label.
+        prompt = raw.split(":", 1)[1].strip() if raw.lower().startswith("flux prompt") else raw
+        png = txt.with_suffix(".png")
+        out.append({"n": txt.stem, "prompt": prompt,
+                    "image": png.name if png.is_file() else None})
     return out
 
 
@@ -764,8 +793,31 @@ def video_detail(video_id):
         <div class="script">{_esc(v['description'] or '—')}</div>
         """
 
+    # Image-generation prompts (the script→images chain), rendered inline so a
+    # reviewer sees exactly what each beat's still was told to draw, next to the
+    # still itself — not a pile of files to download one by one.
+    img_prompts = _image_prompts(v["run_id"])
+    prompts_html = ("<p class='muted'>No per-beat image prompts saved for this "
+                    "run yet.</p>")
+    if img_prompts:
+        cards = ""
+        for p in img_prompts:
+            thumb = ""
+            if p["image"]:
+                thumb = (f'<a href="/debug/{_esc(v["run_id"])}/{_esc(p["image"])}" '
+                         f'target="_blank"><img src="/debug/{_esc(v["run_id"])}/'
+                         f'{_esc(p["image"])}" loading="lazy" '
+                         f'style="width:120px;border-radius:6px;flex:0 0 auto"></a>')
+            cards += (
+                f'<div style="display:flex;gap:12px;margin:10px 0;align-items:flex-start">'
+                f'{thumb}'
+                f'<div><b>beat {_esc(p["n"])}</b>'
+                f'<div class="script" style="margin-top:4px">{_esc(p["prompt"])}</div>'
+                f'</div></div>')
+        prompts_html = cards
+
     assets = _debug_assets(v["run_id"])
-    assets_html = "<p class='muted'>No debug artifacts for this run (RUFUS_DEBUG was off, or they've aged out).</p>"
+    assets_html = "<p class='muted'>No debug artifacts for this run.</p>"
     if assets:
         links = "".join(
             f'<a href="/debug/{_esc(v["run_id"])}/{_esc(a["name"])}" target="_blank">'
@@ -791,6 +843,8 @@ def video_detail(video_id):
     <h2>Seed / source</h2>
     <p class="muted">{_esc(v['seed_type'])} · {_esc(v['seed_source'])}</p>
     <div class="script">{_esc(v['seed_content'] or '—')}</div>
+    <h2>Image prompts (what each beat was told to draw)</h2>
+    {prompts_html}
     <h2>Debug artifacts (run {_esc(v['run_id'] or '—')})</h2>
     {assets_html}
     """

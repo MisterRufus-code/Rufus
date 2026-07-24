@@ -896,7 +896,12 @@ def _story_architect(client: OpenAI, seed: dict, analysis: str, hook: str,
         "backwards), not a vague 'this matters'.\n"
         "WHY NOW: the single sharpest, most concrete reason a viewer should "
         "care about THIS today — not a generic 'this matters', the real stake.\n"
-        "Be concrete. No fluff, no restating the hook."
+        "Be concrete. No fluff, no restating the hook.\n"
+        "GROUNDING RULE (hard): every one of the 4 lines must be traceable to the "
+        "SOURCE/PRE-ANALYSIS above. Do NOT invent motives, secret deals, dollar "
+        "figures, or sweeping claims ('reshaped history', 'changed everything') the "
+        "source does not actually state — the fact-check will reject the script and "
+        "hold the whole video if you do."
     )
     try:
         t0 = time.time()
@@ -1541,9 +1546,25 @@ def write_script(scene_description: str, seed: dict | None = None,
     if not fact_ok:
         capped = min(best["score"], score_min - 3)
         print(f"[gpt] ⚠ FACT GATE FAILED: {fact_reason}")
-        print(f"[gpt]   score capped {best['score']} → {capped} (upload will be held for review)")
-        best["score"] = capped
-        best["reasoning"] = f"FACT GATE: {fact_reason} | " + (best.get("reasoning") or "")
+        # Self-recovery: give the gate that detected the problem ONE grounded
+        # rewrite of its own (see _grounded_rewrite), instead of leaving a dead
+        # capped 5/10 whenever main.py's separate supervisor gate happens to
+        # disagree and not trigger its rewrite.
+        rewrite = _grounded_rewrite(
+            client, system=system, base_usr=base_usr, body_model=body_model,
+            fact_reason=fact_reason, winning_hook=winning_hook, seed=seed,
+            run_id=run_id, active=active)
+        total_cost += (rewrite or {}).get("cost", 0.0)
+        if rewrite and rewrite["score"] >= capped:
+            print(f"[gpt]   grounded rewrite passed fact-check → "
+                  f"{rewrite['score']}/10 (replacing the capped {capped}/10 draft)")
+            best.update(script=rewrite["script"], score=rewrite["score"],
+                        crits=rewrite["crits"], reasoning=rewrite["reasoning"])
+        else:
+            print(f"[gpt]   score capped {best['score']} → {capped} "
+                  f"(upload will be held for review)")
+            best["score"] = capped
+            best["reasoning"] = f"FACT GATE: {fact_reason} | " + (best.get("reasoning") or "")
 
     if best["score"] < score_min:
         print(f"[gpt] ⚠ best score was {best['score']}/10 (target ≥{score_min}) — using best attempt")
@@ -1573,6 +1594,55 @@ def write_script(scene_description: str, seed: dict | None = None,
         "reasoning": best["reasoning"],
         "cost_usd": total_cost,
     }
+
+
+def _grounded_rewrite(client: OpenAI, *, system: str, base_usr: str,
+                      body_model: str, fact_reason: str, winning_hook: str,
+                      seed: dict | None, run_id: str, active: str) -> dict | None:
+    """One grounded rewrite after the in-writer fact gate fails.
+
+    Why this exists: the fact gate CAPS the score (→5/10, held) but the only
+    rewrite path used to live in main.py's SEPARATE supervisor gate
+    (judge_script_facts). The two graders can disagree — the in-writer gate
+    flags a script the supervisor passes — and when they did, the script was
+    capped to 5/10 with NO rewrite attempt at all (seen live on the money_history
+    'Hanseatic League' run: 8/10 → capped 5, no recovery). This gives the gate
+    that detected the problem its own recovery, feeding the exact objection back
+    as a hard grounding constraint.
+
+    Returns a result dict (script/score/crits/reasoning/cost) only if the rewrite
+    PASSES the fact gate; else None so the caller keeps the capped original."""
+    correction = (
+        f"\n\nFACTUAL CORRECTION REQUIRED. The previous draft was rejected by the "
+        f"fact-check for: {fact_reason}\n"
+        f"Rewrite the COMPLETE SCRIPT making ONLY claims directly supported by the "
+        f"source and pre-analysis above. Do NOT invent figures, secret motives, "
+        f"hidden deals, or sweeping superlatives ('reshaped forever', 'changed "
+        f"everything') the source does not state — every sentence must trace to a "
+        f"real detail. Keep the hook on line 1 and the CTA on the last line."
+    )
+    try:
+        script, cost, _ms, _pt, _ct = _generate(
+            client, system, base_usr + correction, model=body_model, temperature=0.5)
+    except Exception:
+        return None
+    lines = [l.strip() for l in script.split("\n") if l.strip()]
+    if lines and not _hook_already_present(lines[0], winning_hook):
+        lines.insert(0, winning_hook)
+        script = "\n".join(lines)
+    if _find_banned(script):
+        script = _repair_banned(script)
+    if _body_pre_check(script):
+        return None   # rewrite broke a structural rule — keep the capped original
+    fact_ok, _reason2, fc_cost = _fact_gate(client, seed, script)
+    cost += fc_cost
+    if not fact_ok:
+        return None   # still ungrounded — keep the capped original
+    total, crits, reasoning, sc_cost, _ = _score(
+        client, script, seed, winning_hook, run_id, active)
+    cost += sc_cost
+    return {"script": script, "score": total, "crits": crits,
+            "reasoning": reasoning, "cost": cost}
 
 
 # ── Fact gate ───────────────────────────────────────────────────────────────────

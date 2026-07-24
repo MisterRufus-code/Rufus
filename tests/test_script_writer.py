@@ -219,6 +219,67 @@ def test_hook_grounding_billion_substring_of_source_year_rejected():
                                  src) is not None
 
 
+# ── _grounded_rewrite: the fact-gate gets its own recovery path ───────────────
+# The in-writer fact gate caps a flagged script to 5/10; the rewrite used to
+# live only in main.py's separate supervisor gate, which can disagree — leaving
+# a dead capped 5/10 with no recovery (live: money_history 'Hanseatic League').
+
+class _FakeGen:
+    """Stand-in OpenAI client — _grounded_rewrite only calls module-level
+    _generate/_score/_fact_gate, all monkeypatched, so the client is never
+    actually used for network I/O."""
+
+
+def test_grounded_rewrite_returns_result_when_rewrite_passes_facts(monkeypatch):
+    import script_writer as sw
+    monkeypatch.setattr(sw, "_generate",
+                        lambda *a, **k: ("Hook line.\nGrounded body.\nCTA.", 0.001, 10, 5, 5))
+    monkeypatch.setattr(sw, "_body_pre_check", lambda script: None)
+    monkeypatch.setattr(sw, "_find_banned", lambda script: None)
+    monkeypatch.setattr(sw, "_fact_gate", lambda c, s, script: (True, "grounded", 0.001))
+    monkeypatch.setattr(sw, "_score",
+                        lambda *a, **k: (8, {"specificity": 2}, "good", 0.001, 10))
+
+    out = sw._grounded_rewrite(
+        _FakeGen(), system="sys", base_usr="usr", body_model="m",
+        fact_reason="invented a figure", winning_hook="Hook line.",
+        seed=None, run_id="r1", active="money_history")
+    assert out is not None
+    assert out["score"] == 8
+    assert out["cost"] > 0
+
+
+def test_grounded_rewrite_returns_none_when_rewrite_still_fails_facts(monkeypatch):
+    import script_writer as sw
+    monkeypatch.setattr(sw, "_generate",
+                        lambda *a, **k: ("Hook line.\nStill wrong.\nCTA.", 0.001, 10, 5, 5))
+    monkeypatch.setattr(sw, "_body_pre_check", lambda script: None)
+    monkeypatch.setattr(sw, "_find_banned", lambda script: None)
+    monkeypatch.setattr(sw, "_fact_gate", lambda c, s, script: (False, "still ungrounded", 0.001))
+    # _score must never be reached once the fact gate rejects the rewrite.
+    monkeypatch.setattr(sw, "_score",
+                        lambda *a, **k: (_ for _ in ()).throw(AssertionError("scored a failing rewrite")))
+
+    out = sw._grounded_rewrite(
+        _FakeGen(), system="sys", base_usr="usr", body_model="m",
+        fact_reason="invented a figure", winning_hook="Hook line.",
+        seed=None, run_id="r1", active="money_history")
+    assert out is None
+
+
+def test_grounded_rewrite_returns_none_when_rewrite_breaks_structure(monkeypatch):
+    import script_writer as sw
+    monkeypatch.setattr(sw, "_generate",
+                        lambda *a, **k: ("Hook line.\nBad.\nCTA.", 0.001, 10, 5, 5))
+    monkeypatch.setattr(sw, "_find_banned", lambda script: None)
+    monkeypatch.setattr(sw, "_body_pre_check", lambda script: "sentences too short")
+    out = sw._grounded_rewrite(
+        _FakeGen(), system="sys", base_usr="usr", body_model="m",
+        fact_reason="x", winning_hook="Hook line.",
+        seed=None, run_id="r1", active="money_history")
+    assert out is None
+
+
 # ── _fixes_from_crits: closes the "LLM score just retries cold" gap ──────────
 # Real bug behind observed score volatility (10/10 one video, 5/10 the next
 # on similar source material): _fix_for() already turns a pre-filter

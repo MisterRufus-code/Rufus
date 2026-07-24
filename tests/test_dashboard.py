@@ -128,6 +128,27 @@ def test_video_detail_shows_pending_status_and_gate_note(client):
     assert "invented figure" in body
 
 
+def test_video_detail_shows_image_prompts_inline(client, tmp_path, monkeypatch):
+    """The per-beat image-generation prompts (script→images chain) must render
+    inline on the review page, not just as downloadable files."""
+    monkeypatch.setattr(dashboard, "DEBUG_ROOT", tmp_path / "debug")
+    run_dir = tmp_path / "debug" / "run-xyz"
+    run_dir.mkdir(parents=True)
+    (run_dir / "01.txt").write_text("FLUX PROMPT:\nAn extreme close-up of a gold coin",
+                                    encoding="utf-8")
+    (run_dir / "01.png").write_bytes(b"fakepng")
+    (run_dir / "02.txt").write_text("FLUX PROMPT:\nA wide shot of a trading floor",
+                                    encoding="utf-8")
+
+    vid = db_manager.save_video(niche="finance", script_hook="Hook", scene_desc="s",
+                                video_file="v.mp4", score=9, run_id="run-xyz")
+    body = client.get(f"/video/{vid}").data.decode()
+    assert "close-up of a gold coin" in body       # prompt text rendered, label stripped
+    assert "wide shot of a trading floor" in body
+    assert "/debug/run-xyz/01.png" in body          # keyframe shown next to its prompt
+    assert "FLUX PROMPT" not in body                # the label line is stripped, not shown
+
+
 def test_video_detail_shows_approve_reject_buttons_when_pending(client):
     vid = db_manager.save_video(niche="finance", script_hook="Hook", scene_desc="s",
                                 video_file="v.mp4", score=9)
