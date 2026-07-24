@@ -196,6 +196,29 @@ def test_hook_grounding_weimar_not_flagged_as_first_person():
     assert _hook_grounding_check("Weimar burned savings in 1923.", src) is None
 
 
+def test_hook_grounding_rejects_round_magnitude_not_a_source_token():
+    """Live hole: '$1 billion vanished' passed the old substring check because
+    '1' is a substring of a source year like '1720', so the fabricated figure
+    reached the fact gate and capped the whole video to 5/10. The number must
+    match a real source token, not merely appear inside one."""
+    from script_writer import _hook_grounding_check
+    src = ("The Mississippi Bubble culminated in 1720. John Law rose to power "
+           "in France before the collapse.")
+    reason = _hook_grounding_check("1720: $1 billion vanished in a day.", src)
+    assert reason is not None
+    assert "1" in reason  # the invented '1 billion', not the grounded year 1720
+
+
+def test_hook_grounding_billion_substring_of_source_year_rejected():
+    """The exact live case: '$1 billion' against a Panic-of-1873 source. '1'
+    is a substring of '1873' but is NOT a real figure in the source, so the
+    fabricated magnitude must be rejected before it reaches scoring."""
+    from script_writer import _hook_grounding_check
+    src = "The Panic of 1873 was a financial crisis that triggered a depression."
+    assert _hook_grounding_check("$1 billion vanished during the Panic of 1873.",
+                                 src) is not None
+
+
 # ── _fixes_from_crits: closes the "LLM score just retries cold" gap ──────────
 # Real bug behind observed score volatility (10/10 one video, 5/10 the next
 # on similar source material): _fix_for() already turns a pre-filter

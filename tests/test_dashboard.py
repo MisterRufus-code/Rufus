@@ -250,6 +250,39 @@ def test_approve_404_for_missing_video(client):
     assert r.status_code == 404
 
 
+def test_approve_blocked_below_hard_score_floor(client, tmp_path, monkeypatch):
+    """No video below the 7/10 hard floor can be approved, even by a human
+    clicking the button — a misclick or a reviewer other than the owner
+    (Tailscale-shared access) must not be able to publish a weak script."""
+    video_file = tmp_path / "v.mp4"
+    video_file.write_bytes(b"x")
+    vid = db_manager.save_video(niche="finance", script_hook="Hook", scene_desc="s",
+                                video_file=str(video_file), score=6)
+
+    called = []
+    monkeypatch.setattr(youtube_uploader, "upload",
+                        lambda *a, **k: called.append(1) or ("u", "i"))
+    r = client.post(f"/video/{vid}/approve", follow_redirects=True)
+
+    assert "below the 7/10 minimum" in r.data.decode()
+    assert not called   # upload() was never even attempted
+    with db_manager._conn() as c:
+        row = c.execute("SELECT upload_status, youtube_id FROM videos WHERE id=?",
+                        (vid,)).fetchone()
+    assert row == ("pending", None)
+
+
+def test_approve_blocked_when_unscored(client, tmp_path):
+    """A video with no score at all (scoring itself failed/skipped) is
+    treated as unscored, not as passing — refuse rather than guess."""
+    video_file = tmp_path / "v.mp4"
+    video_file.write_bytes(b"x")
+    vid = db_manager.save_video(niche="finance", script_hook="Hook", scene_desc="s",
+                                video_file=str(video_file), score=None)
+    r = client.post(f"/video/{vid}/approve", follow_redirects=True)
+    assert "unscored" in r.data.decode()
+
+
 # ── Reject / un-reject ─────────────────────────────────────────────────────────
 
 def test_reject_marks_rejected(client):

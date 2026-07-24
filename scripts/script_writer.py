@@ -406,9 +406,15 @@ def _hook_grounding_check(hook: str, source_text: str) -> str | None:
     instead of the script being built on a doomed hook."""
     if _HOOK_FIRST_PERSON_RE.search(hook):
         return "first-person confession (faceless channel — fabricated persona)"
-    src_norm = source_text.replace(",", "")
+    # Whole-TOKEN match, not substring: the old `num in source_text` check let
+    # a fabricated magnitude through whenever its bare digits appeared inside a
+    # real source number — e.g. "$1 billion" passed because "1" is a substring
+    # of the source year "1873". Tokenizing both sides and requiring set
+    # membership closes that (a live 5/10-cap cause), while "1873" still
+    # matches the real "1873" token.
+    src_num_tokens = {n.replace(",", "") for n in _HOOK_NUMBER_RE.findall(source_text)}
     for num in _HOOK_NUMBER_RE.findall(hook):
-        if num.replace(",", "") not in src_norm:
+        if num.replace(",", "") not in src_num_tokens:
             return f"number '{num}' not in source/analysis (invented figure)"
     return None
 

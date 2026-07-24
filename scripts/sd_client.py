@@ -487,14 +487,13 @@ def generate_clips(queries: list[str], n: int = 4,
     accepted_hashes: list[int] = []
     print(f"[sd] base seed {master_seed} — each image offset for variety")
 
-    # RUFUS_DEBUG=1 keeps a copy of every accepted keyframe + its prompt under
+    # Every run keeps a copy of every accepted keyframe + its prompt under
     # media_library/debug/<stamp>/ so a run can be inspected/critiqued afterwards
-    # (see scripts/inspect_run.py). Off by default — zero overhead on real runs.
-    debug_dir = None
-    if os.environ.get("RUFUS_DEBUG"):
-        debug_dir = Path(__file__).parent.parent / "media_library" / "debug" / str(stamp)
-        debug_dir.mkdir(parents=True, exist_ok=True)
-        print(f"[sd] DEBUG on — keeping keyframes in {debug_dir}")
+    # (see scripts/inspect_run.py) — not just RUFUS_DEBUG=1 runs, since the
+    # quality-review workflow needs every image logged, not an opt-in subset.
+    debug_dir = Path(__file__).parent.parent / "media_library" / "debug" / str(stamp)
+    debug_dir.mkdir(parents=True, exist_ok=True)
+    print(f"[sd] keeping keyframes in {debug_dir}")
 
     for i, query in enumerate(prompts):
         print(f"[sd] {i+1}/{len(prompts)}: {query[:70]}")

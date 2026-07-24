@@ -642,11 +642,10 @@ def test_ensure_media_root_noop_when_missing(tmp_path, monkeypatch):
 
 # ── Debug-mode artifacts (RUFUS_DEBUG) ────────────────────────────────────────
 
-def test_housekeeping_cleans_stale_debug_and_empty_dirs(tmp_path, monkeypatch):
-    """Debug output gets its own ~month-long retention window (not the 14-day
-    cache one) since it's for reviewing what a run produced — but it still
-    needs a cap or it grows forever. Stale files AND the now-empty per-run
-    subfolders they leave behind must both get swept."""
+def test_housekeeping_never_deletes_debug(tmp_path, monkeypatch):
+    """media_library/debug/ is the permanent quality-review record (every
+    run's script/voiceover/keyframes) — it must survive housekeeping
+    regardless of age, unlike the rolling cache/temp/log cleanup."""
     import main
 
     monkeypatch.setattr(main, "ROOT", tmp_path)
@@ -654,27 +653,24 @@ def test_housekeeping_cleans_stale_debug_and_empty_dirs(tmp_path, monkeypatch):
 
     debug_dir = tmp_path / "media_library" / "debug"
     old_run   = debug_dir / "20260101-old"
-    new_run   = debug_dir / "20260710-new"
     old_run.mkdir(parents=True)
-    new_run.mkdir(parents=True)
 
     old_file = old_run / "script.txt"
-    new_file = new_run / "script.txt"
     old_file.write_text("old")
-    new_file.write_text("new")
 
-    old_time = time.time() - 40 * 86400   # 40 days ago — past the 30-day default
+    old_time = time.time() - 400 * 86400   # over a year old
     os.utime(old_file, (old_time, old_time))
 
     main._housekeeping()
 
-    assert not old_file.exists()
-    assert not old_run.exists()           # emptied folder gets swept too
-    assert new_file.exists()
-    assert new_run.exists()
+    assert old_file.exists()
+    assert old_run.exists()
 
 
-def test_save_debug_artifacts_noop_when_debug_off(tmp_path, monkeypatch):
+def test_save_debug_artifacts_saves_even_when_debug_off(tmp_path, monkeypatch):
+    """Every run's script/voiceover gets logged now, not just RUFUS_DEBUG=1
+    runs — the quality-review workflow needs every run's artifacts, not an
+    opt-in subset a reviewer has to remember to enable."""
     import audio_gen as ag
     monkeypatch.delenv("RUFUS_DEBUG", raising=False)
     monkeypatch.setattr(ag, "ROOT", tmp_path)
@@ -683,7 +679,7 @@ def test_save_debug_artifacts_noop_when_debug_off(tmp_path, monkeypatch):
     mp3.write_bytes(b"x")
     ag._save_debug_artifacts("a script", mp3)
 
-    assert not (tmp_path / "media_library" / "debug").exists()
+    assert (tmp_path / "media_library" / "debug").exists()
 
 
 def test_save_debug_artifacts_saves_script_and_voiceover(tmp_path, monkeypatch):

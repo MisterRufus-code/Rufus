@@ -11,6 +11,7 @@ media_library/cache/
 media_library/output/
 media_library/temp/
 media_library/music/
+media_library/debug/
 assets/sfx/
 assets/music_synth/
 

@@ -53,6 +53,13 @@ app = Flask(__name__)
 
 UPLOAD_THRESHOLD_DEFAULT = 8   # visual reference line on the score sparkline
 
+# Hard floor enforced in approve_video() below — no video below this score
+# can be approved for upload, even by a human clicking the button, whether
+# it's a misclick or a reviewer other than you (Tailscale-shared access).
+# Keep in sync with main.py's HARD_MIN_UPLOAD_SCORE (duplicated, not
+# imported, so this file has zero import-time dependency on main.py).
+HARD_MIN_UPLOAD_SCORE = 7
+
 
 # ── Data access (read-only) ───────────────────────────────────────────────────
 
@@ -801,6 +808,13 @@ def approve_video(video_id):
         abort(404)
     if v["youtube_id"]:
         return _redirect_detail(video_id, error="already uploaded")
+    if v["score"] is None or v["score"] < HARD_MIN_UPLOAD_SCORE:
+        shown = "unscored" if v["score"] is None else f"{v['score']}/10"
+        return _redirect_detail(
+            video_id,
+            error=(f"blocked: score {shown} is below the {HARD_MIN_UPLOAD_SCORE}/10 "
+                   f"minimum — this video cannot be approved for upload. Reject it "
+                   f"or fix the underlying script/QC issue instead."))
     video_file = Path(v["video_file"] or "")
     if not video_file.exists():
         return _redirect_detail(video_id, error=f"video file missing on disk: {video_file}")

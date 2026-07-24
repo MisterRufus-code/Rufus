@@ -33,6 +33,11 @@ NICHES_FILE = CONFIG_DIR / "niches.json"
 OUTPUT_DIR  = Path(os.environ.get("RUFUS_OUTPUT_DIR", ROOT / "media_library" / "output"))
 LOG_DIR     = ROOT / "logs"
 
+# Absolute quality floor: no per-channel config or env var may push the
+# upload threshold below this, in either the auto-upload gate below or the
+# dashboard's Approve action (see dashboard.py's HARD_MIN_UPLOAD_SCORE).
+HARD_MIN_UPLOAD_SCORE = 7
+
 
 # ── Single-instance lock (cron overlap protection) ───────────────────────────────
 # Cross-platform (Windows + Linux + macOS) via filelock — POSIX os.kill(pid, 0)
@@ -142,17 +147,16 @@ def _ensure_media_root() -> None:
 # ── Housekeeping (disk + logs never grow unbounded) ──────────────────────────────
 
 def _housekeeping(max_log_days: int = 90, max_cache_days: int = 14,
-                  max_debug_days: int = 30, max_output_days: int = 14) -> None:
-    """Delete old logs and stale cache/temp/debug media. Cheap, runs every start.
+                  max_output_days: int = 14) -> None:
+    """Delete old logs and stale cache/temp media. Cheap, runs every start.
 
-    Debug gets its own, longer window (~a month, not 14 days) — RUFUS_DEBUG
-    output (script/voiceover/keyframes per run) is for reviewing what a run
-    actually produced, so it's worth keeping around longer than throwaway
-    cache/temp, but still needs a cap or it grows forever."""
+    media_library/debug/ (every run's script/voiceover/keyframes) is
+    deliberately EXEMPT from this sweep — it's the permanent quality-review
+    record now, not a rolling cache, so it's kept forever and never
+    auto-deleted here. Disk usage is the tradeoff; prune it by hand if it
+    grows too large."""
     cutoff_logs  = time.time() - max_log_days * 86400
     cutoff_cache = time.time() - max_cache_days * 86400
-    cutoff_debug = time.time() - max_debug_days * 86400
-    debug_dir    = ROOT / "media_library" / "debug"
     removed = 0
     for d, cutoff in (
         (LOG_DIR, cutoff_logs),
@@ -160,7 +164,6 @@ def _housekeeping(max_log_days: int = 90, max_cache_days: int = 14,
         (ROOT / "media_library" / "cache", cutoff_cache),
         (ROOT / "media_library" / "temp", cutoff_cache),
         (ROOT / "media_library" / "music", cutoff_cache),
-        (debug_dir, cutoff_debug),
     ):
         if not d.exists():
             continue
@@ -171,16 +174,6 @@ def _housekeeping(max_log_days: int = 90, max_cache_days: int = 14,
                     removed += 1
             except OSError:
                 continue
-    # Debug files live in per-run subfolders (media_library/debug/<run_id>/) —
-    # clean up any now-empty ones the file pass above leaves behind.
-    if debug_dir.exists():
-        for sub in debug_dir.iterdir():
-            try:
-                if sub.is_dir() and not any(sub.iterdir()):
-                    sub.rmdir()
-            except OSError:
-                continue
-
     removed += _housekeep_output(max_output_days)
 
     if removed:
@@ -826,12 +819,13 @@ def run(skip_upload: bool = False, niche_override: str = None, output_dir: Path 
     except Exception as e:
         print(f"           ⚠ Pre-analysis failed (non-fatal): {e}")
 
-    # Debug mode: one human-readable folder per run (media_library/debug/<run_id>/)
-    # shared by every stage — comfy_client's images/prompts, and now the raw
-    # script + pre-mix voiceover from audio_gen — instead of each stage picking
-    # its own timestamp. Env var, not a function param, so it reaches every
-    # sub-module the same way RUFUS_CHANNEL already does.
-    if os.environ.get("RUFUS_DEBUG") and script_run_id:
+    # One human-readable folder per run (media_library/debug/<run_id>/) shared
+    # by every stage — comfy_client's images/prompts, and the raw script +
+    # pre-mix voiceover from audio_gen — always, not just RUFUS_DEBUG=1 runs
+    # (the quality-review workflow needs every run's images/scripts logged,
+    # not an opt-in subset). Env var, not a function param, so it reaches
+    # every sub-module the same way RUFUS_CHANNEL already does.
+    if script_run_id:
         os.environ["RUFUS_DEBUG_RUN_ID"] = script_run_id
 
     # Source resolution: explicit env > per-niche config > default "sd".
@@ -1146,8 +1140,9 @@ def run(skip_upload: bool = False, niche_override: str = None, output_dir: Path 
     # computed and shown to the human reviewer as a signal, even though NOTHING
     # auto-uploads anymore (see Step 7): a friend approving/rejecting in the
     # dashboard benefits from knowing "the gate would have held this for X".
-    _hold_min_score = int(os.environ.get("RUFUS_MIN_UPLOAD_SCORE",
-                          str(channel.upload.get("min_score", 8))))
+    _hold_min_score = max(HARD_MIN_UPLOAD_SCORE,
+                         int(os.environ.get("RUFUS_MIN_UPLOAD_SCORE",
+                             str(channel.upload.get("min_score", 8)))))
     _hold_score = result.get("score", 0)
     if qc is not None and not qc.get("ok", True):
         hold_reason = f"QC failed: {'; '.join(qc['critical'])}"

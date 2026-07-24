@@ -20,7 +20,9 @@ Environment:
   COMFY_MODEL   (default: flux1-dev-fp8.safetensors)
   COMFY_STEPS   (default: 20)
   SD_CLIPS      (clip count — shared with sd_client)
-  RUFUS_DEBUG=1 (keep keyframes + prompts under media_library/debug/<stamp>/)
+  RUFUS_DEBUG=1 (also print verbose per-clip progress; keyframes + prompts
+                are ALWAYS kept under media_library/debug/<stamp>/, on every
+                run, regardless of this flag — see _housekeeping's retention)
 
 Usage:
   RUFUS_VIDEO_SOURCE=comfy python scripts/main.py --skip-upload
@@ -529,16 +531,17 @@ def generate_clips(queries: list[str], n: int = 4,
               f"FLUX.1 '{model}' is the fallback")
     print(f"[comfy] FLUX model={model} steps={steps} base_seed={master_seed}")
 
-    debug_dir = None
-    if os.environ.get("RUFUS_DEBUG"):
-        # Prefer the shared run id main.py sets (RUFUS_DEBUG_RUN_ID) so this
-        # run's images land in the SAME folder as its script/voiceover instead
-        # of a folder named after this stage's own timestamp. Falls back to
-        # the temp-file stamp when comfy_client runs standalone (its __main__).
-        debug_name = os.environ.get("RUFUS_DEBUG_RUN_ID") or str(stamp)
-        debug_dir = Path(__file__).parent.parent / "media_library" / "debug" / debug_name
-        debug_dir.mkdir(parents=True, exist_ok=True)
-        print(f"[comfy] DEBUG on — keeping keyframes in {debug_dir}")
+    # Every run keeps its keyframes + prompts, not just RUFUS_DEBUG=1 runs —
+    # the quality-review workflow needs every image logged, not a sampled
+    # subset a reviewer has to remember to opt into. Prefer the shared run id
+    # main.py sets (RUFUS_DEBUG_RUN_ID) so this run's images land in the SAME
+    # folder as its script/voiceover instead of a folder named after this
+    # stage's own timestamp. Falls back to the temp-file stamp when
+    # comfy_client runs standalone (its __main__).
+    debug_name = os.environ.get("RUFUS_DEBUG_RUN_ID") or str(stamp)
+    debug_dir = Path(__file__).parent.parent / "media_library" / "debug" / debug_name
+    debug_dir.mkdir(parents=True, exist_ok=True)
+    print(f"[comfy] keeping keyframes in {debug_dir}")
 
     # ── Phase 1: generate every still (FLUX stays loaded the whole time) ────
     stills: list[tuple[int, Path, str]] = []   # (beat index, png path, prompt)
