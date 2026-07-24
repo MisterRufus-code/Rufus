@@ -25,7 +25,7 @@
     "class_type": "UNETLoader",
     "inputs": {
       "unet_name": "hunyuanvideo1.5_720p_i2v_fp16.safetensors",
-      "weight_dtype": "default"
+      "weight_dtype": "fp8_e4m3fn"
     }
   },
   "44": {
