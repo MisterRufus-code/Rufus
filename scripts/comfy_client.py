@@ -1,24 +1,29 @@
 #!/usr/bin/env python3
 """
-comfy_client.py — ComfyUI + FLUX.1-dev image generator for Rufus.
+comfy_client.py — ComfyUI stills generator for Rufus.
 
-Generates photoreal portrait images via a local ComfyUI server (FLUX.1-dev),
-then reuses sd_client's PIL/FFmpeg helpers to upscale → crop 1080×1920 → Ken
-Burns mp4. Produces the same deliverable as sd_client / hyperframes — a list of
-.mp4 paths — so the rest of the pipeline is untouched.
+Generates photoreal portrait images via a local ComfyUI server, then reuses
+sd_client's PIL/FFmpeg helpers to upscale → crop 1080×1920 → Ken Burns mp4.
+Produces the same deliverable as sd_client / hyperframes — a list of .mp4
+paths — so the rest of the pipeline is untouched.
 
-Why this exists: with a 24GB GPU (RTX 3090) FLUX.1-dev is the best free local
-image model. ComfyUI exposes a headless HTTP API (POST /prompt, poll /history,
-GET /view) — no websocket dependency needed.
+MODEL: exclusively via config/stills_api.json — a user-exported ComfyUI API
+workflow (see comfy_template.py). This is Rufus's ONLY stills engine here;
+there is deliberately no built-in fallback model, because the built-in engine
+this file used to fall back to (FLUX.1-dev) is non-commercial-licensed and
+this pipeline is monetized. The default/documented model is Z-Image-Turbo
+(Alibaba Tongyi, Apache 2.0, fully commercial-safe) — see README for the
+exact ComfyUI setup. Any other Apache/MIT/commercial-safe image model works
+the same way: run its workflow once, set the positive prompt to RUFUS_PROMPT,
+Export (API) → config/stills_api.json.
 
-Requirements (Windows 11 / Linux):
-  ComfyUI running with --listen, FLUX checkpoint in models/checkpoints/:
-    flux1-dev-fp8.safetensors   (single-file fp8 build — fits 24GB comfortably)
+Requirements: ComfyUI running with --listen, and config/stills_api.json in
+place (see README's "Swappable stills model" section). With no template
+exported, this backend has nothing to render and generate_clips() returns []
+so main.py falls through to sd/diffusers/pexels.
 
 Environment:
   COMFY_HOST    (default: http://localhost:8188)
-  COMFY_MODEL   (default: flux1-dev-fp8.safetensors)
-  COMFY_STEPS   (default: 20)
   SD_CLIPS      (clip count — shared with sd_client)
   RUFUS_DEBUG=1 (also print verbose per-clip progress; keyframes + prompts
                 are ALWAYS kept under media_library/debug/<stamp>/, on every
@@ -39,26 +44,25 @@ from pathlib import Path
 import requests
 
 # Reuse the proven, dependency-free (PIL/FFmpeg-only) helpers from sd_client so
-# animation, perceptual dedup, and the negative prompt behave identically
-# across backends. One-way import — sd_client never imports comfy_client.
+# animation and perceptual dedup behave identically across backends. One-way
+# import — sd_client never imports comfy_client.
 from sd_client import (
     _animate_to_clip,
     _avg_hash,
     _hamming,
     DUP_THRESHOLD,
     MAX_DUP_RETRIES,
-    NEGATIVE_PROMPT,
     OUT_W,
     OUT_H,
 )
 
 
 def _fit_to_portrait(img_bytes: bytes, out_path: Path) -> bool:
-    """Cover-resize a FLUX frame to exactly 1080×1920, preserving composition.
+    """Cover-resize a stills-model frame to exactly 1080×1920, preserving composition.
 
     832×1472 (0.5652) vs 1080×1920 (0.5625) are near-identical aspect ratios, so
     we Lanczos-scale to just cover the target and trim the ~0.5% sliver. This
-    keeps ~99% of the frame FLUX composed — unlike sd_client's fixed 2× upscale
+    keeps ~99% of the frame as composed — unlike sd_client's fixed 2× upscale
     + center-crop, which at this generation size would discard 35% of the image.
     """
     from PIL import Image
@@ -77,12 +81,8 @@ def _fit_to_portrait(img_bytes: bytes, out_path: Path) -> bool:
     img.save(str(out_path), format="PNG", optimize=False)
     return out_path.exists() and out_path.stat().st_size > 20_000
 
-# FLUX likes ~1MP. 832×1472 is ÷16 on both axes, ~9:16, then we upscale+crop to
-# exactly 1080×1920. (Generating native 1080×1920 wastes VRAM/time for no gain.)
-GEN_W, GEN_H = 832, 1472
-
 POLL_INTERVAL = 1.5    # seconds between /history polls
-GEN_TIMEOUT   = 300    # max seconds to wait for one image (FLUX ~20-30s on a 3090)
+GEN_TIMEOUT   = 300    # max seconds to wait for one image (~20-30s on a 3090)
 GEN_ERROR_BACKOFF = 3.0  # pause before resubmitting after a submit/generation failure
 
 # Cross-run visual freshness: perceptual hashes of images accepted in RECENT
@@ -153,100 +153,24 @@ def list_checkpoints() -> list[str]:
         return []
 
 
-# ── Optional face restoration ─────────────────────────────────────────────────
-# FLUX (like any diffusion model) renders human faces worst — the prompt steering
-# in main.py avoids the hardest close-ups, and this is the belt-and-suspenders:
-# if a face-restoration custom node is installed in ComfyUI, route each FLUX still
-# through it (CodeFormer / GFPGAN) to clean up eyes/teeth/skin before animation.
+# THE STILLS MODEL — swap it without touching code. Same template pattern as
+# hunyuan_client: replay a user-exported, verified ComfyUI graph instead of
+# blind-wiring each new model's node stack. Drop in ANY commercial-safe image
+# model this way — Z-Image-Turbo (recommended, Apache 2.0), Qwen-Image, etc.:
+# run its ComfyUI workflow once at portrait ~832×1472, set the positive prompt
+# text to RUFUS_PROMPT, Export (API) → config/stills_api.json.
 #
-# STRICTLY OPTIONAL and fail-safe: with no node installed, or RUFUS_FACE_RESTORE=0,
-# or ANY failure of the restore graph, we render the plain graph you already run —
-# restoration can only ever ADD quality, never reduce reliability or clip yield.
-#
-#   RUFUS_FACE_RESTORE        auto (default: use a restore node if one is installed)
-#                             | 0 to force off | 1 = same as auto
-#   RUFUS_FACE_RESTORE_MODEL  restore weights filename (default GFPGANv1.4.pth)
-#   RUFUS_FACE_FIDELITY       0..1, higher = truer to the original (default 0.5)
-
-
-def _has_node(class_type: str) -> bool:
-    """True if the running ComfyUI has a node of this class_type installed."""
-    try:
-        r = requests.get(f"{_host()}/object_info/{class_type}", timeout=10)
-        if r.status_code != 200:
-            return False
-        return bool(r.json().get(class_type))
-    except Exception:
-        return False
-
-
-def _face_restore_setting() -> str:
-    return os.environ.get("RUFUS_FACE_RESTORE", "auto").strip().lower()
-
-
-def resolve_face_restore() -> dict | None:
-    """Pick an installed face-restoration node, or None to skip it entirely.
-
-    Prefers the dedicated facerestore_cf pack (FaceRestoreCFWithModel), then the
-    ReActor pack (ReActorRestoreFace). Returns a descriptor dict consumed by
-    _apply_face_restore, or None when disabled or no supported node is present."""
-    if _face_restore_setting() in ("0", "false", "no", "off"):
-        return None
-    model    = os.environ.get("RUFUS_FACE_RESTORE_MODEL", "GFPGANv1.4.pth")
-    fidelity = float(os.environ.get("RUFUS_FACE_FIDELITY", "0.5"))
-    if _has_node("FaceRestoreCFWithModel") and _has_node("FaceRestoreModelLoader"):
-        return {"kind": "facerestore_cf", "model": model, "fidelity": fidelity}
-    if _has_node("ReActorRestoreFace"):
-        return {"kind": "reactor", "model": model, "fidelity": fidelity}
-    return None
-
-
-def _apply_face_restore(graph: dict, restore: dict) -> dict:
-    """Insert a face-restoration node between VAEDecode ('8') and SaveImage ('9'),
-    re-pointing SaveImage at the restored image. Mutates and returns graph.
-
-    A restore node with no face in the frame passes the image through unchanged,
-    so it's safe on object-only beats (coins, documents, streets)."""
-    if restore["kind"] == "facerestore_cf":
-        graph["20"] = {"class_type": "FaceRestoreModelLoader",
-                       "inputs": {"model_name": restore["model"]}}
-        graph["21"] = {"class_type": "FaceRestoreCFWithModel",
-                       "inputs": {
-                           "facerestore_model": ["20", 0],
-                           "image": ["8", 0],
-                           "facedetection": "retinaface_resnet50",
-                           "codeformer_fidelity": restore["fidelity"],
-                       }}
-        graph["9"]["inputs"]["images"] = ["21", 0]
-    elif restore["kind"] == "reactor":
-        graph["21"] = {"class_type": "ReActorRestoreFace",
-                       "inputs": {
-                           "image": ["8", 0],
-                           "facedetection": "retinaface_resnet50",
-                           "model": restore["model"],
-                           "visibility": 1.0,
-                           "codeformer_weight": restore["fidelity"],
-                       }}
-        graph["9"]["inputs"]["images"] = ["21", 0]
-    return graph
-
-
-def _build_flux_graph_face(prompt: str, seed: int, model: str, steps: int,
-                           restore: dict) -> dict:
-    """Plain FLUX graph plus a face-restoration tail."""
-    return _apply_face_restore(_build_flux_graph(prompt, seed, model, steps), restore)
-
-
-# PRIMARY-STILLS TEMPLATE — swap the image model without touching code.
-# Same template pattern as hunyuan_client: replay a user-exported, verified
-# ComfyUI graph instead of blind-wiring each new model's node stack. Drop in
-# ANY image model this way — Z-Image-Turbo, Qwen-Image, FLUX.2, etc.: run its
-# ComfyUI workflow once at portrait ~832×1472, set the positive prompt text to
-# RUFUS_PROMPT, Export (API) → config/stills_api.json. Any failure falls back
-# to the built-in FLUX.1 graph with the SAME seed — an upgrade can never cost
-# a clip. Opt out with RUFUS_STILLS_TEMPLATE=0.
+# Deliberately NO built-in fallback model here. This used to fall back to a
+# hardcoded FLUX.1-dev graph on any failure — removed because FLUX.1-dev is
+# non-commercial-licensed and this pipeline is monetized; a "safety net" that
+# silently renders a non-commercial model into the final video isn't safe at
+# all. If the template is missing or a render fails, generate_clips() returns
+# [] and main.py falls through to sd/diffusers/pexels instead. Opt the
+# template out with RUFUS_STILLS_TEMPLATE=0.
 #   config/stills_api.json  — the current/primary image model (model-agnostic)
-#   config/flux2_api.json   — kept as a fallback name for back-compat
+#   config/flux2_api.json   — kept as a fallback FILENAME for back-compat
+#                             (historical name from FLUX.2 testing; holds
+#                             whatever commercial-safe model you export to it)
 STILLS_TEMPLATE = Path(__file__).parent.parent / "config" / "stills_api.json"
 FLUX2_TEMPLATE  = Path(__file__).parent.parent / "config" / "flux2_api.json"
 
@@ -271,76 +195,33 @@ def _stills_template() -> dict | None:
 _flux2_template = _stills_template
 
 
-def _render_image(prompt: str, seed: int, model: str, steps: int,
-                  client_id: str, restore: dict | None) -> tuple[bytes | None, bool]:
-    """Render one still → raw PNG bytes (or None). Returns (bytes, used_restore).
+def _render_image(prompt: str, seed: int, client_id: str) -> bytes | None:
+    """Render one still via config/stills_api.json → raw PNG bytes, or None.
 
-    Engine order: primary-stills template (if exported — Z-Image/Qwen/FLUX.2/
-    etc.) → face-restore FLUX.1 graph (if configured) → plain FLUX.1 graph,
-    all with the SAME seed — a fancier path failing can never cost a clip."""
+    No built-in fallback model — see the module docstring for why (licensing).
+    Returns None if no template is exported, or if the render itself fails;
+    the caller's own retry loop (generate_clips' MAX_DUP_RETRIES) and
+    beat-alignment reuse already handle a transient failure, same as any
+    other clip-generation error."""
     tpl = _stills_template()
-    if tpl is not None:
-        import comfy_template
-        g = comfy_template.prepare(tpl, prompt=prompt, seed=seed,
-                                   save_prefix="rufus_stills")
-        pid = _submit(g, client_id)
-        if pid:
-            img = _await_image(pid)
-            if img:
-                return img, False
-        print(f"[comfy] stills-template render failed — falling back to FLUX.1 (seed={seed})")
-    if restore:
-        pid = _submit(_build_flux_graph_face(prompt, seed, model, steps, restore), client_id)
-        if pid:
-            img = _await_image(pid)
-            if img:
-                return img, True
-        print(f"[comfy] face-restore render failed — falling back to plain (seed={seed})")
-    pid = _submit(_build_flux_graph(prompt, seed, model, steps), client_id)
+    if tpl is None:
+        return None
+    import comfy_template
+    g = comfy_template.prepare(tpl, prompt=prompt, seed=seed,
+                               save_prefix="rufus_stills")
+    pid = _submit(g, client_id)
     if not pid:
-        return None, False
-    return _await_image(pid), False
-
-
-def _build_flux_graph(prompt: str, seed: int, model: str, steps: int) -> dict:
-    """A minimal FLUX.1-dev txt2img graph (no custom nodes required).
-
-    CheckpointLoaderSimple → CLIPTextEncode(+/-) → FluxGuidance → KSampler
-    → VAEDecode → SaveImage. Mirrors the tutorial workflow but strips the WAS
-    style-CSV nodes (which need extra installs) and injects our own prompt.
-    """
-    return {
-        "4": {"class_type": "CheckpointLoaderSimple",
-              "inputs": {"ckpt_name": model}},
-        "6": {"class_type": "CLIPTextEncode",
-              "inputs": {"text": prompt, "clip": ["4", 1]}},
-        "7": {"class_type": "CLIPTextEncode",
-              "inputs": {"text": NEGATIVE_PROMPT, "clip": ["4", 1]}},
-        "15": {"class_type": "FluxGuidance",
-               "inputs": {"guidance": 3.5, "conditioning": ["6", 0]}},
-        "10": {"class_type": "EmptySD3LatentImage",
-               "inputs": {"width": GEN_W, "height": GEN_H, "batch_size": 1}},
-        "3": {"class_type": "KSampler",
-              "inputs": {
-                  "seed": seed, "steps": steps, "cfg": 1.0,
-                  "sampler_name": "dpmpp_2m", "scheduler": "sgm_uniform",
-                  "denoise": 1.0,
-                  "model": ["4", 0], "positive": ["15", 0],
-                  "negative": ["7", 0], "latent_image": ["10", 0],
-              }},
-        "8": {"class_type": "VAEDecode",
-              "inputs": {"samples": ["3", 0], "vae": ["4", 2]}},
-        "9": {"class_type": "SaveImage",
-              "inputs": {"filename_prefix": "rufus", "images": ["8", 0]}},
-    }
+        return None
+    return _await_image(pid)
 
 
 def _free_comfy_memory() -> None:
     """Ask ComfyUI to unload models + free VRAM/RAM (its /free endpoint).
-    Used at the stills→motion phase boundary: a 24GB card can't hold FLUX and
-    a 14B/8B video model together, and letting ComfyUI evict lazily under
-    pressure is exactly the documented RAM-leak/degradation pattern. Best
-    effort — an older ComfyUI without /free just ignores this."""
+    Used at the stills→motion phase boundary: a 24GB card can't hold the
+    stills model and a 14B/8B video model together, and letting ComfyUI
+    evict lazily under pressure is exactly the documented RAM-leak/
+    degradation pattern. Best effort — an older ComfyUI without /free just
+    ignores this."""
     try:
         r = requests.post(f"{_host()}/free",
                           json={"unload_models": True, "free_memory": True},
@@ -408,42 +289,31 @@ def _await_image(prompt_id: str) -> bytes | None:
 
 
 def generate_clips(queries: list[str], n: int = 4,
-                   clip_duration: float = 8.0,
-                   niche_cfg: dict | None = None) -> list[Path]:
-    """Generate one Ken Burns clip per query via ComfyUI + FLUX.1-dev, in order.
+                   clip_duration: float = 8.0) -> list[Path]:
+    """Generate one Ken Burns clip per query via ComfyUI, in order.
 
     Pipeline per clip:
-      query → FLUX 832×1472 → Lanczos 2× → crop 1080×1920 → Ken Burns mp4
+      query → stills model (config/stills_api.json) 832×1472 → Lanczos 2× →
+      crop 1080×1920 → Ken Burns mp4
 
     Matches sd_client.generate_clips' contract: returns a list of 1080×1920 mp4
-    Paths (one per query), or [] if ComfyUI is not running / all images fail, so
-    main.py can fall through to the next backend.
+    Paths (one per query), or [] if ComfyUI is not running / no stills template
+    is exported / all images fail, so main.py can fall through to the next
+    backend.
     """
     if not is_available():
         print(f"[comfy] ComfyUI not running at {_host()} — start it with --listen, "
               f"or set COMFY_HOST. Falling back.")
         return []
 
-    model = (os.environ.get("COMFY_MODEL")
-             or (niche_cfg or {}).get("comfy_model")
-             or "flux1-dev-fp8.safetensors")
-    steps = int(os.environ.get("COMFY_STEPS", "32"))
-
-    # Preflight the checkpoint: server-up but model-missing is the classic
-    # first-run failure. Catch it here with the exact fix instead of submitting
-    # a batch of doomed jobs. Empty list = endpoint unavailable → can't verify,
-    # proceed (fail-open).
-    available = list_checkpoints()
-    if available and model not in available and _stills_template() is None:
-        # (With a stills template exported, the FLUX.1 checkpoint is only the
-        # fallback engine — don't bail the whole run over it.)
-        print(f"[comfy] checkpoint '{model}' not loadable by ComfyUI.")
-        print(f"[comfy] it sees: {', '.join(available[:5])}")
-        print(f"[comfy] put the file in ComfyUI\\models\\checkpoints\\ (not unet/), "
-              f"or set COMFY_MODEL to one of the names above. Falling back.")
+    if _stills_template() is None:
+        print("[comfy] no stills model configured — export a ComfyUI image "
+              "workflow (Z-Image-Turbo recommended, Apache 2.0/commercial-safe) "
+              "to config/stills_api.json. See README's 'Swappable stills model' "
+              "section. Falling back.")
         return []
 
-    # Image-to-video: animate each FLUX still into real motion instead of the
+    # Image-to-video: animate each still into real motion instead of the
     # Ken Burns zoom, via an ORDERED engine chain resolved once per run —
     # Wan 2.2 (best temporal consistency, takes a motion prompt) → SVD →
     # Ken Burns. Any per-image failure walks down the chain, so a clip is
@@ -498,19 +368,6 @@ def generate_clips(queries: list[str], n: int = 4,
     except Exception as e:
         print(f"[comfy] img2vid unavailable ({e}) — Ken Burns only")
 
-    # Face restoration (optional): clean up FLUX faces if a restore node is
-    # installed. Fail-safe — any problem falls back to the plain graph per image.
-    restore = None
-    try:
-        restore = resolve_face_restore()
-        if restore:
-            print(f"[comfy] face restore: ON via {restore['kind']} ({restore['model']})")
-        elif _face_restore_setting() not in ("0", "false", "no", "off"):
-            print("[comfy] face restore: off (no restore node found in ComfyUI — "
-                  "install one to enable, see README)")
-    except Exception as e:
-        print(f"[comfy] face restore unavailable ({e}) — plain render")
-
     tmp_dir = Path(__file__).parent.parent / "media_library" / "temp" / "comfy"
     tmp_dir.mkdir(parents=True, exist_ok=True)
 
@@ -534,10 +391,7 @@ def generate_clips(queries: list[str], n: int = 4,
     if n_prior:
         print(f"[comfy] freshness: {n_prior} image hash(es) from recent runs loaded")
     clips: list[Path] = []
-    if _stills_template() is not None:
-        print(f"[comfy] stills: custom template (config/stills_api.json) — "
-              f"FLUX.1 '{model}' is the fallback")
-    print(f"[comfy] FLUX model={model} steps={steps} base_seed={master_seed}")
+    print(f"[comfy] stills: config/stills_api.json  base_seed={master_seed}")
 
     # Every run keeps its keyframes + prompts, not just RUFUS_DEBUG=1 runs —
     # the quality-review workflow needs every image logged, not a sampled
@@ -551,7 +405,7 @@ def generate_clips(queries: list[str], n: int = 4,
     debug_dir.mkdir(parents=True, exist_ok=True)
     print(f"[comfy] keeping keyframes in {debug_dir}")
 
-    # ── Phase 1: generate every still (FLUX stays loaded the whole time) ────
+    # ── Phase 1: generate every still (the stills model stays loaded the whole time) ────
     stills: list[tuple[int, Path, str]] = []   # (beat index, png path, prompt)
     for i, prompt in enumerate(prompts):
         print(f"[comfy] {i+1}/{len(prompts)}: {prompt}")
@@ -561,10 +415,7 @@ def generate_clips(queries: list[str], n: int = 4,
         for retry in range(MAX_DUP_RETRIES + 1):
             # %(2**31) keeps the seed in range for any backend; offset per clip/retry.
             seed  = (master_seed + i + 1000 * retry) % (2**31 - 1)
-            # Face-restore graph if configured, else plain — with an automatic
-            # same-seed fallback to plain inside _render_image, so restoration
-            # never costs a clip.
-            img_bytes, _ = _render_image(prompt, seed, model, steps, client_id, restore)
+            img_bytes = _render_image(prompt, seed, client_id)
             if not img_bytes:
                 # A hard generation error (vs. a plain duplicate) is often a
                 # transient GPU/model-loading hiccup on the ComfyUI side —

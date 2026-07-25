@@ -181,7 +181,7 @@ def run() -> None:
     except ImportError:
         warn("pytrends", "not installed — pip install pytrends>=4.9.0 for trending-topic hook boost (optional)")
 
-    # ── ComfyUI + FLUX (only relevant if a niche uses it or it's selected) ───────
+    # ── ComfyUI stills (only relevant if a niche uses it or it's selected) ───────
     try:
         _niches = json.loads(NICHES_FILE.read_text()).get("niches", {})
         uses_comfy = (video_src == "comfy"
@@ -192,29 +192,28 @@ def run() -> None:
             try:
                 r = _rq.get(f"{chost}/system_stats", timeout=5)
                 if r.status_code == 200:
-                    ok(f"ComfyUI available ({chost})  ← FLUX engine"
+                    ok(f"ComfyUI available ({chost})  ← stills engine"
                        + ("  ← ACTIVE" if video_src == "comfy" else ""))
-                    # Server up ≠ model loadable — verify the configured
-                    # checkpoint is actually in ComfyUI's list (the classic
-                    # first-run failure is the file in the wrong folder).
+                    # Server up ≠ model configured. There is deliberately no
+                    # built-in fallback model (FLUX.1-dev was removed —
+                    # non-commercial-licensed, this pipeline is monetized), so
+                    # a missing stills template means comfy mode renders
+                    # nothing at all, not a degraded fallback.
                     try:
                         sys.path.insert(0, str(Path(__file__).parent))
-                        from comfy_client import list_checkpoints as _lc
-                        _active = json.loads(NICHES_FILE.read_text())
-                        _acfg   = _active["niches"].get(
-                            os.environ.get("RUFUS_NICHE_OVERRIDE") or _active["active"], {})
-                        _model  = (os.environ.get("COMFY_MODEL")
-                                   or _acfg.get("comfy_model")
-                                   or "flux1-dev-fp8.safetensors")
-                        _ckpts = _lc()
-                        if _ckpts and _model in _ckpts:
-                            ok(f"FLUX checkpoint loadable  ({_model})")
-                        elif _ckpts:
-                            msg = (f"'{_model}' not in ComfyUI's checkpoint list "
-                                   f"(sees: {', '.join(_ckpts[:4])}) — put the file in "
-                                   f"ComfyUI\\models\\checkpoints\\ or set COMFY_MODEL")
-                            err("FLUX checkpoint", msg) if video_src == "comfy" \
-                                else warn("FLUX checkpoint", msg)
+                        import comfy_template
+                        stills_path = Path(__file__).parent.parent / "config" / "stills_api.json"
+                        tpl = comfy_template.load_template(stills_path)
+                        if tpl is not None and comfy_template.has_placeholder(tpl):
+                            ok(f"stills model configured  ({stills_path.name})")
+                        else:
+                            msg = (f"no valid stills template at {stills_path} — export a "
+                                   f"ComfyUI image workflow (Z-Image-Turbo recommended, "
+                                   f"Apache 2.0/commercial-safe) with the positive prompt "
+                                   f"set to RUFUS_PROMPT. See README's 'Swappable stills "
+                                   f"model' section.")
+                            err("stills model", msg) if video_src == "comfy" \
+                                else warn("stills model", msg)
                     except Exception:
                         pass
                     # Motion engines are optional (Ken Burns is the guaranteed
