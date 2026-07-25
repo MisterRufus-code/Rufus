@@ -1240,9 +1240,91 @@ def preanalyze(seed: dict, scene: str = "") -> tuple[str, str, float]:
     return analysis, run_id, cost
 
 
+def write_script_until_good(scene_description: str, seed: dict | None = None,
+                            precomputed_analysis: str = None,
+                            run_id: str = None) -> dict:
+    """Run full script CYCLES until one is both high-scoring and factual.
+
+    Why this exists (the retries were happening at the wrong level): inside
+    write_script the hook is chosen ONCE, then up to 3 body attempts run
+    against it. When the fact gate rejects the hook's own core claim — live:
+    "Swiss banking secrecy protected Nazi assets", unsupportable from the
+    source — redrafting the body under that same doomed hook cannot ever
+    succeed. Every retry was spent on a premise that was already lost.
+
+    So this escalates instead of repeating: each cycle is a COMPLETE fresh
+    attempt (new hook factory → new angle → new body → fact gate), and the
+    previous cycle's rejection is fed forward so the hook factory stops
+    reaching for the same unsupportable claim.
+
+    Stops as soon as a cycle is genuinely good (score >= target AND fact gate
+    passed) — no wasted spend when the first try is fine. Otherwise it keeps
+    the best-scoring attempt so far and returns that; a run is NEVER failed
+    over this, matching the rest of the pipeline's fail-open policy.
+
+    Bounded on purpose — "loop until perfect" with no ceiling is how you get a
+    runaway bill on a topic whose source genuinely can't support an
+    interesting claim:
+      RUFUS_SCRIPT_CYCLES    3      full cycles (1 = old single-pass behavior)
+      RUFUS_SCRIPT_MAX_COST  0.30   hard USD ceiling across all cycles
+    """
+    std        = _standards()
+    target     = std["scoring"]["score_min"]
+    max_cycles = max(1, int(os.environ.get("RUFUS_SCRIPT_CYCLES", "3")))
+    max_cost   = float(os.environ.get("RUFUS_SCRIPT_MAX_COST", "0.30"))
+
+    best: dict | None = None
+    spent = 0.0
+    scene = scene_description
+
+    for cycle in range(1, max_cycles + 1):
+        result = write_script(scene, seed=seed,
+                              precomputed_analysis=precomputed_analysis,
+                              run_id=run_id)
+        spent += result.get("cost_usd", 0.0) or 0.0
+        result["cost_usd"] = spent          # report cumulative, not per-cycle
+
+        if best is None or result.get("score", 0) > best.get("score", 0):
+            best = result
+
+        good = result.get("score", 0) >= target and result.get("fact_ok", True)
+        if good:
+            if cycle > 1:
+                print(f"[gpt] cycle {cycle}/{max_cycles}: "
+                      f"{result['score']}/10 and factual — accepted")
+            return result
+
+        why = (result.get("fact_reason")
+               or f"scored {result.get('score', 0)}/10, below the {target}/10 bar")
+        if cycle >= max_cycles:
+            print(f"[gpt] ⚠ {max_cycles} cycle(s) exhausted — keeping the best "
+                  f"({best.get('score', 0)}/10). Last issue: {why}")
+            break
+        if spent >= max_cost:
+            print(f"[gpt] ⚠ cost ceiling ${max_cost:.2f} reached after cycle "
+                  f"{cycle} — keeping the best ({best.get('score', 0)}/10)")
+            break
+
+        print(f"[gpt] cycle {cycle}/{max_cycles} not good enough ({why}) — "
+              f"retrying with a DIFFERENT angle")
+        # Feed the failure forward. A fresh hook factory runs next cycle, and
+        # this steers it off the angle that just failed instead of letting it
+        # rediscover the same doomed claim.
+        scene = (f"{scene_description}\n\nAVOID — a previous attempt on this "
+                 f"exact source was rejected for: {why}. Choose a DIFFERENT "
+                 f"angle that the source material actually supports; do not "
+                 f"restate or lightly reword the rejected claim.")
+
+    best["cost_usd"] = spent
+    return best
+
+
 def write_script(scene_description: str, seed: dict | None = None,
                  precomputed_analysis: str = None, run_id: str = None) -> dict:
     """Three-phase hook-first script writer. Returns dict with full metadata.
+
+    Single pass — see write_script_until_good() for the escalating retry loop
+    that calls this repeatedly with a fresh hook when a cycle isn't good enough.
 
     Pass precomputed_analysis + run_id (from preanalyze()) to skip the
     redundant pre-analysis API call when analysis was already run for video
@@ -1565,6 +1647,8 @@ def write_script(scene_description: str, seed: dict | None = None,
     # below the auto-upload threshold, so the video is saved for human review.
     fact_ok, fact_reason, fact_cost = _fact_gate(client, seed, best["script"])
     total_cost += fact_cost
+    final_fact_ok  = fact_ok      # may flip True below if the rewrite passes
+    final_fact_why = fact_reason
     if not fact_ok:
         capped = min(best["score"], score_min - 3)
         print(f"[gpt] ⚠ FACT GATE FAILED: {fact_reason}")
@@ -1582,6 +1666,7 @@ def write_script(scene_description: str, seed: dict | None = None,
                   f"{rewrite['score']}/10 (replacing the capped {capped}/10 draft)")
             best.update(script=rewrite["script"], score=rewrite["score"],
                         crits=rewrite["crits"], reasoning=rewrite["reasoning"])
+            final_fact_ok, final_fact_why = True, ""   # the rewrite is grounded
         else:
             print(f"[gpt]   score capped {best['score']} → {capped} "
                   f"(upload will be held for review)")
@@ -1610,6 +1695,13 @@ def write_script(scene_description: str, seed: dict | None = None,
         "script": best["script"],
         "run_id": run_id,
         "score": best["score"],
+        # Did the shipped script clear the fact gate (either first pass or via
+        # the grounded rewrite)? write_script_until_good loops on this — a
+        # capped score alone can't distinguish "weak writing" from "wrong
+        # facts", and those need different escalations.
+        "fact_ok": final_fact_ok,
+        "fact_reason": final_fact_why,
+        "hook": winning_hook,
         "criterion_scores": best["crits"],
         "attempts_used": best["attempt_n"],
         "final_temperature": best["temperature"],

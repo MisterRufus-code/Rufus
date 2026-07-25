@@ -249,7 +249,8 @@ sys.path.insert(0, str(Path(__file__).parent))
 from research        import get_seed
 from media_fetcher   import fetch_candidates
 from llava_tagger    import pick_best_video
-from script_writer   import write_script, preanalyze, check_blacklist, add_to_blacklist
+from script_writer   import (write_script, write_script_until_good, preanalyze,
+                             check_blacklist, add_to_blacklist)
 from audio_gen       import render
 from db_manager      import init_db, save_video, update_youtube_id
 
@@ -883,9 +884,13 @@ def run(skip_upload: bool = False, niche_override: str = None, output_dir: Path 
     # ── Step 4: Write script (reuses pre-analysis, no duplicate API call) ──────
     print("[ 4 / 7 ]  Writing script with GPT...")
     try:
-        result = write_script(scene, seed=seed,
-                              precomputed_analysis=seed_analysis or None,
-                              run_id=script_run_id)
+        # Escalating loop, not a single pass: when a cycle fails the fact gate
+        # or misses the score bar, retry with a WHOLE new hook/angle (the
+        # failure is fed forward) instead of redrafting the body under a hook
+        # that's already lost. Bounded by RUFUS_SCRIPT_CYCLES/MAX_COST.
+        result = write_script_until_good(scene, seed=seed,
+                                         precomputed_analysis=seed_analysis or None,
+                                         run_id=script_run_id)
         script = result["script"]
 
         if check_blacklist(script):

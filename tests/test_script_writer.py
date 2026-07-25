@@ -855,3 +855,98 @@ def test_add_topic_embedding_respects_history_cap(monkeypatch, tmp_path):
     entries = _json.loads((tmp_path / "topics.json").read_text())
     assert len(entries) == 3
     assert entries[-1]["vec"] == [5.0]   # newest kept
+
+
+# ── write_script_until_good: escalate to a NEW hook, don't redraft a doomed one ──
+# Live failure this fixes: the hook "Swiss banking secrecy protected Nazi
+# assets" scored 10/10, then the fact gate rejected that very claim. All three
+# body retries reran under the same unsupportable hook, so they could never
+# have succeeded — the retry was happening at the wrong level.
+
+def _res(score, fact_ok, cost=0.02, script="s", reason=""):
+    return {"script": script, "score": score, "fact_ok": fact_ok,
+            "fact_reason": reason, "cost_usd": cost, "run_id": "r",
+            "criterion_scores": {}, "attempts_used": 1,
+            "final_temperature": 0.7, "reasoning": ""}
+
+
+def test_until_good_stops_immediately_when_first_cycle_is_good(monkeypatch):
+    import script_writer as sw
+    calls = []
+    monkeypatch.setattr(sw, "write_script",
+                        lambda *a, **k: calls.append(1) or _res(9, True))
+    out = sw.write_script_until_good("scene", seed={"content": "x"})
+    assert out["score"] == 9
+    assert len(calls) == 1          # no wasted spend when the first try is fine
+
+
+def test_until_good_retries_when_fact_gate_failed(monkeypatch):
+    """A capped-but-decent score still retries if the facts were wrong."""
+    import script_writer as sw
+    seq = iter([_res(5, False, reason="claim unsupported"), _res(9, True)])
+    monkeypatch.setattr(sw, "write_script", lambda *a, **k: next(seq))
+    out = sw.write_script_until_good("scene", seed={"content": "x"})
+    assert out["score"] == 9 and out["fact_ok"] is True
+
+
+def test_until_good_feeds_the_rejection_into_the_next_cycle(monkeypatch):
+    """The next cycle must be told what was rejected, or the fresh hook
+    factory just rediscovers the same doomed claim."""
+    import script_writer as sw
+    scenes = []
+
+    def fake(scene, **kw):
+        scenes.append(scene)
+        return _res(5, False, reason="Nazi-assets claim unsupported") \
+            if len(scenes) == 1 else _res(9, True)
+
+    monkeypatch.setattr(sw, "write_script", fake)
+    sw.write_script_until_good("original scene", seed={"content": "x"})
+    assert len(scenes) == 2
+    assert "original scene" in scenes[1]
+    assert "Nazi-assets claim unsupported" in scenes[1]
+    assert "DIFFERENT angle" in scenes[1]
+
+
+def test_until_good_keeps_best_when_all_cycles_fail(monkeypatch):
+    """Never fails a run — returns the best attempt, like the rest of the
+    pipeline's fail-open policy."""
+    import script_writer as sw
+    monkeypatch.setenv("RUFUS_SCRIPT_CYCLES", "3")
+    seq = iter([_res(4, False), _res(7, False), _res(5, False)])
+    monkeypatch.setattr(sw, "write_script", lambda *a, **k: next(seq))
+    out = sw.write_script_until_good("scene", seed={"content": "x"})
+    assert out["score"] == 7          # the best of the three, not the last
+
+
+def test_until_good_respects_cycle_limit(monkeypatch):
+    import script_writer as sw
+    monkeypatch.setenv("RUFUS_SCRIPT_CYCLES", "2")
+    calls = []
+    monkeypatch.setattr(sw, "write_script",
+                        lambda *a, **k: calls.append(1) or _res(3, False))
+    sw.write_script_until_good("scene", seed={"content": "x"})
+    assert len(calls) == 2
+
+
+def test_until_good_reports_cumulative_cost(monkeypatch):
+    import script_writer as sw
+    monkeypatch.setenv("RUFUS_SCRIPT_CYCLES", "3")
+    seq = iter([_res(3, False, cost=0.02), _res(4, False, cost=0.03),
+                _res(5, False, cost=0.01)])
+    monkeypatch.setattr(sw, "write_script", lambda *a, **k: next(seq))
+    out = sw.write_script_until_good("scene", seed={"content": "x"})
+    assert abs(out["cost_usd"] - 0.06) < 1e-9
+
+
+def test_until_good_stops_at_cost_ceiling(monkeypatch):
+    """Unbounded 'loop until perfect' is how you get a runaway bill on a topic
+    whose source genuinely can't support an interesting claim."""
+    import script_writer as sw
+    monkeypatch.setenv("RUFUS_SCRIPT_CYCLES", "50")
+    monkeypatch.setenv("RUFUS_SCRIPT_MAX_COST", "0.05")
+    calls = []
+    monkeypatch.setattr(sw, "write_script",
+                        lambda *a, **k: calls.append(1) or _res(3, False, cost=0.02))
+    sw.write_script_until_good("scene", seed={"content": "x"})
+    assert len(calls) == 3          # 0.02+0.02+0.02 crosses 0.05, then stops
