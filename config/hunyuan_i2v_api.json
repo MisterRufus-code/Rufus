@@ -106,7 +106,7 @@
     "class_type": "BasicScheduler",
     "inputs": {
       "scheduler": "simple",
-      "steps": 20,
+      "steps": 30,
       "denoise": 1,
       "model": ["12", 0]
     }
@@ -135,7 +135,7 @@
   "130": {
     "class_type": "ModelSamplingSD3",
     "inputs": {
-      "shift": 7,
+      "shift": 5,
       "model": ["12", 0]
     }
   }
