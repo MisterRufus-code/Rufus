@@ -38,7 +38,7 @@ Environment:
   RUFUS_HUNYUAN_H        832   (portrait height)
   RUFUS_HUNYUAN_FRAMES   121   (~5s at Hunyuan's native 24fps)
   RUFUS_HUNYUAN_FPS      24    (native frame rate, used for assembly)
-  RUFUS_HUNYUAN_TIMEOUT  1200  (seconds to wait for one clip)
+  RUFUS_HUNYUAN_TIMEOUT  1800  (seconds to wait for one clip)
   RUFUS_HUNYUAN_TEMPLATE path override for the API-export JSON
 """
 
@@ -150,7 +150,13 @@ def animate_image(png_path: Path, out_path: Path, duration: float = 8.0,
         w       = int(os.environ.get("RUFUS_HUNYUAN_W", "480"))
         h       = int(os.environ.get("RUFUS_HUNYUAN_H", "832"))
         frames  = int(os.environ.get("RUFUS_HUNYUAN_FRAMES", "121"))
-        timeout = float(os.environ.get("RUFUS_HUNYUAN_TIMEOUT", "1200"))
+        # 1800s (30 min), not 1200 — a live 16GB-RAM run showed ComfyUI's dynamic
+        # VRAM streaming taking ~21-23 min per 480p/30-step clip (comfy-aimdo
+        # async weight offloading trades speed for fitting in limited RAM), which
+        # is LONGER than the old 1200s default — every clip was timing out and
+        # silently falling through to SVD/Ken Burns, wasting the full 20 minutes
+        # for zero motion output on every single beat.
+        timeout = float(os.environ.get("RUFUS_HUNYUAN_TIMEOUT", "1800"))
         # Hunyuan's 3D causal VAE requires 4n+1 frames (121 ok, 120 not) —
         # snap a misconfigured count down to the nearest valid one instead of
         # letting the whole generation fail.
