@@ -3,7 +3,7 @@
 import json
 import sys
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -156,6 +156,59 @@ def test_missing_nodes_server_down_reports_all():
     with patch.object(ct.requests, "get", side_effect=OSError("down")):
         missing = ct.missing_nodes(_i2v_graph(), "http://x")
     assert len(missing) == len({n["class_type"] for n in _i2v_graph().values()})
+
+
+# ── missing_models: catch a stale model filename at PREFLIGHT ─────────────────
+# missing_nodes() passes on a graph whose node classes all exist but whose
+# weights file is gone — ComfyUI then rejects the submit with
+# "value_not_in_list". Live, that surfaced only after the whole stills phase
+# had run, wasting the run.
+
+def _loader_graph(unet="model_a.safetensors"):
+    return {"12": {"class_type": "UNETLoader",
+                   "inputs": {"unet_name": unet, "weight_dtype": "default"}}}
+
+
+def _object_info(class_type, names):
+    r = MagicMock()
+    r.status_code = 200
+    r.json.return_value = {class_type: {"input": {"required": {
+        "unet_name": [names, {"tooltip": "x"}]}}}}
+    return r
+
+
+def test_missing_models_flags_filename_not_on_disk():
+    """The exact live failure: config named the superseded 480p fp16 build
+    while only the step-distilled fp8 file was actually present."""
+    graph = _loader_graph("hunyuanvideo1.5_480p_i2v_fp16.safetensors")
+    resp = _object_info("UNETLoader",
+                        ["hunyuanvideo1.5_480p_i2v_step_distilled_fp8_scaled.safetensors"])
+    with patch.object(ct.requests, "get", return_value=resp):
+        missing = ct.missing_models(graph, "http://x")
+    assert len(missing) == 1
+    assert "hunyuanvideo1.5_480p_i2v_fp16.safetensors" in missing[0]
+    assert "UNETLoader.unet_name" in missing[0]
+
+
+def test_missing_models_empty_when_file_present():
+    graph = _loader_graph("model_a.safetensors")
+    with patch.object(ct.requests, "get",
+                      return_value=_object_info("UNETLoader", ["model_a.safetensors"])):
+        assert ct.missing_models(graph, "http://x") == []
+
+
+def test_missing_models_fails_open_when_object_info_unreadable():
+    """Must never block a run it can't actually verify."""
+    graph = _loader_graph("whatever.safetensors")
+    with patch.object(ct.requests, "get", side_effect=OSError("down")):
+        assert ct.missing_models(graph, "http://x") == []
+
+
+def test_missing_models_ignores_non_loader_nodes():
+    graph = {"6": {"class_type": "CLIPTextEncode", "inputs": {"text": "hello"}}}
+    with patch.object(ct.requests, "get") as get:
+        assert ct.missing_models(graph, "http://x") == []
+    get.assert_not_called()   # no probe for a node that names no model file
 
 
 # ── Shipped configs stay valid Rufus templates ────────────────────────────────

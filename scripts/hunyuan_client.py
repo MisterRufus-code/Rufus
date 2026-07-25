@@ -74,7 +74,8 @@ def enabled() -> bool:
 
 def ready() -> tuple[bool, str]:
     """Fail-closed preflight: template exported + placeholder present + every
-    node class it uses exists in the running ComfyUI."""
+    node class it uses exists in the running ComfyUI + every model FILE it
+    names is actually loadable there."""
     tpl = comfy_template.load_template(_template_path())
     if tpl is None:
         return False, ("no API export at config/hunyuan_i2v_api.json — run the "
@@ -88,6 +89,14 @@ def ready() -> tuple[bool, str]:
     if missing:
         return False, (f"ComfyUI is missing node(s): {', '.join(missing[:4])} "
                        f"(server down or ComfyUI needs an update)")
+    # Model FILENAMES too, not just node classes — a config naming a model
+    # that isn't on disk otherwise fails only at submit time, i.e. after the
+    # entire stills phase has already run (seen live).
+    missing_files = comfy_template.missing_models(tpl, _host())
+    if missing_files:
+        return False, (f"ComfyUI can't load model file(s): "
+                       f"{'; '.join(missing_files[:3])} — download it, or point "
+                       f"config/hunyuan_i2v_api.json at a file you have")
     return True, "HunyuanVideo 1.5 template loaded (face-capable motion)"
 
 

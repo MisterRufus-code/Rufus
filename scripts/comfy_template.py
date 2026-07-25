@@ -86,6 +86,70 @@ def missing_nodes(graph: dict, host: str) -> list[str]:
     return missing
 
 
+# Loader inputs whose value is a MODEL FILENAME that ComfyUI validates against
+# the files actually on disk. class_type -> input names to check.
+_MODEL_FILE_INPUTS = {
+    "UNETLoader":        ("unet_name",),
+    "CheckpointLoaderSimple": ("ckpt_name",),
+    "VAELoader":         ("vae_name",),
+    "CLIPLoader":        ("clip_name",),
+    "DualCLIPLoader":    ("clip_name1", "clip_name2"),
+    "CLIPVisionLoader":  ("clip_name",),
+    "LoraLoaderModelOnly": ("lora_name",),
+    "LatentUpscaleModelLoader": ("model_name",),
+}
+
+
+def missing_models(graph: dict, host: str) -> list[str]:
+    """Model FILENAMES the template references that ComfyUI can't load.
+
+    missing_nodes() only checks node CLASSES exist — a graph can pass that and
+    still be rejected at submit time with
+    "value_not_in_list: unet_name '<file>' not in [...]" when the referenced
+    weights file isn't on disk. That happened live: a config still naming the
+    superseded 480p fp16 checkpoint failed only AFTER the whole stills phase
+    had run, wasting the run. Checking it in the same preflight as the node
+    classes turns that into an upfront, actionable message.
+
+    Each loader's valid filenames come from /object_info/<class>, whose
+    required-input spec carries the enum list. Unreadable/unknown shapes are
+    skipped (fail-open) — this must never block a run it can't actually
+    verify."""
+    missing: list[str] = []
+    cache: dict[str, set[str] | None] = {}
+    for node in graph.values():
+        ct = node.get("class_type")
+        fields = _MODEL_FILE_INPUTS.get(ct)
+        if not fields:
+            continue
+        if ct not in cache:
+            cache[ct] = _loader_choices(ct, host)
+        for field in fields:
+            value = (node.get("inputs") or {}).get(field)
+            choices = cache[ct]
+            if isinstance(value, str) and choices and value not in choices:
+                missing.append(f"{value} (for {ct}.{field})")
+    return missing
+
+
+def _loader_choices(class_type: str, host: str) -> set[str] | None:
+    """Filenames a loader node will accept, or None when it can't be read."""
+    try:
+        r = requests.get(f"{host}/object_info/{class_type}", timeout=10)
+        if r.status_code != 200:
+            return None
+        required = (r.json().get(class_type, {})
+                    .get("input", {}).get("required", {}))
+    except Exception:
+        return None
+    names: set[str] = set()
+    for spec in required.values():
+        # A file-enum input is [[...names...], {...opts}] or [[...names...]]
+        if isinstance(spec, list) and spec and isinstance(spec[0], list):
+            names.update(s for s in spec[0] if isinstance(s, str))
+    return names or None
+
+
 def prepare(graph: dict, *, prompt: str | None = None,
             image_name: str | None = None, seed: int | None = None,
             dims: tuple[int, int, int] | None = None,
