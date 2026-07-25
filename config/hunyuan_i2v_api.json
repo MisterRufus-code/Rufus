@@ -24,8 +24,8 @@
   "12": {
     "class_type": "UNETLoader",
     "inputs": {
-      "unet_name": "hunyuanvideo1.5_480p_i2v_fp16.safetensors",
-      "weight_dtype": "fp8_e4m3fn"
+      "unet_name": "hunyuanvideo1.5_480p_i2v_step_distilled_fp8_scaled.safetensors",
+      "weight_dtype": "default"
     }
   },
   "44": {
@@ -106,7 +106,7 @@
     "class_type": "BasicScheduler",
     "inputs": {
       "scheduler": "simple",
-      "steps": 30,
+      "steps": 12,
       "denoise": 1,
       "model": ["12", 0]
     }
@@ -126,7 +126,7 @@
   "129": {
     "class_type": "CFGGuider",
     "inputs": {
-      "cfg": 6,
+      "cfg": 1,
       "model": ["130", 0],
       "positive": ["78", 0],
       "negative": ["78", 1]
