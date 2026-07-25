@@ -450,6 +450,12 @@ def generate_clips(queries: list[str], n: int = 4,
     # never lost to a fancier engine.
     motion_engines: list[tuple[str, object]] = []
     try:
+        import svd_client
+        _stills_only_reason = ("RUFUS_STILLS_ONLY=1 forces images-only"
+                               if svd_client._stills_only() else None)
+    except Exception:
+        _stills_only_reason = None
+    try:
         import wan_client
         if wan_client.enabled():
             wan_ok, wan_why = wan_client.ready()
@@ -457,7 +463,8 @@ def generate_clips(queries: list[str], n: int = 4,
             if wan_ok:
                 motion_engines.append(("wan", wan_client.animate_image))
         else:
-            print("[comfy] motion wan 2.2: off — disabled (RUFUS_WAN=0)")
+            print(f"[comfy] motion wan 2.2: off — disabled "
+                  f"({_stills_only_reason or 'RUFUS_WAN=0'})")
     except Exception as e:
         print(f"[comfy] wan unavailable ({e})")
     try:
@@ -471,7 +478,8 @@ def generate_clips(queries: list[str], n: int = 4,
                 # shots land here instead of falling to static Ken Burns.
                 motion_engines.append(("hunyuan", hunyuan_client.animate_image))
         else:
-            print("[comfy] motion hunyuan 1.5: off — disabled (RUFUS_HUNYUAN=0)")
+            print(f"[comfy] motion hunyuan 1.5: off — disabled "
+                  f"({_stills_only_reason or 'RUFUS_HUNYUAN=0'})")
     except Exception as e:
         print(f"[comfy] hunyuan unavailable ({e})")
     try:
