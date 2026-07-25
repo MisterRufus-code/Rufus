@@ -1,0 +1,81 @@
+{
+  "16": {
+    "class_type": "UNETLoader",
+    "inputs": {
+      "unet_name": "z_image_turbo_bf16.safetensors",
+      "weight_dtype": "default"
+    }
+  },
+  "18": {
+    "class_type": "CLIPLoader",
+    "inputs": {
+      "clip_name": "qwen_3_4b.safetensors",
+      "type": "lumina2",
+      "device": "default"
+    }
+  },
+  "11": {
+    "class_type": "ModelSamplingAuraFlow",
+    "inputs": {
+      "shift": 3,
+      "model": ["16", 0]
+    }
+  },
+  "6": {
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "text": "RUFUS_PROMPT",
+      "clip": ["18", 0]
+    }
+  },
+  "7": {
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "text": "",
+      "clip": ["18", 0]
+    }
+  },
+  "13": {
+    "class_type": "EmptySD3LatentImage",
+    "inputs": {
+      "width": 832,
+      "height": 1472,
+      "batch_size": 1
+    }
+  },
+  "3": {
+    "class_type": "KSampler",
+    "inputs": {
+      "seed": 47447417949230,
+      "steps": 9,
+      "cfg": 1,
+      "sampler_name": "euler",
+      "scheduler": "simple",
+      "denoise": 1,
+      "model": ["11", 0],
+      "positive": ["6", 0],
+      "negative": ["7", 0],
+      "latent_image": ["13", 0]
+    }
+  },
+  "17": {
+    "class_type": "VAELoader",
+    "inputs": {
+      "vae_name": "ae.safetensors"
+    }
+  },
+  "8": {
+    "class_type": "VAEDecode",
+    "inputs": {
+      "samples": ["3", 0],
+      "vae": ["17", 0]
+    }
+  },
+  "9": {
+    "class_type": "SaveImage",
+    "inputs": {
+      "filename_prefix": "rufus_stills",
+      "images": ["8", 0]
+    }
+  }
+}

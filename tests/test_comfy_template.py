@@ -156,3 +156,29 @@ def test_missing_nodes_server_down_reports_all():
     with patch.object(ct.requests, "get", side_effect=OSError("down")):
         missing = ct.missing_nodes(_i2v_graph(), "http://x")
     assert len(missing) == len({n["class_type"] for n in _i2v_graph().values()})
+
+
+# ── Shipped configs stay valid Rufus templates ────────────────────────────────
+# The repo ships hand-built API exports (config/hunyuan_i2v_api.json for motion,
+# config/stills_api.json for the commercial-free Z-Image stills model). A typo
+# in either — a broken JSON, or losing the RUFUS_PROMPT placeholder — silently
+# disables the engine (falls back to FLUX/Ken Burns) with no error, so guard it.
+
+CONFIG_DIR = Path(__file__).parent.parent / "config"
+
+
+@pytest.mark.parametrize("name", ["hunyuan_i2v_api.json", "stills_api.json"])
+def test_shipped_config_is_a_valid_rufus_template(name):
+    tpl = ct.load_template(CONFIG_DIR / name)
+    assert tpl is not None, f"{name} is not a loadable API graph"
+    assert ct.has_placeholder(tpl), f"{name} lost its RUFUS_PROMPT placeholder"
+
+
+def test_shipped_stills_config_substitutes_and_is_portrait():
+    tpl = ct.load_template(CONFIG_DIR / "stills_api.json")
+    g = ct.prepare(tpl, prompt="a real photo", seed=123, save_prefix="rufus_stills")
+    # prompt substituted, no placeholder left anywhere
+    assert not ct.has_placeholder(g)
+    # portrait latent (taller than wide) so Rufus' 1080x1920 crop keeps the subject
+    latent = next(n for n in g.values() if n["class_type"] == "EmptySD3LatentImage")
+    assert latent["inputs"]["height"] > latent["inputs"]["width"]

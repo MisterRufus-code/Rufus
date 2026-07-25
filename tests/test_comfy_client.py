@@ -193,9 +193,11 @@ def test_resolve_face_restore_uses_reactor_when_only_it_present(monkeypatch):
     assert r["kind"] == "reactor"
 
 
-def test_render_image_falls_back_to_plain_when_restore_fails():
+def test_render_image_falls_back_to_plain_when_restore_fails(monkeypatch):
     # Face-restore submit is rejected (bad node/param) → must retry the SAME seed
     # on the plain graph so a misconfigured restore node never costs a clip.
+    # Disable the shipped stills template so THIS test isolates the FLUX path.
+    monkeypatch.setattr(c, "_stills_template", lambda: None)
     restore = {"kind": "reactor", "model": "GFPGANv1.4.pth", "fidelity": 0.5}
     calls = []
 
@@ -395,8 +397,12 @@ def test_flux2_template_loads_with_placeholder(monkeypatch, tmp_path):
 def test_render_image_prefers_flux2_then_falls_back(monkeypatch, tmp_path):
     """FLUX.2 template render fails → the SAME seed goes to the FLUX.1 graph;
     the upgrade can never cost a clip."""
+    # Point the primary stills path at a missing file so this test exercises the
+    # legacy FLUX.2 template it sets up, not the shipped config/stills_api.json.
+    monkeypatch.setattr(c, "STILLS_TEMPLATE", tmp_path / "no_stills.json")
     monkeypatch.setattr(c, "FLUX2_TEMPLATE", _flux2_tpl(tmp_path))
     monkeypatch.delenv("RUFUS_FLUX2", raising=False)
+    monkeypatch.delenv("RUFUS_STILLS_TEMPLATE", raising=False)
 
     submitted = []
 
