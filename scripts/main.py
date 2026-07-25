@@ -960,8 +960,10 @@ def run(skip_upload: bool = False, niche_override: str = None, output_dir: Path 
         except Exception as e:
             print(f"           ⚠ topic-clustering gate skipped (non-fatal): {e}")
 
-        preview = script[:100] + "..." if len(script) > 100 else script
-        print(f"           → {preview}")
+        # Full script, not a truncated preview — so the terminal itself is a
+        # complete log of what's shipping, not just a teaser you have to open
+        # a file to finish reading.
+        print(f"           → {script}")
         print(f"           → score {result['score']}/10  attempts={result['attempts_used']}  "
               f"cost=${result['cost_usd']:.4f}\n")
     except Exception as e:
@@ -1025,7 +1027,7 @@ def run(skip_upload: bool = False, niche_override: str = None, output_dir: Path 
             prompts = _build_sd_prompts(script, active, max_scenes=max_scenes)
             print(f"           → {len(prompts)} beat-matched prompts:")
             for i, p in enumerate(prompts):
-                print(f"             {i+1}. {p[:90]}")
+                print(f"             {i+1}. {p}")
 
             # Supervisor: catch prompt-builder drift (near-duplicates, off-topic
             # imagery) BEFORE burning FLUX/SD generation time on doomed images.

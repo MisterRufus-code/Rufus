@@ -496,7 +496,7 @@ def generate_clips(queries: list[str], n: int = 4,
     print(f"[sd] keeping keyframes in {debug_dir}")
 
     for i, query in enumerate(prompts):
-        print(f"[sd] {i+1}/{len(prompts)}: {query[:70]}")
+        print(f"[sd] {i+1}/{len(prompts)}: {query}")
 
         if prebuilt:
             # GPT already wrote a complete SD token prompt with specs baked in.

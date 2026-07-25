@@ -546,7 +546,7 @@ def generate_clips(queries: list[str], n: int = 4,
     # ── Phase 1: generate every still (FLUX stays loaded the whole time) ────
     stills: list[tuple[int, Path, str]] = []   # (beat index, png path, prompt)
     for i, prompt in enumerate(prompts):
-        print(f"[comfy] {i+1}/{len(prompts)}: {prompt[:70]}")
+        print(f"[comfy] {i+1}/{len(prompts)}: {prompt}")
         png_path = tmp_dir / f"{stamp}_{i}.png"
         accepted = False
 
