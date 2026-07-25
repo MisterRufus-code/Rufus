@@ -62,6 +62,20 @@ def test_fact_gate_prompt_contains_seed_and_script():
     assert "conspiracy" in prompt.lower()        # misinformation clause present
 
 
+def test_fact_gate_prompt_carves_out_ordinary_editorializing():
+    """Live pattern: good scripts (8/10, 10/10) kept getting capped to 5/10
+    because the checker model flagged ordinary 'why it happened' narration —
+    'simpler for trade', 'redefined modern finance' — as an unsupported-motive
+    violation. Rule 3 must be narrowed to actual secret/covert motive claims,
+    with an explicit carve-out for normal editorial explanation, or this keeps
+    capping good scripts for no real accuracy problem."""
+    client = _client_answering("PASS")
+    _fact_gate(client, _SEED, "some script")
+    prompt = client.chat.completions.create.call_args.kwargs["messages"][0]["content"]
+    assert "secret" in prompt.lower() or "covert" in prompt.lower()
+    assert "ordinary editorial" in prompt.lower() or "normal explanatory" in prompt.lower()
+
+
 def test_write_script_wires_the_gate_and_caps_score():
     import inspect
     src = inspect.getsource(script_writer.write_script)

@@ -1656,6 +1656,19 @@ def _fact_gate(client: OpenAI, seed: dict | None, script: str) -> tuple[bool, st
     question about Benjamin Freedman's 1961 speech, a known antisemitic
     conspiracy source, became an 8/10 script about a "$50B deception").
 
+    Rule 3 is deliberately NARROW (secret/covert motive, not ordinary
+    editorializing) after a live pattern of good scripts (8/10, 10/10) getting
+    capped to 5/10 for completely benign explanatory language: "simpler for
+    trade," "reflected a shift in strategy," "redefined modern finance" all got
+    flagged as "attributes motives... not supported" by the checker model, even
+    though none of them assert a hidden agenda — they're just normal "why this
+    happened" narration, which every history-education script needs to not read
+    as a dry fact list. Rule 3 now targets the actual conspiracy-adjacent
+    pattern it was built for (secret deals, hidden agendas, covert plans) and
+    explicitly carves out ordinary cause-and-effect commentary, so the fact
+    gate stops punishing normal narration while still catching invented
+    motives and conspiracy framing.
+
     Returns (passed, reason, cost_usd). Fail-open on API errors: the gate must
     never break a render — a failed CHECK is not a failed SCRIPT.
     """
@@ -1669,8 +1682,14 @@ def _fact_gate(client: OpenAI, seed: dict | None, script: str) -> tuple[bool, st
         "by the source material above nor well-established mainstream history.\n"
         "2. It presents conspiracy-theory claims or framing as fact (hidden cabals, "
         "'what they don't want you to know', claims from known misinformation sources).\n"
-        "3. It attributes motives or secret deals that mainstream historiography does "
-        "not support.\n\n"
+        "3. It asserts a SPECIFIC secret/covert motive or hidden deal that mainstream "
+        "historiography does not support (e.g. 'they secretly conspired to...', "
+        "'the real reason, hidden from the public, was...').\n\n"
+        "Do NOT fail for ordinary editorial narration explaining why something happened "
+        "or why it matters (e.g. 'it was simpler for trade', 'this reflected a shift in "
+        "strategy', 'it reshaped the industry') — that is normal explanatory writing, not "
+        "a factual violation, UNLESS it also invents a specific unsupported fact already "
+        "covered by rule 1. Only fail rule 3 for an actual SECRET/COVERT motive claim.\n\n"
         "Reply with EXACTLY one line:\n"
         "PASS\n"
         "or\n"
