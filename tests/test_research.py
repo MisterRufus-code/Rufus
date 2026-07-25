@@ -234,8 +234,12 @@ def _wiki_search_response(hits):
     return resp
 
 
-def test_fetch_wikipedia_by_title_exact_match_fast_path():
+def test_fetch_wikipedia_by_title_exact_match_fast_path(monkeypatch):
     extract = "Bretton Woods was a 1944 conference. " * 10
+    # Stub the full-text fetch so this test counts only the RESOLUTION calls
+    # (its actual subject: fast path vs search fallback), not the extra
+    # grounding-corpus fetch every successful resolution now makes.
+    monkeypatch.setattr(research, "fetch_wikipedia_fulltext", lambda t: "")
     with patch.object(research.httpx, "get",
                       return_value=_wiki_response(extract, title="Bretton Woods")) as get:
         seed = research.fetch_wikipedia_by_title("Bretton Woods")
@@ -247,9 +251,10 @@ def test_fetch_wikipedia_by_title_exact_match_fast_path():
     assert get.call_count == 1
 
 
-def test_fetch_wikipedia_by_title_falls_back_to_search():
+def test_fetch_wikipedia_by_title_falls_back_to_search(monkeypatch):
     """An imprecise query ('bretton woods conference' lowercase, or a partial
     phrase) must not just fail — it should find the real article via search."""
+    monkeypatch.setattr(research, "fetch_wikipedia_fulltext", lambda t: "")
     summary_404 = MagicMock()
     summary_404.raise_for_status.side_effect = Exception("404")
     search_hit = _wiki_search_response([{"title": "Bretton Woods Conference"}])
@@ -292,6 +297,74 @@ def test_fetch_wikipedia_by_title_rejects_short_extract_then_tries_search():
         seed = research.fetch_wikipedia_by_title("some query")
     assert seed is not None
     assert seed["title"] == "Real Article"
+
+
+# ── Full-article grounding corpus ─────────────────────────────────────────────
+# The REST summary endpoint returns only the lead paragraph — too thin to
+# fact-check a 110-word script against, which capped run after run at 5/10
+# with "not supported by the source material".
+
+def _fulltext_response(body):
+    r = MagicMock()
+    r.raise_for_status.return_value = None
+    r.json.return_value = {"query": {"pages": {"123": {"extract": body}}}}
+    return r
+
+
+def test_fetch_wikipedia_fulltext_returns_article_body():
+    body = "Lead paragraph. " + ("Section body sentence. " * 50)
+    with patch.object(research.httpx, "get", return_value=_fulltext_response(body)):
+        got = research.fetch_wikipedia_fulltext("Some_Article")
+    assert "Section body sentence." in got
+    assert len(got) > 200
+
+
+def test_fetch_wikipedia_fulltext_truncates_long_articles():
+    body = "x. " * 20_000                      # way past the cap
+    with patch.object(research.httpx, "get", return_value=_fulltext_response(body)):
+        got = research.fetch_wikipedia_fulltext("Long")
+    assert len(got) <= research.WIKI_FULLTEXT_CHARS
+
+
+def test_fetch_wikipedia_fulltext_empty_on_failure():
+    with patch.object(research.httpx, "get", side_effect=Exception("network")):
+        assert research.fetch_wikipedia_fulltext("X") == ""
+
+
+def test_wikipedia_story_prefers_fulltext_over_summary(monkeypatch, tmp_path):
+    """The seed's content must be the real article body, not the lead-paragraph
+    summary — that's the corpus the fact gate verifies the script against."""
+    summary = "A short lead paragraph about the topic that clears the minimum. " * 4
+    full    = "Much longer real article body with specifics. " * 40
+
+    topics = tmp_path / "wiki_topics.json"
+    topics.write_text(json.dumps({"money_history": ["Some Article"]}))
+    monkeypatch.setattr(research, "WIKI_TOPICS_FILE", topics)
+    monkeypatch.setattr(research, "replenish_wiki_topics", lambda n: None)
+    monkeypatch.setattr(research, "_unused_wiki_topic_count", lambda n, u: 99)
+    monkeypatch.setattr(research, "fetch_wikipedia_fulltext", lambda t: full)
+
+    with patch.object(research.httpx, "get", return_value=_wiki_response(summary)):
+        seed = research.fetch_wikipedia_story("money_history", used_ids=set())
+
+    assert seed is not None
+    assert seed["content"] == full          # full body won, not the summary
+
+
+def test_wikipedia_story_falls_back_to_summary_when_fulltext_fails(monkeypatch, tmp_path):
+    summary = "A short lead paragraph about the topic that clears the minimum. " * 4
+    topics = tmp_path / "wiki_topics.json"
+    topics.write_text(json.dumps({"money_history": ["Some Article"]}))
+    monkeypatch.setattr(research, "WIKI_TOPICS_FILE", topics)
+    monkeypatch.setattr(research, "replenish_wiki_topics", lambda n: None)
+    monkeypatch.setattr(research, "_unused_wiki_topic_count", lambda n, u: 99)
+    monkeypatch.setattr(research, "fetch_wikipedia_fulltext", lambda t: "")   # fetch failed
+
+    with patch.object(research.httpx, "get", return_value=_wiki_response(summary)):
+        seed = research.fetch_wikipedia_story("money_history", used_ids=set())
+
+    assert seed is not None
+    assert seed["content"].startswith("A short lead paragraph")   # summary kept
 
 
 # ── Trend-driven topic selection ──────────────────────────────────────────────

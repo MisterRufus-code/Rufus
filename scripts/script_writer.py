@@ -396,6 +396,22 @@ _HOOK_FIRST_PERSON_RE = re.compile(
 _HOOK_NUMBER_RE = re.compile(r"\d+(?:[.,]\d+)*")
 
 
+_LIST_MARKER_RE = re.compile(r"^\s*\d+[.)]\s*", re.MULTILINE)
+
+
+def _strip_list_markers(text: str) -> str:
+    """Drop leading "1. " / "2) " enumeration from each line.
+
+    The pre-analysis is returned as a numbered list (1. CONTRADICTION,
+    2. HOOK ANGLE, … 8. SENSORY ANCHOR). Feeding that verbatim into the
+    invented-number grounding corpus made the digits 1-8 read as legitimate
+    figures "from the source", so a fabricated "$1 billion" hook sailed
+    through the check and only got caught later by the fact gate — capping
+    the whole video to 5/10 (observed live on the Swiss-banking run). The
+    list markers are formatting, never source facts."""
+    return _LIST_MARKER_RE.sub("", text or "")
+
+
 def _hook_grounding_check(hook: str, source_text: str) -> str | None:
     """Reject hooks the fact gate is guaranteed to kill later. Deterministic.
 
@@ -742,7 +758,7 @@ def _hook_scorer(client: OpenAI, hooks: list[str], seed: dict, niche_name: str,
     grounding = " ".join(filter(None, [
         (seed.get("content") or "") if seed else "",
         (seed.get("title") or "") if seed else "",
-        analysis or "",
+        _strip_list_markers(analysis or ""),
     ]))
 
     # 1. Regex pre-filter
@@ -876,7 +892,13 @@ def _story_architect(client: OpenAI, seed: dict, analysis: str, hook: str,
     if not _architect_enabled():
         return "", 0.0
     model = _standards()["models"].get("architect", "gpt-4o-mini")
-    seed_text = (seed.get("content") or "")[:600] if seed else ""
+    # 2500, not 600: the architect is the component that invents the "turn" and
+    # the stakes, and a 600-char window (barely the lead paragraph) left it
+    # nothing to build from but its own priors — so it wrote plausible-sounding
+    # motives the fact gate then rejected, capping the video to 5/10. Now that
+    # seeds carry real article bodies (research.WIKI_FULLTEXT_CHARS), give the
+    # architect enough of one to find a REAL turn instead of inventing one.
+    seed_text = (seed.get("content") or "")[:2500] if seed else ""
     prompt = (
         f"HOOK (already chosen, will not change): \"{hook}\"\n"
         f"SOURCE: \"{seed_text}\"\n"

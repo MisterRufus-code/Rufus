@@ -654,6 +654,44 @@ WIKI_TOPICS_FILE = CONFIG_DIR / "wiki_topics.json"
 WIKI_TIMEOUT       = 10.0
 WIKI_MIN_EXTRACT   = 200   # a summary shorter than this can't carry a 45s script
 WIKI_MAX_ATTEMPTS  = 8     # bound network fetches per run
+# How much full-article text to keep as the grounding corpus. The REST
+# /page/summary endpoint returns only the lead paragraph (~1-3 sentences) —
+# far too thin to fact-check a 110-word script against, which is why nearly
+# every run got capped to 5/10 with "not supported by the source material"
+# even when the script was factually fine (observed live across the Doubloon,
+# Monte dei Paschi, Manila galleon and Swiss-banking runs). Pulling the real
+# article body gives both the writer richer specifics AND the fact gate
+# something to actually verify against. Capped so a long article doesn't
+# blow up prompt cost.
+WIKI_FULLTEXT_CHARS = 6000
+
+
+def fetch_wikipedia_fulltext(url_title: str) -> str:
+    """Plain-text article body (lead + sections), or '' on any failure.
+
+    Uses action=query&prop=extracts&explaintext — the full article, unlike
+    the REST summary endpoint's lead-paragraph-only extract. Truncated to
+    WIKI_FULLTEXT_CHARS on a paragraph boundary where possible."""
+    try:
+        r = httpx.get(
+            "https://en.wikipedia.org/w/api.php",
+            params={"action": "query", "prop": "extracts", "explaintext": "1",
+                    "redirects": "1", "format": "json", "titles": url_title.replace("_", " ")},
+            headers=WIKI_HEADERS, timeout=WIKI_TIMEOUT, follow_redirects=True,
+        )
+        r.raise_for_status()
+        pages = r.json().get("query", {}).get("pages", {})
+    except Exception:
+        return ""
+    for page in pages.values():
+        body = _clean_text(page.get("extract") or "")
+        if len(body) <= WIKI_FULLTEXT_CHARS:
+            return body
+        cut = body[:WIKI_FULLTEXT_CHARS]
+        # Prefer to end on a sentence rather than mid-word.
+        stop = max(cut.rfind(". "), cut.rfind("\n"))
+        return cut[:stop + 1] if stop > WIKI_FULLTEXT_CHARS // 2 else cut
+    return ""
 
 # Auto-replenish: below this many UNUSED topics left for a niche, propose more
 # before the pool actually runs dry. At 1 video/day the ~155-topic pool lasts
@@ -808,11 +846,14 @@ def fetch_wikipedia_story(niche_name: str, used_ids: set | None = None) -> dict 
         extract = _clean_text(data.get("extract") or "")
         if len(extract) < WIKI_MIN_EXTRACT:
             continue
+        # Prefer the full article body over the lead-paragraph summary — see
+        # WIKI_FULLTEXT_CHARS. Falls back to the summary if the fetch fails.
+        body = fetch_wikipedia_fulltext(url_title)
         return {
             "type":    "wikipedia",
             "source":  "Wikipedia",
             "title":   data.get("title") or title,
-            "content": extract,
+            "content": body if len(body) > len(extract) else extract,
             "url":     page_url,
         }
 
@@ -855,10 +896,12 @@ def fetch_wikipedia_by_title(query: str) -> dict | None:
         extract = _clean_text(data.get("extract") or "")
         if len(extract) < WIKI_MIN_EXTRACT:
             return None
+        body = fetch_wikipedia_fulltext(url_title)
         return {
             "type": "wikipedia", "source": "Wikipedia",
             "title": data.get("title") or title,
-            "content": extract, "url": page_url,
+            "content": body if len(body) > len(extract) else extract,
+            "url": page_url,
         }
 
     direct = _try_title(query)

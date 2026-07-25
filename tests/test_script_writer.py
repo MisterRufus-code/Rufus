@@ -209,6 +209,32 @@ def test_hook_grounding_rejects_round_magnitude_not_a_source_token():
     assert "1" in reason  # the invented '1 billion', not the grounded year 1720
 
 
+def test_strip_list_markers_removes_enumeration_only():
+    from script_writer import _strip_list_markers
+    out = _strip_list_markers("1. CONTRADICTION: x\n2) HOOK: y\n5. CONCRETE: in 1934")
+    assert "CONTRADICTION: x" in out and "HOOK: y" in out
+    assert "1934" in out           # real figures inside the line survive
+    assert not out.lstrip().startswith("1.")
+
+
+def test_hook_grounding_ignores_analysis_list_numbers():
+    """Live 5/10 cause: the pre-analysis is a numbered list (1.–8.), so feeding
+    it verbatim into the grounding corpus made the digits 1-8 read as real
+    source figures — a fabricated '$1 billion' hook passed the check and was
+    only caught later by the fact gate, capping the whole video."""
+    from script_writer import _hook_grounding_check, _strip_list_markers
+    analysis = ("1. CONTRADICTION: Swiss secrecy shields many parties.\n"
+                "2. HOOK ANGLE: Banking secrecy since 1700s.\n"
+                "5. CONCRETE DETAIL: codified in 1934.")
+    src = "Banking in Switzerland dates to the early 18th century."
+    grounding = src + " " + _strip_list_markers(analysis)
+
+    # '1' came only from the "1." list marker → still an invented figure
+    assert _hook_grounding_check("$1 billion hidden since the 1700s.", grounding) is not None
+    # real figures surfaced by the analysis still pass
+    assert _hook_grounding_check("Secrecy became law in 1934.", grounding) is None
+
+
 def test_hook_grounding_billion_substring_of_source_year_rejected():
     """The exact live case: '$1 billion' against a Panic-of-1873 source. '1'
     is a substring of '1873' but is NOT a real figure in the source, so the
