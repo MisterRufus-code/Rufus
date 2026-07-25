@@ -107,7 +107,7 @@ Each niche picks its own source via `"video_source"` in `config/niches.json`
 
 Fallback chain so a run never dies on footage: **comfy → sd → diffusers → pexels**.
 
-**Stills-only mode** (`RUFUS_WAN=0 RUFUS_IMG2VID=0`): skips Wan and SVD entirely — every beat is just its FLUX still animated with a subtle Ken Burns zoom (`RUFUS_KENBURNS_ZOOM`, default 0.06). Much faster per video (no motion-model GPU time at all) and sidesteps every current motion-engine glitch, at the cost of no real camera/subject motion — a deliberate trade when the FLUX stills alone are already the strongest part of the output.
+**Stills-only mode** (`RUFUS_STILLS_ONLY=1`): a single switch that overrides Wan, HunyuanVideo, AND SVD at once — every beat is just its stills-model image animated with a subtle Ken Burns zoom (`RUFUS_KENBURNS_ZOOM`, default 0.06). Much faster per video (no motion-model GPU time at all) and sidesteps every current motion-engine glitch, at the cost of no real camera/subject motion — a deliberate trade when the stills alone are already the strongest part of the output. (The old per-engine knobs — `RUFUS_WAN=0`, `RUFUS_HUNYUAN=0`, `RUFUS_IMG2VID=0` — still work individually if you want motion from only one engine rather than none at all.)
 
 > _Optional/unwired:_ `scripts/hyperframes_client.py` (HeyGen HyperFrames HTML→MP4 motion-graphics) stays on disk for a possible future data-viz channel but is **not** in the active source routing — the focus is photoreal SD.
 

@@ -53,7 +53,7 @@ import requests
 
 import comfy_template
 from comfy_client import _host
-from svd_client import _await_frames, _assemble, _upload_image
+from svd_client import _await_frames, _assemble, _upload_image, _stills_only
 
 ROOT = Path(__file__).parent.parent
 
@@ -66,6 +66,8 @@ def _template_path() -> Path:
 
 
 def enabled() -> bool:
+    if _stills_only():
+        return False
     return os.environ.get("RUFUS_HUNYUAN", "1").strip().lower() \
         not in ("0", "false", "no", "off")
 

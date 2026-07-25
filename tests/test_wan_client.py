@@ -24,6 +24,13 @@ def test_disabled_via_env(monkeypatch):
     assert w.enabled() is False
 
 
+def test_disabled_when_stills_only(monkeypatch):
+    """RUFUS_STILLS_ONLY=1 must win even if RUFUS_WAN=1 is explicitly set."""
+    monkeypatch.setenv("RUFUS_STILLS_ONLY", "1")
+    monkeypatch.setenv("RUFUS_WAN", "1")
+    assert w.enabled() is False
+
+
 # ── Graph structure ──────────────────────────────────────────────────────────────
 # Verified against an actual API export of the channel owner's proven-good
 # test run: the template's default toggle ("Enable 4steps LoRA?") is FALSE,

@@ -23,6 +23,21 @@ def test_img2vid_disabled_via_env(monkeypatch):
     assert s.img2vid_enabled() is False
 
 
+# ── RUFUS_STILLS_ONLY: single switch overriding all three motion engines ──────
+
+def test_stills_only_off_by_default(monkeypatch):
+    monkeypatch.delenv("RUFUS_STILLS_ONLY", raising=False)
+    assert s._stills_only() is False
+
+
+def test_stills_only_on_forces_img2vid_off_even_with_img2vid_enabled(monkeypatch):
+    """RUFUS_STILLS_ONLY=1 must win even if RUFUS_IMG2VID=1 is explicitly set —
+    it's the master override, not just another default."""
+    monkeypatch.setenv("RUFUS_STILLS_ONLY", "1")
+    monkeypatch.setenv("RUFUS_IMG2VID", "1")
+    assert s.img2vid_enabled() is False
+
+
 # ── SVD workflow graph ───────────────────────────────────────────────────────────
 
 def test_svd_graph_is_json_serializable_and_wired():

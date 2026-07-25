@@ -34,6 +34,13 @@ def test_enabled_env_off(monkeypatch):
     assert hy.enabled() is False
 
 
+def test_enabled_false_when_stills_only(monkeypatch):
+    """RUFUS_STILLS_ONLY=1 must win even if RUFUS_HUNYUAN=1 is explicitly set."""
+    monkeypatch.setenv("RUFUS_STILLS_ONLY", "1")
+    monkeypatch.setenv("RUFUS_HUNYUAN", "1")
+    assert hy.enabled() is False
+
+
 def test_ready_fails_without_template(monkeypatch, tmp_path):
     monkeypatch.setenv("RUFUS_HUNYUAN_TEMPLATE", str(tmp_path / "missing.json"))
     ok, why = hy.ready()

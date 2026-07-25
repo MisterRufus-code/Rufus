@@ -31,6 +31,9 @@ Pipeline per clip:
   Lanczos upscale 1080×1920 → looped to the requested clip duration.
 
 Environment:
+  RUFUS_STILLS_ONLY        0 (default) — 1 forces Ken Burns on every beat,
+                                overriding RUFUS_WAN/RUFUS_HUNYUAN/RUFUS_IMG2VID
+                                (a single switch instead of setting all three)
   RUFUS_IMG2VID            1 (default) — set 0 to skip SVD and keep Ken Burns stills
   RUFUS_IMG2VID_ENGINE     auto (default) / comfy / diffusers
   COMFY_SVD_MODEL          svd_xt.safetensors           (comfy engine)
@@ -61,6 +64,16 @@ from sd_client import FPS, OUT_W, OUT_H
 SVD_W, SVD_H = 576, 1024
 
 SVD_TIMEOUT = 420   # 25 frames on a 3090 ≈ 60-120s; generous headroom
+
+
+def _stills_only() -> bool:
+    """Master switch: one flag instead of setting RUFUS_WAN=0 AND RUFUS_HUNYUAN=0
+    AND RUFUS_IMG2VID=0 by hand. wan_client/hunyuan_client/svd_client's own
+    enabled() checks all defer to this first — every beat falls straight to
+    Ken Burns, the fastest and most reliable path (no motion-model GPU time at
+    all, and it can't warp/distort anything since it never touches pixels)."""
+    return os.environ.get("RUFUS_STILLS_ONLY", "0").strip().lower() \
+        in ("1", "true", "yes", "on")
 
 # SVD is trained on general scene/object motion, NOT faces — it has no concept
 # of facial structure, so animating a shot with a visible face frequently
@@ -124,6 +137,8 @@ def _image_shows_a_face(png_path: Path) -> bool:
 
 
 def img2vid_enabled() -> bool:
+    if _stills_only():
+        return False
     return os.environ.get("RUFUS_IMG2VID", "1").strip().lower() not in ("0", "false", "no", "off")
 
 

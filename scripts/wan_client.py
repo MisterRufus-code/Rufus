@@ -60,6 +60,8 @@ The fast lightx2v path (4 steps, cfg 1.0) is kept as an explicit opt-in via
 RUFUS_WAN_LORA=1 for when speed matters more than the verified-quality bar.
 
 Environment:
+  RUFUS_STILLS_ONLY  0 (default) — 1 forces Ken Burns on every beat, overriding
+                       this AND RUFUS_HUNYUAN AND RUFUS_IMG2VID (see svd_client)
   RUFUS_WAN          1 (default) — 0 disables Wan (chain continues with SVD)
   RUFUS_WAN_FRAMES   81   (Wan's native 5s at 16fps; ping-pong+loop covers the
                            requested clip duration downstream)
@@ -95,7 +97,8 @@ from comfy_client import _host
 # bucket too), history polling, and the frames→mp4 assembly pipeline. Also the
 # face-detection pair — see the RUFUS_WAN_FACE_MOTION note on animate_image.
 from svd_client import (_prep_init_image, _await_frames, _assemble, _upload_image,
-                        SVD_W, SVD_H, _prompt_likely_shows_a_face, _image_shows_a_face)
+                        SVD_W, SVD_H, _prompt_likely_shows_a_face, _image_shows_a_face,
+                        _stills_only)
 
 WAN_FPS = 16   # Wan 2.2's native frame rate (81 frames = ~5s)
 
@@ -120,6 +123,8 @@ NEGATIVE_PROMPT = (
 
 
 def enabled() -> bool:
+    if _stills_only():
+        return False
     return os.environ.get("RUFUS_WAN", "1").strip().lower() not in ("0", "false", "no", "off")
 
 
