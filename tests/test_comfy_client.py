@@ -508,3 +508,57 @@ def test_free_not_called_in_stills_only_mode(monkeypatch, tmp_path):
         clips = c.generate_clips(["p1", "p2"], n=2)
     assert len(clips) == 2
     assert freed == []
+
+
+# ── Detail/realism direction on stills prompts ────────────────────────────────
+# The stills model's encoder is an LLM (Qwen3-4B for Z-Image), so it reads
+# descriptive prose — NOT sd_client's booru-style "8k, masterpiece" tag stack,
+# which is the SD1.5 idiom and is out-of-distribution here.
+
+def test_with_detail_appends_photographic_direction(monkeypatch):
+    monkeypatch.delenv("RUFUS_STILLS_DETAIL", raising=False)
+    out = c._with_detail("A macro shot of a tarnished coin")
+    assert "85mm" in out and "depth of field" in out
+    assert "A macro shot of a tarnished coin" in out
+    # natural language, not the SD1.5 tag idiom
+    assert "masterpiece" not in out.lower() and "8k" not in out.lower()
+
+
+def test_with_detail_is_env_overridable(monkeypatch):
+    monkeypatch.setenv("RUFUS_STILLS_DETAIL", "my own direction")
+    assert c._with_detail("subject").endswith("my own direction")
+
+
+def test_with_detail_disabled_when_env_empty(monkeypatch):
+    monkeypatch.setenv("RUFUS_STILLS_DETAIL", "")
+    assert c._with_detail("subject") == "subject"
+
+
+def test_with_detail_skips_prompt_that_already_has_direction(monkeypatch):
+    """A niche style_suffix or hand-written --topic prompt already carrying
+    photographic direction must not get a second, contradictory one."""
+    monkeypatch.delenv("RUFUS_STILLS_DETAIL", raising=False)
+    p = "a coin, 85mm f/1.4, moody light"
+    assert c._with_detail(p) == p
+
+
+def test_generate_clips_sends_the_detailed_prompt(monkeypatch):
+    """The suffix must be applied before render AND before the debug/log save,
+    so what's reviewed afterwards is what was actually sent."""
+    monkeypatch.delenv("RUFUS_STILLS_DETAIL", raising=False)
+    seen = []
+
+    def fake_render(prompt, seed, client_id):
+        seen.append(prompt)
+        return b"PNG"
+
+    with patch.object(c, "is_available", return_value=True), \
+         patch.object(c, "_stills_template", return_value=_dummy_tpl()), \
+         patch.object(c, "_render_image", side_effect=fake_render), \
+         patch.object(c, "_fit_to_portrait", lambda b, p: p.write_bytes(b"i" * 25_000) or True), \
+         patch.object(c, "_avg_hash", return_value=None), \
+         patch.object(c, "_animate_to_clip",
+                      lambda png, clip, duration=8.0, idx=0: clip.write_bytes(b"x" * 60_000) or True):
+        c.generate_clips(["a vintage ledger"], n=1)
+
+    assert seen and "85mm" in seen[0] and "a vintage ledger" in seen[0]

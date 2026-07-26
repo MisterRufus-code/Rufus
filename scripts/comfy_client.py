@@ -195,6 +195,49 @@ def _stills_template() -> dict | None:
 _flux2_template = _stills_template
 
 
+# ── Detail / realism direction appended to every stills prompt ────────────────
+# NOT the SD1.5 idiom. sd_client's QUALITY_SUFFIX stacks booru-style tokens
+# ("8k, masterpiece, ultra-detailed") because Realistic Vision v5.1 was trained
+# on caption text full of exactly those tags, so they land as real signal there.
+#
+# The stills model here (Z-Image-Turbo by default) encodes prompts with
+# Qwen3-4B — a modern LLM text encoder trained on long, descriptive natural-
+# language captions. Keyword spam is out-of-distribution for it: "8k,
+# masterpiece" contributes little and can crowd out the actual subject tokens.
+# What DOES drive fine detail in an LLM-encoder model is concrete physical
+# description — real optics, a named light behaviour, and micro-surface facts
+# the model can actually render. So this reads like a photographer's note, not
+# a tag dump.
+#
+# Tune or replace wholesale with RUFUS_STILLS_DETAIL; set it empty to disable.
+DEFAULT_DETAIL_SUFFIX = (
+    "Shot on a full-frame camera with an 85mm f/1.4 prime, shallow depth of "
+    "field with the subject tack-sharp and the background falling into soft "
+    "bokeh. Motivated directional lighting with visible falloff and real "
+    "shadow gradients. Fine surface detail is legible: individual material "
+    "grain, worn edges, dust and fingerprints, micro-scratches, fabric weave, "
+    "the texture of aged metal and paper. Subtle film grain, natural colour "
+    "response, no digital over-sharpening. Photojournalistic realism."
+)
+
+
+def _detail_suffix() -> str:
+    return os.environ.get("RUFUS_STILLS_DETAIL", DEFAULT_DETAIL_SUFFIX).strip()
+
+
+def _with_detail(prompt: str) -> str:
+    """Append the detail/realism direction, unless it's disabled or the prompt
+    already carries its own photographic direction (a niche style_suffix, or a
+    hand-written --topic prompt, shouldn't get a second contradictory one)."""
+    tail = _detail_suffix()
+    if not tail:
+        return prompt
+    low = prompt.lower()
+    if "f/1.4" in low or "depth of field" in low:
+        return prompt
+    return f"{prompt.rstrip().rstrip('.')}. {tail}"
+
+
 def _render_image(prompt: str, seed: int, client_id: str) -> bytes | None:
     """Render one still via config/stills_api.json → raw PNG bytes, or None.
 
@@ -377,6 +420,7 @@ def generate_clips(queries: list[str], n: int = 4,
         while len(prompts) < n:
             prompts.append(base[len(prompts) % len(base)] + ", different angle, wider shot")
     prompts = prompts[:n]
+    prompts = [_with_detail(p) for p in prompts]
 
     # pid in the stamp: with per-channel locks two channels may run
     # concurrently, and two runs starting the same second would otherwise
