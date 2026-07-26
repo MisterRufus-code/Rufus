@@ -32,6 +32,8 @@ import subprocess
 import time
 from pathlib import Path
 
+import paths
+
 import requests
 
 CONFIG_DIR = Path(__file__).parent.parent / "config"
@@ -467,8 +469,7 @@ def generate_clips(queries: list[str], n: int = 4,
     if not is_available():
         print(f"[sd] A1111 not running at {_host()} — start with: ./webui.sh --api --medvram --xformers")
         return []
-
-    tmp_dir = Path(__file__).parent.parent / "media_library" / "temp" / "sd"
+    tmp_dir = paths.media_root() / "temp" / "sd"
     tmp_dir.mkdir(parents=True, exist_ok=True)
 
     clips:  list[Path] = []
@@ -491,7 +492,7 @@ def generate_clips(queries: list[str], n: int = 4,
     # media_library/debug/<stamp>/ so a run can be inspected/critiqued afterwards
     # (see scripts/inspect_run.py) — not just RUFUS_DEBUG=1 runs, since the
     # quality-review workflow needs every image logged, not an opt-in subset.
-    debug_dir = Path(__file__).parent.parent / "media_library" / "debug" / str(stamp)
+    debug_dir = paths.debug_root() / str(stamp)
     debug_dir.mkdir(parents=True, exist_ok=True)
     print(f"[sd] keeping keyframes in {debug_dir}")
 

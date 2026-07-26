@@ -27,11 +27,13 @@ import sys
 import time
 from pathlib import Path
 
+import paths
+
 ROOT        = Path(__file__).parent.parent
 CONFIG_DIR  = ROOT / "config"
 NICHES_FILE = CONFIG_DIR / "niches.json"
-OUTPUT_DIR  = Path(os.environ.get("RUFUS_OUTPUT_DIR", ROOT / "media_library" / "output"))
-LOG_DIR     = ROOT / "logs"
+OUTPUT_DIR  = paths.output_dir()
+LOG_DIR     = paths.log_dir()
 
 # Absolute quality floor: no per-channel config or env var may push the
 # upload threshold below this, in either the auto-upload gate below or the
@@ -98,7 +100,7 @@ def _sweep_run_temp() -> None:
     pid = os.getpid()
     removed = 0
     for sub in ("comfy", "sd"):
-        d = ROOT / "media_library" / "temp" / sub
+        d = paths.media_root() / "temp" / sub
         if not d.exists():
             continue
         for f in d.glob(f"*_{pid}_*"):
@@ -130,7 +132,7 @@ def _ensure_media_root() -> None:
     the (possibly broken) target, so it works regardless of why the entry
     is unhealthy. A truly empty spot just raises FileNotFoundError, which is
     the expected no-op case."""
-    media_root = ROOT / "media_library"
+    media_root = paths.media_root()
     if media_root.is_dir():
         return   # already healthy — nothing to do
     backup = media_root.with_name(f"media_library.bak-{int(time.time())}")
@@ -161,9 +163,9 @@ def _housekeeping(max_log_days: int = 90, max_cache_days: int = 14,
     for d, cutoff in (
         (LOG_DIR, cutoff_logs),
         (LOG_DIR / "scripts", cutoff_logs),
-        (ROOT / "media_library" / "cache", cutoff_cache),
-        (ROOT / "media_library" / "temp", cutoff_cache),
-        (ROOT / "media_library" / "music", cutoff_cache),
+        (paths.media_root() / "cache", cutoff_cache),
+        (paths.media_root() / "temp", cutoff_cache),
+        (paths.media_root() / "music", cutoff_cache),
     ):
         if not d.exists():
             continue
@@ -979,6 +981,16 @@ def run(skip_upload: bool = False, niche_override: str = None, output_dir: Path 
         print(f"           → {script}")
         print(f"           → score {result['score']}/10  attempts={result['attempts_used']}  "
               f"cost=${result['cost_usd']:.4f}\n")
+        # One reviewable file per run (script now, image prompts at Step 2.5).
+        if script_run_id:
+            paths.write_run_report(
+                script_run_id, script=script,
+                meta={"niche": active, "channel": channel.id,
+                      "score": f"{result.get('score', 0)}/10",
+                      "fact_gate": "pass" if result.get("fact_ok", True) else
+                                   f"FAIL — {result.get('fact_reason', '')}",
+                      "attempts": result.get("attempts_used"),
+                      "cost_usd": f"{result.get('cost_usd', 0):.4f}"})
     except Exception as e:
         print(f"           ✗ Step 4 failed: {e}")
         sys.exit(1)
@@ -1041,6 +1053,10 @@ def run(skip_upload: bool = False, niche_override: str = None, output_dir: Path 
             print(f"           → {len(prompts)} beat-matched prompts:")
             for i, p in enumerate(prompts):
                 print(f"             {i+1}. {p}")
+            if script_run_id:
+                rp = paths.write_run_report(script_run_id, prompts=prompts)
+                if rp:
+                    print(f"           → run report: {rp}")
 
             # Supervisor: catch prompt-builder drift (near-duplicates, off-topic
             # imagery) BEFORE burning FLUX/SD generation time on doomed images.

@@ -39,6 +39,8 @@ import sys
 import time
 from contextlib import contextmanager
 from pathlib import Path
+
+import paths
 from urllib.parse import quote as _urlquote
 
 from flask import Flask, abort, redirect, request, send_from_directory
@@ -47,7 +49,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 import db_manager
 
 ROOT       = Path(__file__).parent.parent
-DEBUG_ROOT = ROOT / "media_library" / "debug"
+DEBUG_ROOT = paths.debug_root()
 
 app = Flask(__name__)
 

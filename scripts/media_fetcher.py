@@ -14,13 +14,15 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
+import paths
+
 import requests
 
 ROOT             = Path(__file__).parent.parent
 CONFIG_DIR       = ROOT / "config"
 NICHES_FILE      = CONFIG_DIR / "niches.json"
 KEYS_FILE        = CONFIG_DIR / "keys.json"
-CACHE_DIR        = ROOT / "media_library" / "cache"
+CACHE_DIR        = paths.media_root() / "cache"
 USED_VIDEOS_FILE = CONFIG_DIR / "used_videos.json"
 
 MIN_FILE_SIZE = 100_000   # 100 KB minimum – reject corrupt/tiny downloads

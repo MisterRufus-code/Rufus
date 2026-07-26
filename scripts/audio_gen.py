@@ -30,6 +30,8 @@ import sys
 import time
 from pathlib import Path
 
+import paths
+
 from faster_whisper import WhisperModel
 
 sys.path.insert(0, str(Path(__file__).parent))
@@ -791,7 +793,7 @@ def _save_debug_artifacts(script: str, voiceover_mp3: Path) -> None:
     Non-fatal: a debug-save failure must never break the actual render."""
     try:
         run_id = os.environ.get("RUFUS_DEBUG_RUN_ID") or f"audio_{int(time.time())}"
-        debug_dir = ROOT / "media_library" / "debug" / run_id
+        debug_dir = paths.debug_root() / run_id
         debug_dir.mkdir(parents=True, exist_ok=True)
         (debug_dir / "script.txt").write_text(script, encoding="utf-8")
         shutil.copy2(voiceover_mp3, debug_dir / "voiceover.mp3")
@@ -833,7 +835,7 @@ def render(script: str, bg_paths: "Path | list[Path]", out_dir: Path,
     font_name = _ensure_font()
 
     out_dir.mkdir(parents=True, exist_ok=True)
-    tmp_dir = ROOT / "media_library" / "temp"
+    tmp_dir = paths.media_root() / "temp"
     tmp_dir.mkdir(parents=True, exist_ok=True)
 
     stamp = int(time.time())

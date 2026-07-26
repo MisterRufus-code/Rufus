@@ -29,6 +29,8 @@ import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
+import paths
+
 ROOT          = Path(__file__).parent.parent
 CONFIG_DIR    = ROOT / "config"
 CHANNELS_FILE = CONFIG_DIR / "channels.json"
@@ -88,7 +90,7 @@ class Channel:
 
     @property
     def output_dir(self) -> Path:
-        base = Path(os.environ.get("RUFUS_OUTPUT_DIR", ROOT / "media_library" / "output"))
+        base = paths.output_dir()
         return base if self.legacy else base / self.id
 
     # ── Niche composition ────────────────────────────────────────────────────────

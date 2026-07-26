@@ -582,6 +582,7 @@ def test_sweep_run_temp_only_removes_own_pid_files(tmp_path, monkeypatch):
     import os
     import main
 
+    monkeypatch.setenv("RUFUS_MEDIA_DIR", str(tmp_path / "media_library"))
     monkeypatch.setattr(main, "ROOT", tmp_path)
     comfy = tmp_path / "media_library" / "temp" / "comfy"
     comfy.mkdir(parents=True)
@@ -605,6 +606,7 @@ def test_ensure_media_root_renames_stray_file(tmp_path, monkeypatch):
     The startup guard must move it aside so a real directory can be created."""
     import main
 
+    monkeypatch.setenv("RUFUS_MEDIA_DIR", str(tmp_path / "media_library"))
     monkeypatch.setattr(main, "ROOT", tmp_path)
     stray = tmp_path / "media_library"
     stray.write_bytes(b"oops, not a folder")
@@ -648,6 +650,7 @@ def test_housekeeping_never_deletes_debug(tmp_path, monkeypatch):
     regardless of age, unlike the rolling cache/temp/log cleanup."""
     import main
 
+    monkeypatch.setenv("RUFUS_MEDIA_DIR", str(tmp_path / "media_library"))
     monkeypatch.setattr(main, "ROOT", tmp_path)
     monkeypatch.setattr(main, "LOG_DIR", tmp_path / "logs")
 
@@ -673,6 +676,7 @@ def test_save_debug_artifacts_saves_even_when_debug_off(tmp_path, monkeypatch):
     opt-in subset a reviewer has to remember to enable."""
     import audio_gen as ag
     monkeypatch.delenv("RUFUS_DEBUG", raising=False)
+    monkeypatch.setenv("RUFUS_MEDIA_DIR", str(tmp_path / "media_library"))
     monkeypatch.setattr(ag, "ROOT", tmp_path)
 
     mp3 = tmp_path / "voice.mp3"
@@ -686,6 +690,7 @@ def test_save_debug_artifacts_saves_script_and_voiceover(tmp_path, monkeypatch):
     import audio_gen as ag
     monkeypatch.setenv("RUFUS_DEBUG", "1")
     monkeypatch.setenv("RUFUS_DEBUG_RUN_ID", "20260710-abc123")
+    monkeypatch.setenv("RUFUS_MEDIA_DIR", str(tmp_path / "media_library"))
     monkeypatch.setattr(ag, "ROOT", tmp_path)
 
     mp3 = tmp_path / "voice.mp3"
@@ -703,6 +708,7 @@ def test_save_debug_artifacts_failure_is_non_fatal(tmp_path, monkeypatch):
     of its own, so the function itself must swallow everything."""
     import audio_gen as ag
     monkeypatch.setenv("RUFUS_DEBUG", "1")
+    monkeypatch.setenv("RUFUS_MEDIA_DIR", str(tmp_path / "media_library"))
     monkeypatch.setattr(ag, "ROOT", tmp_path)
     monkeypatch.setattr(ag.shutil, "copy2",
                         lambda *a, **k: (_ for _ in ()).throw(OSError("disk full")))

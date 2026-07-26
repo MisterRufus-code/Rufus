@@ -21,11 +21,13 @@ import random
 import subprocess
 from pathlib import Path
 
+import paths
+
 import requests
 
 ROOT       = Path(__file__).parent.parent
 CONFIG_DIR = ROOT / "config"
-MUSIC_DIR  = ROOT / "media_library" / "music"
+MUSIC_DIR  = paths.media_root() / "music"
 KEYS_FILE  = CONFIG_DIR / "keys.json"
 
 MOOD_MAP = {

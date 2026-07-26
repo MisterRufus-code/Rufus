@@ -41,6 +41,8 @@ import time
 import uuid
 from pathlib import Path
 
+import paths
+
 import requests
 
 # Reuse the proven, dependency-free (PIL/FFmpeg-only) helpers from sd_client so
@@ -211,13 +213,23 @@ _flux2_template = _stills_template
 #
 # Tune or replace wholesale with RUFUS_STILLS_DETAIL; set it empty to disable.
 DEFAULT_DETAIL_SUFFIX = (
-    "Shot on a full-frame camera with an 85mm f/1.4 prime, shallow depth of "
-    "field with the subject tack-sharp and the background falling into soft "
-    "bokeh. Motivated directional lighting with visible falloff and real "
-    "shadow gradients. Fine surface detail is legible: individual material "
-    "grain, worn edges, dust and fingerprints, micro-scratches, fabric weave, "
-    "the texture of aged metal and paper. Subtle film grain, natural colour "
-    "response, no digital over-sharpening. Photojournalistic realism."
+    "Shot on a full-frame camera with an 85mm f/1.4 prime at close range, "
+    "shallow depth of field: the subject is tack-sharp with visible focus "
+    "falloff, the background dissolving into soft round bokeh. Motivated "
+    "directional key light rakes across the surface at a low angle so every "
+    "raised and recessed detail casts its own micro-shadow, with a soft fill "
+    "opening the darker side and real gradient falloff — never flat lighting. "
+    "Extreme surface fidelity, legible down to the smallest scale: individual "
+    "material grain and pores, hairline scratches and scuffs, worn and "
+    "rounded edges, dust motes and lint caught in the light, fingerprints and "
+    "smudges, tarnish and patina pooling in recesses, fibres standing off cut "
+    "paper, the weave and loose threads of fabric, condensation beading, "
+    "chipped paint, oxidation, the faint irregularity of anything handmade. "
+    "Nothing is pristine or computer-clean — every surface carries the "
+    "evidence of having existed and been handled. Fine natural film grain, "
+    "true-to-life colour response, natural chromatic falloff toward the frame "
+    "edges, no digital over-sharpening, no plastic smoothing, no HDR halos. "
+    "Documentary photojournalism captured on a real camera."
 )
 
 
@@ -411,7 +423,7 @@ def generate_clips(queries: list[str], n: int = 4,
     except Exception as e:
         print(f"[comfy] img2vid unavailable ({e}) — Ken Burns only")
 
-    tmp_dir = Path(__file__).parent.parent / "media_library" / "temp" / "comfy"
+    tmp_dir = paths.media_root() / "temp" / "comfy"
     tmp_dir.mkdir(parents=True, exist_ok=True)
 
     prompts = list(queries or ["cinematic establishing shot"])
@@ -445,7 +457,7 @@ def generate_clips(queries: list[str], n: int = 4,
     # stage's own timestamp. Falls back to the temp-file stamp when
     # comfy_client runs standalone (its __main__).
     debug_name = os.environ.get("RUFUS_DEBUG_RUN_ID") or str(stamp)
-    debug_dir = Path(__file__).parent.parent / "media_library" / "debug" / debug_name
+    debug_dir = paths.debug_root() / debug_name
     debug_dir.mkdir(parents=True, exist_ok=True)
     print(f"[comfy] keeping keyframes in {debug_dir}")
 
