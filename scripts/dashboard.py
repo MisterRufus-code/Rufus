@@ -853,6 +853,27 @@ def video_detail(video_id):
     return PAGE_HEAD + body + PAGE_TAIL
 
 
+def _extra_publishers() -> list[tuple[str, object]]:
+    """Platforms to cross-post to after YouTube, as (name, upload_fn).
+
+    Opt-in per platform so an unconfigured account never turns a good approval
+    into a scary error: RUFUS_PUBLISH_TIKTOK=1 enables TikTok. The module is
+    imported lazily because it reads credentials at import time.
+
+    Instagram is deliberately absent: the Graph API needs a Business/Creator
+    account AND a PUBLICLY reachable video URL to pull from (it will not accept
+    a local file), so it needs hosting decisions this box can't make on its
+    own. Add it here once that's settled."""
+    out = []
+    if os.environ.get("RUFUS_PUBLISH_TIKTOK", "0").strip().lower() in ("1", "true", "yes", "on"):
+        try:
+            import tiktok_uploader
+            out.append(("TikTok", tiktok_uploader.upload))
+        except Exception as e:
+            print(f"[dashboard] TikTok publisher unavailable ({e})")
+    return out
+
+
 @app.route("/video/<int:video_id>/approve", methods=["POST"])
 def approve_video(video_id):
     """The ONLY path that actually uploads a video — see module docstring.
@@ -902,6 +923,19 @@ def approve_video(video_id):
             pass
         return _redirect_detail(video_id, error=f"Upload failed (not uploaded, safe to retry): {e}")
 
+    # Cross-post. TikTok has its own uploader module but was never wired to
+    # the approve action, so approving only ever reached YouTube. Each extra
+    # platform is best-effort and reported in the result message: YouTube
+    # already succeeded by this point, so one platform being unconfigured or
+    # erroring must not read as "the approval failed".
+    extra = []
+    for name, fn in _extra_publishers():
+        try:
+            fn(video_file, v["script_full"] or "")
+            extra.append(f"{name} ok")
+        except Exception as e:
+            extra.append(f"{name} FAILED ({str(e)[:80]})")
+
     # The upload SUCCEEDED. A DB failure past this point must NOT read as
     # "upload failed" — that would tempt a re-approve and publish a DUPLICATE
     # public video. Separate block, explicit do-not-retry message.
@@ -914,7 +948,17 @@ def approve_video(video_id):
             error=(f"UPLOADED OK ({yt_url}) but the status update failed "
                    f"({db_err}). Do NOT re-approve — it's already live. Fix "
                    f"the DB row manually if needed."))
-    return _redirect_detail(video_id, ok=f"Uploaded: {yt_url}")
+    msg = f"Uploaded: {yt_url}"
+    if extra:
+        msg += "  |  " + "; ".join(extra)
+    try:
+        import notify
+        notify.send("Rufus: video published",
+                    f"{v['niche']} · {v['title'] or v['script_hook'] or ''}\n{yt_url}",
+                    url=yt_url)
+    except Exception:
+        pass
+    return _redirect_detail(video_id, ok=msg)
 
 
 @app.route("/video/<int:video_id>/reject", methods=["POST"])

@@ -1255,6 +1255,16 @@ def run(skip_upload: bool = False, niche_override: str = None, output_dir: Path 
             print(f"           note for reviewer: the auto-gate would also "
                   f"have held this — {hold_reason}")
         print(f"           Video: {output_path}\n")
+        # Ping the phone. An unattended 06:30 render is useless if nobody
+        # knows it finished — the queue only works when you're told.
+        try:
+            import notify
+            notify.notify_pending_review(
+                title=(meta or {}).get("title") or script.strip().split("\n")[0][:80],
+                score=result.get("score", 0), niche=active,
+                video_id=db_id, hold_reason=hold_reason)
+        except Exception as e:
+            print(f"           ⚠ notification skipped (non-fatal): {e}")
     elif qc is not None and not qc.get("ok", True):
         print(f"[ 7 / 7 ]  Upload held — output failed QC: {'; '.join(qc['critical'])}")
         print(f"           Video saved for review: {output_path}\n")
