@@ -532,17 +532,39 @@ def generate_clips(queries: list[str], n: int = 4,
     if motion_engines and stills:
         _free_comfy_memory()
 
+    motion_log: list[dict] = []
     for i, png_path, prompt in stills:
         clip_path = tmp_dir / f"{stamp}_{i}.mp4"
         made_via = None
+        tried: list[str] = []
         for eng_name, animate in motion_engines:
-            if animate(png_path, clip_path, duration=clip_duration, idx=i,
-                       prompt=prompt):
+            t0 = time.time()
+            okd = animate(png_path, clip_path, duration=clip_duration, idx=i,
+                          prompt=prompt)
+            secs = time.time() - t0
+            # Record what the engine ACTUALLY used, not what we assume it did:
+            # the motion prompt is derived inside the engine and the settings
+            # come from env + the exported template, so neither is knowable
+            # here. Engines publish both via LAST_CALL/settings().
+            rec = {"beat": i + 1, "engine": eng_name, "ok": bool(okd),
+                   "seconds": round(secs, 1)}
+            try:
+                mod = {"hunyuan": "hunyuan_client", "wan": "wan_client"}.get(eng_name)
+                if mod:
+                    rec.update(__import__(mod).LAST_CALL)
+            except Exception:
+                pass
+            motion_log.append(rec)
+            tried.append(f"{eng_name} {'ok' if okd else 'failed'} in {secs:.0f}s")
+            if okd:
                 made_via = eng_name
                 break
             print(f"[comfy] {eng_name} failed for clip {i+1} — trying next engine")
         made = made_via is not None or _animate_to_clip(png_path, clip_path,
                                                         duration=clip_duration, idx=i)
+        if made_via is None and motion_engines:
+            motion_log.append({"beat": i + 1, "engine": "kenburns", "ok": bool(made),
+                               "note": "all motion engines declined/failed"})
         if made:
             clips.append(clip_path)
             print(f"[comfy] clip {i+1} ready"
@@ -551,6 +573,12 @@ def generate_clips(queries: list[str], n: int = 4,
             print(f"[comfy] animation failed for clip {i+1} — later images may "
                   f"drift ahead of narration")
         png_path.unlink(missing_ok=True)
+
+    if motion_log:
+        try:
+            paths.write_run_report(debug_name, motion=motion_log)
+        except Exception as e:
+            print(f"[comfy] motion-report write skipped (non-fatal): {e}")
 
     if _fresh_images_enabled() and len(accepted_hashes) > n_prior:
         _save_hashes(accepted_hashes)

@@ -76,3 +76,44 @@ def test_run_report_never_raises_on_bad_path(monkeypatch, tmp_path):
     blocker.write_text("i am a file, not a directory")
     monkeypatch.setenv("RUFUS_DEBUG_DIR", str(blocker))
     assert paths.write_run_report("run-x", script="s") is None
+
+
+# ── Motion record: the raw material for "why did clip 4 look wrong" ──────────
+
+def test_run_report_logs_motion_prompt_and_settings(monkeypatch, tmp_path):
+    monkeypatch.setenv("RUFUS_DEBUG_DIR", str(tmp_path / "debug"))
+    out = paths.write_run_report("r", motion=[
+        {"beat": 1, "engine": "hunyuan", "ok": True, "seconds": 512.3,
+         "motion_prompt": "a vault door, camera drifts slowly",
+         "model": "hunyuan_480p_step_distilled.safetensors",
+         "steps": 12, "cfg": 1, "shift": 5},
+    ])
+    t = out.read_text(encoding="utf-8")
+    assert "a vault door, camera drifts slowly" in t     # the real prompt used
+    assert "512.3s" in t                                  # timing, to spot drift
+    assert "hunyuan_480p_step_distilled.safetensors" in t
+    assert "**steps**: 12" in t and "**shift**: 5" in t    # reproducible settings
+
+
+def test_run_report_records_engine_fallthrough(monkeypatch, tmp_path):
+    """A clip that fell to Ken Burns must say so, with the failed engine and
+    the time it burned — that's the signal an engine is silently broken."""
+    monkeypatch.setenv("RUFUS_DEBUG_DIR", str(tmp_path / "debug"))
+    out = paths.write_run_report("r", motion=[
+        {"beat": 2, "engine": "hunyuan", "ok": False, "seconds": 1800.0},
+        {"beat": 2, "engine": "kenburns", "ok": True,
+         "note": "all motion engines declined/failed"},
+    ])
+    t = out.read_text(encoding="utf-8")
+    assert "hunyuan: failed (1800.0s)" in t
+    assert "kenburns: ok" in t
+
+
+def test_run_report_settings_block_printed_once(monkeypatch, tmp_path):
+    """Settings are per-run, not per-beat — repeating them 10x would bury the
+    per-beat prompts that actually differ."""
+    monkeypatch.setenv("RUFUS_DEBUG_DIR", str(tmp_path / "debug"))
+    rec = lambda b: {"beat": b, "engine": "hunyuan", "ok": True,
+                     "seconds": 1.0, "steps": 12}
+    out = paths.write_run_report("r", motion=[rec(1), rec(2), rec(3)])
+    assert out.read_text(encoding="utf-8").count("Motion engine settings") == 1

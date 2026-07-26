@@ -53,7 +53,8 @@ def log_dir() -> Path:
 
 
 def write_run_report(run_id: str, *, script: str = "", prompts: list[str] | None = None,
-                     meta: dict | None = None) -> "Path | None":
+                     meta: dict | None = None,
+                     motion: list[dict] | None = None) -> "Path | None":
     """Write ONE human-readable markdown file per run collecting everything a
     reviewer needs: the final script, every beat's image prompt, and the run's
     scores/costs.
@@ -82,6 +83,35 @@ def write_run_report(run_id: str, *, script: str = "", prompts: list[str] | None
             parts.append(f"## Image prompts ({len(prompts)} beats)\n\n")
             for i, p in enumerate(prompts, 1):
                 parts.append(f"**Beat {i}**\n\n```\n{p}\n```\n\n")
+        if motion:
+            # Per-beat motion record: which engine handled it, how long it
+            # took, and the exact prompt + sampler settings behind it. This is
+            # the raw material for "why did clip 4 look wrong" — without the
+            # settings a bad clip is unreproducible, and without the timing
+            # there's no way to see an engine quietly getting slower.
+            parts.append("## Motion\n\n")
+            shown_settings = False
+            for r in motion:
+                head = (f"- **beat {r.get('beat')}** — {r.get('engine')}: "
+                        f"{'ok' if r.get('ok') else 'failed'}")
+                if r.get("seconds") is not None:
+                    head += f" ({r['seconds']}s)"
+                parts.append(head + "\n")
+                if r.get("note"):
+                    parts.append(f"    - {r['note']}\n")
+                if r.get("motion_prompt"):
+                    parts.append(f"    - prompt: `{r['motion_prompt']}`\n")
+                if not shown_settings:
+                    cfg = {k: v for k, v in r.items()
+                           if k not in ("beat", "engine", "ok", "seconds",
+                                        "note", "motion_prompt")}
+                    if cfg:
+                        parts.append("\n### Motion engine settings\n\n")
+                        parts += [f"- **{k}**: {v}\n" for k, v in sorted(cfg.items())]
+                        parts.append("\n")
+                        shown_settings = True
+            parts.append("\n")
+
         with out.open("a", encoding="utf-8") as fh:
             fh.write("".join(parts))
         return out

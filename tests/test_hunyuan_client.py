@@ -122,3 +122,42 @@ def test_animate_snaps_invalid_frame_count(monkeypatch, tmp_path, capsys):
         assert hy.animate_image(src, tmp_path / "o.mp4") is False  # submit=None → False
 
     assert captured_dims["dims"][2] == 117
+
+
+# ── settings(): what actually produced a clip, for investigation ─────────────
+
+def test_settings_reads_sampler_values_from_the_live_template(monkeypatch, tmp_path):
+    """Read the template rather than assume documented defaults — a re-export
+    that changes model/steps must show up here, not silently drift."""
+    import json as _json
+    g = {
+        "1": {"class_type": "CLIPTextEncode", "inputs": {"text": "RUFUS_PROMPT"}},
+        "12": {"class_type": "UNETLoader",
+               "inputs": {"unet_name": "my_model.safetensors", "weight_dtype": "fp8_e4m3fn"}},
+        "126": {"class_type": "BasicScheduler", "inputs": {"steps": 12, "scheduler": "simple"}},
+        "129": {"class_type": "CFGGuider", "inputs": {"cfg": 1}},
+        "130": {"class_type": "ModelSamplingSD3", "inputs": {"shift": 5}},
+    }
+    p = tmp_path / "tpl.json"; p.write_text(_json.dumps(g))
+    monkeypatch.setenv("RUFUS_HUNYUAN_TEMPLATE", str(p))
+
+    s = hy.settings()
+    assert s["model"] == "my_model.safetensors"
+    assert s["weight_dtype"] == "fp8_e4m3fn"
+    assert s["steps"] == 12 and s["cfg"] == 1 and s["shift"] == 5
+
+
+def test_settings_survives_a_missing_template(monkeypatch, tmp_path):
+    """Never raise — this feeds a report, and a reporting failure must not
+    break a render."""
+    monkeypatch.setenv("RUFUS_HUNYUAN_TEMPLATE", str(tmp_path / "nope.json"))
+    s = hy.settings()
+    assert s["width"] == 480 and "model" not in s   # env knobs still resolve
+
+
+def test_settings_reflects_env_overrides(monkeypatch, tmp_path):
+    monkeypatch.setenv("RUFUS_HUNYUAN_TEMPLATE", str(tmp_path / "nope.json"))
+    monkeypatch.setenv("RUFUS_HUNYUAN_W", "720")
+    monkeypatch.setenv("RUFUS_HUNYUAN_TIMEOUT", "900")
+    s = hy.settings()
+    assert s["width"] == 720 and s["timeout"] == 900.0

@@ -100,6 +100,46 @@ def ready() -> tuple[bool, str]:
     return True, "HunyuanVideo 1.5 template loaded (face-capable motion)"
 
 
+# What the LAST animate_image() call actually used. The run report reads this
+# so a reviewer can see the real motion prompt and the settings behind a clip
+# — the whole point of keeping motion output for investigation is being able
+# to tie a bad clip back to the exact prompt and sampler values that made it,
+# and both are derived at call time (env + template), not visible from outside.
+LAST_CALL: dict = {}
+
+
+def settings() -> dict:
+    """Resolved motion settings: env knobs plus the sampler values baked into
+    the exported template (steps/cfg/shift/model). Template values are read
+    live rather than assumed, so a re-export that changes the model or step
+    count shows up here instead of silently drifting from the docs."""
+    out = {
+        "width":   int(os.environ.get("RUFUS_HUNYUAN_W", "480")),
+        "height":  int(os.environ.get("RUFUS_HUNYUAN_H", "832")),
+        "frames":  int(os.environ.get("RUFUS_HUNYUAN_FRAMES", "121")),
+        "fps":     HY_FPS,
+        "timeout": float(os.environ.get("RUFUS_HUNYUAN_TIMEOUT", "1800")),
+        "template": str(_template_path()),
+    }
+    tpl = comfy_template.load_template(_template_path())
+    for node in (tpl or {}).values():
+        ins = node.get("inputs") or {}
+        ct  = node.get("class_type", "")
+        if ct == "UNETLoader":
+            out["model"] = ins.get("unet_name")
+            out["weight_dtype"] = ins.get("weight_dtype")
+        elif ct == "BasicScheduler":
+            out["steps"] = ins.get("steps")
+            out["scheduler"] = ins.get("scheduler")
+        elif ct == "CFGGuider":
+            out["cfg"] = ins.get("cfg")
+        elif ct == "ModelSamplingSD3":
+            out["shift"] = ins.get("shift")
+        elif ct == "KSamplerSelect":
+            out["sampler"] = ins.get("sampler_name")
+    return out
+
+
 def _motion_prompt(beat_prompt: str) -> str:
     """Face-safe motion direction. Same one-way-action constraint as Wan (the
     clip is freeze-extended, so subtle sustained life beats a completed
@@ -185,9 +225,13 @@ def animate_image(png_path: Path, out_path: Path, duration: float = 8.0,
             if not image_name:
                 return False
 
+            motion_prompt = _motion_prompt(prompt)
+            LAST_CALL.clear()
+            LAST_CALL.update(engine="hunyuan", motion_prompt=motion_prompt,
+                             **settings())
             graph = comfy_template.prepare(
                 tpl,
-                prompt=_motion_prompt(prompt),
+                prompt=motion_prompt,
                 image_name=image_name,
                 seed=random.randint(1, 2**31 - 1),
                 dims=(w, h, frames),
