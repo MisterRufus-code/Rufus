@@ -97,6 +97,9 @@ _MODEL_FILE_INPUTS = {
     "CLIPVisionLoader":  ("clip_name",),
     "LoraLoaderModelOnly": ("lora_name",),
     "LatentUpscaleModelLoader": ("model_name",),
+    # city96's ComfyUI-GGUF pack — needed for GGUF-quantized checkpoints
+    # (e.g. the LTX-2.3 Q4_K_M build recommended for 24GB-VRAM boxes).
+    "UnetLoaderGGUF":    ("unet_name",),
 }
 
 

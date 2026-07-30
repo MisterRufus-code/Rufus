@@ -4,22 +4,35 @@ ltx_client.py — LTX-2.3 image-to-video for Rufus (via ComfyUI).
 
 NOT CONFIRMED FAST ON THIS HARDWARE. LTX-2.3 is built for speed in general,
 but the checkpoint actually installed here is LTXAV (audio+video: node names
-LTXAVTEModel_ / LTXAV, ~23.8GB staged — right at the 24GB VRAM ceiling). A
-live test clip took 928s (00:15:28), i.e. in the same range as Hunyuan, not
-faster. Two live suspects, unconfirmed: (1) audio generation is pure
-overhead Rufus never uses (it has its own TTS/music/SFX) — a pure-video LTX
-checkpoint, if one exists, would drop that whole branch; (2) at ~23.8GB the
-model is close enough to the 24GB card that the same RAM-streaming slowdown
-documented for Hunyuan on this 16GB-RAM box may apply here too. Researched: Lightricks does NOT ship a separate video-only checkpoint — LTX-2/
-2.3 is architecturally one joint audio-video transformer (ltx-2.3-22b-dev and
-ltx-2.3-22b-distilled-1.1, both audio+video). An open upstream issue asking to
-disable the audio branch for speed (Lightricks/LTX-2 #208) has no official
-answer as of this writing. The only lever worth trying on this hardware is
-Kijai's fp8 "transformer_only" distilled-1.1 build on HuggingFace
-(Kijai/LTX2.3_comfy), explicitly recommended for 16GB-class VRAM — swap it in
-via a fresh ComfyUI export, no code change needed here (template-driven).
-Until that's tried, treat this as an alternative engine to compare, not a
-speed win.
+LTXAVTEModel_ / LTXAV) — ~23.8GB for the video transformer PLUS ~11.2GB for
+its text encoder, ~35GB combined. That's well past the 24GB VRAM ceiling, not
+merely "close to it" — the card can never hold the whole thing, so every
+clip pays constant weight-streaming. A live test clip took 928s (00:15:28),
+i.e. in the same range as Hunyuan, not faster.
+
+Researched: Lightricks does NOT ship a separate video-only checkpoint —
+LTX-2/2.3 is architecturally one joint audio-video transformer
+(ltx-2.3-22b-dev and ltx-2.3-22b-distilled-1.1, both audio+video). An open
+upstream issue asking to disable the audio branch for speed
+(Lightricks/LTX-2 #208) has no official answer as of this writing. Kijai's
+fp8 "transformer_only" distilled-1.1 build (Kijai/LTX2.3_comfy on
+HuggingFace) removes nothing size-wise — at ~25.2GB it's not smaller than
+what's already installed, so it's a fallback option at best, not the fix.
+
+The actual lever for this hardware: a GGUF-QUANTIZED checkpoint, meaningfully
+smaller than the current ~23.8GB video transformer —
+QuantStack/LTX-2.3-GGUF's `LTX-2.3-distilled-1.1/LTX-2.3-22B-distilled-1.1-
+Q4_K_M.gguf` (~17.8GB) is the recommended first try. It loads through the
+community ComfyUI-GGUF node pack (city96) via node class `UnetLoaderGGUF`
+(field `unet_name`) — comfy_template.py's preflight now recognizes that
+loader class too, so a stale/misnamed .gguf filename still gets caught
+before a run, same as every other engine. No code change needed here at
+all: comfy_template.prepare() substitutes by input field name, not by
+loader class, so once config/ltx_i2v_api.json is re-exported from a
+workflow using UnetLoaderGGUF, this file works unchanged. Text encoder and
+VAE stay whatever's already installed — only the transformer file differs.
+Until the swap is tested, treat this as an alternative engine to compare,
+not a confirmed speed win.
 
 TEMPLATE-DRIVEN, like every other engine here: export your own verified
 ComfyUI workflow rather than letting this file guess a node graph. Setup:

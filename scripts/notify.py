@@ -163,3 +163,21 @@ def notify_pending_review(*, title: str, score, niche: str,
     lines.append("Approve or reject in the dashboard.")
     return send(f"Rufus: \"{title}\" needs review",
                 "\n".join(lines), url=link, priority="high")
+
+
+def notify_run_failed(reason: str, *, niche: str | None = None,
+                      channel: str | None = None) -> bool:
+    """A run crashed before reaching the DB save — the orphaned debug folder
+    that leaves behind is invisible until someone happens to open /failures.
+    This is the only way the owner learns about it in real time, for ANY
+    entry point (run_scheduled.bat already alerts on crash for scheduled
+    runs specifically, via a hardcoded ntfy curl — this covers every other
+    way main.py gets invoked, and every backend notify.py supports)."""
+    lines = []
+    if niche or channel:
+        lines.append(f"{niche or '?'}" + (f" · {channel}" if channel else ""))
+    lines.append(reason[-400:])   # truncate — backends cap message length
+    link = _dashboard_url()
+    if link:
+        link = f"{link}/failures"
+    return send("Rufus: run CRASHED", "\n".join(lines), url=link, priority="high")

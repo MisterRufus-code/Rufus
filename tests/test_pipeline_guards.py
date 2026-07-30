@@ -933,3 +933,68 @@ def test_acquire_lock_default_is_nonblocking(tmp_path, monkeypatch):
     monkeypatch.setattr(main, "FileLock", FakeLock)
     main._acquire_lock("chan_x")
     assert captured["timeout"] == 0
+
+
+# ── Crash notification (every entry point, not just --scheduled) ────────────
+
+def test_run_or_notify_calls_notify_on_crash_then_reraises(monkeypatch):
+    import main
+    import notify
+
+    def boom(**kwargs):
+        raise RuntimeError("comfy server unreachable")
+
+    monkeypatch.setattr(main, "run", boom)
+    calls = []
+    monkeypatch.setattr(notify, "notify_run_failed",
+                        lambda reason, **kw: calls.append((reason, kw)))
+
+    with pytest.raises(RuntimeError, match="comfy server unreachable"):
+        main._run_or_notify("finance", channel_id="main_en")
+
+    assert len(calls) == 1
+    reason, kw = calls[0]
+    assert "comfy server unreachable" in reason
+    assert kw == {"niche": "finance", "channel": "main_en"}
+
+
+def test_run_or_notify_does_not_notify_on_sys_exit(monkeypatch):
+    """sys.exit(1) paths already print their own reason — must not double-page."""
+    import main
+    import notify
+
+    def exits(**kwargs):
+        raise SystemExit(1)
+
+    monkeypatch.setattr(main, "run", exits)
+    calls = []
+    monkeypatch.setattr(notify, "notify_run_failed",
+                        lambda reason, **kw: calls.append((reason, kw)))
+
+    with pytest.raises(SystemExit):
+        main._run_or_notify("finance")
+    assert calls == []
+
+
+def test_run_or_notify_survives_notify_itself_failing(monkeypatch):
+    """A broken notification path must never mask the real crash."""
+    import main
+    import notify
+
+    def boom(**kwargs):
+        raise RuntimeError("original failure")
+
+    monkeypatch.setattr(main, "run", boom)
+    monkeypatch.setattr(notify, "notify_run_failed",
+                        lambda reason, **kw: (_ for _ in ()).throw(OSError("network down")))
+
+    with pytest.raises(RuntimeError, match="original failure"):
+        main._run_or_notify("finance")
+
+
+def test_run_or_notify_passes_through_on_success(monkeypatch):
+    import main
+    calls = []
+    monkeypatch.setattr(main, "run", lambda **kwargs: calls.append(kwargs))
+    main._run_or_notify("finance", channel_id="main_en")   # must not raise
+    assert calls == [{"niche_override": "finance", "channel_id": "main_en"}]

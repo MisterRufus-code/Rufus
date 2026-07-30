@@ -164,8 +164,8 @@ def test_missing_nodes_server_down_reports_all():
 # "value_not_in_list". Live, that surfaced only after the whole stills phase
 # had run, wasting the run.
 
-def _loader_graph(unet="model_a.safetensors"):
-    return {"12": {"class_type": "UNETLoader",
+def _loader_graph(unet="model_a.safetensors", class_type="UNETLoader"):
+    return {"12": {"class_type": class_type,
                    "inputs": {"unet_name": unet, "weight_dtype": "default"}}}
 
 
@@ -201,6 +201,27 @@ def test_missing_models_fails_open_when_object_info_unreadable():
     """Must never block a run it can't actually verify."""
     graph = _loader_graph("whatever.safetensors")
     with patch.object(ct.requests, "get", side_effect=OSError("down")):
+        assert ct.missing_models(graph, "http://x") == []
+
+
+def test_missing_models_flags_gguf_loader_filename_not_on_disk():
+    """UnetLoaderGGUF (city96's ComfyUI-GGUF pack) — the loader a GGUF-
+    quantized LTX checkpoint swap depends on. Same live-failure shape as
+    UNETLoader: a stale/misnamed .gguf file must be caught at preflight."""
+    graph = _loader_graph("LTX-2.3-22B-distilled-1.1-Q4_K_M.gguf",
+                          class_type="UnetLoaderGGUF")
+    resp = _object_info("UnetLoaderGGUF", ["some-other-quant.gguf"])
+    with patch.object(ct.requests, "get", return_value=resp):
+        missing = ct.missing_models(graph, "http://x")
+    assert len(missing) == 1
+    assert "LTX-2.3-22B-distilled-1.1-Q4_K_M.gguf" in missing[0]
+    assert "UnetLoaderGGUF.unet_name" in missing[0]
+
+
+def test_missing_models_empty_when_gguf_file_present():
+    graph = _loader_graph("model.gguf", class_type="UnetLoaderGGUF")
+    with patch.object(ct.requests, "get",
+                      return_value=_object_info("UnetLoaderGGUF", ["model.gguf"])):
         assert ct.missing_models(graph, "http://x") == []
 
 

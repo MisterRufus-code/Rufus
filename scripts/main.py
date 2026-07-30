@@ -1345,6 +1345,29 @@ def run(skip_upload: bool = False, niche_override: str = None, output_dir: Path 
     return {"video": str(output_path), "youtube_url": yt_url, "script": script, "seed": seed}
 
 
+def _run_or_notify(niche: str | None, **kwargs) -> None:
+    """Crash alert for every entry point, not just --scheduled
+    (run_scheduled.bat already curls a raw ntfy alert on a non-zero exit
+    code, but ONLY for that one entry point and ONLY via ntfy — a manual
+    run gets nothing, and a Pushover/Telegram-only setup gets nothing even
+    scheduled). Re-raises so the process still exits non-zero —
+    run_scheduled.bat's own fallback stays as deliberate redundancy for the
+    case Python itself never starts (broken venv, syntax error)."""
+    try:
+        run(niche_override=niche, **kwargs)
+    except SystemExit:
+        raise   # sys.exit(1) paths already print their own reason
+    except Exception as e:
+        import traceback
+        try:
+            import notify
+            notify.notify_run_failed(f"{e}\n{traceback.format_exc()}",
+                                     niche=niche, channel=kwargs.get("channel_id"))
+        except Exception:
+            pass   # never let a notification failure mask the real crash
+        raise
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Rufus pipeline runner")
     parser.add_argument("--skip-upload", action="store_true", help="Render only, skip YouTube upload")
@@ -1386,8 +1409,8 @@ if __name__ == "__main__":
         for n in seen:
             # Clear any prior env override so each iteration starts clean
             os.environ.pop("RUFUS_NICHE_OVERRIDE", None)
-            run(skip_upload=args.skip_upload, niche_override=n,
-                output_dir=out_dir_arg, channel_id=args.channel)
+            _run_or_notify(n, skip_upload=args.skip_upload,
+                          output_dir=out_dir_arg, channel_id=args.channel)
     elif args.scheduled:
         from datetime import datetime
         schedule = _channel_schedule()
@@ -1399,9 +1422,9 @@ if __name__ == "__main__":
         # of dying and silently dropping the slot. RUFUS_SCHED_LOCK_WAIT
         # (seconds) tunes the cap; default 3h.
         _sched_wait = float(os.environ.get("RUFUS_SCHED_LOCK_WAIT", str(3 * 3600)))
-        run(skip_upload=args.skip_upload, niche_override=n,
-            output_dir=out_dir_arg, channel_id=args.channel, topic=args.topic,
-            lock_wait=_sched_wait)
+        _run_or_notify(n, skip_upload=args.skip_upload,
+                      output_dir=out_dir_arg, channel_id=args.channel, topic=args.topic,
+                      lock_wait=_sched_wait)
     else:
-        run(skip_upload=args.skip_upload, niche_override=args.niche,
-            output_dir=out_dir_arg, channel_id=args.channel, topic=args.topic)
+        _run_or_notify(args.niche, skip_upload=args.skip_upload,
+                      output_dir=out_dir_arg, channel_id=args.channel, topic=args.topic)

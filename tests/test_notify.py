@@ -99,3 +99,37 @@ def test_pending_review_body_carries_score_and_hold_reason(monkeypatch):
                                      video_id=3, hold_reason="score 5/10 < 8/10")
     body = post.call_args[1]["data"].decode("utf-8")
     assert "money_history" in body and "5/10" in body
+
+
+def test_run_failed_sends_high_priority(monkeypatch):
+    _clear(monkeypatch)
+    monkeypatch.setenv("RUFUS_NTFY_TOPIC", "topic")
+    with patch.object(notify.requests, "post", return_value=_ok()) as post:
+        assert notify.notify_run_failed("boom", niche="money_history",
+                                        channel="main_en") is True
+    assert post.call_args[1]["headers"]["Priority"] == "high"
+    body = post.call_args[1]["data"].decode("utf-8")
+    assert "money_history" in body and "main_en" in body and "boom" in body
+
+
+def test_run_failed_links_to_failures_page(monkeypatch):
+    _clear(monkeypatch)
+    monkeypatch.setenv("RUFUS_NTFY_TOPIC", "topic")
+    monkeypatch.setenv("RUFUS_DASHBOARD_URL", "http://192.168.1.20:8765")
+    with patch.object(notify.requests, "post", return_value=_ok()) as post:
+        notify.notify_run_failed("boom")
+    assert post.call_args[1]["headers"]["Click"] == "http://192.168.1.20:8765/failures"
+
+
+def test_run_failed_truncates_a_long_reason(monkeypatch):
+    _clear(monkeypatch)
+    monkeypatch.setenv("RUFUS_NTFY_TOPIC", "topic")
+    with patch.object(notify.requests, "post", return_value=_ok()) as post:
+        notify.notify_run_failed("x" * 10_000)
+    body = post.call_args[1]["data"].decode("utf-8")
+    assert len(body) <= 500
+
+
+def test_run_failed_no_backend_is_a_noop(monkeypatch):
+    _clear(monkeypatch)
+    assert notify.notify_run_failed("boom") is False
