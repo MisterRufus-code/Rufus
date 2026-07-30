@@ -32,6 +32,15 @@ def test_find_banned_empty_string():
     assert _find_banned("") is None
 
 
+def test_find_banned_flags_vague_attribution():
+    """Generic AI-writing tell: a claim propped up by an unnamed authority
+    instead of the actual specific fact — "studies show" instead of naming
+    the study."""
+    assert _find_banned("Studies show most people never check their statements.") == "studies show"
+    assert _find_banned("Experts believe the market will keep rising.") == "experts believe"
+    assert _find_banned("Some say the bank never recovered.") == "some say"
+
+
 def test_blacklist_key_first_twenty_words_lowercase():
     s = "You're losing money every single day right now my friend stop wasting time on things that do not matter"
     key = _blacklist_key(s)
@@ -602,6 +611,60 @@ def test_fix_for_rejection_repeated_number_message():
     rejection = "number '1873' repeated 3x — restate with a NEW specific each time, not the same figure"
     fix = _fix_for_rejection(rejection, _standards(), "hook,tokens", "worst")
     assert "1873" in fix and "DIFFERENT specific" in fix
+
+
+# ── em-dash overuse ──────────────────────────────────────────────────────────
+# 3+ em-dashes in a short script is a real AI-cadence tell. Kept deliberately
+# loose (2 must pass) — the false-positive-risk boundary this whole check
+# hinges on, given the standing note that the gate is already too strict.
+
+def test_em_dash_overuse_flags_three_or_more():
+    from script_writer import _em_dash_overuse
+    script = "One thing—then another—then a third thing—all in one script."
+    result = _em_dash_overuse(script)
+    assert result is not None
+    assert "3" in result
+
+
+def test_em_dash_overuse_allows_two():
+    from script_writer import _em_dash_overuse
+    script = "One thing—then another thing—and that's it, nothing more here."
+    assert _em_dash_overuse(script) is None
+
+
+def test_em_dash_overuse_ignores_hyphens_and_en_dashes():
+    from script_writer import _em_dash_overuse
+    script = "A well-known, state-of-the-art, top-tier plan spanning 2020-2023."
+    assert _em_dash_overuse(script) is None
+
+
+def test_body_pre_check_chains_to_em_dash_overuse(monkeypatch):
+    """Same wiring proof as the repeated-number test: every earlier check
+    force-passes so a script is rejected specifically for em-dash overuse."""
+    from script_writer import _body_pre_check
+    import script_writer as sw
+    monkeypatch.setattr(sw, "_specificity_density", lambda s: 999)
+    monkeypatch.setattr(sw, "_sentence_stats", lambda s: (9.0, 5))
+    monkeypatch.setattr(sw, "_loop_echoes_hook", lambda s: (True, "x"))
+    monkeypatch.setattr(sw, "_has_opinion_word", lambda s: True)
+    monkeypatch.setattr(sw, "_find_hedging", lambda s: None)
+    monkeypatch.setattr(sw, "_repeated_number", lambda s: None)
+
+    std = sw._standards()
+    core = "One thing—then another—then a third—all crammed into one script here."
+    pad_needed = max(0, std["body"]["min_words"] - len(core.split()))
+    script = core + " " + " ".join(["filler"] * pad_needed)
+
+    result = _body_pre_check(script)
+    assert result is not None
+    assert "em-dash" in result
+
+
+def test_fix_for_rejection_em_dash_message():
+    from script_writer import _fix_for_rejection, _standards
+    rejection = "em-dash overuse (4 in the script — vary punctuation; use a period, comma, or colon for some of these instead)"
+    fix = _fix_for_rejection(rejection, _standards(), "hook,tokens", "worst")
+    assert "2 em-dashes" in fix
 
 
 def test_fix_for_rejection_sentences_too_short_not_confused_with_total_length():

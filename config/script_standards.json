@@ -81,7 +81,10 @@
     "wake up", "open your eyes", "the fact is",
     "it's simple", "it's easy", "it's straightforward",
     "just remember", "just think", "just imagine",
-    "you need to", "you must", "you have to understand"
+    "you need to", "you must", "you have to understand",
+    "some say", "many say", "some believe", "many believe", "people believe",
+    "studies show", "research shows", "experts say", "experts believe",
+    "critics say", "it is said", "reportedly"
   ],
 
   "scoring": {

@@ -456,6 +456,18 @@ def _repeated_number(script: str) -> str | None:
             f"NEW specific each time, not the same figure")
 
 
+def _em_dash_overuse(script: str) -> str | None:
+    """3+ em-dashes in an 80-115 word script is a real AI-cadence tell — one
+    or two is normal, good writing (this very sentence uses one). Only fires
+    at >=3 to keep false positives near zero, since the quality gate is
+    already flagged as too aggressive elsewhere — this must not add to that."""
+    count = script.count("—")
+    if count >= 3:
+        return (f"em-dash overuse ({count} in the script — vary punctuation; "
+                f"use a period, comma, or colon for some of these instead)")
+    return None
+
+
 def _specificity_density(text: str) -> float:
     """Specifics per 25 words. ≥1.0 means the body is grounded."""
     words = len(_word_tokens(text))
@@ -540,6 +552,9 @@ def _body_pre_check(script: str) -> str | None:
 
     if (rep := _repeated_number(script)):
         return rep
+
+    if (dash := _em_dash_overuse(script)):
+        return dash
 
     return _cadence_violation(script)
 
@@ -1015,6 +1030,9 @@ def _fix_for_rejection(rejection: str, std: dict, hook_token_str: str,
         bad = rejection.split("'")[1] if "'" in rejection else ""
         return (f"CRITICAL: you repeated the number '{bad}' more than once — every "
                 f"sentence needs a DIFFERENT specific, never the same figure restated.")
+    if rejection.startswith("em-dash"):
+        return ("CRITICAL: use at most 2 em-dashes in the whole script — replace "
+                "the rest with a period, comma, or colon.")
     return ""
 
 def _build_system(niche_cfg: dict, niche_name: str, cta: str, hook: str) -> str:
