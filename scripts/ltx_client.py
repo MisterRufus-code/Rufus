@@ -10,8 +10,15 @@ faster. Two live suspects, unconfirmed: (1) audio generation is pure
 overhead Rufus never uses (it has its own TTS/music/SFX) — a pure-video LTX
 checkpoint, if one exists, would drop that whole branch; (2) at ~23.8GB the
 model is close enough to the 24GB card that the same RAM-streaming slowdown
-documented for Hunyuan on this 16GB-RAM box may apply here too. Until one of
-those is ruled out, treat this as an alternative engine to compare, not a
+documented for Hunyuan on this 16GB-RAM box may apply here too. Researched: Lightricks does NOT ship a separate video-only checkpoint — LTX-2/
+2.3 is architecturally one joint audio-video transformer (ltx-2.3-22b-dev and
+ltx-2.3-22b-distilled-1.1, both audio+video). An open upstream issue asking to
+disable the audio branch for speed (Lightricks/LTX-2 #208) has no official
+answer as of this writing. The only lever worth trying on this hardware is
+Kijai's fp8 "transformer_only" distilled-1.1 build on HuggingFace
+(Kijai/LTX2.3_comfy), explicitly recommended for 16GB-class VRAM — swap it in
+via a fresh ComfyUI export, no code change needed here (template-driven).
+Until that's tried, treat this as an alternative engine to compare, not a
 speed win.
 
 TEMPLATE-DRIVEN, like every other engine here: export your own verified
