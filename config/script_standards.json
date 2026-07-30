@@ -85,7 +85,7 @@
   ],
 
   "scoring": {
-    "score_min": 8,
+    "score_min": 7,
     "hook_score_min": 7,
     "max_body_attempts": 3,
     "body_temperatures": [0.7, 0.95, 1.1],
