@@ -435,6 +435,27 @@ def _hook_grounding_check(hook: str, source_text: str) -> str | None:
     return None
 
 
+_REPEATED_NUM_RE = re.compile(r"\b\d{3,}\b")
+
+
+def _repeated_number(script: str) -> str | None:
+    """A distinctive figure (year, dollar amount, count) restated verbatim
+    reads as padding, not new information — the "1873 three times" pattern
+    seen live: under grounding pressure the model reaches for its one solid,
+    already-verified number again and again instead of finding fresh
+    specifics elsewhere in the source. Deterministic and free, so it catches
+    this before an expensive LLM score gets spent on a redundant script."""
+    counts: dict[str, int] = {}
+    for n in _REPEATED_NUM_RE.findall(script):
+        counts[n] = counts.get(n, 0) + 1
+    repeats = {n: c for n, c in counts.items() if c >= 2}
+    if not repeats:
+        return None
+    worst = max(repeats, key=repeats.get)
+    return (f"number '{worst}' repeated {repeats[worst]}x — restate with a "
+            f"NEW specific each time, not the same figure")
+
+
 def _specificity_density(text: str) -> float:
     """Specifics per 25 words. ≥1.0 means the body is grounded."""
     words = len(_word_tokens(text))
@@ -516,6 +537,9 @@ def _body_pre_check(script: str) -> str | None:
 
     if (h := _find_hedging(script)):
         return f"hedging word: '{h}'"
+
+    if (rep := _repeated_number(script)):
+        return rep
 
     return _cadence_violation(script)
 
@@ -987,6 +1011,10 @@ def _fix_for_rejection(rejection: str, std: dict, hook_token_str: str,
         return f"CRITICAL: keep it under {std['body']['max_words']} words."
     if "specificity" in rejection:
         return "CRITICAL: add concrete specifics — a name, year, or dollar amount per sentence."
+    if rejection.startswith("number"):
+        bad = rejection.split("'")[1] if "'" in rejection else ""
+        return (f"CRITICAL: you repeated the number '{bad}' more than once — every "
+                f"sentence needs a DIFFERENT specific, never the same figure restated.")
     return ""
 
 def _build_system(niche_cfg: dict, niche_name: str, cta: str, hook: str) -> str:

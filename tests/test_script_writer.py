@@ -539,6 +539,71 @@ def test_fix_for_rejection_cadence_message():
     assert "vary sentence rhythm" in fix
 
 
+# ── repeated-number check ────────────────────────────────────────────────────
+# Live pattern: under grounding pressure the model reaches for its one solid
+# verified figure ("1873") again and again instead of finding fresh specifics,
+# so the script pads itself with the SAME fact restated rather than new ones.
+
+def test_repeated_number_flags_a_figure_used_twice():
+    from script_writer import _repeated_number
+    script = "The bank opened in 1873. By 1873 it was the largest lender."
+    result = _repeated_number(script)
+    assert result is not None
+    assert "1873" in result
+
+
+def test_repeated_number_passes_when_each_figure_is_unique():
+    from script_writer import _repeated_number
+    script = "The bank opened in 1873. By 1901 it was the largest lender."
+    assert _repeated_number(script) is None
+
+
+def test_repeated_number_ignores_short_numbers():
+    """Small numbers (page/list counters, "3 things") repeat for reasons that
+    aren't the padding pattern this guards against — only 3+ digit figures
+    (years, dollar amounts, counts) count."""
+    from script_writer import _repeated_number
+    script = "Rule 12: save first. Rule 12 again: automate it."
+    assert _repeated_number(script) is None
+
+
+def test_repeated_number_reports_the_worst_offender():
+    from script_writer import _repeated_number
+    script = "It cost 5000 dollars in 1873. Again, 1873 was the turning point. 1873."
+    result = _repeated_number(script)
+    assert "1873" in result and "3x" in result
+
+
+def test_body_pre_check_chains_to_repeated_number(monkeypatch):
+    """Same wiring proof as the cadence test: every earlier check force-passes
+    so a script is rejected specifically because of the repeated figure, not
+    some other coincidental failure."""
+    from script_writer import _body_pre_check
+    import script_writer as sw
+    monkeypatch.setattr(sw, "_specificity_density", lambda s: 999)
+    monkeypatch.setattr(sw, "_sentence_stats", lambda s: (9.0, 5))
+    monkeypatch.setattr(sw, "_loop_echoes_hook", lambda s: (True, "x"))
+    monkeypatch.setattr(sw, "_has_opinion_word", lambda s: True)
+    monkeypatch.setattr(sw, "_find_hedging", lambda s: None)
+
+    std = sw._standards()
+    sentence = "The vault opened in 1873 after decades of careful planning work."
+    core = " ".join([sentence] * 2) + " It happened in 1873, everyone agreed."
+    pad_needed = max(0, std["body"]["min_words"] - len(core.split()))
+    script = core + " " + " ".join(["filler"] * pad_needed)
+
+    result = _body_pre_check(script)
+    assert result is not None
+    assert "1873" in result
+
+
+def test_fix_for_rejection_repeated_number_message():
+    from script_writer import _fix_for_rejection, _standards
+    rejection = "number '1873' repeated 3x — restate with a NEW specific each time, not the same figure"
+    fix = _fix_for_rejection(rejection, _standards(), "hook,tokens", "worst")
+    assert "1873" in fix and "DIFFERENT specific" in fix
+
+
 def test_fix_for_rejection_sentences_too_short_not_confused_with_total_length():
     """Regression: 'sentences too short' contains 'too short' as a substring
     — the generic 'too short' branch used to win first and told the model to
