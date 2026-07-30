@@ -47,6 +47,7 @@ Environment:
 """
 
 import html
+import json
 import os
 import subprocess
 import sys
@@ -126,6 +127,43 @@ def _run_in_progress(channel_id: str) -> bool:
     return False
 
 
+# ── Settings editor (/settings) ──────────────────────────────────────────────
+# Most Rufus tunables are read via os.environ.get(...) in the process that's
+# actually running — this dashboard editing a value can't retroactively
+# change an already-running process, and won't reach a Task-Scheduler-
+# launched run_scheduled.bat unless that file is separately updated to
+# source this same JSON (documented in the /settings page itself, not done
+# automatically here). What it DOES do immediately: every run this
+# dashboard launches (_launch_run below — /system/run, /request-topic,
+# /trending's queue button) picks these up as env overrides.
+
+SETTINGS_FILE = ROOT / "config" / "dashboard_settings.json"
+
+# (env var, label, kind, help). kind: "bool" (tri-state — blank means "don't
+# override, use whatever's already configured") or "select:opt1,opt2,...".
+SETTINGS_SCHEMA = [
+    ("RUFUS_STILLS_ONLY", "Stills only", "bool",
+     "Force Ken Burns on stills only, overriding Hunyuan/Wan/LTX/SVD all at once."),
+    ("RUFUS_RENDERER", "Renderer", "select:ffmpeg,remotion",
+     "remotion needs `cd remotion && npm install` once; falls back to ffmpeg on any failure."),
+    ("RUFUS_LTX", "LTX motion engine", "bool", "Enable/disable the LTX-2.3 engine."),
+    ("RUFUS_HUNYUAN", "Hunyuan motion engine", "bool", "Enable/disable the Hunyuan engine."),
+    ("RUFUS_WAN", "Wan motion engine", "bool", "Enable/disable the Wan engine."),
+]
+
+
+def _load_settings() -> dict:
+    try:
+        return json.loads(SETTINGS_FILE.read_text())
+    except (OSError, json.JSONDecodeError, ValueError):
+        return {}
+
+
+def _save_settings(values: dict) -> None:
+    SETTINGS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    SETTINGS_FILE.write_text(json.dumps(values, indent=2))
+
+
 # Processes THIS dashboard launched, keyed by channel id — the only ones it
 # can cancel. A run started elsewhere (Task Scheduler, a manual run.bat) has
 # no Popen handle here; _run_in_progress() above still reports it as
@@ -144,7 +182,9 @@ def _launch_run(*, niche: str | None = None, topic: str | None = None,
     Output goes to a log file (not the dashboard's own stdout) so a
     dashboard-launched run doesn't interleave console output with whatever
     else is running; the single shared launch path behind both
-    /request-topic and /system/run."""
+    /request-topic and /system/run. Settings saved via /settings layer on
+    top of the current env (they don't replace it) as overrides for THIS
+    child process only."""
     cmd = [sys.executable, str(ROOT / "scripts" / "main.py")]
     if niche:
         cmd += ["--niche", niche]
@@ -152,11 +192,13 @@ def _launch_run(*, niche: str | None = None, topic: str | None = None,
         cmd += ["--topic", topic]
     if channel:
         cmd += ["--channel", channel]
+    env = os.environ.copy()
+    env.update(_load_settings())
     log_dir = ROOT / "logs"
     log_dir.mkdir(parents=True, exist_ok=True)
     log_path = log_dir / f"dashboard_run_{int(time.time())}.log"
     with open(log_path, "wb") as logf:
-        proc = subprocess.Popen(cmd, cwd=str(ROOT), stdout=logf,
+        proc = subprocess.Popen(cmd, cwd=str(ROOT), stdout=logf, env=env,
                                stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL)
     _LAUNCHED[channel or "default"] = proc
     return proc, log_path
@@ -649,7 +691,8 @@ PAGE_HEAD = """<!doctype html><html><head><meta charset="utf-8">
 <a class="navlink" href="/performance">📈 Performance</a>
 <a class="navlink" href="/system">🖥 System</a>
 <a class="navlink" href="/trending">🔥 Trending</a>
-<a class="navlink" href="/gallery">🖼 Gallery</a></header>
+<a class="navlink" href="/gallery">🖼 Gallery</a>
+<a class="navlink" href="/settings">⚙ Settings</a></header>
 <main>
 """
 PAGE_TAIL = "</main></body></html>"
@@ -985,6 +1028,55 @@ def system_cancel():
     channel = request.form.get("channel", "").strip() or None
     _cancel_run(channel)
     return redirect("/system")
+
+
+@app.route("/settings")
+def settings():
+    """Edit common tunables from a form instead of PowerShell/editing JSON
+    by hand. Applies immediately to runs launched FROM this dashboard; a
+    Task Scheduler run needs run_scheduled.bat updated separately to read
+    config/dashboard_settings.json too — not wired automatically, since env
+    vars don't propagate between independent processes."""
+    values = _load_settings()
+    rows = ""
+    for key, label, kind, help_text in SETTINGS_SCHEMA:
+        val = values.get(key, "")
+        if kind == "bool":
+            opts = [("", "(default — don't override)"), ("1", "on"), ("0", "off")]
+        else:
+            opts = [("", "(default)")] + [(o, o) for o in kind.split(":", 1)[1].split(",")]
+        options = "".join(
+            f'<option value="{_esc(v)}" {"selected" if val == v else ""}>{_esc(t)}</option>'
+            for v, t in opts)
+        rows += (f"<tr><td>{_esc(label)}</td>"
+                f"<td><select name=\"{key}\">{options}</select></td></tr>"
+                f"<tr><td colspan='2' class='muted' style='padding-top:0'>{_esc(help_text)}</td></tr>\n")
+
+    body = f"""
+    <a class="back" href="/">← back</a>
+    <h2 style="margin-top:14px">Settings</h2>
+    <p class="muted">Applies to runs launched from THIS dashboard (Run a
+       video now, Queue a topic, Trending) immediately. A Task Scheduler
+       run needs run_scheduled.bat updated separately to read the same
+       file — leaving a setting at "(default)" never overrides anything.</p>
+    <form method="post" action="/settings/save">
+      <table>{rows}</table>
+      <button class="btn save" type="submit" style="margin-top:12px">Save</button>
+    </form>
+    """
+    return PAGE_HEAD + body + PAGE_TAIL
+
+
+@app.route("/settings/save", methods=["POST"])
+def settings_save():
+    _require_localhost()
+    values = {}
+    for key, label, kind, help_text in SETTINGS_SCHEMA:
+        v = request.form.get(key, "").strip()
+        if v:
+            values[key] = v
+    _save_settings(values)
+    return redirect("/settings")
 
 
 @app.route("/gallery")

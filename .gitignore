@@ -28,6 +28,7 @@ config/script_embeddings.json
 config/topic_embeddings.json
 config/recent_image_prompts.json
 config/recent_image_hashes.json
+config/dashboard_settings.json
 
 # Python
 __pycache__/

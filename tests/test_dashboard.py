@@ -1133,3 +1133,63 @@ def test_gallery_page_shows_thumbnails(client, tmp_path, monkeypatch):
     r = client.get("/gallery")
     body = r.data.decode()
     assert "/debug/run_a/01.png" in body
+
+
+# ── /settings — tunables from a form, applied to dashboard-launched runs ────
+
+def test_settings_page_loads_with_defaults(client, tmp_path, monkeypatch):
+    monkeypatch.setattr(dashboard, "SETTINGS_FILE", tmp_path / "settings.json")
+    r = client.get("/settings")
+    assert r.status_code == 200
+    assert b"Stills only" in r.data
+    assert b"Renderer" in r.data
+
+
+def test_settings_save_writes_only_non_default_fields(client, tmp_path, monkeypatch):
+    monkeypatch.setattr(dashboard, "SETTINGS_FILE", tmp_path / "settings.json")
+    client.post("/settings/save", data={"RUFUS_STILLS_ONLY": "1", "RUFUS_RENDERER": ""})
+    saved = dashboard._load_settings()
+    assert saved == {"RUFUS_STILLS_ONLY": "1"}   # blank ("default") never written
+
+
+def test_settings_page_reflects_saved_values(client, tmp_path, monkeypatch):
+    monkeypatch.setattr(dashboard, "SETTINGS_FILE", tmp_path / "settings.json")
+    dashboard._save_settings({"RUFUS_RENDERER": "remotion"})
+    r = client.get("/settings")
+    assert 'value="remotion" selected' in r.data.decode()
+
+
+def test_settings_load_survives_missing_file(tmp_path, monkeypatch):
+    monkeypatch.setattr(dashboard, "SETTINGS_FILE", tmp_path / "nope.json")
+    assert dashboard._load_settings() == {}
+
+
+def test_settings_load_survives_corrupt_file(tmp_path, monkeypatch):
+    p = tmp_path / "settings.json"
+    p.write_text("{ not json")
+    monkeypatch.setattr(dashboard, "SETTINGS_FILE", p)
+    assert dashboard._load_settings() == {}
+
+
+def test_settings_route_blocks_non_localhost(client):
+    r = client.post("/settings/save", data={},
+                    environ_overrides={"REMOTE_ADDR": "10.0.0.5"})
+    assert r.status_code == 403
+
+
+def test_launch_run_applies_saved_settings_as_env_overrides(tmp_path, monkeypatch):
+    import subprocess
+    monkeypatch.setattr(dashboard, "ROOT", tmp_path)
+    monkeypatch.setattr(dashboard, "SETTINGS_FILE", tmp_path / "settings.json")
+    dashboard._save_settings({"RUFUS_STILLS_ONLY": "1"})
+    dashboard._LAUNCHED.clear()
+    captured = {}
+    class FakeProc:
+        def poll(self): return None
+    def fake_popen(cmd, **kwargs):
+        captured["env"] = kwargs.get("env")
+        return FakeProc()
+    monkeypatch.setattr(subprocess, "Popen", fake_popen)
+
+    dashboard._launch_run(niche="finance")
+    assert captured["env"]["RUFUS_STILLS_ONLY"] == "1"
