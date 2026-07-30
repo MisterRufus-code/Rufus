@@ -300,6 +300,58 @@ def _fmt_ts(epoch: float) -> str:
     return datetime.fromtimestamp(epoch).strftime("%Y-%m-%d %H:%M")
 
 
+# Real audience performance, not just the internal LLM score. The data pipe
+# already exists (analytics_fetcher.py fetches views/watch% via the YouTube
+# API, report.py's correlate() already buckets score-vs-views for the log
+# digest) — this is that same signal in the browser, since nothing here ever
+# queried the `metrics` table before.
+MIN_VIDEOS_FOR_CORRELATION = 5   # matches report.py's --correlate guard
+
+
+def _performance_rows(channel: str | None = None, days: int = 90) -> list[dict]:
+    """videos LEFT JOIN latest metrics row per video — same shape as
+    report.py's _latest_metrics_join() / feedback_analyzer.py's query.
+    LEFT JOIN (not INNER) so a video with no metrics yet still shows up
+    with blank views/watch%, rather than silently vanishing."""
+    q = """
+        SELECT v.id, v.upload_date, v.niche, v.channel,
+               COALESCE(v.title, v.script_hook) AS title, v.score, v.youtube_id,
+               m.views, m.watch_pct, m.likes
+        FROM videos v
+        LEFT JOIN (
+            SELECT video_id, views, watch_pct, ctr, likes
+            FROM metrics WHERE id IN (SELECT MAX(id) FROM metrics GROUP BY video_id)
+        ) m ON m.video_id = v.id
+        WHERE v.upload_date >= date('now', ?)
+    """
+    args: list = [f"-{days} days"]
+    if channel:
+        q += " AND v.channel = ?"
+        args.append(channel)
+    q += " ORDER BY v.id DESC"
+    try:
+        with db_manager._conn() as c:
+            rows = c.execute(q, args).fetchall()
+    except Exception:
+        return []
+    cols = ["id", "upload_date", "niche", "channel", "title", "score",
+            "youtube_id", "views", "watch_pct", "likes"]
+    return [dict(zip(cols, r)) for r in rows]
+
+
+def _score_vs_views(rows: list[dict]) -> list[dict]:
+    """Bucket by score, average views per bucket — does the 1-10 gate
+    actually predict real performance? Same question report.py's
+    correlate() answers for the log digest."""
+    from collections import defaultdict
+    buckets: dict[int, list[int]] = defaultdict(list)
+    for r in rows:
+        if r["score"] is not None and r["views"] is not None:
+            buckets[r["score"]].append(r["views"])
+    return [{"score": s, "avg_views": round(sum(vs) / len(vs)), "n": len(vs)}
+           for s, vs in sorted(buckets.items())]
+
+
 def _debug_assets(run_id: str | None) -> list[dict]:
     """Files in this run's debug folder (script/voiceover/keyframes). Every run
     keeps these now (not just RUFUS_DEBUG=1 runs), and they're retained
@@ -455,7 +507,8 @@ PAGE_HEAD = """<!doctype html><html><head><meta charset="utf-8">
   @media (prefers-color-scheme: light) { .orphan { background: #fff; border-color: #e5e7eb; } }
 </style></head><body>
 <header><a href="/"><h1>🎬 Rufus Dashboard</h1></a>
-<a class="navlink" href="/failures">⚠ Failures &amp; rejected attempts</a></header>
+<a class="navlink" href="/failures">⚠ Failures &amp; rejected attempts</a>
+<a class="navlink" href="/performance">📈 Performance</a></header>
 <main>
 """
 PAGE_TAIL = "</main></body></html>"
@@ -653,6 +706,62 @@ def failures():
     <h2>Rejected script attempts</h2>
     {filt_html}
     {reject_html}
+    """
+    return PAGE_HEAD + body + PAGE_TAIL
+
+
+@app.route("/performance")
+def performance():
+    """Score vs real audience performance — does the internal 1-10 gate
+    actually predict views/watch%? analytics_fetcher.py already fetches this
+    data and report.py's correlate() already computes this same signal for
+    the log digest; this is that signal in the browser, since dashboard.py
+    never queried the `metrics` table before this route existed."""
+    channel = request.args.get("channel") or None
+    rows = _performance_rows(channel=channel)
+
+    channel_links = "".join(
+        f'<a href="/performance?channel={_esc(c)}">{_esc(c)}</a> '
+        for c in sorted({r["channel"] for r in rows if r["channel"]}))
+    filt_html = f'<div class="filters"><a href="/performance">all channels</a> {channel_links}</div>'
+
+    with_metrics = [r for r in rows if r["views"] is not None]
+    correlation_html = (f"<p class='muted'>Need ≥{MIN_VIDEOS_FOR_CORRELATION} "
+                        f"videos with metrics to correlate (have {len(with_metrics)}).</p>")
+    if len(with_metrics) >= MIN_VIDEOS_FOR_CORRELATION:
+        bars = ""
+        for b in _score_vs_views(with_metrics):
+            bars += (f"<div style='margin:6px 0'>"
+                     f"<span style='display:inline-block;width:60px'>{b['score']}/10</span>"
+                     f"<b>{b['avg_views']}</b> <span class='muted'>avg views "
+                     f"(n={b['n']})</span></div>\n")
+        correlation_html = bars
+
+    table_html = "<p class='muted'>No uploaded videos in the last 90 days.</p>"
+    if rows:
+        trs = ""
+        for r in rows:
+            views = r["views"] if r["views"] is not None else "—"
+            watch = f"{r['watch_pct']:.0f}%" if r["watch_pct"] is not None else "—"
+            likes = r["likes"] if r["likes"] is not None else "—"
+            link = (f'<a href="/video/{r["id"]}">{_esc(r["title"] or "(untitled)")}</a>'
+                    if r["id"] else _esc(r["title"] or ""))
+            trs += (f"<tr><td class='muted'>{_esc(r['upload_date'] or '')}</td>"
+                   f"<td>{_esc(r['niche'] or '')}</td><td>{link}</td>"
+                   f"<td>{r['score'] if r['score'] is not None else '—'}/10</td>"
+                   f"<td>{views}</td><td>{watch}</td><td>{likes}</td></tr>\n")
+        table_html = (f"<table><tr><th>Date</th><th>Niche</th><th>Title</th>"
+                     f"<th>Score</th><th>Views</th><th>Watch%</th><th>Likes</th></tr>{trs}</table>")
+
+    body = f"""
+    <a class="back" href="/">← back</a>
+    <h2 style="margin-top:14px">Does the score predict real performance?</h2>
+    <p class="muted">Average views per internal score bucket — pulled from
+       the same YouTube Analytics data analytics_fetcher.py already collects.</p>
+    {correlation_html}
+    <h2>Videos (last 90 days)</h2>
+    {filt_html}
+    {table_html}
     """
     return PAGE_HEAD + body + PAGE_TAIL
 

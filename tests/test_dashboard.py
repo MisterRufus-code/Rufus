@@ -830,3 +830,81 @@ def test_approve_upload_failure_records_mark_upload_failed(client, tmp_path, mon
     with db_manager._conn() as c:
         row = c.execute("SELECT upload_status FROM videos WHERE id=?", (vid,)).fetchone()
     assert row[0] == "pending"                    # still retryable
+
+
+# ── /performance — real analytics, surfaced for the first time ──────────────
+
+def test_performance_page_loads_empty(client):
+    r = client.get("/performance")
+    assert r.status_code == 200
+    assert b"No uploaded videos" in r.data
+
+
+def test_performance_page_shows_score_and_views(client):
+    vid = db_manager.save_video(niche="finance", script_hook="Gold shock",
+                                scene_desc="s", video_file="v.mp4",
+                                score=9, youtube_id="yt0", upload_status="approved")
+    db_manager.save_metrics(vid, views=12345, watch_pct=54.2, ctr=0.0, likes=99)
+    r = client.get("/performance")
+    body = r.data.decode()
+    assert "Gold shock" in body
+    assert "12345" in body
+    assert "54%" in body
+    assert "99" in body
+
+
+def test_performance_page_handles_videos_with_no_metrics_yet(client):
+    """LEFT JOIN must not drop a video that hasn't been analytics-fetched yet."""
+    db_manager.save_video(niche="finance", script_hook="Brand new upload",
+                          scene_desc="s", video_file="v.mp4",
+                          score=8, youtube_id="yt1", upload_status="approved")
+    r = client.get("/performance")
+    body = r.data.decode()
+    assert "Brand new upload" in body
+    assert "—" in body   # blank views/watch%/likes rendered, not a crash
+
+
+def test_performance_page_channel_filter(client):
+    a = db_manager.save_video(niche="finance", script_hook="Chan A video",
+                              scene_desc="s", video_file="a.mp4", score=8,
+                              youtube_id="yt2", channel="chan_a", upload_status="approved")
+    b = db_manager.save_video(niche="finance", script_hook="Chan B video",
+                              scene_desc="s", video_file="b.mp4", score=8,
+                              youtube_id="yt3", channel="chan_b", upload_status="approved")
+    db_manager.save_metrics(a, views=100, watch_pct=50, ctr=0, likes=1)
+    db_manager.save_metrics(b, views=200, watch_pct=50, ctr=0, likes=1)
+    r = client.get("/performance?channel=chan_a")
+    body = r.data.decode()
+    assert "Chan A video" in body
+    assert "Chan B video" not in body
+
+
+def test_performance_correlation_needs_minimum_sample(client):
+    vid = db_manager.save_video(niche="finance", script_hook="Only one",
+                                scene_desc="s", video_file="v.mp4",
+                                score=9, youtube_id="yt4", upload_status="approved")
+    db_manager.save_metrics(vid, views=500, watch_pct=60, ctr=0, likes=5)
+    r = client.get("/performance")
+    assert b"Need" in r.data and b"to correlate" in r.data
+
+
+def test_performance_correlation_shows_avg_views_once_enough_data(client):
+    for i in range(5):
+        vid = db_manager.save_video(niche="finance", script_hook=f"V{i}",
+                                    scene_desc="s", video_file=f"v{i}.mp4",
+                                    score=9, youtube_id=f"yt{i}", upload_status="approved")
+        db_manager.save_metrics(vid, views=1000, watch_pct=50, ctr=0, likes=1)
+    r = client.get("/performance")
+    body = r.data.decode()
+    assert "9/10" in body
+    assert "avg views" in body
+
+
+def test_score_vs_views_buckets_by_score():
+    rows = [{"score": 9, "views": 100}, {"score": 9, "views": 300},
+           {"score": 5, "views": 10}]
+    out = dashboard._score_vs_views(rows)
+    by_score = {b["score"]: b for b in out}
+    assert by_score[9]["avg_views"] == 200
+    assert by_score[9]["n"] == 2
+    assert by_score[5]["avg_views"] == 10
