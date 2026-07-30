@@ -1094,3 +1094,42 @@ def test_trending_queue_button_posts_to_request_topic(client, monkeypatch, tmp_p
                     follow_redirects=True)
     assert r.status_code == 200
     assert "--topic" in captured["cmd"] and "gold price surge" in captured["cmd"]
+
+
+# ── /gallery — cross-run visual browsing ─────────────────────────────────────
+
+def test_gallery_page_empty(client):
+    r = client.get("/gallery")
+    assert r.status_code == 200
+    assert b"No keyframes saved yet" in r.data
+
+
+def test_gallery_images_flattens_across_runs(tmp_path, monkeypatch):
+    monkeypatch.setattr(dashboard, "DEBUG_ROOT", tmp_path)
+    for run_id in ("run_a", "run_b"):
+        d = tmp_path / run_id
+        d.mkdir()
+        (d / "01.png").write_bytes(b"x")
+        (d / "02.png").write_bytes(b"x")
+    images = dashboard._gallery_images()
+    assert len(images) == 4
+    assert {i["run_id"] for i in images} == {"run_a", "run_b"}
+
+
+def test_gallery_images_respects_limit(tmp_path, monkeypatch):
+    monkeypatch.setattr(dashboard, "DEBUG_ROOT", tmp_path)
+    d = tmp_path / "run_a"
+    d.mkdir()
+    for i in range(10):
+        (d / f"{i:02d}.png").write_bytes(b"x")
+    assert len(dashboard._gallery_images(limit=3)) == 3
+
+
+def test_gallery_page_shows_thumbnails(client, tmp_path, monkeypatch):
+    monkeypatch.setattr(dashboard, "DEBUG_ROOT", tmp_path)
+    d = tmp_path / "run_a"
+    d.mkdir()
+    (d / "01.png").write_bytes(b"x")
+    r = client.get("/gallery")
+    body = r.data.decode()
+    assert "/debug/run_a/01.png" in body

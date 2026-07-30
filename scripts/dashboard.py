@@ -508,6 +508,32 @@ def _image_prompts(run_id: str | None) -> list[dict]:
     return out
 
 
+def _gallery_images(limit: int = 60) -> list[dict]:
+    """Every keyframe still across every recent run, newest first — a
+    browsable portfolio instead of hunting through one video's detail page
+    at a time. Same source _orphaned_debug_runs()/_debug_assets() already
+    read (paths.debug_root()), just flattened across runs."""
+    if not DEBUG_ROOT.is_dir():
+        return []
+    out: list[dict] = []
+    try:
+        run_dirs = sorted((d for d in DEBUG_ROOT.iterdir() if d.is_dir()),
+                         key=lambda p: p.stat().st_mtime, reverse=True)
+    except OSError:
+        return []
+    for run_dir in run_dirs:
+        try:
+            pngs = sorted(run_dir.glob("[0-9]*.png"))
+        except OSError:
+            continue
+        for png in pngs:
+            out.append({"run_id": run_dir.name, "image": png.name,
+                       "mtime": png.stat().st_mtime})
+            if len(out) >= limit:
+                return out
+    return out
+
+
 # ── Rendering helpers (no template engine — a handful of small f-strings) ────
 
 def _esc(s) -> str:
@@ -622,7 +648,8 @@ PAGE_HEAD = """<!doctype html><html><head><meta charset="utf-8">
 <a class="navlink" href="/failures">⚠ Failures &amp; rejected attempts</a>
 <a class="navlink" href="/performance">📈 Performance</a>
 <a class="navlink" href="/system">🖥 System</a>
-<a class="navlink" href="/trending">🔥 Trending</a></header>
+<a class="navlink" href="/trending">🔥 Trending</a>
+<a class="navlink" href="/gallery">🖼 Gallery</a></header>
 <main>
 """
 PAGE_TAIL = "</main></body></html>"
@@ -958,6 +985,32 @@ def system_cancel():
     channel = request.form.get("channel", "").strip() or None
     _cancel_run(channel)
     return redirect("/system")
+
+
+@app.route("/gallery")
+def gallery():
+    """Browsable grid of generated stills across every recent run — the
+    per-video detail page already shows one run's keyframes; this is every
+    run's, for browsing past visual output rather than reviewing one video
+    at a time."""
+    images = _gallery_images()
+    if not images:
+        body = "<a class='back' href='/'>← back</a><p class='muted'>No keyframes saved yet.</p>"
+        return PAGE_HEAD + body + PAGE_TAIL
+    tiles = ""
+    for img in images:
+        src = f"/debug/{_esc(img['run_id'])}/{_esc(img['image'])}"
+        tiles += (f'<a href="{src}" target="_blank" style="display:inline-block;margin:4px">'
+                 f'<img src="{src}" style="width:120px;height:213px;object-fit:cover;'
+                 f'border-radius:6px" loading="lazy" title="{_esc(img["run_id"])}"></a>\n')
+    body = f"""
+    <a class="back" href="/">← back</a>
+    <h2 style="margin-top:14px">Gallery ({len(images)} recent stills)</h2>
+    <p class="muted">Every saved keyframe across recent runs, newest first.
+       Click one to open full-size.</p>
+    <div>{tiles}</div>
+    """
+    return PAGE_HEAD + body + PAGE_TAIL
 
 
 @app.route("/trending")
