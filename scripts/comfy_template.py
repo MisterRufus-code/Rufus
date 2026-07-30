@@ -153,7 +153,8 @@ def _loader_choices(class_type: str, host: str) -> set[str] | None:
 def prepare(graph: dict, *, prompt: str | None = None,
             image_name: str | None = None, seed: int | None = None,
             dims: tuple[int, int, int] | None = None,
-            save_prefix: str = "rufus_tpl") -> dict:
+            save_prefix: str = "rufus_tpl",
+            keep_video_writers: bool = False) -> dict:
     """Deep-copy the template and substitute Rufus' per-run values (see module
     docstring for the exact substitution contract)."""
     g = copy.deepcopy(graph)
@@ -181,11 +182,30 @@ def prepare(graph: dict, *, prompt: str | None = None,
 
         if dims is not None and all(k in inputs for k in ("width", "height", "length")):
             inputs["width"], inputs["height"], inputs["length"] = dims
+        elif dims is not None and all(k in inputs for k in ("width", "height", "duration")):
+            # LTX-style all-in-one nodes size clips in SECONDS + fps rather than
+            # a frame count. Without this branch the whole dims substitution is
+            # skipped silently and the export's own resolution wins — which for
+            # the stock LTX template means 1280x720 LANDSCAPE clips fed into a
+            # 1080x1920 portrait pipeline, i.e. a pillarboxed mess that still
+            # "succeeds". Convert frames -> seconds with the node's own fps.
+            w, h, frames = dims
+            fps = inputs.get("fps") or 25
+            inputs["width"], inputs["height"] = w, h
+            try:
+                inputs["duration"] = max(1, round(frames / float(fps)))
+            except (TypeError, ValueError, ZeroDivisionError):
+                pass
 
     # Swap video-writer nodes for SaveImage frames (wired to the decode the
     # writer chain was consuming — found by walking back through the writers).
-    writer_ids = [nid for nid, n in g.items()
-                  if n.get("class_type") in _VIDEO_WRITER_CLASSES]
+    # keep_video_writers: some all-in-one i2v nodes (LTX) emit a VIDEO with no
+    # VAEDecode behind it. Stripping the writer there deletes the graph's ONLY
+    # output and leaves something that renders nothing, so those engines keep
+    # the writer and download the finished container instead.
+    writer_ids = [] if keep_video_writers else [
+        nid for nid, n in g.items()
+        if n.get("class_type") in _VIDEO_WRITER_CLASSES]
     if writer_ids:
         decode_id = _find_decode_source(g, writer_ids)
         for nid in writer_ids:

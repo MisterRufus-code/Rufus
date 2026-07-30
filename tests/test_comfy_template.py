@@ -235,3 +235,32 @@ def test_shipped_stills_config_substitutes_and_is_portrait():
     # portrait latent (taller than wide) so Rufus' 1080x1920 crop keeps the subject
     latent = next(n for n in g.values() if n["class_type"] == "EmptySD3LatentImage")
     assert latent["inputs"]["height"] > latent["inputs"]["width"]
+
+
+# ── LTX-style nodes size in SECONDS, not frames ───────────────────────────────
+
+def test_prepare_handles_duration_style_dims():
+    """LTX's all-in-one i2v node takes width/height/duration(+fps) instead of
+    width/height/length. Without this the dims substitution silently no-ops and
+    the export's own 1280x720 LANDSCAPE wins over the portrait pipeline."""
+    g = {"1": {"class_type": "LTXImageToVideo",
+               "inputs": {"width": 1280, "height": 720, "duration": 5, "fps": 25,
+                          "prompt": "RUFUS_PROMPT"}}}
+    out = ct.prepare(g, prompt="x", dims=(832, 1472, 121))
+    ins = out["1"]["inputs"]
+    assert (ins["width"], ins["height"]) == (832, 1472)
+    assert ins["duration"] == 5          # 121 frames / 25fps, rounded
+
+
+def test_prepare_duration_survives_a_bad_fps():
+    g = {"1": {"class_type": "LTXImageToVideo",
+               "inputs": {"width": 1, "height": 2, "duration": 5, "fps": 0}}}
+    out = ct.prepare(g, dims=(832, 1472, 121))     # must not raise
+    assert out["1"]["inputs"]["width"] == 832
+
+
+def test_prepare_still_prefers_length_when_present():
+    g = {"1": {"class_type": "HunyuanVideo15ImageToVideo",
+               "inputs": {"width": 1, "height": 2, "length": 3}}}
+    out = ct.prepare(g, dims=(480, 832, 121))
+    assert out["1"]["inputs"]["length"] == 121

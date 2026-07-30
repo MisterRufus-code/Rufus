@@ -411,6 +411,18 @@ def generate_clips(queries: list[str], n: int = 4,
     except Exception as e:
         print(f"[comfy] hunyuan unavailable ({e})")
     try:
+        import ltx_client
+        if ltx_client.enabled():
+            lx_ok, lx_why = ltx_client.ready()
+            print(f"[comfy] motion ltx 2.3: {'ON' if lx_ok else 'off'} — {lx_why}")
+            if lx_ok:
+                motion_engines.append(("ltx", ltx_client.animate_image))
+        else:
+            print(f"[comfy] motion ltx 2.3: off — disabled "
+                  f"({_stills_only_reason or 'RUFUS_LTX=0'})")
+    except Exception as e:
+        print(f"[comfy] ltx unavailable ({e})")
+    try:
         import svd_client
         if svd_client.img2vid_enabled():
             svd_engine, svd_why = svd_client.resolve_engine()
@@ -552,7 +564,8 @@ def generate_clips(queries: list[str], n: int = 4,
             rec = {"beat": i + 1, "engine": eng_name, "ok": bool(okd),
                    "seconds": round(secs, 1)}
             try:
-                mod = {"hunyuan": "hunyuan_client", "wan": "wan_client"}.get(eng_name)
+                mod = {"hunyuan": "hunyuan_client", "wan": "wan_client",
+                       "ltx": "ltx_client"}.get(eng_name)
                 if mod:
                     rec.update(__import__(mod).LAST_CALL)
             except Exception:
