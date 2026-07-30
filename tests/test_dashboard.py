@@ -1041,3 +1041,56 @@ def test_system_routes_block_non_localhost(client, monkeypatch):
     r = client.post("/system/cancel", data={"channel": "main_en"},
                     environ_overrides={"REMOTE_ADDR": "10.0.0.5"})
     assert r.status_code == 403
+
+
+# ── /trending — browse rising queries, queue via the existing gate path ─────
+
+def test_trending_page_lists_niche_links(client):
+    r = client.get("/trending")
+    assert r.status_code == 200
+    body = r.data.decode()
+    assert "finance" in body   # a real NICHE_TREND_SEEDS key
+
+
+def test_trending_page_shows_queries_and_queue_buttons(client, monkeypatch):
+    import research
+    monkeypatch.setattr(research, "_trending_queries", lambda niche: ["gold price surge"])
+    r = client.get("/trending?niche=finance")
+    body = r.data.decode()
+    assert "gold price surge" in body
+    assert 'action="/request-topic"' in body
+    assert 'value="gold price surge"' in body
+
+
+def test_trending_page_handles_no_results(client, monkeypatch):
+    import research
+    monkeypatch.setattr(research, "_trending_queries", lambda niche: [])
+    r = client.get("/trending?niche=finance")
+    assert b"No rising queries" in r.data
+
+
+def test_trending_page_handles_lookup_failure(client, monkeypatch):
+    import research
+    def boom(niche):
+        raise RuntimeError("pytrends rate-limited")
+    monkeypatch.setattr(research, "_trending_queries", boom)
+    r = client.get("/trending?niche=finance")
+    assert b"Trend lookup failed" in r.data
+
+
+def test_trending_queue_button_posts_to_request_topic(client, monkeypatch, tmp_path):
+    """The whole point: queuing a trending query goes through the SAME gate
+    path as manual topic entry, not a separate launch mechanism."""
+    import subprocess
+    monkeypatch.setattr(dashboard, "ROOT", tmp_path)
+    captured = {}
+    def fake_popen(cmd, **kwargs):
+        captured["cmd"] = cmd
+        class P:
+            def poll(self): return None
+        return P()
+    monkeypatch.setattr(subprocess, "Popen", fake_popen)
+    r = client.post("/request-topic", data={"topic": "gold price surge"},
+                    follow_redirects=True)
+    assert r.status_code == 200
+    assert "--topic" in captured["cmd"] and "gold price surge" in captured["cmd"]

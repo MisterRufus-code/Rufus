@@ -621,7 +621,8 @@ PAGE_HEAD = """<!doctype html><html><head><meta charset="utf-8">
 <header><a href="/"><h1>🎬 Rufus Dashboard</h1></a>
 <a class="navlink" href="/failures">⚠ Failures &amp; rejected attempts</a>
 <a class="navlink" href="/performance">📈 Performance</a>
-<a class="navlink" href="/system">🖥 System</a></header>
+<a class="navlink" href="/system">🖥 System</a>
+<a class="navlink" href="/trending">🔥 Trending</a></header>
 <main>
 """
 PAGE_TAIL = "</main></body></html>"
@@ -957,6 +958,57 @@ def system_cancel():
     channel = request.form.get("channel", "").strip() or None
     _cancel_run(channel)
     return redirect("/system")
+
+
+@app.route("/trending")
+def trending():
+    """Browse this week's rising search queries per niche (Google Trends via
+    pytrends) before committing a run to one — research.py already uses
+    these to auto-pick topics (fetch_trending_wikipedia); this is that same
+    signal, made browsable, with a "queue it" button that hands off to the
+    existing /request-topic path (same fact-grounding, same gates) rather
+    than a separate launch mechanism."""
+    import research
+    niches = list(research.NICHE_TREND_SEEDS.keys())
+    niche = request.args.get("niche") or (niches[0] if niches else None)
+
+    queries: list[str] = []
+    error = None
+    if niche:
+        try:
+            queries = research._trending_queries(niche)
+        except Exception as e:
+            error = str(e)
+
+    niche_links = "".join(
+        f'<a href="/trending?niche={_esc(n)}">{_esc(n)}</a> ' for n in niches)
+
+    if error:
+        list_html = f"<p class='muted'>Trend lookup failed: {_esc(error)}</p>"
+    elif not queries:
+        list_html = ("<p class='muted'>No rising queries right now for this "
+                     "niche (pytrends not installed, rate-limited, or "
+                     "nothing rising this week) — the same fail-open signal "
+                     "research.py itself falls back on.</p>")
+    else:
+        items = ""
+        for q in queries:
+            items += (f'<form method="post" action="/request-topic" style="margin:6px 0">'
+                     f'<input type="hidden" name="topic" value="{_esc(q)}">'
+                     f'<button type="submit">Queue "{_esc(q)}"</button></form>\n')
+        list_html = items
+
+    body = f"""
+    <a class="back" href="/">← back</a>
+    <h2 style="margin-top:14px">Trending queries — {_esc(niche or '(no niche configured)')}</h2>
+    <p class="muted">This week's rising Google Trends searches for the
+       niche. Queuing one resolves it to a real Wikipedia article through
+       the same /request-topic path as typing a topic by hand — same
+       fact-grounding, same gates, nothing skipped.</p>
+    <div class="filters">{niche_links}</div>
+    {list_html}
+    """
+    return PAGE_HEAD + body + PAGE_TAIL
 
 
 @app.route("/request-topic", methods=["POST"])
