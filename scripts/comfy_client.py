@@ -229,6 +229,9 @@ DEFAULT_DETAIL_SUFFIX = (
     "evidence of having existed and been handled. Fine natural film grain, "
     "true-to-life colour response, natural chromatic falloff toward the frame "
     "edges, no digital over-sharpening, no plastic smoothing, no HDR halos. "
+    "Caught as a decisive moment mid-action rather than posed or arranged: the "
+    "moving element shows a touch of natural motion blur while the rest of the "
+    "frame stays sharp, so the instant reads as continuing past the shutter. "
     "Documentary photojournalism captured on a real camera."
 )
 
