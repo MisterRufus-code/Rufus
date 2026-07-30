@@ -48,6 +48,7 @@ Environment:
 
 import html
 import os
+import subprocess
 import sys
 import time
 from contextlib import contextmanager
@@ -56,6 +57,8 @@ from pathlib import Path
 import paths
 from urllib.parse import quote as _urlquote
 
+import requests
+from filelock import FileLock, Timeout
 from flask import Flask, abort, redirect, request, send_from_directory
 
 sys.path.insert(0, str(Path(__file__).parent))
@@ -74,6 +77,102 @@ UPLOAD_THRESHOLD_DEFAULT = 8   # visual reference line on the score sparkline
 # Keep in sync with main.py's HARD_MIN_UPLOAD_SCORE (duplicated, not
 # imported, so this file has zero import-time dependency on main.py).
 HARD_MIN_UPLOAD_SCORE = 7
+
+
+# ── Process control (/system) — status, launch, cancel ───────────────────────
+# Loopback-only binding (see module docstring) already keeps these off the
+# network by default; _require_localhost() is defense-in-depth against
+# someone later widening RUFUS_DASHBOARD_HOST without re-reading why.
+
+def _require_localhost() -> None:
+    if request.remote_addr not in ("127.0.0.1", "::1"):
+        abort(403)
+
+
+def _comfy_host() -> str:
+    # Duplicated from comfy_client._host() rather than imported — same
+    # reasoning as HARD_MIN_UPLOAD_SCORE above: this file stays free of an
+    # import-time dependency on the ComfyUI client module.
+    return os.environ.get("COMFY_HOST", "http://localhost:8188").rstrip("/")
+
+
+def _comfyui_reachable() -> bool:
+    try:
+        r = requests.get(f"{_comfy_host()}/system_stats", timeout=3)
+        return r.status_code == 200
+    except Exception:
+        return False
+
+
+def _lock_path(channel_id: str) -> Path:
+    # Exact naming main.py's _acquire_lock() uses — same lock, checked
+    # non-blockingly instead of held.
+    return ROOT / f"rufus.{channel_id}.lock.lock"
+
+
+def _run_in_progress(channel_id: str) -> bool:
+    """True if main.py (any entry point, anywhere) currently holds this
+    channel's run lock. Works regardless of who started the run — a manual
+    run.bat, Task Scheduler, or this dashboard — because it checks the same
+    FileLock main.py itself uses, non-blockingly."""
+    lock = FileLock(str(_lock_path(channel_id)))
+    try:
+        lock.acquire(timeout=0)
+    except Timeout:
+        return True
+    except Exception:
+        return False   # fail open — never let a lock-check bug block the page
+    lock.release()
+    return False
+
+
+# Processes THIS dashboard launched, keyed by channel id — the only ones it
+# can cancel. A run started elsewhere (Task Scheduler, a manual run.bat) has
+# no Popen handle here; _run_in_progress() above still reports it as
+# running (shared lock file), but cancelling it needs the actual process
+# handle, which only exists for runs this page started.
+_LAUNCHED: dict[str, subprocess.Popen] = {}
+
+
+def _launch_run(*, niche: str | None = None, topic: str | None = None,
+                channel: str | None = None) -> tuple[subprocess.Popen, Path]:
+    """Fire-and-forget: a genuinely separate OS process, not an in-process
+    call — this Flask app runs threaded=False (see approve_video's
+    _scoped_env note), so a call that blocks for the 5-45+ minutes a video
+    can take would freeze every other request. No --skip-upload: safety
+    comes from the review-queue gate itself, same as run_scheduled.bat.
+    Output goes to a log file (not the dashboard's own stdout) so a
+    dashboard-launched run doesn't interleave console output with whatever
+    else is running; the single shared launch path behind both
+    /request-topic and /system/run."""
+    cmd = [sys.executable, str(ROOT / "scripts" / "main.py")]
+    if niche:
+        cmd += ["--niche", niche]
+    if topic:
+        cmd += ["--topic", topic]
+    if channel:
+        cmd += ["--channel", channel]
+    log_dir = ROOT / "logs"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    log_path = log_dir / f"dashboard_run_{int(time.time())}.log"
+    with open(log_path, "wb") as logf:
+        proc = subprocess.Popen(cmd, cwd=str(ROOT), stdout=logf,
+                               stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL)
+    _LAUNCHED[channel or "default"] = proc
+    return proc, log_path
+
+
+def _cancel_run(channel: str | None = None) -> bool:
+    """Terminate a run this dashboard launched. Returns False (no-op) for a
+    run it has no handle to, or one that already finished."""
+    proc = _LAUNCHED.get(channel or "default")
+    if proc is None or proc.poll() is not None:
+        return False
+    try:
+        proc.terminate()
+    except OSError:
+        return False
+    return True
 
 
 # ── Data access (read-only) ───────────────────────────────────────────────────
@@ -521,7 +620,8 @@ PAGE_HEAD = """<!doctype html><html><head><meta charset="utf-8">
 </style></head><body>
 <header><a href="/"><h1>🎬 Rufus Dashboard</h1></a>
 <a class="navlink" href="/failures">⚠ Failures &amp; rejected attempts</a>
-<a class="navlink" href="/performance">📈 Performance</a></header>
+<a class="navlink" href="/performance">📈 Performance</a>
+<a class="navlink" href="/system">🖥 System</a></header>
 <main>
 """
 PAGE_TAIL = "</main></body></html>"
@@ -779,6 +879,86 @@ def performance():
     return PAGE_HEAD + body + PAGE_TAIL
 
 
+@app.route("/system")
+def system_status():
+    """Status + process control for THIS PC's automation: is ComfyUI up, is
+    a run in progress per channel, launch a run, cancel one this dashboard
+    started. Loopback-only binding is the primary guard (see module
+    docstring); /system/run and /system/cancel additionally self-check
+    remote_addr as defense in depth."""
+    channels = _channels()
+    comfy_up = _comfyui_reachable()
+
+    rows = ""
+    for cid in channels:
+        running = _run_in_progress(cid)
+        can_cancel = running and _LAUNCHED.get(cid, _LAUNCHED.get("default"))
+        can_cancel = bool(can_cancel and can_cancel.poll() is None)
+        status_badge = ("<span class='badge pending'>running</span>" if running
+                        else "<span class='badge approved'>idle</span>")
+        cancel_btn = (f'<form method="post" action="/system/cancel" style="display:inline">'
+                     f'<input type="hidden" name="channel" value="{_esc(cid)}">'
+                     f'<button type="submit">Cancel</button></form>' if can_cancel else "")
+        rows += (f"<tr><td>{_esc(cid)}</td><td>{status_badge}</td><td>{cancel_btn}</td></tr>\n")
+    channels_html = (f"<table><tr><th>Channel</th><th>Status</th><th></th></tr>{rows}</table>"
+                     if rows else "<p class='muted'>No channels configured.</p>")
+
+    comfy_badge = ("<span class='badge approved'>reachable</span>" if comfy_up
+                  else "<span class='badge pending'>not reachable</span>")
+
+    channel_options = "".join(f'<option value="{_esc(c)}">{_esc(c)}</option>' for c in channels)
+
+    body = f"""
+    <a class="back" href="/">← back</a>
+    <h2 style="margin-top:14px">ComfyUI</h2>
+    <p>{comfy_badge} <span class="muted">({_esc(_comfy_host())})</span></p>
+    <h2>Channels</h2>
+    {channels_html}
+    <h2>Run a video now</h2>
+    <form method="post" action="/system/run" style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end">
+      {f'''<div><label for="sys-channel">Channel</label>
+        <select class="field" style="margin:6px 0 0" id="sys-channel" name="channel">
+          <option value="">(default)</option>{channel_options}
+        </select></div>''' if channels else ""}
+      <div><label for="sys-niche">Niche override</label>
+        <input class="field" style="margin:6px 0 0" type="text" id="sys-niche" name="niche"
+               placeholder="(optional)"></div>
+      <button class="btn save" type="submit" style="height:38px">Start</button>
+    </form>
+    <p class="muted">Cancelling only works for a run started from this page
+       — a Task Scheduler run or a manual run.bat run has no process handle
+       here to stop. If one of those actually crashed rather than just
+       running long, its channel still shows "running" until its .lock file
+       is removed — check /failures for a crashed/orphaned run before
+       deleting a lock file by hand.</p>
+    """
+    return PAGE_HEAD + body + PAGE_TAIL
+
+
+@app.route("/system/run", methods=["POST"])
+def system_run():
+    _require_localhost()
+    channel = request.form.get("channel", "").strip() or None
+    niche   = request.form.get("niche", "").strip() or None
+    from channel_config import load_channel
+    resolved_id = load_channel(channel).id
+    if _run_in_progress(resolved_id):
+        return redirect("/system")
+    try:
+        _launch_run(niche=niche, channel=channel)
+    except Exception:
+        pass   # /system re-renders either way; no separate error channel here
+    return redirect("/system")
+
+
+@app.route("/system/cancel", methods=["POST"])
+def system_cancel():
+    _require_localhost()
+    channel = request.form.get("channel", "").strip() or None
+    _cancel_run(channel)
+    return redirect("/system")
+
+
 @app.route("/request-topic", methods=["POST"])
 def request_topic():
     """Kick off a real Rufus run for a topic YOU chose, in the background.
@@ -792,20 +972,8 @@ def request_topic():
     channel = request.form.get("channel", "").strip() or None
     if not topic:
         return _redirect_index(error="topic is required")
-
-    import subprocess
-    main_py = str(ROOT / "scripts" / "main.py")
-    cmd = [sys.executable, main_py, "--topic", topic]
-    if channel:
-        cmd += ["--channel", channel]
-
-    log_dir = ROOT / "logs"
-    log_dir.mkdir(parents=True, exist_ok=True)
-    log_path = log_dir / f"topic_request_{int(time.time())}.log"
     try:
-        with open(log_path, "wb") as logf:
-            subprocess.Popen(cmd, cwd=str(ROOT), stdout=logf,
-                             stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL)
+        _, log_path = _launch_run(topic=topic, channel=channel)
         return _redirect_index(
             ok=f'Queued "{topic}" — this can take a while. It will appear in '
                f'the pending list below when done. Log: logs/{log_path.name}')

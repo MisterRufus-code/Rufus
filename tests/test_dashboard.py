@@ -10,6 +10,7 @@ import sys
 from pathlib import Path
 
 import pytest
+from filelock import FileLock
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
 
@@ -908,3 +909,135 @@ def test_score_vs_views_buckets_by_score():
     assert by_score[9]["avg_views"] == 200
     assert by_score[9]["n"] == 2
     assert by_score[5]["avg_views"] == 10
+
+
+# ── /system — process status + control ──────────────────────────────────────
+
+def test_comfyui_reachable_true_on_200(monkeypatch):
+    class R:
+        status_code = 200
+    monkeypatch.setattr(dashboard.requests, "get", lambda *a, **k: R())
+    assert dashboard._comfyui_reachable() is True
+
+
+def test_comfyui_reachable_false_on_error(monkeypatch):
+    def boom(*a, **k):
+        raise OSError("down")
+    monkeypatch.setattr(dashboard.requests, "get", boom)
+    assert dashboard._comfyui_reachable() is False
+
+
+def test_run_in_progress_false_when_no_lock_held(tmp_path, monkeypatch):
+    monkeypatch.setattr(dashboard, "ROOT", tmp_path)
+    assert dashboard._run_in_progress("main_en") is False
+
+
+def test_run_in_progress_true_when_lock_held(tmp_path, monkeypatch):
+    monkeypatch.setattr(dashboard, "ROOT", tmp_path)
+    lock_path = dashboard._lock_path("main_en")
+    holder = FileLock(str(lock_path))
+    holder.acquire(timeout=0)
+    try:
+        assert dashboard._run_in_progress("main_en") is True
+    finally:
+        holder.release()
+
+
+def test_launch_run_builds_expected_command(tmp_path, monkeypatch):
+    import subprocess
+    monkeypatch.setattr(dashboard, "ROOT", tmp_path)
+    dashboard._LAUNCHED.clear()
+    captured = {}
+    class FakeProc:
+        def poll(self): return None
+    def fake_popen(cmd, **kwargs):
+        captured["cmd"] = cmd
+        return FakeProc()
+    monkeypatch.setattr(subprocess, "Popen", fake_popen)
+
+    proc, log_path = dashboard._launch_run(niche="finance", channel="main_en")
+    assert captured["cmd"][0] == sys.executable
+    assert str(tmp_path / "scripts" / "main.py") in captured["cmd"]
+    assert "--niche" in captured["cmd"] and "finance" in captured["cmd"]
+    assert "--channel" in captured["cmd"] and "main_en" in captured["cmd"]
+    assert log_path.parent == tmp_path / "logs"
+    assert dashboard._LAUNCHED["main_en"] is proc
+
+
+def test_cancel_run_terminates_a_tracked_process():
+    dashboard._LAUNCHED.clear()
+    terminated = []
+    class FakeProc:
+        def poll(self): return None
+        def terminate(self): terminated.append(True)
+    dashboard._LAUNCHED["main_en"] = FakeProc()
+    assert dashboard._cancel_run("main_en") is True
+    assert terminated == [True]
+
+
+def test_cancel_run_false_when_nothing_tracked():
+    dashboard._LAUNCHED.clear()
+    assert dashboard._cancel_run("nope") is False
+
+
+def test_cancel_run_false_when_process_already_finished():
+    dashboard._LAUNCHED.clear()
+    class FakeProc:
+        def poll(self): return 0   # already exited
+    dashboard._LAUNCHED["main_en"] = FakeProc()
+    assert dashboard._cancel_run("main_en") is False
+
+
+def test_system_page_shows_comfy_and_channel_status(client, monkeypatch):
+    monkeypatch.setattr(dashboard, "_comfyui_reachable", lambda: True)
+    monkeypatch.setattr(dashboard, "_channels", lambda: ["main_en"])
+    monkeypatch.setattr(dashboard, "_run_in_progress", lambda cid: False)
+    r = client.get("/system")
+    body = r.data.decode()
+    assert "reachable" in body
+    assert "main_en" in body
+    assert "idle" in body
+
+
+def test_system_run_route_launches_and_redirects(client, monkeypatch, tmp_path):
+    monkeypatch.setattr(dashboard, "ROOT", tmp_path)
+    dashboard._LAUNCHED.clear()
+    calls = []
+    def fake_launch(**kw):
+        calls.append(kw)
+        return None, tmp_path / "x.log"
+    monkeypatch.setattr(dashboard, "_launch_run", fake_launch)
+    monkeypatch.setattr(dashboard, "_run_in_progress", lambda cid: False)
+    r = client.post("/system/run", data={"niche": "finance"}, follow_redirects=False)
+    assert r.status_code in (301, 302)
+    assert calls and calls[0]["niche"] == "finance"
+
+
+def test_system_run_route_skips_when_already_running(client, monkeypatch):
+    monkeypatch.setattr(dashboard, "_run_in_progress", lambda cid: True)
+    calls = []
+    monkeypatch.setattr(dashboard, "_launch_run", lambda **kw: calls.append(kw))
+    r = client.post("/system/run", data={"niche": "finance"}, follow_redirects=False)
+    assert r.status_code in (301, 302)
+    assert calls == []
+
+
+def test_system_cancel_route_calls_cancel_run(client, monkeypatch):
+    calls = []
+    monkeypatch.setattr(dashboard, "_cancel_run", lambda channel: calls.append(channel))
+    r = client.post("/system/cancel", data={"channel": "main_en"}, follow_redirects=False)
+    assert r.status_code in (301, 302)
+    assert calls == ["main_en"]
+
+
+def test_system_routes_block_non_localhost(client, monkeypatch):
+    """Defense-in-depth: even if loopback binding is somehow bypassed, these
+    routes must refuse a request that isn't from 127.0.0.1/::1. Flask's test
+    client reports remote_addr as 127.0.0.1 by default, so force a non-local
+    address via the environ override it supports."""
+    r = client.post("/system/run", data={"niche": "finance"},
+                    environ_overrides={"REMOTE_ADDR": "10.0.0.5"})
+    assert r.status_code == 403
+    r = client.post("/system/cancel", data={"channel": "main_en"},
+                    environ_overrides={"REMOTE_ADDR": "10.0.0.5"})
+    assert r.status_code == 403
