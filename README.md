@@ -36,7 +36,7 @@ python scripts/health_check.py        # verify everything is ready
 
 **Windows 11 (+ RTX 3090):**
 ```powershell
-.\setup_windows.ps1                   # venv, deps, ffmpeg check, prints GPU-stack cmds, health check
+.\setup_windows.ps1                   # venv, deps, ffmpeg check, optional Remotion install, GPU-stack cmds, health check
 # then edit config\keys.json with your real keys
 .\run.bat --skip-upload               # daily run (ComfyUI + GPU by default)
 ```
@@ -72,7 +72,7 @@ Everything is free except OpenAI credits. Mix and match:
 | `RUFUS_VIDEO_SOURCE` | `comfy` / `sd` / `diffusers` / `pexels` | per-niche (`niches.json`) | Footage source — overrides the niche's `video_source`; falls back down the chain |
 | `COMFY_HOST` | URL | `http://localhost:8188` | ComfyUI server address |
 | `RUFUS_STILLS_ONLY` | `0`/`1` | `0` | One switch for images-only mode: overrides Wan, HunyuanVideo, AND SVD at once — every beat is just its stills-model image with a Ken Burns zoom. No motion-model GPU time at all. |
-| `RUFUS_RENDERER` | `ffmpeg` / `remotion` | `ffmpeg` | Render engine (see below) |
+| `RUFUS_RENDERER` | `ffmpeg` / `remotion` | `ffmpeg` | Render engine — `remotion` uses the React/Node engine (`remotion/`) for spring-physics captions, crossfades, and a retention progress bar; falls back to `ffmpeg` on any failure. Needs `cd remotion && npm install` once (both setup scripts do this automatically if Node.js is present). |
 | `RUFUS_TTS` | `edge` / `kokoro` / `kokoro_api` / `xtts` / `elevenlabs` | auto (`kokoro` if installed, else `edge`) | Voice engine (see below) |
 | `KOKORO_API_URL` | URL | `http://localhost:8880` | Kokoro-FastAPI service (for `kokoro_api`) |
 | `RUFUS_GPU` | `1` / unset | unset | Whisper CUDA + FFmpeg NVENC |
