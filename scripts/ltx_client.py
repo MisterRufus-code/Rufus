@@ -2,10 +2,17 @@
 """
 ltx_client.py — LTX-2.3 image-to-video for Rufus (via ComfyUI).
 
-THE FAST ENGINE. Hunyuan produces good motion but costs ~9-22 min/clip on a
-16GB-RAM box, which is the pipeline's throughput ceiling. LTX-2.3 (Lightricks)
-is built for speed and slots into the same chain, so a run can trade some
-motion fidelity for finishing in a fraction of the time.
+NOT CONFIRMED FAST ON THIS HARDWARE. LTX-2.3 is built for speed in general,
+but the checkpoint actually installed here is LTXAV (audio+video: node names
+LTXAVTEModel_ / LTXAV, ~23.8GB staged — right at the 24GB VRAM ceiling). A
+live test clip took 928s (00:15:28), i.e. in the same range as Hunyuan, not
+faster. Two live suspects, unconfirmed: (1) audio generation is pure
+overhead Rufus never uses (it has its own TTS/music/SFX) — a pure-video LTX
+checkpoint, if one exists, would drop that whole branch; (2) at ~23.8GB the
+model is close enough to the 24GB card that the same RAM-streaming slowdown
+documented for Hunyuan on this 16GB-RAM box may apply here too. Until one of
+those is ruled out, treat this as an alternative engine to compare, not a
+speed win.
 
 TEMPLATE-DRIVEN, like every other engine here: export your own verified
 ComfyUI workflow rather than letting this file guess a node graph. Setup:
@@ -33,7 +40,9 @@ Environment:
   RUFUS_LTX_W         832   (portrait width)
   RUFUS_LTX_H         1472  (portrait height)
   RUFUS_LTX_FRAMES    121   (converted to seconds using the template's fps)
-  RUFUS_LTX_TIMEOUT   900   (seconds to wait for one clip)
+  RUFUS_LTX_TIMEOUT   1800  (seconds to wait for one clip — a live LTXAV run
+                            on a 16GB-RAM box took 928s; 900s cut it off
+                            client-side 28s before ComfyUI actually finished)
   RUFUS_LTX_TEMPLATE  path override for the API-export JSON
 """
 
@@ -79,7 +88,7 @@ def settings() -> dict:
         "width":   int(os.environ.get("RUFUS_LTX_W", str(OUT_W_DEFAULT))),
         "height":  int(os.environ.get("RUFUS_LTX_H", str(OUT_H_DEFAULT))),
         "frames":  int(os.environ.get("RUFUS_LTX_FRAMES", "121")),
-        "timeout": float(os.environ.get("RUFUS_LTX_TIMEOUT", "900")),
+        "timeout": float(os.environ.get("RUFUS_LTX_TIMEOUT", "1800")),
         "template": str(_template_path()),
     }
     tpl = comfy_template.load_template(_template_path()) or {}
@@ -209,7 +218,7 @@ def animate_image(png_path: Path, out_path: Path, duration: float = 8.0,
         w = int(os.environ.get("RUFUS_LTX_W", str(OUT_W_DEFAULT)))
         h = int(os.environ.get("RUFUS_LTX_H", str(OUT_H_DEFAULT)))
         frames = int(os.environ.get("RUFUS_LTX_FRAMES", "121"))
-        timeout = float(os.environ.get("RUFUS_LTX_TIMEOUT", "900"))
+        timeout = float(os.environ.get("RUFUS_LTX_TIMEOUT", "1800"))
 
         with tempfile.TemporaryDirectory(prefix="rufus_ltx_") as td:
             tmp = Path(td)
