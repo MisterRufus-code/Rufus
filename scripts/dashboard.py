@@ -13,23 +13,36 @@ description are editable before that click.
 Reads/writes rufus.db (WAL mode — safe alongside a live main.py run) and
 reads media_library/debug/<run_id>/ for the per-run script/voiceover/
 keyframes. No external assets (self-contained HTML/CSS/inline SVG — nothing
-to break when you're not on the local network). No login of its own — see
-the module-level access note below before exposing this beyond your LAN.
+to break when you're not on the local network). No login of its own.
+
+DEFAULT IS LOOPBACK-ONLY (127.0.0.1) — not reachable from your home WiFi at
+all, only from this PC. This page also has "/system" routes that can START
+AND KILL PROCESSES on this machine (launch a run, stop ComfyUI), so it needs
+more than "no login" once those exist — loopback-only means literally
+nothing on the network can reach ANY route here, including those.
 
 Run:
     python scripts\\dashboard.py
-    → http://localhost:8765            (this machine)
-    → http://<PC's LAN IP>:8765        (phone/other device on the same wifi)
+    → http://localhost:8765            (this machine only, by default)
 
-For access away from home (e.g. a friend reviewing/uploading remotely), do
-NOT port-forward this — it has no login, so that exposes it AND your PC's
-YouTube upload capability to the open internet. Use Tailscale (share this
-one machine with their account, private, free, ~2 min) or a Cloudflare
-Tunnel + Cloudflare Access (real https:// link, email login, no VPN app
-needed on their end) — never a raw port-forward.
+For access from your phone or another device, do NOT change
+RUFUS_DASHBOARD_HOST to 0.0.0.0 and do NOT port-forward — either one puts
+the process-control routes on your open WiFi/the internet with no login.
+Use Tailscale instead (free, ~2 min):
+    1. Install Tailscale on this PC and on your phone, sign into the same account.
+    2. On this PC:  tailscale serve --bg 8765
+       (proxies http://127.0.0.1:8765 onto your private tailnet over https,
+       auto-renewed cert, only devices signed into YOUR tailnet can reach it —
+       the dashboard itself never has to leave loopback.)
+    3. On your phone (with Tailscale connected): open the https URL
+       `tailscale serve status` prints.
+    `tailscale serve --bg off` to stop sharing it again.
 
 Environment:
-  RUFUS_DASHBOARD_HOST   0.0.0.0 (default — LAN-visible; 127.0.0.1 for local-only)
+  RUFUS_DASHBOARD_HOST   127.0.0.1 (default — loopback-only; 0.0.0.0 opens
+                         it to your whole LAN, not recommended once
+                         process-control routes exist — use tailscale serve
+                         instead)
   RUFUS_DASHBOARD_PORT   8765
 """
 
@@ -1113,7 +1126,7 @@ def not_found(e):
 
 
 if __name__ == "__main__":
-    host = os.environ.get("RUFUS_DASHBOARD_HOST", "0.0.0.0")
+    host = os.environ.get("RUFUS_DASHBOARD_HOST", "127.0.0.1")
     port = int(os.environ.get("RUFUS_DASHBOARD_PORT", "8765"))
     db_manager.init_db()
     print(f"[dashboard] http://localhost:{port}  (LAN: http://<this PC's IP>:{port})")

@@ -337,20 +337,29 @@ attempts** — the full, filterable (by niche/phase) list of every hook/body
 (already logged to `script_attempts` for every run; the homepage only ever
 showed the top-8 aggregate, this is the full browser).
 
-**Access from your phone at home**: it already binds to `0.0.0.0`, so
-`http://<this PC's LAN IP>:8765` works from any device on the same wifi —
-find the IP with `ipconfig` (look for "IPv4 Address").
+**Loopback-only by default**: it binds to `127.0.0.1`, so it's reachable
+*only from this PC* — not your home WiFi, not any other device. This is
+deliberate: `/system` has routes that can start and kill processes on this
+machine, so "no login" alone isn't enough once those exist.
 
-**Access from away from home (e.g. a reviewer who isn't you)**: do **not**
-port-forward this — it has no login, so that exposes both the dashboard
-and its real upload capability to the open internet. Install
-[Tailscale](https://tailscale.com) on this PC and share just this one
-machine with the reviewer's own Tailscale account (Machines → your PC →
-Share) — free, ~2 minutes, no router changes, no public exposure, and no
-need for them to see your whole network.
+**Access from your phone (or a reviewer who isn't you)**: use
+[Tailscale](https://tailscale.com), free, ~2 minutes, no router changes:
+1. Install Tailscale on this PC and on your phone, same account (or share
+   just this one machine with a reviewer's own account: Machines → your PC
+   → Share).
+2. On this PC: `tailscale serve --bg 8765` — proxies the dashboard onto
+   your private tailnet over https with an auto-renewed cert. The
+   dashboard itself never has to leave loopback; only devices already
+   signed into your tailnet can reach it.
+3. Open the `https://...` URL `tailscale serve status` prints, from your
+   phone (Tailscale connected).
+4. `tailscale serve --bg off` to stop sharing it.
 
-Knobs: `RUFUS_DASHBOARD_PORT` (8765), `RUFUS_DASHBOARD_HOST` (`0.0.0.0`;
-set to `127.0.0.1` to force local-only even on the LAN).
+Never set `RUFUS_DASHBOARD_HOST=0.0.0.0` and never port-forward this —
+either one puts the process-control routes on your open WiFi or the
+internet with no login.
+
+Knobs: `RUFUS_DASHBOARD_PORT` (8765), `RUFUS_DASHBOARD_HOST` (`127.0.0.1`).
 
 ---
 
