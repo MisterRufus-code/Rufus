@@ -34,7 +34,7 @@ XTTS voice cloning (optional):
   RUFUS_TTS_VOICE=/path/to/reference.wav   # 6-30s clean speech sample to clone
 
 ElevenLabs tuning (optional):
-  RUFUS_ELEVEN_VOICE=<voice_id>   # default: Adam (pNInz6obpgDQGcFmaJgB)
+  RUFUS_ELEVEN_VOICE=<voice_id>   # default: James (lUTamkMw7gOzZbFIwmq4)
   RUFUS_ELEVEN_MODEL=<model_id>   # default: eleven_turbo_v2_5
 
 All backends write to the exact output path requested (mp3).
@@ -68,7 +68,7 @@ XTTS_LANGUAGE        = os.environ.get("RUFUS_TTS_LANG", "en")
 XTTS_DEFAULT_SPEAKER = os.environ.get("RUFUS_XTTS_SPEAKER", "Damien Black")
 
 # ElevenLabs defaults
-ELEVEN_VOICE = os.environ.get("RUFUS_ELEVEN_VOICE", "pNInz6obpgDQGcFmaJgB")  # Adam
+ELEVEN_VOICE = os.environ.get("RUFUS_ELEVEN_VOICE", "lUTamkMw7gOzZbFIwmq4")  # James
 ELEVEN_MODEL = os.environ.get("RUFUS_ELEVEN_MODEL", "eleven_turbo_v2_5")
 
 _xtts_model   = None   # lazy singleton
