@@ -1283,11 +1283,22 @@ def thumbnails_generate():
     prompt = request.form.get("prompt", "").strip()
     if not prompt:
         return redirect("/thumbnails?error=Describe+the+image+first")
+    # A video run owns the GPU for its whole duration, so a thumbnail asked
+    # for now would sit in ComfyUI's queue behind it — and because this render
+    # is inline on a threaded=False server, that wait freezes the dashboard for
+    # everyone. Refuse immediately instead, with the reason.
+    busy = [c for c in _channels() if _run_in_progress(c)]
+    if busy:
+        return redirect("/thumbnails?error=" + _urlquote(
+            f"A video run is using the GPU ({', '.join(busy)}). "
+            f"Thumbnails have to wait for it to finish — try again shortly."))
+
     portrait = request.form.get("shape") == "portrait"
     w, h = ((image_gen.PORTRAIT_W, image_gen.PORTRAIT_H) if portrait
             else (image_gen.THUMB_W, image_gen.THUMB_H))
     try:
-        path = image_gen.generate_image(prompt, width=w, height=h)
+        path = image_gen.generate_image(prompt, width=w, height=h,
+                                        timeout=image_gen.WEB_TIMEOUT)
     except Exception as e:
         return redirect(f"/thumbnails?error={_urlquote(f'Generation failed: {e}')}")
     if path is None:

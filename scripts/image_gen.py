@@ -46,6 +46,13 @@ import paths
 THUMB_W, THUMB_H = 1280, 720
 PORTRAIT_W, PORTRAIT_H = 1080, 1920
 
+# Cap for a browser-initiated render. The dashboard runs threaded=False, so a
+# request that blocks holds up EVERY other user — including the owner trying
+# to approve a video. A still is ~20-30s on a 3090 when the GPU is free; past
+# this something else is occupying it, and failing fast with "try again" beats
+# freezing the page for five minutes.
+WEB_TIMEOUT = 90
+
 
 def _slugify(text: str, limit: int = 40) -> str:
     """A filename that says what the image IS — a folder of image_1.png tells
@@ -77,11 +84,15 @@ def _apply_image_dims(graph: dict, width: int, height: int) -> None:
 def generate_image(prompt: str, out_path: Path | None = None, *,
                    width: int = THUMB_W, height: int = THUMB_H,
                    seed: int | None = None,
-                   add_detail: bool = True) -> Path | None:
+                   add_detail: bool = True,
+                   timeout: float | None = None) -> Path | None:
     """Render one image → the saved PNG path, or None on any failure.
 
     Never raises: callers include a Flask route, where an exception is a 500
     page on someone's phone. Failure is None plus a printed reason.
+
+    `timeout` caps the wait for ComfyUI. The dashboard passes a short one
+    because it renders inline on a single-threaded server — see WEB_TIMEOUT.
     """
     import comfy_client
     import comfy_template
@@ -112,7 +123,7 @@ def generate_image(prompt: str, out_path: Path | None = None, *,
         print("[image] ComfyUI rejected the workflow")
         return None
 
-    png_bytes = comfy_client._await_image(pid)
+    png_bytes = comfy_client._await_image(pid, timeout=timeout)
     if not png_bytes:
         print("[image] render produced no image")
         return None

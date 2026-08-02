@@ -303,10 +303,16 @@ def _submit(graph: dict, client_id: str) -> str | None:
         return None
 
 
-def _await_image(prompt_id: str) -> bytes | None:
+def _await_image(prompt_id: str, timeout: float | None = None) -> bytes | None:
     """Poll /history/<id> until the SaveImage node reports an output, then fetch
-    the PNG via /view. Returns raw bytes or None on timeout/failure."""
-    deadline = time.time() + GEN_TIMEOUT
+    the PNG via /view. Returns raw bytes or None on timeout/failure.
+
+    `timeout` overrides GEN_TIMEOUT for callers that cannot afford the full
+    wait — the dashboard renders a thumbnail inline on a threaded=False Flask
+    app, so a request that blocks for the default 300s freezes the page for
+    every other user. A pipeline run has nobody waiting on it and keeps the
+    generous default."""
+    deadline = time.time() + (GEN_TIMEOUT if timeout is None else timeout)
     while time.time() < deadline:
         try:
             r = requests.get(f"{_host()}/history/{prompt_id}", timeout=15)
@@ -342,7 +348,8 @@ def _await_image(prompt_id: str) -> bytes | None:
                 return None
         time.sleep(POLL_INTERVAL)
 
-    print(f"[comfy] timed out after {GEN_TIMEOUT}s waiting for image")
+    waited = GEN_TIMEOUT if timeout is None else timeout
+    print(f"[comfy] timed out after {waited}s waiting for image")
     return None
 
 

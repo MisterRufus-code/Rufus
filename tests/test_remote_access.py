@@ -82,7 +82,7 @@ def test_generate_image_writes_png_and_prompt_sidecar(tmp_path, monkeypatch):
                                        "inputs": {"width": 1, "height": 1,
                                                   "text": "RUFUS_PROMPT"}}})
     monkeypatch.setattr(comfy_client, "_submit", lambda g, c: "pid-1")
-    monkeypatch.setattr(comfy_client, "_await_image", lambda pid: b"\x89PNG-bytes")
+    monkeypatch.setattr(comfy_client, "_await_image", lambda pid, timeout=None: b"\x89PNG-bytes")
 
     out = tmp_path / "thumb.png"
     result = image_gen.generate_image("gold coins", out, seed=7)
@@ -98,7 +98,7 @@ def test_generate_image_returns_none_when_render_produces_nothing(tmp_path, monk
     monkeypatch.setattr(comfy_client, "_stills_template",
                         lambda: {"1": {"class_type": "X", "inputs": {"t": "RUFUS_PROMPT"}}})
     monkeypatch.setattr(comfy_client, "_submit", lambda g, c: "pid-1")
-    monkeypatch.setattr(comfy_client, "_await_image", lambda pid: None)
+    monkeypatch.setattr(comfy_client, "_await_image", lambda pid, timeout=None: None)
     assert image_gen.generate_image("x", tmp_path / "a.png") is None
 
 
@@ -252,3 +252,36 @@ def test_digest_is_skipped_when_nothing_was_fetched(monkeypatch):
     monkeypatch.setattr(analytics_fetcher, "list_channels", lambda: [])
     analytics_fetcher.fetch_analytics()
     assert called == []
+
+
+# ── Inline-render protection ─────────────────────────────────────────────────
+# The dashboard renders a thumbnail inline on a threaded=False server, so any
+# unbounded wait here freezes the page for every other user.
+
+def test_web_timeout_is_far_below_the_pipeline_default():
+    import comfy_client
+    assert image_gen.WEB_TIMEOUT < comfy_client.GEN_TIMEOUT
+
+
+def test_await_image_honors_an_explicit_timeout(monkeypatch):
+    """Without the override a browser request could block for GEN_TIMEOUT."""
+    import comfy_client
+    monkeypatch.setattr(comfy_client, "POLL_INTERVAL", 0.01)
+    monkeypatch.setattr(comfy_client.requests, "get",
+                        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("down")))
+    import time as _t
+    started = _t.time()
+    assert comfy_client._await_image("pid", timeout=0.05) is None
+    assert _t.time() - started < 5, "explicit timeout was ignored"
+
+
+def test_await_image_still_defaults_to_gen_timeout(monkeypatch):
+    """A pipeline run has nobody waiting and must keep the generous default."""
+    import comfy_client
+    seen = {}
+    monkeypatch.setattr(comfy_client, "GEN_TIMEOUT", 0.05)
+    monkeypatch.setattr(comfy_client, "POLL_INTERVAL", 0.01)
+    monkeypatch.setattr(comfy_client.requests, "get",
+                        lambda *a, **k: seen.setdefault("hit", True) or
+                        (_ for _ in ()).throw(RuntimeError("down")))
+    assert comfy_client._await_image("pid") is None
