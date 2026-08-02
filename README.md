@@ -400,6 +400,52 @@ added someone before running `-Tailscale`, don't `revoke` — their token is
 still valid, just re-print it with the right domain:
 `python scripts\auth.py link james`.
 
+### Managing users from the dashboard itself
+
+Everything above is also a page, at **Settings → Manage users** (owner-only,
+`/settings/users`) — add or revoke a partner/viewer without a terminal. It
+calls the exact same `add_user()`/`revoke_user()` functions the CLI does, so
+the two can't drift into enforcing different rules. Adding someone there
+shows their sign-in link right on the page; revoking takes effect on their
+very next request.
+
+### Google Sign-In (optional, instead of a token link)
+
+A token link works everywhere with zero setup, and stays the default. Google
+Sign-In is for when you'd rather your partner log in with their own Google
+account than hold onto a link — nothing to lose in a screenshot, nothing to
+forward by mistake.
+
+**How it decides who gets in**: Google only vouches for *identity* (which
+verified email just signed in) — it grants nothing by itself. Access is still
+whatever's in `config/users.json`: an email with no matching `google_email`
+entry is refused exactly like a wrong token, no account is silently created.
+
+**One-time setup**, in the **same** Google Cloud project you may already have
+for YouTube (see below) — this is a *second*, differently-typed OAuth client;
+Google doesn't let a Desktop-app client (YouTube's) and a Web-app client
+(this) share one registration:
+
+1. Run `serve.ps1 -Tailscale` first — you need the real tailnet URL for step 3.
+2. [Google Cloud Console](https://console.cloud.google.com) → your project
+   → **Credentials → Create credentials → OAuth client ID → Web application**.
+3. **Authorized redirect URIs** → add exactly:
+   `https://<your-machine>.<your-tailnet>.ts.net/auth/google/callback`
+   (the domain `tailscale serve status` printed, from `config/dashboard_url.txt`).
+   Must match byte-for-byte or Google refuses with `redirect_uri_mismatch`.
+4. Download the client ID + secret, save as `config/google_oauth.json`
+   (gitignored — see `config/google_oauth.json.template` for the shape).
+5. Add a user with their Google email attached:
+   ```powershell
+   python scripts\auth.py add james --role partner --google james@gmail.com
+   ```
+   (or the same thing from **Settings → Manage users** in the dashboard —
+   the "Google email" field is optional on that form).
+
+`/login` now shows a **Sign in with Google** button automatically once
+`config/google_oauth.json` exists. James signs in with his own account —
+no link to send at all.
+
 ### Always-on server (Windows)
 
 ```powershell

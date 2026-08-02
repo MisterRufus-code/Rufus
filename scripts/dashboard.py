@@ -102,7 +102,10 @@ def _require_localhost() -> None:
 
 # Routes reachable without being signed in: the login page itself, and a
 # liveness probe the watchdog hits (it has no token and must not be a 401).
-PUBLIC_ENDPOINTS = {"login", "healthz", "static"}
+# google_login_start/callback must be reachable before anyone is signed in —
+# that's the entire point of a login route.
+PUBLIC_ENDPOINTS = {"login", "healthz", "static",
+                   "google_login_start", "google_login_callback"}
 
 
 @app.before_request
@@ -152,8 +155,23 @@ def login():
         return redirect("/")
     if getattr(g, "rufus_user", None):
         return redirect("/")
-    body = """
+
+    error = request.args.get("error", "")
+    error_html = f'<div class="msg error">{_esc(error)}</div>' if error else ""
+
+    google_html = ""
+    if auth.google_oauth_enabled():
+        google_html = """
+        <a class="btn save" style="text-decoration:none;display:inline-block;margin-bottom:6px"
+           href="/auth/google/start">Sign in with Google</a>
+        <p class="muted" style="margin:4px 0 18px">Only works if the owner already
+           added your Google account. — or use a token link instead —</p>
+        """
+
+    body = f"""
     <h2 style="margin-top:14px">Sign in</h2>
+    {error_html}
+    {google_html}
     <p class="muted">This dashboard needs a personal sign-in link. Ask the
        channel owner for yours — it looks like
        <code>https://…/?token=…</code> and only has to be opened once per
@@ -167,6 +185,73 @@ def login():
     """
     return PAGE_STYLE + '<header><h1>🎬 Rufus Dashboard</h1></header>\n<main>\n' \
         + body + PAGE_TAIL, 401
+
+
+@app.route("/auth/google/start")
+def google_login_start():
+    """Kick off the redirect-to-Google leg. 404s (not a plain error page)
+    when Google sign-in isn't configured — the route simply doesn't exist in
+    that setup, same as any other feature-flagged path."""
+    if not auth.google_oauth_enabled():
+        abort(404)
+    try:
+        flow = auth.build_google_flow()
+    except auth.AuthError as e:
+        return redirect(f"/login?error={_urlquote(str(e))}")
+    state = auth.new_oauth_state()
+    auth_url, _ = flow.authorization_url(
+        access_type="online", include_granted_scopes="true",
+        state=state, prompt="select_account")
+    return redirect(auth_url)
+
+
+@app.route("/auth/google/callback")
+def google_login_callback():
+    """Where Google sends the browser back. Every failure path redirects to
+    /login with a reason rather than raising — a stack trace here would be
+    shown to someone mid sign-in attempt, not a developer."""
+    if not auth.google_oauth_enabled():
+        abort(404)
+
+    if request.args.get("error"):
+        return redirect("/login?error=" + _urlquote(
+            "Google sign-in was cancelled or denied."))
+
+    if not auth.consume_oauth_state(request.args.get("state", "")):
+        return redirect("/login?error=" + _urlquote(
+            "That sign-in attempt expired or was already used — try again."))
+
+    code = request.args.get("code", "")
+    if not code:
+        return redirect("/login?error=" + _urlquote(
+            "Google did not return an authorization code."))
+
+    try:
+        flow = auth.build_google_flow()
+        flow.fetch_token(code=code)
+        claims = auth.verify_google_id_token(flow.credentials.id_token)
+    except Exception as e:
+        return redirect("/login?error=" + _urlquote(f"Google sign-in failed: {e}"))
+
+    if not claims.get("email_verified", False):
+        return redirect("/login?error=" + _urlquote(
+            "That Google account has no verified email."))
+
+    email = claims.get("email", "")
+    user = auth.find_user_by_email(email)
+    if user is None:
+        # Deliberately does NOT create an account — an unrecognized Google
+        # identity gets refused exactly like a wrong token. Google vouches for
+        # WHO they are; it never decides WHETHER they're allowed in.
+        return redirect("/login?error=" + _urlquote(
+            f"{email} is not on the access list — ask the owner to add it "
+            f"in Settings → Users."))
+
+    resp = make_response(redirect("/"))
+    resp.set_cookie(auth.COOKIE_NAME, user["token"], max_age=auth.COOKIE_MAX_AGE,
+                    httponly=True, samesite="Strict",
+                    secure=request.headers.get("X-Forwarded-Proto") == "https")
+    return resp
 
 
 @app.route("/logout")
@@ -1363,8 +1448,123 @@ def settings():
       <table>{rows}</table>
       <button class="btn save" type="submit" style="margin-top:12px">Save</button>
     </form>
+    <h2>Dashboard users</h2>
+    <p class="muted">Add or remove who can reach this dashboard — a partner,
+       a viewer, or another owner — without a terminal.</p>
+    <a class="btn save" style="text-decoration:none;display:inline-block" href="/settings/users">Manage users →</a>
     """
     return _head() + body + PAGE_TAIL
+
+
+def _users_table_rows(users: list[dict]) -> str:
+    rows = ""
+    for u in users:
+        via = (f'Google: {_esc(u["google_email"])}' if u.get("google_email")
+               else "token link")
+        name = _esc(u.get("name", ""))
+        rows += (
+            f'<tr><td>{name}</td><td>{_esc(u.get("role",""))}</td><td>{via}</td>'
+            f'<td style="white-space:nowrap">'
+            f'<form method="post" action="/settings/users/link" style="display:inline">'
+            f'<input type="hidden" name="name" value="{name}">'
+            f'<button type="submit">Reprint link</button></form> '
+            f'<form method="post" action="/settings/users/revoke" style="display:inline" '
+            f'onsubmit="return confirm(\'Revoke {name}? This takes effect immediately.\');">'
+            f'<input type="hidden" name="name" value="{name}">'
+            f'<button class="btn reject" type="submit" style="padding:4px 10px">Revoke</button>'
+            f'</form></td></tr>')
+    return rows
+
+
+@app.route("/settings/users")
+def settings_users():
+    """Owner-only user management, backed by the exact same add_user() /
+    revoke_user() the CLI uses (scripts/auth.py) — this is a form in front of
+    those, not a second implementation of the rules."""
+    auth.require("manage_users")
+    users = auth._load_users()
+    rows = _users_table_rows(users)
+    table = (f'<table><tr><th>Name</th><th>Role</th><th>Signs in via</th><th></th></tr>{rows}</table>'
+             if rows else "<p class='muted'>No users yet — auth is off "
+             "(legacy loopback-owner mode). Adding one here turns it on for everyone.</p>")
+
+    link_val = request.args.get("link", "")
+    link_name = request.args.get("name", "")
+    link_html = ""
+    if link_val:
+        link_html = (f'<div class="msg ok">Sign-in link for {_esc(link_name)}: '
+                    f'<code style="user-select:all">{_esc(link_val)}</code><br>'
+                    f'<span class="muted">Send this privately — it IS the password.</span></div>')
+
+    google_note = ("" if auth.google_oauth_enabled() else
+                  "<p class='muted'>Google sign-in isn't set up — leave the "
+                  "email field blank and share the printed link instead, or "
+                  "see the README's \"Google Sign-In\" section to enable it.</p>")
+
+    body = f"""
+    <a class="back" href="/settings">← back to settings</a>
+    <h2 style="margin-top:14px">Dashboard users</h2>
+    {_msg_banner()}
+    {link_html}
+    {table}
+    <h2>Add a user</h2>
+    {google_note}
+    <form method="post" action="/settings/users/add">
+      <label for="uname">Name</label>
+      <input class="field" type="text" id="uname" name="name" required placeholder="james">
+      <label for="urole">Role</label>
+      <select class="field" id="urole" name="role">
+        <option value="partner">partner — generate videos/thumbnails, cannot publish</option>
+        <option value="viewer">viewer — read-only, cannot generate</option>
+        <option value="owner">owner — full control, including adding/revoking users</option>
+      </select>
+      <label for="uemail">Google email (optional)</label>
+      <input class="field" type="email" id="uemail" name="google_email"
+             placeholder="lets them sign in with Google instead of a link — optional">
+      <button class="btn save" type="submit">Add</button>
+    </form>
+    """
+    return _head() + body + PAGE_TAIL
+
+
+@app.route("/settings/users/add", methods=["POST"])
+def settings_users_add():
+    auth.require("manage_users")
+    name = request.form.get("name", "").strip()
+    role_name = request.form.get("role", "partner").strip()
+    google_email = request.form.get("google_email", "").strip() or None
+    try:
+        user = auth.add_user(name, role_name, google_email=google_email)
+    except auth.AuthError as e:
+        return redirect("/settings/users?error=" + _urlquote(str(e)))
+    link = f"{auth._base_url()}/?token={user['token']}"
+    return redirect(
+        f"/settings/users?ok={_urlquote(f'Added {name} as {role_name}.')}"
+        f"&link={_urlquote(link)}&name={_urlquote(name)}")
+
+
+@app.route("/settings/users/revoke", methods=["POST"])
+def settings_users_revoke():
+    auth.require("manage_users")
+    name = request.form.get("name", "").strip()
+    status = auth.revoke_user(name)
+    if status == "last_owner":
+        return redirect("/settings/users?error=" + _urlquote(
+            "Refusing — that's the last owner; you'd lock yourself out."))
+    if status == "not_found":
+        return redirect("/settings/users?error=" + _urlquote("No such user."))
+    return redirect(f"/settings/users?ok={_urlquote(f'Revoked {name}.')}")
+
+
+@app.route("/settings/users/link", methods=["POST"])
+def settings_users_link():
+    auth.require("manage_users")
+    name = request.form.get("name", "").strip()
+    for u in auth._load_users():
+        if u.get("name") == name:
+            link = f"{auth._base_url()}/?token={u['token']}"
+            return redirect(f"/settings/users?link={_urlquote(link)}&name={_urlquote(name)}")
+    return redirect("/settings/users?error=" + _urlquote("No such user."))
 
 
 @app.route("/settings/save", methods=["POST"])

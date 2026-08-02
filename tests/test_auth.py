@@ -294,3 +294,258 @@ def test_cmd_link_reports_unknown_user(users_file, capsys):
     rc = auth._cmd_link("nobody")
     assert rc == 1
     assert "No user named" in capsys.readouterr().out
+
+
+# ── User management functions (shared by CLI and /settings/users) ────────────
+
+def test_add_user_creates_and_returns_the_record(users_file):
+    user = auth.add_user("newperson", "viewer")
+    assert user["name"] == "newperson" and user["role"] == "viewer" and user["token"]
+    assert auth.user_for_token(user["token"])["name"] == "newperson"
+
+
+def test_add_user_rejects_duplicate_name(users_file):
+    with pytest.raises(auth.AuthError, match="already exists"):
+        auth.add_user("james", "viewer")
+
+
+def test_add_user_rejects_unknown_role(users_file):
+    with pytest.raises(auth.AuthError, match="Unknown role"):
+        auth.add_user("someone", "superadmin")
+
+
+def test_add_user_rejects_empty_name(users_file):
+    with pytest.raises(auth.AuthError, match="empty"):
+        auth.add_user("   ", "viewer")
+
+
+def test_add_user_stores_google_email_lowercased(users_file):
+    user = auth.add_user("newperson", "partner", google_email="James@Gmail.com")
+    assert user["google_email"] == "james@gmail.com"
+
+
+def test_revoke_user_removes_them(users_file):
+    assert auth.revoke_user("james") == "ok"
+    assert auth.user_for_token(PARTNER_TOKEN) is None
+
+
+def test_revoke_user_reports_not_found(users_file):
+    assert auth.revoke_user("nobody") == "not_found"
+
+
+def test_revoke_user_refuses_to_remove_the_last_owner(users_file):
+    auth.revoke_user("james")
+    auth.revoke_user("guest")
+    assert auth.revoke_user("dani") == "last_owner"
+    assert auth.user_for_token(OWNER_TOKEN) is not None   # unchanged
+
+
+def test_find_user_by_email_matches_case_insensitively(users_file):
+    auth.add_user("newperson", "partner", google_email="James@Gmail.com")
+    assert auth.find_user_by_email("james@GMAIL.com")["name"] == "newperson"
+
+
+def test_find_user_by_email_returns_none_for_unrecognized_address(users_file):
+    assert auth.find_user_by_email("stranger@example.com") is None
+
+
+def test_find_user_by_email_returns_none_for_empty_input(users_file):
+    assert auth.find_user_by_email("") is None
+    assert auth.find_user_by_email(None) is None
+
+
+# ── Google OAuth config / state (no live network) ────────────────────────────
+
+def test_google_oauth_disabled_without_config_file(tmp_path, monkeypatch):
+    monkeypatch.setattr(auth, "GOOGLE_OAUTH_FILE", tmp_path / "nope.json")
+    assert auth.google_oauth_enabled() is False
+
+
+def test_google_oauth_enabled_once_configured(tmp_path, monkeypatch):
+    f = tmp_path / "google_oauth.json"
+    f.write_text(json.dumps({"client_id": "x", "client_secret": "y"}))
+    monkeypatch.setattr(auth, "GOOGLE_OAUTH_FILE", f)
+    assert auth.google_oauth_enabled() is True
+
+
+def test_google_oauth_disabled_when_incomplete(tmp_path, monkeypatch):
+    f = tmp_path / "google_oauth.json"
+    f.write_text(json.dumps({"client_id": "x"}))   # no client_secret
+    monkeypatch.setattr(auth, "GOOGLE_OAUTH_FILE", f)
+    assert auth.google_oauth_enabled() is False
+
+
+def test_oauth_state_is_consumed_exactly_once():
+    state = auth.new_oauth_state()
+    assert auth.consume_oauth_state(state) is True
+    assert auth.consume_oauth_state(state) is False, "state was replayable"
+
+
+def test_unknown_oauth_state_is_rejected():
+    assert auth.consume_oauth_state("made-up-state") is False
+
+
+def test_empty_oauth_state_is_rejected():
+    assert auth.consume_oauth_state("") is False
+
+
+def test_expired_oauth_state_is_rejected(monkeypatch):
+    monkeypatch.setattr(auth, "_OAUTH_STATE_TTL", 0)
+    state = auth.new_oauth_state()
+    assert auth.consume_oauth_state(state) is False
+
+
+def test_google_redirect_uri_matches_base_url(monkeypatch, tmp_path):
+    monkeypatch.setenv("RUFUS_DASHBOARD_URL", "https://rufus.example.ts.net")
+    assert auth.google_redirect_uri() == "https://rufus.example.ts.net/auth/google/callback"
+
+
+def test_build_google_flow_raises_when_unconfigured(tmp_path, monkeypatch):
+    monkeypatch.setattr(auth, "GOOGLE_OAUTH_FILE", tmp_path / "nope.json")
+    with pytest.raises(auth.AuthError):
+        auth.build_google_flow()
+
+
+# ── Dashboard: /settings/users permission gating ──────────────────────────────
+
+def test_partner_cannot_manage_users(client):
+    client.get(f"/?token={PARTNER_TOKEN}")
+    assert client.get("/settings/users").status_code == 403
+    assert client.post("/settings/users/add", data={"name": "x", "role": "viewer"}).status_code == 403
+    assert client.post("/settings/users/revoke", data={"name": "guest"}).status_code == 403
+
+
+def test_owner_can_add_and_revoke_a_user_through_the_dashboard(client):
+    client.get(f"/?token={OWNER_TOKEN}")
+    r = client.post("/settings/users/add", data={"name": "newpartner", "role": "partner"})
+    assert r.status_code == 302
+    assert auth.user_for_token != None  # sanity
+    users = auth._load_users()
+    assert any(u["name"] == "newpartner" for u in users)
+
+    r2 = client.post("/settings/users/revoke", data={"name": "newpartner"})
+    assert r2.status_code == 302
+    users_after = auth._load_users()
+    assert not any(u["name"] == "newpartner" for u in users_after)
+
+
+def test_owner_cannot_revoke_themselves_as_last_owner(client):
+    client.get(f"/?token={OWNER_TOKEN}")
+    client.post("/settings/users/revoke", data={"name": "james"})
+    client.post("/settings/users/revoke", data={"name": "guest"})
+    r = client.post("/settings/users/revoke", data={"name": "dani"})
+    assert "error" in r.headers["Location"]
+    assert auth.user_for_token(OWNER_TOKEN) is not None
+
+
+def test_dashboard_add_user_rejects_bad_role(client):
+    client.get(f"/?token={OWNER_TOKEN}")
+    r = client.post("/settings/users/add", data={"name": "x", "role": "superadmin"})
+    assert "error" in r.headers["Location"]
+
+
+# ── Dashboard: Google login routes ────────────────────────────────────────────
+
+def test_google_start_404s_when_not_configured(client):
+    assert client.get("/auth/google/start").status_code == 404
+
+
+def test_google_callback_404s_when_not_configured(client):
+    assert client.get("/auth/google/callback").status_code == 404
+
+
+def test_google_start_redirects_to_google_when_configured(client, tmp_path, monkeypatch):
+    f = tmp_path / "google_oauth.json"
+    f.write_text(json.dumps({"client_id": "cid", "client_secret": "secret"}))
+    monkeypatch.setattr(auth, "GOOGLE_OAUTH_FILE", f)
+    r = client.get("/auth/google/start")
+    assert r.status_code == 302
+    assert "accounts.google.com" in r.headers["Location"]
+
+
+def test_google_callback_rejects_bad_state(client, tmp_path, monkeypatch):
+    f = tmp_path / "google_oauth.json"
+    f.write_text(json.dumps({"client_id": "cid", "client_secret": "secret"}))
+    monkeypatch.setattr(auth, "GOOGLE_OAUTH_FILE", f)
+    r = client.get("/auth/google/callback?state=bogus&code=abc")
+    assert r.status_code == 302 and "/login" in r.headers["Location"]
+
+
+def test_google_callback_rejects_denied_consent(client, tmp_path, monkeypatch):
+    f = tmp_path / "google_oauth.json"
+    f.write_text(json.dumps({"client_id": "cid", "client_secret": "secret"}))
+    monkeypatch.setattr(auth, "GOOGLE_OAUTH_FILE", f)
+    r = client.get("/auth/google/callback?error=access_denied")
+    assert r.status_code == 302 and "/login" in r.headers["Location"]
+
+
+def test_google_callback_signs_in_a_recognized_email(client, tmp_path, monkeypatch):
+    f = tmp_path / "google_oauth.json"
+    f.write_text(json.dumps({"client_id": "cid", "client_secret": "secret"}))
+    monkeypatch.setattr(auth, "GOOGLE_OAUTH_FILE", f)
+    auth.add_user("googleuser", "partner", google_email="partner@example.com")
+
+    state = auth.new_oauth_state()
+
+    class FakeCreds:
+        id_token = "fake-jwt"
+
+    class FakeFlow:
+        credentials = FakeCreds()
+        def fetch_token(self, code):
+            pass
+
+    monkeypatch.setattr(auth, "build_google_flow", lambda: FakeFlow())
+    monkeypatch.setattr(auth, "verify_google_id_token",
+                        lambda jwt: {"email": "partner@example.com", "email_verified": True})
+
+    r = client.get(f"/auth/google/callback?state={state}&code=anything")
+    assert r.status_code == 302 and r.headers["Location"] == "/"
+    # The session cookie now authenticates as that user.
+    assert client.get("/generate").status_code == 200
+
+
+def test_google_callback_refuses_an_unrecognized_email(client, tmp_path, monkeypatch):
+    f = tmp_path / "google_oauth.json"
+    f.write_text(json.dumps({"client_id": "cid", "client_secret": "secret"}))
+    monkeypatch.setattr(auth, "GOOGLE_OAUTH_FILE", f)
+    state = auth.new_oauth_state()
+
+    class FakeCreds:
+        id_token = "fake-jwt"
+
+    class FakeFlow:
+        credentials = FakeCreds()
+        def fetch_token(self, code):
+            pass
+
+    monkeypatch.setattr(auth, "build_google_flow", lambda: FakeFlow())
+    monkeypatch.setattr(auth, "verify_google_id_token",
+                        lambda jwt: {"email": "stranger@example.com", "email_verified": True})
+
+    r = client.get(f"/auth/google/callback?state={state}&code=anything")
+    assert r.status_code == 302 and "/login" in r.headers["Location"]
+    assert client.get("/generate").status_code == 401   # never signed in
+
+
+def test_google_callback_refuses_unverified_email(client, tmp_path, monkeypatch):
+    f = tmp_path / "google_oauth.json"
+    f.write_text(json.dumps({"client_id": "cid", "client_secret": "secret"}))
+    monkeypatch.setattr(auth, "GOOGLE_OAUTH_FILE", f)
+    auth.add_user("googleuser", "partner", google_email="partner@example.com")
+    state = auth.new_oauth_state()
+
+    class FakeCreds:
+        id_token = "fake-jwt"
+
+    class FakeFlow:
+        credentials = FakeCreds()
+        def fetch_token(self, code):
+            pass
+
+    monkeypatch.setattr(auth, "build_google_flow", lambda: FakeFlow())
+    monkeypatch.setattr(auth, "verify_google_id_token",
+                        lambda jwt: {"email": "partner@example.com", "email_verified": False})
+
+    r = client.get(f"/auth/google/callback?state={state}&code=anything")
+    assert r.status_code == 302 and "/login" in r.headers["Location"]

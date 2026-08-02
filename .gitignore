@@ -5,6 +5,7 @@ config/channels/
 config/youtube_token.json
 config/tiktok_token.json
 config/client_secrets.json
+config/google_oauth.json
 
 # Generated media
 media_library/cache/

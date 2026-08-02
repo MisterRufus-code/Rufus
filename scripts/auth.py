@@ -30,12 +30,20 @@ dashboard into authenticated mode for everyone, loopback included.
 SETUP
     python scripts/auth.py init                  # create the file + owner token
     python scripts/auth.py add james --role partner
+    python scripts/auth.py add james --role partner --google james@gmail.com
     python scripts/auth.py list
+    python scripts/auth.py link james             # reprint a link without rotating the token
     python scripts/auth.py revoke james
 
 Each command prints the sign-in URL to hand to that person. The token IS the
 credential — anyone holding it has that role, so send it over something private
 (Signal/WhatsApp), not a public channel.
+
+All of this is also available from inside the dashboard itself, for an owner,
+at /settings/users — add/revoke without a terminal. --google (or the
+dashboard form's Google email field) additionally lets that person sign in
+with their Google account instead of holding a link; see google_oauth_config()
+below and the README's "Google Sign-In" section for the one-time setup.
 
 Environment:
   RUFUS_AUTH_DISABLED=1   escape hatch: skip all auth (single-user localhost
@@ -46,10 +54,18 @@ import json
 import os
 import secrets
 import sys
+import time
 from functools import wraps
 from pathlib import Path
 
 from flask import abort, g, redirect, request
+
+
+class AuthError(ValueError):
+    """A problem with a user-management request that should be shown to a
+    human (bad role, duplicate name, unconfigured Google client) — a distinct
+    type from a bare ValueError so callers can catch precisely this without
+    swallowing an unrelated bug."""
 
 ROOT       = Path(__file__).parent.parent
 USERS_FILE = ROOT / "config" / "users.json"
@@ -62,6 +78,7 @@ ROLE_PERMISSIONS: dict[str, set[str]] = {
     "owner": {
         "view", "generate", "thumbnail", "download",
         "approve", "reject", "edit", "settings", "system", "cancel",
+        "manage_users",   # can add/revoke OTHER users — owner-only, obviously
     },
     # A partner can MAKE things and take them to their phone, but cannot put
     # anything on the channel or touch how the machine is configured. That
@@ -118,6 +135,177 @@ def user_for_token(token: str) -> dict | None:
 
 def _is_loopback() -> bool:
     return request.remote_addr in ("127.0.0.1", "::1")
+
+
+# ── User management (shared by the CLI and the dashboard's /settings/users) ──
+# One implementation of the actual rules — valid role, no duplicate name,
+# never leave the dashboard with zero owners — so the CLI and the web form
+# can't drift into checking different things.
+
+def add_user(name: str, role_name: str, *, google_email: str | None = None) -> dict:
+    """Create a user and return their record (including the generated token).
+
+    Raises AuthError with a human-readable reason on any problem — empty
+    name, unknown role, or a name already taken.
+    """
+    name = (name or "").strip()
+    if not name:
+        raise AuthError("Name can't be empty.")
+    if role_name not in ROLE_PERMISSIONS:
+        raise AuthError(f"Unknown role '{role_name}'. Valid: {', '.join(ROLES)}")
+    users = _load_users()
+    if any(u.get("name") == name for u in users):
+        raise AuthError(f"User '{name}' already exists.")
+    user = {"name": name, "role": role_name, "token": _new_token()}
+    if google_email:
+        # Stored lowercase so a later case-different login (Gmail addresses
+        # are case-insensitive) still matches in find_user_by_email().
+        user["google_email"] = google_email.strip().lower()
+    users.append(user)
+    _save_users(users)
+    return user
+
+
+def revoke_user(name: str) -> str:
+    """Remove a user. Returns 'ok', 'not_found', or 'last_owner' (refused —
+    would leave nobody who can sign back in as owner)."""
+    users = _load_users()
+    remaining = [u for u in users if u.get("name") != name]
+    if len(remaining) == len(users):
+        return "not_found"
+    if not any(u.get("role") == "owner" for u in remaining):
+        return "last_owner"
+    _save_users(remaining)
+    return "ok"
+
+
+def find_user_by_email(email: str) -> dict | None:
+    """Match a verified Google account email to a user record, or None.
+
+    Case-insensitive: Google addresses are effectively case-insensitive, and
+    a casing mismatch shouldn't be able to lock someone out of an account
+    the owner clearly intended to grant them."""
+    email = (email or "").strip().lower()
+    if not email:
+        return None
+    for u in _load_users():
+        if (u.get("google_email") or "").strip().lower() == email:
+            return u
+    return None
+
+
+# ── Google Sign-In (optional alternative to a shared token link) ────────────
+# A SEPARATE OAuth client from the one youtube_uploader.py uses: that one is
+# registered in Google Cloud Console as a Desktop app (loopback redirect,
+# config/client_secrets.json); this needs a Web application client (a fixed
+# https redirect URI matching the tailnet domain) — Google does not let the
+# two share one registration. See README "Google Sign-In" for the one-time
+# console setup.
+#
+# What this buys over the token link: identity is vouched for by Google
+# instead of by possession of a bearer string, so there's nothing to leak in
+# a screenshot or a forwarded chat message. What it does NOT do: grant access
+# to anyone with a Google account — find_user_by_email() only recognizes an
+# email the owner explicitly added, so an unrecognized sign-in is refused the
+# same as a wrong token.
+
+GOOGLE_OAUTH_FILE = ROOT / "config" / "google_oauth.json"
+
+_OAUTH_STATE_TTL = 600   # seconds — long enough for a slow phone to finish the redirect
+_pending_oauth_states: dict[str, float] = {}
+
+
+def google_oauth_config() -> dict | None:
+    """{"client_id", "client_secret"} from config/google_oauth.json, or None
+    if the file is missing/incomplete — Google sign-in is simply absent from
+    the login page in that case, not an error."""
+    try:
+        data = json.loads(GOOGLE_OAUTH_FILE.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, ValueError):
+        return None
+    if not data.get("client_id") or not data.get("client_secret"):
+        return None
+    return data
+
+
+def google_oauth_enabled() -> bool:
+    return google_oauth_config() is not None
+
+
+def google_redirect_uri() -> str:
+    """Must byte-for-byte match an 'Authorized redirect URI' registered on
+    the Google Cloud OAuth client, or Google refuses the whole flow with
+    redirect_uri_mismatch. Derived from the same _base_url() the sign-in
+    links use, so the two can't drift apart independently."""
+    return f"{_base_url()}/auth/google/callback"
+
+
+def _prune_oauth_states() -> None:
+    cutoff = time.time() - _OAUTH_STATE_TTL
+    for k in [k for k, t in _pending_oauth_states.items() if t < cutoff]:
+        _pending_oauth_states.pop(k, None)
+
+
+def new_oauth_state() -> str:
+    """A one-time CSRF token for the Google redirect round-trip. Stored
+    in-process (fine here: the dashboard is a single Flask process,
+    threaded=False, never multiple workers) rather than in a cookie, so
+    there's no session/secret-key machinery to add just for this."""
+    _prune_oauth_states()
+    state = secrets.token_urlsafe(24)
+    _pending_oauth_states[state] = time.time()
+    return state
+
+
+def consume_oauth_state(state: str) -> bool:
+    """True exactly once per state issued by new_oauth_state(). Popping
+    rather than merely checking membership means a captured callback URL
+    can't be replayed to sign in a second time."""
+    _prune_oauth_states()
+    return bool(state) and _pending_oauth_states.pop(state, None) is not None
+
+
+def build_google_flow():
+    """A google_auth_oauthlib Flow for the WEB authorization-code flow (not
+    InstalledAppFlow — that variant is for a desktop app's own loopback
+    redirect, which is what youtube_uploader.py uses; this dashboard is
+    itself the web server receiving the redirect). Imported lazily — same
+    reason as youtube_uploader.py's Google imports: this module must stay
+    importable with no Google auth stack installed when Google sign-in isn't
+    configured at all."""
+    from google_auth_oauthlib.flow import Flow
+
+    cfg = google_oauth_config()
+    if cfg is None:
+        raise AuthError(f"Google sign-in isn't configured ({GOOGLE_OAUTH_FILE} missing).")
+    client_config = {"web": {
+        "client_id": cfg["client_id"],
+        "client_secret": cfg["client_secret"],
+        "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+        "token_uri": "https://oauth2.googleapis.com/token",
+    }}
+    return Flow.from_client_config(
+        client_config,
+        scopes=["openid", "https://www.googleapis.com/auth/userinfo.email"],
+        redirect_uri=google_redirect_uri(),
+    )
+
+
+def verify_google_id_token(id_token_jwt: str) -> dict:
+    """Decode + verify a Google ID token, returning its claims.
+
+    The verification (signature against Google's published keys, issuer,
+    audience == our client_id, expiry) is what makes the email claim
+    trustworthy — skipping it would let anyone hand the callback a
+    self-signed 'email' and be waved in as whoever they typed."""
+    from google.auth.transport import requests as google_requests
+    from google.oauth2 import id_token as google_id_token
+
+    cfg = google_oauth_config()
+    if cfg is None:
+        raise AuthError("Google sign-in isn't configured.")
+    return google_id_token.verify_oauth2_token(
+        id_token_jwt, google_requests.Request(), cfg["client_id"])
 
 
 # ── Request-time identity ─────────────────────────────────────────────────────
@@ -232,24 +420,24 @@ def _cmd_init() -> int:
     return 0
 
 
-def _cmd_add(name: str, role_name: str) -> int:
-    if role_name not in ROLE_PERMISSIONS:
-        print(f"Unknown role '{role_name}'. Valid: {', '.join(ROLES)}")
-        return 1
-    users = _load_users()
-    if not users:
+def _cmd_add(name: str, role_name: str, google_email: str | None = None) -> int:
+    if not _load_users():
         print("No users file yet — run `python scripts/auth.py init` first.")
         return 1
-    if any(u.get("name") == name for u in users):
-        print(f"User '{name}' already exists — `link {name}` reprints their "
-              f"existing sign-in link, or `revoke {name}` then `add` to "
-              f"issue a new token.")
+    try:
+        user = add_user(name, role_name, google_email=google_email)
+    except AuthError as e:
+        msg = str(e)
+        if "already exists" in msg:
+            msg += (f" `link {name}` reprints their existing sign-in link, "
+                    f"or `revoke {name}` then `add` to issue a new token.")
+        print(msg)
         return 1
-    user = {"name": name, "role": role_name, "token": _new_token()}
-    users.append(user)
-    _save_users(users)
     print(f"Added '{name}' as {role_name}.")
     _print_signin(user)
+    if google_email:
+        print(f"  Google sign-in: {google_email} (once you've set up "
+              f"config/google_oauth.json — see README)")
     return 0
 
 
@@ -278,20 +466,19 @@ def _cmd_list() -> int:
     print(f"{len(users)} user(s) in {USERS_FILE}:")
     for u in users:
         perms = ", ".join(sorted(ROLE_PERMISSIONS.get(u.get("role", ""), set()))) or "(unknown role)"
-        print(f"  {u.get('name'):<16} {u.get('role'):<10} {perms}")
+        via = f"google:{u['google_email']}" if u.get("google_email") else "token link"
+        print(f"  {u.get('name'):<16} {u.get('role'):<10} {via:<28} {perms}")
     return 0
 
 
 def _cmd_revoke(name: str) -> int:
-    users = _load_users()
-    remaining = [u for u in users if u.get("name") != name]
-    if len(remaining) == len(users):
+    status = revoke_user(name)
+    if status == "not_found":
         print(f"No user named '{name}'.")
         return 1
-    if not any(u.get("role") == "owner" for u in remaining):
+    if status == "last_owner":
         print("Refusing — that's the last owner; you'd lock yourself out.")
         return 1
-    _save_users(remaining)
     print(f"Revoked '{name}'. Their link stops working immediately.")
     return 0
 
@@ -305,14 +492,19 @@ def main(argv: list[str]) -> int:
         return _cmd_init()
     if cmd == "add":
         if len(argv) < 2:
-            print("usage: auth.py add <name> [--role owner|partner|viewer]")
+            print("usage: auth.py add <name> [--role owner|partner|viewer] [--google email]")
             return 1
         role_name = "partner"
         if "--role" in argv:
             i = argv.index("--role")
             if i + 1 < len(argv):
                 role_name = argv[i + 1]
-        return _cmd_add(argv[1], role_name)
+        google_email = None
+        if "--google" in argv:
+            i = argv.index("--google")
+            if i + 1 < len(argv):
+                google_email = argv[i + 1]
+        return _cmd_add(argv[1], role_name, google_email)
     if cmd == "list":
         return _cmd_list()
     if cmd == "link":
