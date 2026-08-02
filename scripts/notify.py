@@ -324,3 +324,20 @@ def notify_run_failed(reason: str, *, niche: str | None = None,
     if link:
         link = f"{link}/failures"
     return send("Rufus: run CRASHED", "\n".join(lines), url=link, priority="high")
+
+
+if __name__ == "__main__":
+    # Manual sanity check for whichever backend(s) are configured — confirms
+    # a webhook/token actually works before trusting it to alert on a real
+    # crash at 3am. `python scripts/notify.py`.
+    backends = configured()
+    if not backends:
+        print("No backend configured — set RUFUS_DISCORD_WEBHOOK, "
+              "RUFUS_NTFY_TOPIC, RUFUS_PUSHOVER_TOKEN/USER, or "
+              "RUFUS_TELEGRAM_TOKEN/CHAT, then re-run this.")
+        raise SystemExit(1)
+    print(f"Sending a test notification via: {', '.join(backends)}")
+    ok = send("Rufus: test notification", "If you can see this, it's working.",
+              priority="normal")
+    print("Delivered." if ok else "Failed to deliver — see the [notify] lines above.")
+    raise SystemExit(0 if ok else 1)
