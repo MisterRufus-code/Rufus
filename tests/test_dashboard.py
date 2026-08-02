@@ -1034,13 +1034,28 @@ def test_system_routes_block_non_localhost(client, monkeypatch):
     """Defense-in-depth: even if loopback binding is somehow bypassed, these
     routes must refuse a request that isn't from 127.0.0.1/::1. Flask's test
     client reports remote_addr as 127.0.0.1 by default, so force a non-local
-    address via the environ override it supports."""
+    address via the environ override it supports.
+
+    401, not the old 403: with no config/users.json these run in auth.py's
+    legacy mode, where a non-loopback caller has no identity at all and is
+    refused by the before_request hook before any route is entered. The
+    refusal moved earlier and got broader — see the next test."""
     r = client.post("/system/run", data={"niche": "finance"},
                     environ_overrides={"REMOTE_ADDR": "10.0.0.5"})
-    assert r.status_code == 403
+    assert r.status_code == 401
     r = client.post("/system/cancel", data={"channel": "main_en"},
                     environ_overrides={"REMOTE_ADDR": "10.0.0.5"})
-    assert r.status_code == 403
+    assert r.status_code == 401
+
+
+def test_non_localhost_cannot_read_anything_either(client):
+    """The gap the old localhost-only guard left: it protected /system and
+    /settings but nothing else, so anyone who could reach a dashboard bound to
+    0.0.0.0 could read every script, score and rendered video. Now identity is
+    required for all of it."""
+    for path in ("/", "/performance", "/gallery", "/failures"):
+        r = client.get(path, environ_overrides={"REMOTE_ADDR": "10.0.0.5"})
+        assert r.status_code == 401, f"{path} was readable by a non-loopback client"
 
 
 # ── /trending — browse rising queries, queue via the existing gate path ─────
@@ -1172,9 +1187,10 @@ def test_settings_load_survives_corrupt_file(tmp_path, monkeypatch):
 
 
 def test_settings_route_blocks_non_localhost(client):
+    # 401 rather than 403 — see test_system_routes_block_non_localhost.
     r = client.post("/settings/save", data={},
                     environ_overrides={"REMOTE_ADDR": "10.0.0.5"})
-    assert r.status_code == 403
+    assert r.status_code == 401
 
 
 def test_launch_run_applies_saved_settings_as_env_overrides(tmp_path, monkeypatch):

@@ -60,9 +60,10 @@ from urllib.parse import quote as _urlquote
 
 import requests
 from filelock import FileLock, Timeout
-from flask import Flask, abort, redirect, request, send_from_directory
+from flask import Flask, abort, g, make_response, redirect, request, send_from_directory
 
 sys.path.insert(0, str(Path(__file__).parent))
+import auth
 import db_manager
 
 ROOT       = Path(__file__).parent.parent
@@ -86,8 +87,100 @@ HARD_MIN_UPLOAD_SCORE = 7
 # someone later widening RUFUS_DASHBOARD_HOST without re-reading why.
 
 def _require_localhost() -> None:
+    """Legacy guard, kept ONLY for when auth is off.
+
+    Once config/users.json exists, loopback proves nothing: `tailscale serve`
+    terminates TLS and proxies to 127.0.0.1, so every tailnet visitor arrives
+    as loopback and would sail through this. In that mode the routes rely on
+    auth.require() instead, and this becomes a no-op.
+    """
+    if auth.auth_enabled():
+        return
     if request.remote_addr not in ("127.0.0.1", "::1"):
         abort(403)
+
+
+# Routes reachable without being signed in: the login page itself, and a
+# liveness probe the watchdog hits (it has no token and must not be a 401).
+PUBLIC_ENDPOINTS = {"login", "healthz", "static"}
+
+
+@app.before_request
+def _authenticate():
+    """Resolve identity once per request and refuse anonymous traffic.
+
+    Runs before every route so no handler can forget. Stores the user on
+    Flask's `g` so _head() and the permission helpers don't re-read the file
+    per call.
+    """
+    g.rufus_user = auth.current_user()
+    if request.endpoint in PUBLIC_ENDPOINTS:
+        return None
+    if g.rufus_user is None:
+        # A browser gets the sign-in page; anything scripted gets a clean 401.
+        if "text/html" in (request.headers.get("Accept") or ""):
+            return redirect("/login")
+        abort(401)
+    return None
+
+
+@app.after_request
+def _persist_token(response):
+    """Turn a ?token=… sign-in link into a cookie, once.
+
+    The partner opens one link on their phone and stays signed in; the token
+    stops trailing in every subsequent URL (and out of browser history and
+    any screenshot they take). HttpOnly so page scripts can't read it,
+    SameSite=Strict so another site can't drive a POST here with their
+    cookie attached — this dashboard's mutating routes are plain HTML forms
+    with no CSRF token of their own, and Strict is what closes that.
+    """
+    token = request.args.get("token", "").strip()
+    if token and auth.auth_enabled() and auth.user_for_token(token):
+        response.set_cookie(auth.COOKIE_NAME, token, max_age=auth.COOKIE_MAX_AGE,
+                            httponly=True, samesite="Strict",
+                            secure=request.headers.get("X-Forwarded-Proto") == "https")
+    return response
+
+
+@app.route("/login")
+def login():
+    """Explains how to get in. Deliberately gives nothing away — no user list,
+    no hint about whether a token was close, since this page is reachable by
+    anyone who can route to the dashboard."""
+    if not auth.auth_enabled():
+        return redirect("/")
+    if getattr(g, "rufus_user", None):
+        return redirect("/")
+    body = """
+    <h2 style="margin-top:14px">Sign in</h2>
+    <p class="muted">This dashboard needs a personal sign-in link. Ask the
+       channel owner for yours — it looks like
+       <code>https://…/?token=…</code> and only has to be opened once per
+       device.</p>
+    <form method="get" action="/">
+      <label for="token">Access token</label>
+      <input class="field" type="password" id="token" name="token"
+             autocomplete="current-password" placeholder="paste your token">
+      <button class="btn save" type="submit">Sign in</button>
+    </form>
+    """
+    return PAGE_STYLE + '<header><h1>🎬 Rufus Dashboard</h1></header>\n<main>\n' \
+        + body + PAGE_TAIL, 401
+
+
+@app.route("/logout")
+def logout():
+    resp = make_response(redirect("/login"))
+    resp.delete_cookie(auth.COOKIE_NAME)
+    return resp
+
+
+@app.route("/healthz")
+def healthz():
+    """Unauthenticated liveness probe for the watchdog. Says nothing about the
+    pipeline — just that this process is answering."""
+    return {"ok": True}, 200
 
 
 def _comfy_host() -> str:
@@ -623,7 +716,7 @@ def _sparkline_svg(scores: list[int], width: int = 320, height: int = 64,
     )
 
 
-PAGE_HEAD = """<!doctype html><html><head><meta charset="utf-8">
+PAGE_STYLE = """<!doctype html><html><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Rufus Dashboard</title>
 <style>
@@ -685,16 +778,58 @@ PAGE_HEAD = """<!doctype html><html><head><meta charset="utf-8">
   .orphan { background: #171a21; border: 1px solid #2a2d34; border-radius: 8px;
             padding: 12px 14px; margin-bottom: 10px; }
   @media (prefers-color-scheme: light) { .orphan { background: #fff; border-color: #e5e7eb; } }
+  .whoami { float: right; font-size: 12px; color: #9ca3af; }
+  .whoami .role { background: rgba(59,130,246,0.15); color: #3b82f6; padding: 2px 8px;
+                  border-radius: 999px; font-weight: 600; margin-left: 6px; }
+  .thumbgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+               gap: 14px; margin-top: 10px; }
+  .thumbcard { background: #171a21; border: 1px solid #2a2d34; border-radius: 10px;
+               overflow: hidden; }
+  @media (prefers-color-scheme: light) { .thumbcard { background: #fff; border-color: #e5e7eb; } }
+  .thumbcard img { width: 100%; display: block; background: #0b0d11; }
+  .thumbcard .meta { padding: 8px 10px; font-size: 12px; color: #9ca3af; }
+  @media (max-width: 700px) {
+    header { padding: 12px 14px; }
+    main { padding: 14px; }
+    .navlink { display: inline-block; margin: 6px 12px 0 0; }
+    .whoami { float: none; display: block; margin-top: 8px; }
+  }
 </style></head><body>
-<header><a href="/"><h1>🎬 Rufus Dashboard</h1></a>
-<a class="navlink" href="/failures">⚠ Failures &amp; rejected attempts</a>
-<a class="navlink" href="/performance">📈 Performance</a>
-<a class="navlink" href="/system">🖥 System</a>
-<a class="navlink" href="/trending">🔥 Trending</a>
-<a class="navlink" href="/gallery">🖼 Gallery</a>
-<a class="navlink" href="/settings">⚙ Settings</a></header>
-<main>
 """
+
+# Nav entries gated by permission — a partner never sees Settings or System,
+# because a link they can only get a 403 from is worse than no link at all.
+NAV_ITEMS = [
+    ("/generate",   "▶ Make a video",                     "generate"),
+    ("/thumbnails", "🎨 Thumbnails",                      "thumbnail"),
+    ("/failures",   "⚠ Failures &amp; rejected attempts", "view"),
+    ("/performance", "📈 Performance",                    "view"),
+    ("/trending",   "🔥 Trending",                        "view"),
+    ("/gallery",    "🖼 Gallery",                         "view"),
+    ("/system",     "🖥 System",                          "system"),
+    ("/settings",   "⚙ Settings",                         "settings"),
+]
+
+
+def _head() -> str:
+    """Page header with the nav this user may actually use.
+
+    Replaces the old module-level PAGE_HEAD constant: nav now depends on who
+    is asking, which a constant can't express. Hiding a link is cosmetic —
+    every route enforces its own permission besides.
+    """
+    links = "".join(f'<a class="navlink" href="{href}">{label}</a>\n'
+                    for href, label, perm in NAV_ITEMS if auth.can(perm))
+    user = getattr(g, "rufus_user", None) or {}
+    who = ""
+    if user:
+        who = (f'<span class="whoami">{_esc(user.get("name", "?"))}'
+               f'<span class="role">{_esc(user.get("role", "?"))}</span>'
+               f' · <a class="navlink" href="/logout" style="margin-left:6px">sign out</a></span>')
+    return (PAGE_STYLE + '<header><a href="/"><h1>🎬 Rufus Dashboard</h1></a>\n'
+            + links + who + "</header>\n<main>\n")
+
+
 PAGE_TAIL = "</main></body></html>"
 
 
@@ -811,7 +946,7 @@ def index():
       </div>
     </div>
     """
-    return PAGE_HEAD + body + PAGE_TAIL
+    return _head() + body + PAGE_TAIL
 
 
 @app.route("/failures")
@@ -891,7 +1026,7 @@ def failures():
     {filt_html}
     {reject_html}
     """
-    return PAGE_HEAD + body + PAGE_TAIL
+    return _head() + body + PAGE_TAIL
 
 
 @app.route("/performance")
@@ -947,7 +1082,7 @@ def performance():
     {filt_html}
     {table_html}
     """
-    return PAGE_HEAD + body + PAGE_TAIL
+    return _head() + body + PAGE_TAIL
 
 
 @app.route("/system")
@@ -957,6 +1092,7 @@ def system_status():
     started. Loopback-only binding is the primary guard (see module
     docstring); /system/run and /system/cancel additionally self-check
     remote_addr as defense in depth."""
+    auth.require("system")
     channels = _channels()
     comfy_up = _comfyui_reachable()
 
@@ -1003,31 +1139,183 @@ def system_status():
        is removed — check /failures for a crashed/orphaned run before
        deleting a lock file by hand.</p>
     """
-    return PAGE_HEAD + body + PAGE_TAIL
+    return _head() + body + PAGE_TAIL
+
+
+@app.route("/generate")
+def generate_page():
+    """The partner-facing entry point: describe a video, start it, watch it run.
+
+    Separate from /system on purpose. /system is process control for the
+    machine (kill a run, inspect ComfyUI) and stays owner-only; this page is
+    just "make me a video," which is exactly the slice a collaborator needs
+    and the only slice they should have.
+    """
+    auth.require("generate")
+    channels = _channels()
+    channel_options = "".join(f'<option value="{_esc(c)}">{_esc(c)}</option>' for c in channels)
+    running = [c for c in channels if _run_in_progress(c)]
+    comfy_up = _comfyui_reachable()
+
+    status = ("<p class='muted'>Nothing running right now.</p>" if not running else
+              "<p>" + " ".join(f"<span class='badge pending'>{_esc(c)} running</span>"
+                               for c in running) + "</p>")
+    gpu_warn = ("" if comfy_up else
+                "<div class='msg error'>ComfyUI is not reachable — a run started "
+                "now will fall back to stock footage instead of GPU stills.</div>")
+
+    body = f"""
+    <a class="back" href="/">← back</a>
+    <h2 style="margin-top:14px">Make a video</h2>
+    {gpu_warn}
+    {_msg_banner()}
+    {status}
+    <p class="muted">A full run takes roughly 5–45 minutes depending on the
+       motion engine. It renders on the owner's RTX 3090 and lands in the
+       review queue when it's done — it is not published automatically.</p>
+    <form method="post" action="/system/run">
+      {f'''<label for="gen-channel">Channel</label>
+      <select class="field" id="gen-channel" name="channel">
+        <option value="">(default)</option>{channel_options}
+      </select>''' if channels else ""}
+      <label for="gen-topic">Topic (optional — leave blank to let Rufus pick)</label>
+      <input class="field" type="text" id="gen-topic" name="topic"
+             placeholder="e.g. why the 1929 crash started in a Florida swamp">
+      <label for="gen-niche">Niche override (optional)</label>
+      <input class="field" type="text" id="gen-niche" name="niche" placeholder="(optional)">
+      <button class="btn save" type="submit">Start the run</button>
+    </form>
+    <h2>Recent</h2>
+    {_videos_table(_recent_videos(limit=10))}
+    """
+    return _head() + body + PAGE_TAIL
 
 
 @app.route("/system/run", methods=["POST"])
 def system_run():
+    """Start a run. Permission is "generate", not "system" — a partner may
+    make videos; only an owner may control the machine."""
+    auth.require("generate")
     _require_localhost()
     channel = request.form.get("channel", "").strip() or None
     niche   = request.form.get("niche", "").strip() or None
+    topic   = request.form.get("topic", "").strip() or None
+    back    = "/generate" if request.form.get("from") != "system" else "/system"
     from channel_config import load_channel
     resolved_id = load_channel(channel).id
     if _run_in_progress(resolved_id):
-        return redirect("/system")
+        return redirect(f"{back}?error=A+run+is+already+in+progress+for+that+channel")
     try:
-        _launch_run(niche=niche, channel=channel)
-    except Exception:
-        pass   # /system re-renders either way; no separate error channel here
-    return redirect("/system")
+        _launch_run(niche=niche, topic=topic, channel=channel)
+    except Exception as e:
+        return redirect(f"{back}?error={_urlquote(f'Could not start the run: {e}')}")
+    return redirect(f"{back}?ok=Run+started")
 
 
 @app.route("/system/cancel", methods=["POST"])
 def system_cancel():
+    auth.require("cancel")
     _require_localhost()
     channel = request.form.get("channel", "").strip() or None
     _cancel_run(channel)
     return redirect("/system")
+
+
+# ── Thumbnails / image generation ────────────────────────────────────────────
+# Generating a picture is a much shorter loop than a whole video (seconds, not
+# tens of minutes) so unlike _launch_run this is done INLINE and the result is
+# shown immediately. That's only safe because the app runs threaded=False and
+# a stills render is bounded — a video render here would freeze the dashboard.
+
+@app.route("/thumbnails")
+def thumbnails_page():
+    auth.require("thumbnail")
+    import image_gen
+
+    comfy_up = _comfyui_reachable()
+    warn = ("" if comfy_up else
+            "<div class='msg error'>ComfyUI is not reachable at "
+            f"{_esc(_comfy_host())} — start it on the host PC before generating.</div>")
+
+    cards = ""
+    for img in image_gen.recent_images(limit=36):
+        name = _urlquote(img["name"])
+        cards += (
+            f'<div class="thumbcard">'
+            f'<a href="/thumbnails/file/{name}" target="_blank">'
+            f'<img src="/thumbnails/file/{name}" loading="lazy" alt=""></a>'
+            f'<div class="meta">{_esc(img["prompt"][:90] or img["name"])}<br>'
+            f'<a href="/thumbnails/file/{name}?download=1">⬇ Save to phone</a>'
+            f' · {img["kb"]}KB</div></div>')
+    gallery = (f'<div class="thumbgrid">{cards}</div>' if cards else
+               "<p class='muted'>Nothing generated yet.</p>")
+
+    body = f"""
+    <a class="back" href="/">← back</a>
+    <h2 style="margin-top:14px">Generate a thumbnail</h2>
+    {warn}
+    {_msg_banner()}
+    <p class="muted">Renders on the owner's RTX 3090 through the same image
+       model the videos use. Takes a few seconds — the page waits for it.
+       1280×720 is YouTube's thumbnail shape; portrait matches the video frame.</p>
+    <form method="post" action="/thumbnails/generate">
+      <label for="tp">Describe the image</label>
+      <input class="field" type="text" id="tp" name="prompt" required
+             placeholder="a cracked hourglass spilling gold coins across a desk">
+      <label for="tshape">Shape</label>
+      <select class="field" id="tshape" name="shape">
+        <option value="landscape">Landscape 1280×720 (YouTube thumbnail)</option>
+        <option value="portrait">Portrait 1080×1920 (video frame)</option>
+      </select>
+      <button class="btn save" type="submit">Generate</button>
+    </form>
+    <h2>Generated</h2>
+    {gallery}
+    """
+    return _head() + body + PAGE_TAIL
+
+
+@app.route("/thumbnails/generate", methods=["POST"])
+def thumbnails_generate():
+    auth.require("thumbnail")
+    import image_gen
+
+    prompt = request.form.get("prompt", "").strip()
+    if not prompt:
+        return redirect("/thumbnails?error=Describe+the+image+first")
+    portrait = request.form.get("shape") == "portrait"
+    w, h = ((image_gen.PORTRAIT_W, image_gen.PORTRAIT_H) if portrait
+            else (image_gen.THUMB_W, image_gen.THUMB_H))
+    try:
+        path = image_gen.generate_image(prompt, width=w, height=h)
+    except Exception as e:
+        return redirect(f"/thumbnails?error={_urlquote(f'Generation failed: {e}')}")
+    if path is None:
+        return redirect("/thumbnails?error=" + _urlquote(
+            "Generation failed — check ComfyUI is running and a stills "
+            "workflow is exported to config/stills_api.json"))
+
+    # Mirror it into Discord so the team sees new art without opening the
+    # tailnet — best effort, never turns a good render into an error.
+    try:
+        import notify
+        notify.send_file(path, caption=f"🎨 New thumbnail: {prompt[:180]}")
+    except Exception:
+        pass
+    return redirect("/thumbnails?ok=" + _urlquote(f"Generated {path.name}"))
+
+
+@app.route("/thumbnails/file/<path:filename>")
+def thumbnail_file(filename):
+    """Serve one generated image. `?download=1` forces a Save dialog instead of
+    rendering inline — the difference between looking at it on a phone and
+    actually getting it into the camera roll."""
+    auth.require("download")
+    folder = paths.thumbnails_dir().resolve()
+    if not folder.is_dir():
+        abort(404)
+    return send_from_directory(folder, filename,
+                               as_attachment=request.args.get("download") == "1")
 
 
 @app.route("/settings")
@@ -1037,6 +1325,7 @@ def settings():
     Task Scheduler run needs run_scheduled.bat updated separately to read
     config/dashboard_settings.json too — not wired automatically, since env
     vars don't propagate between independent processes."""
+    auth.require("settings")
     values = _load_settings()
     rows = ""
     for key, label, kind, help_text in SETTINGS_SCHEMA:
@@ -1064,11 +1353,12 @@ def settings():
       <button class="btn save" type="submit" style="margin-top:12px">Save</button>
     </form>
     """
-    return PAGE_HEAD + body + PAGE_TAIL
+    return _head() + body + PAGE_TAIL
 
 
 @app.route("/settings/save", methods=["POST"])
 def settings_save():
+    auth.require("settings")
     _require_localhost()
     values = {}
     for key, label, kind, help_text in SETTINGS_SCHEMA:
@@ -1088,7 +1378,7 @@ def gallery():
     images = _gallery_images()
     if not images:
         body = "<a class='back' href='/'>← back</a><p class='muted'>No keyframes saved yet.</p>"
-        return PAGE_HEAD + body + PAGE_TAIL
+        return _head() + body + PAGE_TAIL
     tiles = ""
     for img in images:
         src = f"/debug/{_esc(img['run_id'])}/{_esc(img['image'])}"
@@ -1102,7 +1392,7 @@ def gallery():
        Click one to open full-size.</p>
     <div>{tiles}</div>
     """
-    return PAGE_HEAD + body + PAGE_TAIL
+    return _head() + body + PAGE_TAIL
 
 
 @app.route("/trending")
@@ -1153,7 +1443,7 @@ def trending():
     <div class="filters">{niche_links}</div>
     {list_html}
     """
-    return PAGE_HEAD + body + PAGE_TAIL
+    return _head() + body + PAGE_TAIL
 
 
 @app.route("/request-topic", methods=["POST"])
@@ -1165,6 +1455,7 @@ def request_topic():
     exactly the same way. main.py's own per-channel FileLock is what
     actually prevents two overlapping runs of the same channel; this route
     doesn't need to duplicate that check."""
+    auth.require("generate")
     topic = request.form.get("topic", "").strip()
     channel = request.form.get("channel", "").strip() or None
     if not topic:
@@ -1247,22 +1538,25 @@ def video_detail(video_id):
 
     msg_html = _msg_banner()
 
-    actions_html = ""
-    if v["upload_status"] != "approved":
+    # Buttons follow the role: a partner sees Download (their whole reason for
+    # being here) but no Approve, because publishing isn't theirs to do.
+    buttons = ""
+    if v["upload_status"] != "approved" and auth.can("approve"):
+        buttons += (f'<form method="post" action="/video/{v["id"]}/approve" '
+                    f'onsubmit="return confirm(\'Upload this video to YouTube now?\');">'
+                    f'<button class="btn approve" type="submit">✓ Approve &amp; Upload</button>'
+                    f'</form>')
+    if v["upload_status"] != "approved" and auth.can("reject"):
         reject_label = "Un-reject" if v["upload_status"] == "rejected" else "Reject"
-        actions_html = f"""
-        <div class="actions">
-          <form method="post" action="/video/{v['id']}/approve" onsubmit="return confirm('Upload this video to YouTube now?');">
-            <button class="btn approve" type="submit">✓ Approve &amp; Upload</button>
-          </form>
-          <form method="post" action="/video/{v['id']}/reject">
-            <button class="btn reject" type="submit">{reject_label}</button>
-          </form>
-        </div>
-        """
+        buttons += (f'<form method="post" action="/video/{v["id"]}/reject">'
+                    f'<button class="btn reject" type="submit">{reject_label}</button></form>')
+    if auth.can("download") and (v["video_file"] and Path(v["video_file"]).exists()):
+        buttons += (f'<a class="btn save" style="text-decoration:none;display:inline-block" '
+                    f'href="/video/{v["id"]}/download">⬇ Download mp4</a>')
+    actions_html = f'<div class="actions">{buttons}</div>' if buttons else ""
 
     edit_html = ""
-    if v["upload_status"] != "approved":
+    if v["upload_status"] != "approved" and auth.can("edit"):
         edit_html = f"""
         <h2>Title &amp; description (edit before approving)</h2>
         <form method="post" action="/video/{v['id']}/edit">
@@ -1337,7 +1631,7 @@ def video_detail(video_id):
     <h2>Debug artifacts (run {_esc(v['run_id'] or '—')})</h2>
     {assets_html}
     """
-    return PAGE_HEAD + body + PAGE_TAIL
+    return _head() + body + PAGE_TAIL
 
 
 def _extra_publishers() -> list[tuple[str, object]]:
@@ -1366,7 +1660,11 @@ def approve_video(video_id):
     """The ONLY path that actually uploads a video — see module docstring.
     Reuses the video's own stored channel/niche context (not whatever's
     'active' today) so the right voice/CTA-pool/category apply even if the
-    approval happens days after generation."""
+    approval happens days after generation.
+
+    Publishing is the one action a partner role must never reach: it puts
+    something permanent on the owner's channel."""
+    auth.require("approve")
     v = _video_detail(video_id)
     if not v:
         abort(404)
@@ -1440,9 +1738,11 @@ def approve_video(video_id):
         msg += "  |  " + "; ".join(extra)
     try:
         import notify
-        notify.send("Rufus: video published",
-                    f"{v['niche']} · {v['title'] or v['script_hook'] or ''}\n{yt_url}",
-                    url=yt_url)
+        notify.notify_published(
+            title=(v["title"] or v["script_hook"] or "Short"),
+            youtube_id=yt_id, score=v["score"], niche=v["niche"],
+            video_path=video_file,
+            by=(getattr(g, "rufus_user", None) or {}).get("name"))
     except Exception:
         pass
     return _redirect_detail(video_id, ok=msg)
@@ -1450,6 +1750,7 @@ def approve_video(video_id):
 
 @app.route("/video/<int:video_id>/reject", methods=["POST"])
 def reject_video(video_id):
+    auth.require("reject")
     v = _video_detail(video_id)
     if not v:
         abort(404)
@@ -1462,6 +1763,7 @@ def reject_video(video_id):
 
 @app.route("/video/<int:video_id>/edit", methods=["POST"])
 def edit_video(video_id):
+    auth.require("edit")
     v = _video_detail(video_id)
     if not v:
         abort(404)
@@ -1479,15 +1781,61 @@ def debug_file(run_id, filename):
     `run_id` is OUR path segment — an audit showed run_id=".." resolved to
     media_library/ itself, serving any rendered (incl. rejected) video. The
     resolve() check pins the folder to a direct child of DEBUG_ROOT."""
+    auth.require("download")
     folder = (DEBUG_ROOT / run_id).resolve()
     if folder.parent != DEBUG_ROOT.resolve() or not folder.is_dir():
         abort(404)
     return send_from_directory(folder, filename)
 
 
+@app.route("/video/<int:video_id>/download")
+def download_video(video_id):
+    """Hand the finished mp4 to the browser as a download.
+
+    The rendered file lives in output/, outside the debug tree /debug/ serves,
+    so before this there was no way to get a video off the box except copying
+    it at the keyboard. as_attachment is what makes a phone offer "Save to
+    Files" / camera roll instead of playing it inline and losing it.
+    """
+    auth.require("download")
+    v = _video_detail(video_id)
+    if not v:
+        abort(404)
+    path = Path(v["video_file"] or "")
+    if not path.exists():
+        abort(404)
+    nice = (v["title"] or v["script_hook"] or f"rufus_{video_id}")[:60]
+    safe = "".join(ch if ch.isalnum() or ch in " -_" else "_" for ch in nice).strip() or f"rufus_{video_id}"
+    return send_from_directory(path.parent, path.name, as_attachment=True,
+                               download_name=f"{safe}.mp4")
+
+
+@app.errorhandler(401)
+def unauthorized(e):
+    """Stays a 401 on purpose. Browsers never reach here — _authenticate()
+    redirects them to /login by Accept header — so everything that lands on
+    this handler is scripted (curl, the watchdog, a phone shortcut), and for
+    those a redirect masquerading as success is worse than an honest refusal.
+    """
+    return ("Not signed in. Open your personal sign-in link "
+            "(/?token=…) or send an X-Rufus-Token header.\n"), 401
+
+
+@app.errorhandler(403)
+def forbidden(e):
+    """An honest wall, not a mystery. Someone who followed a link their role
+    can't use should be told that's what happened, not shown a blank error."""
+    who = (getattr(g, "rufus_user", None) or {}).get("role", "your account")
+    return _head() + (
+        f"<div class='msg error'>Your role ({_esc(who)}) can't use that page. "
+        f"Ask the channel owner if you need it.</div>"
+        f"<p><a class='back' href='/'>← back to the queue</a></p>"
+    ) + PAGE_TAIL, 403
+
+
 @app.errorhandler(404)
 def not_found(e):
-    return PAGE_HEAD + "<p>Not found. <a class='back' href='/'>← back</a></p>" + PAGE_TAIL, 404
+    return _head() + "<p>Not found. <a class='back' href='/'>← back</a></p>" + PAGE_TAIL, 404
 
 
 if __name__ == "__main__":

@@ -52,6 +52,15 @@ def log_dir() -> Path:
     return _env_path("RUFUS_LOG_DIR", ROOT / "logs")
 
 
+def thumbnails_dir() -> Path:
+    """Standalone thumbnails generated outside a video run (thumbnail_gen.py).
+
+    Kept out of debug/ and output/ on purpose: those are per-run artifacts
+    swept and reasoned about as a unit, while a thumbnail is a loose asset
+    someone asked for by hand and will download to a phone."""
+    return _env_path("RUFUS_THUMBNAIL_DIR", media_root() / "thumbnails")
+
+
 def write_run_report(run_id: str, *, script: str = "", prompts: list[str] | None = None,
                      meta: dict | None = None,
                      motion: list[dict] | None = None) -> "Path | None":

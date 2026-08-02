@@ -26,22 +26,39 @@ optional stage).
   Telegram (good if you already run a bot)
     Set RUFUS_TELEGRAM_TOKEN (from @BotFather) and RUFUS_TELEGRAM_CHAT.
 
+  Discord (best when more than one person follows the channel's output)
+    1. Server Settings → Integrations → Webhooks → New Webhook, pick a channel.
+    2. Copy Webhook URL → RUFUS_DISCORD_WEBHOOK
+    Unlike the phone-push backends, Discord can carry the ARTIFACT itself:
+    send_file() posts the finished mp4 or a generated thumbnail into the
+    channel, so the media shows up where the team already talks instead of
+    only a link that needs the tailnet to open.
+
 Environment:
   RUFUS_NOTIFY            1 (default) — 0 disables all notifications
   RUFUS_NTFY_TOPIC        ntfy topic (the shared secret — make it random)
   RUFUS_NTFY_SERVER       https://ntfy.sh (default)
   RUFUS_PUSHOVER_TOKEN / RUFUS_PUSHOVER_USER
   RUFUS_TELEGRAM_TOKEN / RUFUS_TELEGRAM_CHAT
+  RUFUS_DISCORD_WEBHOOK   full webhook URL
+  RUFUS_DISCORD_UPLOAD    1 (default) — 0 to post links only, never the file
   RUFUS_DASHBOARD_URL     link included in the notification so the phone can
                           open the review page directly, e.g.
                           http://192.168.1.20:8765 (LAN) or a Tailscale URL
 """
 
 import os
+from pathlib import Path
 
 import requests
 
 TIMEOUT = 10
+
+# Discord rejects an upload over the server's tier limit with a 413 AFTER the
+# whole body has been sent. A 40MB Short over a slow uplink would spend a
+# minute uploading only to be refused, so anything above the free-tier ceiling
+# is linked rather than attached.
+DISCORD_MAX_UPLOAD_BYTES = 8 * 1024 * 1024
 
 
 def enabled() -> bool:
@@ -64,6 +81,8 @@ def configured() -> list[str]:
     if (os.environ.get("RUFUS_TELEGRAM_TOKEN", "").strip()
             and os.environ.get("RUFUS_TELEGRAM_CHAT", "").strip()):
         out.append("telegram")
+    if _discord_webhook():
+        out.append("discord")
     return out
 
 
@@ -113,7 +132,83 @@ def _send_telegram(title: str, body: str, url: str, priority: str) -> bool:
     return r.status_code < 300
 
 
-_BACKENDS = {"ntfy": _send_ntfy, "pushover": _send_pushover, "telegram": _send_telegram}
+def _discord_webhook() -> str:
+    return (os.environ.get("RUFUS_DISCORD_WEBHOOK") or "").strip()
+
+
+def _discord_color(priority: str) -> int:
+    # Red for the things that need someone now, blue for everything else.
+    return 0xEF4444 if priority == "high" else 0x3B82F6
+
+
+def _send_discord(title: str, body: str, url: str, priority: str) -> bool:
+    """Post an embed to the configured webhook.
+
+    An embed rather than plain content so the title, the body and the
+    dashboard link stay visually distinct in a busy channel — and so a run
+    failure reads as an alert instead of another line of chat.
+    """
+    hook = _discord_webhook()
+    if not hook:
+        return False
+    embed = {
+        "title": title[:256],           # Discord truncates past this and 400s past 6000 total
+        "description": body[:4000],
+        "color": _discord_color(priority),
+    }
+    if url:
+        embed["url"] = url
+        embed["fields"] = [{"name": "Dashboard", "value": url, "inline": False}]
+    r = requests.post(hook, json={"embeds": [embed]}, timeout=TIMEOUT)
+    return r.status_code < 300
+
+
+def send_file(path, *, caption: str = "") -> bool:
+    """Post an actual file (mp4/png) into the Discord channel. Discord only.
+
+    The phone-push backends can carry a link but not a payload, so this is
+    deliberately not part of send()'s fan-out: it's the one thing Discord adds
+    that the others structurally cannot. Returns False (never raises) when
+    Discord isn't configured, uploads are disabled, the file is missing, or
+    it's too big to attach — the caller has already done its real work and a
+    failed upload must not turn a good render into an error.
+    """
+    hook = _discord_webhook()
+    if not hook or not enabled():
+        return False
+    if os.environ.get("RUFUS_DISCORD_UPLOAD", "1").strip().lower() in ("0", "false", "no", "off"):
+        return False
+
+    p = Path(path)
+    if not p.exists():
+        print(f"[notify] discord upload skipped — {p} not found")
+        return False
+
+    size = p.stat().st_size
+    if size > DISCORD_MAX_UPLOAD_BYTES:
+        # Say so rather than failing silently: "why didn't the video appear in
+        # Discord" is otherwise a mystery with no trace anywhere.
+        print(f"[notify] {p.name} is {size//1024//1024}MB — over Discord's "
+              f"{DISCORD_MAX_UPLOAD_BYTES//1024//1024}MB attach limit, posting a link instead")
+        return _send_discord(caption or p.name,
+                             f"File too large to attach ({size//1024//1024}MB).",
+                             _dashboard_url(), "normal")
+    try:
+        with p.open("rb") as fh:
+            r = requests.post(hook,
+                              data={"content": caption[:2000]} if caption else None,
+                              files={"file": (p.name, fh)}, timeout=120)
+        if r.status_code < 300:
+            print(f"[notify] posted {p.name} to Discord")
+            return True
+        print(f"[notify] discord upload rejected (HTTP {r.status_code})")
+    except Exception as e:
+        print(f"[notify] discord upload failed ({e})")
+    return False
+
+
+_BACKENDS = {"ntfy": _send_ntfy, "pushover": _send_pushover,
+             "telegram": _send_telegram, "discord": _send_discord}
 
 
 def send(title: str, body: str, *, url: str | None = None,
@@ -129,7 +224,8 @@ def send(title: str, body: str, *, url: str | None = None,
     if not backends:
         print("[notify] no backend configured — set RUFUS_NTFY_TOPIC (free, "
               "no account: install the ntfy app, subscribe to a random topic) "
-              "to get a phone ping when a video needs approval")
+              "for a phone ping, and/or RUFUS_DISCORD_WEBHOOK to post runs "
+              "into a Discord channel")
         return False
 
     link = (url or "").strip() or _dashboard_url()
@@ -163,6 +259,40 @@ def notify_pending_review(*, title: str, score, niche: str,
     lines.append("Approve or reject in the dashboard.")
     return send(f"Rufus: \"{title}\" needs review",
                 "\n".join(lines), url=link, priority="high")
+
+
+def notify_published(*, title: str, youtube_id: str | None = None,
+                     score=None, niche: str | None = None,
+                     video_path=None, by: str | None = None) -> bool:
+    """A video actually went live — the event the owner most wants mirrored to
+    the team, and the one nothing announced before.
+
+    Posts the mp4 into Discord when it fits, so the channel shows what shipped
+    rather than just claiming something did."""
+    bits = []
+    if niche:
+        bits.append(niche)
+    if score is not None:
+        bits.append(f"scored {score}/10")
+    if by:
+        bits.append(f"approved by {by}")
+    link = (f"https://youtu.be/{youtube_id}" if youtube_id else _dashboard_url())
+    ok = send(f"Rufus: published \"{title}\"", " · ".join(bits) or "Uploaded.",
+              url=link, priority="normal")
+    if video_path:
+        send_file(video_path, caption=f"**{title}** — {link}" if link else f"**{title}**")
+    return ok
+
+
+def notify_analytics(summary: str, *, rows: int = 0) -> bool:
+    """Daily performance digest. Low priority by design — it's a report, not
+    an alert, and waking a phone at 10:00 every morning for a number that
+    didn't move is how people mute a notification channel entirely."""
+    link = _dashboard_url()
+    if link:
+        link = f"{link}/performance"
+    return send(f"Rufus: analytics ({rows} video{'s' if rows != 1 else ''})",
+                summary, url=link, priority="normal")
 
 
 def notify_run_failed(reason: str, *, niche: str | None = None,

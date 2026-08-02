@@ -46,3 +46,6 @@ remotion/node_modules/
 remotion/public/job_*/
 remotion/out/
 .aider*
+
+# Dashboard access tokens — real credentials, never commit
+config/users.json
