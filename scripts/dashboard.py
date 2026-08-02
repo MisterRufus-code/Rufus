@@ -65,6 +65,11 @@ from flask import Flask, abort, g, make_response, redirect, request, send_from_d
 sys.path.insert(0, str(Path(__file__).parent))
 import auth
 import db_manager
+import run_progress
+
+# When this dashboard process started — reported as uptime by /api/status, so
+# a phone can tell "the box has been up for 3 days" from "it just rebooted".
+_STARTED_AT = time.time()
 
 ROOT       = Path(__file__).parent.parent
 DEBUG_ROOT = paths.debug_root()
@@ -266,6 +271,64 @@ def healthz():
     """Unauthenticated liveness probe for the watchdog. Says nothing about the
     pipeline — just that this process is answering."""
     return {"ok": True}, 200
+
+
+@app.route("/api/status")
+def api_status():
+    """Live machine + pipeline state, polled by the status bar on every page.
+
+    Answers the three things you actually want to know from a phone: is the PC
+    up (you got a reply at all), is it making a video right now (and how far
+    in), and what's waiting for you. Authenticated like everything else — run
+    topics and niches are not public.
+
+    Cheap by design, because it's polled: two file-existence checks, one
+    3-second ComfyUI probe, and one small aggregate query.
+    """
+    auth.require("view")
+
+    channels = _channels() or ["default"]
+    runs = []
+    for cid in channels:
+        prog = run_progress.read(cid) or {}
+        # The lock is authoritative for "is something running" — a progress
+        # file can be stale or missing (a run started before this feature
+        # existed), but the lock is held by the live process itself.
+        running = _run_in_progress(cid)
+        runs.append({
+            "channel": cid,
+            "running": running,
+            "step": prog.get("step", 0),
+            "total": prog.get("total", run_progress.TOTAL_STEPS),
+            "label": prog.get("label", ""),
+            "niche": prog.get("niche", ""),
+            "topic": prog.get("topic", ""),
+            "elapsed_seconds": int(prog.get("elapsed_seconds", 0)),
+            "age_seconds": int(prog.get("age_seconds", 0)),
+            # "Lock held but the progress file went quiet" = the run almost
+            # certainly died without releasing. Worth surfacing, not hiding.
+            "stale": bool(running and prog.get("stale")),
+            "status": prog.get("status", ""),
+            "detail": prog.get("detail", ""),
+        })
+
+    stats = _stats(limit=200)
+    return {
+        "ok": True,
+        "server_time": time.time(),
+        # The PC is obviously on if this reply arrived; what's worth reporting
+        # is how long it's been up and whether the GPU service is actually
+        # available, which is what decides if a run would even work now.
+        "uptime_seconds": int(time.time() - _STARTED_AT),
+        "comfyui": _comfyui_reachable(),
+        "busy": any(r["running"] for r in runs),
+        "runs": runs,
+        "queue": {
+            "pending": stats.get("pending", 0),
+            "approved": stats.get("uploaded", 0),
+            "rejected": stats.get("rejected", 0),
+        },
+    }, 200
 
 
 def _comfy_host() -> str:
@@ -863,6 +926,23 @@ PAGE_STYLE = """<!doctype html><html><head><meta charset="utf-8">
   .orphan { background: #171a21; border: 1px solid #2a2d34; border-radius: 8px;
             padding: 12px 14px; margin-bottom: 10px; }
   @media (prefers-color-scheme: light) { .orphan { background: #fff; border-color: #e5e7eb; } }
+  /* Live status bar — polls /api/status, no page reload */
+  #livebar { display: flex; gap: 14px; flex-wrap: wrap; align-items: center;
+             background: #171a21; border: 1px solid #2a2d34; border-radius: 10px;
+             padding: 10px 14px; margin-bottom: 16px; font-size: 13px; }
+  @media (prefers-color-scheme: light) { #livebar { background: #fff; border-color: #e5e7eb; } }
+  #livebar .dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block;
+                  margin-right: 6px; vertical-align: middle; }
+  .dot.on   { background: #22c55e; box-shadow: 0 0 0 3px rgba(34,197,94,0.15); }
+  .dot.off  { background: #ef4444; box-shadow: 0 0 0 3px rgba(239,68,68,0.15); }
+  .dot.warn { background: #eab308; box-shadow: 0 0 0 3px rgba(234,179,8,0.15); }
+  .dot.busy { background: #3b82f6; animation: pulse 1.4s ease-in-out infinite; }
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.35; } }
+  #livebar .item { white-space: nowrap; }
+  .progress { height: 6px; background: #2a2d34; border-radius: 999px;
+              overflow: hidden; min-width: 140px; flex: 1 1 140px; }
+  .progress > i { display: block; height: 100%; background: #3b82f6;
+                  border-radius: 999px; transition: width .4s ease; }
   .whoami { float: right; font-size: 12px; color: #9ca3af; }
   .whoami .role { background: rgba(59,130,246,0.15); color: #3b82f6; padding: 2px 8px;
                   border-radius: 999px; font-weight: 600; margin-left: 6px; }
@@ -896,6 +976,66 @@ NAV_ITEMS = [
 ]
 
 
+# Polls /api/status and rewrites the bar in place. Vanilla JS and inline —
+# the dashboard is deliberately self-contained (no CDN, no build step) so it
+# keeps working on a phone with no internet beyond the tailnet.
+LIVEBAR_JS = """
+<script>
+(function () {
+  var el = document.getElementById('livebar');
+  if (!el) return;
+  function fmt(s) {
+    s = Math.max(0, Math.round(s));
+    if (s < 60) return s + 's';
+    var m = Math.floor(s / 60);
+    if (m < 60) return m + 'm';
+    return Math.floor(m / 60) + 'h ' + (m % 60) + 'm';
+  }
+  function render(d) {
+    var bits = [];
+    bits.push('<span class="item"><span class="dot on"></span>PC on'
+              + ' <span class="muted">(up ' + fmt(d.uptime_seconds) + ')</span></span>');
+    bits.push('<span class="item"><span class="dot ' + (d.comfyui ? 'on' : 'off')
+              + '"></span>GPU ' + (d.comfyui ? 'ready' : 'offline') + '</span>');
+    var active = (d.runs || []).filter(function (r) { return r.running; });
+    if (!active.length) {
+      bits.push('<span class="item"><span class="dot on"></span>Idle \\u2014 not making a video</span>');
+    } else {
+      active.forEach(function (r) {
+        var pct = r.total ? Math.round((r.step / r.total) * 100) : 0;
+        var cls = r.stale ? 'warn' : 'busy';
+        var txt = r.stale
+          ? 'stuck? no update for ' + fmt(r.age_seconds)
+          : 'step ' + r.step + '/' + r.total + ' \\u2014 ' + (r.label || 'working');
+        bits.push('<span class="item"><span class="dot ' + cls + '"></span>'
+                  + '<b>' + r.channel + '</b> ' + txt
+                  + ' <span class="muted">(' + fmt(r.elapsed_seconds) + ')</span></span>');
+        bits.push('<span class="progress"><i style="width:' + pct + '%"></i></span>');
+      });
+    }
+    var q = d.queue || {};
+    bits.push('<span class="item"><a class="navlink" style="margin:0" href="/">'
+              + (q.pending || 0) + ' awaiting review</a></span>');
+    el.innerHTML = bits.join('');
+  }
+  function poll() {
+    fetch('/api/status', { headers: { 'Accept': 'application/json' } })
+      .then(function (r) { return r.ok ? r.json() : Promise.reject(r.status); })
+      .then(render)
+      .catch(function () {
+        el.innerHTML = '<span class="item"><span class="dot off"></span>'
+          + 'Cannot reach the PC \\u2014 it may be asleep, off, or off the tailnet.</span>';
+      });
+  }
+  poll();
+  // 5s while a run is active is responsive without being chatty; the endpoint
+  // is a couple of file checks plus one small query.
+  setInterval(poll, 5000);
+})();
+</script>
+"""
+
+
 def _head() -> str:
     """Page header with the nav this user may actually use.
 
@@ -912,7 +1052,10 @@ def _head() -> str:
                f'<span class="role">{_esc(user.get("role", "?"))}</span>'
                f' · <a class="navlink" href="/logout" style="margin-left:6px">sign out</a></span>')
     return (PAGE_STYLE + '<header><a href="/"><h1>🎬 Rufus Dashboard</h1></a>\n'
-            + links + who + "</header>\n<main>\n")
+            + links + who + "</header>\n<main>\n"
+            + '<div id="livebar"><span class="item">'
+              '<span class="dot warn"></span>checking…</span></div>\n'
+            + LIVEBAR_JS)
 
 
 PAGE_TAIL = "</main></body></html>"
@@ -928,7 +1071,26 @@ def _status_badge(status: str) -> str:
     return '<span class="badge pending">pending</span>'
 
 
-def _videos_table(videos: list[dict]) -> str:
+def _run_keyframes(run_id: str | None, limit: int = 4) -> list[str]:
+    """First few keyframe filenames for a run, for an inline preview strip.
+
+    Cheap (one directory glob, no image decoding) because the queue calls it
+    once per row."""
+    if not run_id:
+        return []
+    folder = DEBUG_ROOT / run_id
+    try:
+        if not folder.is_dir():
+            return []
+        return [p.name for p in sorted(folder.glob("[0-9]*.png"))[:limit]]
+    except OSError:
+        return []
+
+
+def _videos_table(videos: list[dict], *, previews: bool = False) -> str:
+    """The queue table. `previews` adds a strip of that run's actual keyframes
+    to each row — approving a video is a judgement about how it LOOKS, and
+    making that call previously meant opening every row one at a time."""
     if not videos:
         return "<p class='muted'>Nothing here.</p>"
     rows = ""
@@ -937,12 +1099,26 @@ def _videos_table(videos: list[dict]) -> str:
         score_html = (f'<span style="color:{_score_color(score)};font-weight:700">{score}/10</span>'
                       if score is not None else "—")
         title = _esc((v["title"] or v["script_hook"] or "")[:70])
-        rows += (f'<tr><td><a class="row-link" href="/video/{v["id"]}">'
+        preview_cell = ""
+        if previews:
+            frames = _run_keyframes(v.get("run_id"))
+            if frames:
+                imgs = "".join(
+                    f'<img src="/debug/{_esc(v["run_id"])}/{_urlquote(f)}" loading="lazy" '
+                    f'alt="" style="width:38px;height:66px;object-fit:cover;'
+                    f'border-radius:4px;margin-right:3px">'
+                    for f in frames)
+                preview_cell = (f'<td><a class="row-link" href="/video/{v["id"]}" '
+                                f'style="display:flex">{imgs}</a></td>')
+            else:
+                preview_cell = '<td><span class="muted">—</span></td>'
+        rows += (f'<tr>{preview_cell}<td><a class="row-link" href="/video/{v["id"]}">'
                  f'{_esc(v["upload_date"])}</a></td>'
                  f'<td><a class="row-link" href="/video/{v["id"]}">{_esc(v["niche"])}</a></td>'
                  f'<td><a class="row-link" href="/video/{v["id"]}">{title}</a></td>'
                  f'<td>{score_html}</td><td>{_status_badge(v["upload_status"])}</td></tr>\n')
-    return (f"<table><tr><th>Date</th><th>Niche</th><th>Hook / Title</th>"
+    preview_th = "<th>Preview</th>" if previews else ""
+    return (f"<table><tr>{preview_th}<th>Date</th><th>Niche</th><th>Hook / Title</th>"
             f"<th>Score</th><th>Status</th></tr>{rows}</table>")
 
 
@@ -1017,7 +1193,7 @@ def index():
     {filt_html}
     {cards}
     <h2>⏳ Awaiting your review ({len(pending)})</h2>
-    {_videos_table(pending)}
+    {_videos_table(pending, previews=True)}
     <h2>Score trend (oldest → newest)</h2>
     {_sparkline_svg(scored)}
     <div class="grid2">
@@ -1322,16 +1498,28 @@ def thumbnails_page():
             "<div class='msg error'>ComfyUI is not reachable at "
             f"{_esc(_comfy_host())} — start it on the host PC before generating.</div>")
 
+    # An image whose prompt was saved can seed a whole video — pick the look
+    # first, then let the pipeline build a script around that subject. Without
+    # a stored prompt there's nothing to hand the script writer, so that
+    # button only appears where it would actually work.
+    can_generate = auth.can("generate")
     cards = ""
     for img in image_gen.recent_images(limit=36):
         name = _urlquote(img["name"])
+        make_btn = ""
+        if can_generate and img["prompt"]:
+            make_btn = (
+                f'<form method="post" action="/thumbnails/make-video" style="margin-top:6px">'
+                f'<input type="hidden" name="name" value="{_esc(img["name"])}">'
+                f'<button class="btn save" type="submit" style="padding:5px 10px;font-size:12px">'
+                f'🎬 Make a video from this</button></form>')
         cards += (
             f'<div class="thumbcard">'
             f'<a href="/thumbnails/file/{name}" target="_blank">'
             f'<img src="/thumbnails/file/{name}" loading="lazy" alt=""></a>'
             f'<div class="meta">{_esc(img["prompt"][:90] or img["name"])}<br>'
             f'<a href="/thumbnails/file/{name}?download=1">⬇ Save to phone</a>'
-            f' · {img["kb"]}KB</div></div>')
+            f' · {img["kb"]}KB{make_btn}</div></div>')
     gallery = (f'<div class="thumbgrid">{cards}</div>' if cards else
                "<p class='muted'>Nothing generated yet.</p>")
 
@@ -1399,6 +1587,43 @@ def thumbnails_generate():
     except Exception:
         pass
     return redirect("/thumbnails?ok=" + _urlquote(f"Generated {path.name}"))
+
+
+@app.route("/thumbnails/make-video", methods=["POST"])
+def thumbnails_make_video():
+    """Start a full video run using a generated image's prompt as the topic.
+
+    The "pick the picture first" flow: browse the gallery, find a look that
+    works, and let the pipeline write a script around that subject. It reuses
+    the ordinary --topic path, so the result goes through every existing gate
+    (fact-check, QC, score) and lands in the review queue like any other run —
+    choosing an image changes what the video is ABOUT, it does not skip any
+    of the checks or publish anything.
+    """
+    auth.require("generate")
+    import image_gen
+
+    name = request.form.get("name", "").strip()
+    # Match against the listing rather than trusting the posted name as a
+    # path — this value reaches the filesystem otherwise.
+    match = next((i for i in image_gen.recent_images(limit=500) if i["name"] == name), None)
+    if match is None:
+        return redirect("/thumbnails?error=" + _urlquote("No such image."))
+    if not match["prompt"]:
+        return redirect("/thumbnails?error=" + _urlquote(
+            "That image has no saved prompt, so there's nothing to build a script from."))
+
+    busy = [c for c in _channels() if _run_in_progress(c)]
+    if busy:
+        return redirect("/thumbnails?error=" + _urlquote(
+            f"A run is already in progress ({', '.join(busy)}) — wait for it to finish."))
+
+    try:
+        _launch_run(topic=match["prompt"])
+    except Exception as e:
+        return redirect(f"/thumbnails?error={_urlquote(f'Could not start the run: {e}')}")
+    return redirect("/?ok=" + _urlquote(
+        f'Started a video from "{match["prompt"][:60]}" — it will appear here for review when done.'))
 
 
 @app.route("/thumbnails/file/<path:filename>")

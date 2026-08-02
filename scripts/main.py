@@ -28,6 +28,7 @@ import time
 from pathlib import Path
 
 import paths
+import run_progress
 
 ROOT        = Path(__file__).parent.parent
 CONFIG_DIR  = ROOT / "config"
@@ -784,6 +785,8 @@ def run(skip_upload: bool = False, niche_override: str = None, output_dir: Path 
     if channel.voice:
         os.environ.setdefault("RUFUS_EDGE_VOICE", channel.voice)
 
+    run_progress.begin(channel.id, niche=niche_override or "", topic=topic or "")
+
     log_path = _enable_file_logging()
     _ensure_media_root()
     _housekeeping()
@@ -801,6 +804,7 @@ def run(skip_upload: bool = False, niche_override: str = None, output_dir: Path 
     init_db()
 
     # ── Step 1: Research seed + pre-analyse ────────────────────────────────────
+    run_progress.update(1, f'researching "{topic}"' if topic else "researching source material")
     if topic:
         print(f"[ 1 / 7 ]  Researching your topic: \"{topic}\"...")
     else:
@@ -873,9 +877,11 @@ def run(skip_upload: bool = False, niche_override: str = None, output_dir: Path 
         # be tailored to the actual content. Placeholder scene gives write_script
         # context; candidates are filled in later.
         scene = niche_cfg.get("llava_context", f"{active} scene")
+        run_progress.update(2, f"{video_source} mode — clips deferred until the script exists")
         print(f"[ 2 / 7 ]  {video_source} mode — clip generation deferred until after scripting\n")
 
     if video_source not in DEFERRED_SOURCES:
+        run_progress.update(2, "fetching stock footage")
         print("[ 2 / 7 ]  Fetching candidate videos (parallel)...")
         try:
             if video_queries:
@@ -892,6 +898,7 @@ def run(skip_upload: bool = False, niche_override: str = None, output_dir: Path 
     elif scene:
         print("[ 3 / 7 ]  Generated clips are purpose-built — skipping vision pick\n")
     else:
+        run_progress.update(3, "picking the best clip")
         print("[ 3 / 7 ]  AI selecting best video...")
         try:
             video_path, scene = pick_best_video(
@@ -906,6 +913,7 @@ def run(skip_upload: bool = False, niche_override: str = None, output_dir: Path 
             sys.exit(1)
 
     # ── Step 4: Write script (reuses pre-analysis, no duplicate API call) ──────
+    run_progress.update(4, "writing the script")
     print("[ 4 / 7 ]  Writing script with GPT...")
     try:
         # Escalating loop, not a single pass: when a cycle fails the fact gate
@@ -1057,6 +1065,7 @@ def run(skip_upload: bool = False, niche_override: str = None, output_dir: Path 
     # the renderer's sentence-boundary cuts keep the image tracking the voice-over.
     # Fallback chain so a render never dies:  comfy → sd → diffusers → pexels.
     if video_source in DEFERRED_SOURCES:
+        run_progress.update(2, f"generating images for each beat ({video_source})")
         print(f"[ 2.5/7 ]  Generating clips from script content ({video_source})...")
         try:
             # One image per beat; SD_CLIPS (if set) caps the scene count.
@@ -1151,6 +1160,7 @@ def run(skip_upload: bool = False, niche_override: str = None, output_dir: Path 
     # crossfades, progress bar); anything else uses the FFmpeg engine. Remotion
     # failures fall back to FFmpeg so a render always completes.
     renderer = os.environ.get("RUFUS_RENDERER", "ffmpeg").strip().lower()
+    run_progress.update(5, f"rendering the video ({renderer})")
     print(f"[ 5 / 7 ]  Rendering Short ({renderer})...")
     try:
         if renderer == "remotion":
@@ -1220,6 +1230,7 @@ def run(skip_upload: bool = False, niche_override: str = None, output_dir: Path 
             print(f"           ⚠ metadata generation skipped: {e}")
 
     # ── Step 6: Save to DB ──────────────────────────────────────────────────────
+    run_progress.update(6, "saving to the database")
     print("[ 6 / 7 ]  Saving to database...")
     db_id = None
     try:
@@ -1341,6 +1352,8 @@ def run(skip_upload: bool = False, niche_override: str = None, output_dir: Path 
     # Abnormal exits (sys.exit mid-run) terminate the whole process, where
     # the atexit-registered _release_lock covers it.
     _release_lock()
+    run_progress.update(7, "queued for review")
+    run_progress.finish("done")
 
     return {"video": str(output_path), "youtube_url": yt_url, "script": script, "seed": seed}
 
@@ -1355,10 +1368,18 @@ def _run_or_notify(niche: str | None, **kwargs) -> None:
     case Python itself never starts (broken venv, syntax error)."""
     try:
         run(niche_override=niche, **kwargs)
-    except SystemExit:
+    except SystemExit as e:
+        # A step called sys.exit(1). Without this the progress file stays
+        # "running" forever and the dashboard shows a phantom active run.
+        if getattr(e, "code", 0):
+            run_progress.finish("failed", "a pipeline step exited early — see the run log")
         raise   # sys.exit(1) paths already print their own reason
+    except KeyboardInterrupt:
+        run_progress.finish("cancelled", "stopped by hand")
+        raise
     except Exception as e:
         import traceback
+        run_progress.finish("failed", str(e))
         try:
             import notify
             notify.notify_run_failed(f"{e}\n{traceback.format_exc()}",
