@@ -384,12 +384,21 @@ credentials. With no such file the dashboard stays in legacy mode (loopback
 python scripts\auth.py init                      # create the file + owner link
 python scripts\auth.py add james --role partner  # prints james's sign-in link
 python scripts\auth.py list
-python scripts\auth.py revoke james              # kills that link immediately
+python scripts\auth.py link james                # reprint james's link (same token)
+python scripts\auth.py revoke james               # kills that link immediately
 ```
 
-Each command prints a `https://…/?token=…` URL. **The link is the password** —
+Each command prints a `.../?token=...` URL. **The link is the password** —
 send it privately. Opening it once on a phone stores an HttpOnly,
 SameSite=Strict cookie, so the token stops trailing in URLs afterward.
+
+**Run `serve.ps1 -Tailscale` (below) before adding anyone.** The link's
+domain comes from `config/dashboard_url.txt`, which only exists once
+Tailscale has actually published the dashboard — `auth.py add` run before
+that prints a `localhost` link that does nothing on a phone. If you already
+added someone before running `-Tailscale`, don't `revoke` — their token is
+still valid, just re-print it with the right domain:
+`python scripts\auth.py link james`.
 
 ### Always-on server (Windows)
 

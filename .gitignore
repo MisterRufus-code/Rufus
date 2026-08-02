@@ -29,6 +29,7 @@ config/topic_embeddings.json
 config/recent_image_prompts.json
 config/recent_image_hashes.json
 config/dashboard_settings.json
+config/dashboard_url.txt
 
 # Python
 __pycache__/

@@ -189,9 +189,29 @@ def _new_token() -> str:
     return secrets.token_urlsafe(32)
 
 
+DASHBOARD_URL_FILE = ROOT / "config" / "dashboard_url.txt"
+
+
 def _base_url() -> str:
-    return (os.environ.get("RUFUS_DASHBOARD_URL", "").strip().rstrip("/")
-            or f"http://localhost:{os.environ.get('RUFUS_DASHBOARD_PORT', '8765')}")
+    """Where to send someone to sign in.
+
+    Checked in order: RUFUS_DASHBOARD_URL (works within the process that set
+    it), then config/dashboard_url.txt (serve.ps1 writes the tailnet https
+    URL here after `tailscale serve` runs, since a NEW PowerShell window
+    doesn't inherit an env var `setx` set in a previous one — a file survives
+    that where an env var doesn't), then localhost as the last resort for a
+    single-PC setup with no remote access configured at all.
+    """
+    env = os.environ.get("RUFUS_DASHBOARD_URL", "").strip().rstrip("/")
+    if env:
+        return env
+    try:
+        saved = DASHBOARD_URL_FILE.read_text(encoding="utf-8").strip().rstrip("/")
+        if saved:
+            return saved
+    except OSError:
+        pass
+    return f"http://localhost:{os.environ.get('RUFUS_DASHBOARD_PORT', '8765')}"
 
 
 def _print_signin(user: dict) -> None:
@@ -221,7 +241,9 @@ def _cmd_add(name: str, role_name: str) -> int:
         print("No users file yet — run `python scripts/auth.py init` first.")
         return 1
     if any(u.get("name") == name for u in users):
-        print(f"User '{name}' already exists — `revoke` then `add` to reissue.")
+        print(f"User '{name}' already exists — `link {name}` reprints their "
+              f"existing sign-in link, or `revoke {name}` then `add` to "
+              f"issue a new token.")
         return 1
     user = {"name": name, "role": role_name, "token": _new_token()}
     users.append(user)
@@ -229,6 +251,23 @@ def _cmd_add(name: str, role_name: str) -> int:
     print(f"Added '{name}' as {role_name}.")
     _print_signin(user)
     return 0
+
+
+def _cmd_link(name: str) -> int:
+    """Reprint an existing user's sign-in link without rotating their token.
+
+    Needed whenever _base_url() changes after the fact — e.g. `serve.ps1
+    -Tailscale` ran for the first time after users already existed, so their
+    original link (printed against localhost) was wrong even though the
+    token itself was always fine. `revoke` + `add` would work too, but it
+    invalidates a link that might already be saved on someone's phone for no
+    reason."""
+    for u in _load_users():
+        if u.get("name") == name:
+            _print_signin(u)
+            return 0
+    print(f"No user named '{name}'.")
+    return 1
 
 
 def _cmd_list() -> int:
@@ -276,12 +315,17 @@ def main(argv: list[str]) -> int:
         return _cmd_add(argv[1], role_name)
     if cmd == "list":
         return _cmd_list()
+    if cmd == "link":
+        if len(argv) < 2:
+            print("usage: auth.py link <name>")
+            return 1
+        return _cmd_link(argv[1])
     if cmd == "revoke":
         if len(argv) < 2:
             print("usage: auth.py revoke <name>")
             return 1
         return _cmd_revoke(argv[1])
-    print(f"Unknown command '{cmd}'. Try: init | add | list | revoke")
+    print(f"Unknown command '{cmd}'. Try: init | add | list | link | revoke")
     return 1
 
 

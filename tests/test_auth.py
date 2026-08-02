@@ -253,3 +253,44 @@ def test_approve_still_works_for_the_owner(client, monkeypatch):
     r = client.post(f"/video/{vid}/approve")
     assert r.status_code == 302
     assert "error" not in r.headers["Location"]
+
+
+# ── Dashboard URL resolution (the tailscale-link bug) ─────────────────────────
+
+def test_base_url_falls_back_to_localhost_with_nothing_configured(monkeypatch, tmp_path):
+    monkeypatch.delenv("RUFUS_DASHBOARD_URL", raising=False)
+    monkeypatch.setattr(auth, "DASHBOARD_URL_FILE", tmp_path / "nope.txt")
+    assert auth._base_url() == "http://localhost:8765"
+
+
+def test_base_url_prefers_env_var(monkeypatch, tmp_path):
+    monkeypatch.setenv("RUFUS_DASHBOARD_URL", "https://from-env.example")
+    monkeypatch.setattr(auth, "DASHBOARD_URL_FILE", tmp_path / "nope.txt")
+    assert auth._base_url() == "https://from-env.example"
+
+
+def test_base_url_reads_the_saved_tailnet_url(monkeypatch, tmp_path):
+    """This is the actual bug: serve.ps1 -Tailscale creates a tailnet URL that
+    a NEW `python scripts\\auth.py add ...` invocation (a separate process)
+    has no way to know about via env var alone — the file is what carries it
+    across process/terminal boundaries."""
+    monkeypatch.delenv("RUFUS_DASHBOARD_URL", raising=False)
+    f = tmp_path / "dashboard_url.txt"
+    f.write_text("https://rufus.tail635959.ts.net/\n")
+    monkeypatch.setattr(auth, "DASHBOARD_URL_FILE", f)
+    assert auth._base_url() == "https://rufus.tail635959.ts.net"
+
+
+def test_cmd_link_reprints_without_rotating_the_token(users_file, capsys):
+    rc = auth._cmd_link("james")
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert PARTNER_TOKEN in out
+    # The token itself must be unchanged afterward.
+    assert auth.user_for_token(PARTNER_TOKEN)["name"] == "james"
+
+
+def test_cmd_link_reports_unknown_user(users_file, capsys):
+    rc = auth._cmd_link("nobody")
+    assert rc == 1
+    assert "No user named" in capsys.readouterr().out

@@ -24,15 +24,29 @@ param(
     [switch]$Unregister
 )
 
-$DashTask  = "Rufus Dashboard"
-$WatchTask = "Rufus Watchdog"
-$Root      = $PSScriptRoot
-$Port      = if ($env:RUFUS_DASHBOARD_PORT) { $env:RUFUS_DASHBOARD_PORT } else { "8765" }
+$DashTask   = "Rufus Dashboard"
+$WatchTask  = "Rufus Watchdog"
+$Root       = $PSScriptRoot
+$Port       = if ($env:RUFUS_DASHBOARD_PORT) { $env:RUFUS_DASHBOARD_PORT } else { "8765" }
+$UrlFile    = Join-Path $Root "config\dashboard_url.txt"
+$DashBat    = Join-Path $Root "run_dashboard.bat"
+$WatchBat   = Join-Path $Root "run_watchdog.bat"
 
 function Get-PythonExe {
     $venv = Join-Path $Root ".venv\Scripts\python.exe"
     if (Test-Path $venv) { return $venv }
     return "python"
+}
+
+function Test-Dependencies($Python) {
+    # The single most common failure of this whole setup: no .venv, so this
+    # silently falls back to system python, which usually does NOT have
+    # flask/filelock installed (they're declared in requirements.txt, which
+    # nothing auto-installs into system python). The dashboard task then dies
+    # on the very first import, and without this check the only symptom is
+    # "not answering" with no indication why.
+    $check = & $Python -c "import flask, filelock, requests" 2>&1
+    return $LASTEXITCODE -eq 0
 }
 
 # ---------------------------------------------------------------- status ----
@@ -58,8 +72,17 @@ if ($Status) {
         }
     } catch {
         Write-Host ("{0,-18} NOT answering on port {1}" -f "dashboard", $Port) -ForegroundColor Red
+        $log = Join-Path $Root "logs\dashboard.log"
+        if (Test-Path $log) {
+            Write-Host "Last lines of logs\dashboard.log:" -ForegroundColor Yellow
+            Get-Content $log -Tail 15 | ForEach-Object { Write-Host "  $_" }
+        }
     }
 
+    if (Test-Path $UrlFile) {
+        Write-Host ""
+        Write-Host ("Public URL:        {0}" -f (Get-Content $UrlFile -Raw).Trim()) -ForegroundColor Cyan
+    }
     if (Get-Command tailscale -ErrorAction SilentlyContinue) {
         Write-Host ""
         Write-Host "Tailscale serve:" -ForegroundColor Cyan
@@ -93,54 +116,37 @@ if ($Unregister) {
 # -------------------------------------------------------------- register ----
 $Python = Get-PythonExe
 if ($Python -eq "python") {
-    Write-Host "No .venv found - using system python. Create one with:" -ForegroundColor Yellow
-    Write-Host "  python -m venv .venv; .\.venv\Scripts\pip install -r requirements.txt"
-    Write-Host ""
+    Write-Host "No .venv found - using system python." -ForegroundColor Yellow
+} else {
+    Write-Host "Using $Python" -ForegroundColor Cyan
 }
 
-# Auth first. An always-on dashboard with no users file is a dashboard that
-# trusts every tailnet visitor as the owner, which is the exact failure this
-# whole setup exists to avoid.
-$UsersFile = Join-Path $Root "config\users.json"
-if (-not (Test-Path $UsersFile)) {
-    Write-Host "No config\users.json yet - creating the owner account." -ForegroundColor Cyan
-    & $Python (Join-Path $Root "scripts\auth.py") init
+if (-not (Test-Dependencies $Python)) {
     Write-Host ""
-    Write-Host "Save the link above. Add your partner with:" -ForegroundColor Cyan
-    Write-Host "  python scripts\auth.py add james --role partner"
+    Write-Host "Missing packages (flask/filelock/requests) under $Python." -ForegroundColor Red
+    Write-Host "This is why the dashboard task fails silently without this check." -ForegroundColor Red
     Write-Host ""
-}
-
-$DashCmd  = "`"$Python`" `"$Root\scripts\dashboard.py`""
-$WatchCmd = "`"$Python`" `"$Root\scripts\watchdog.py`""
-
-schtasks /Create /TN "$DashTask" /TR "$DashCmd" /SC ONSTART /RL HIGHEST /F | Out-Null
-if ($LASTEXITCODE -ne 0) {
-    Write-Host "Failed to register '$DashTask' - run this PowerShell as Administrator." -ForegroundColor Red
+    if ($Python -eq "python") {
+        Write-Host "Recommended - create a venv and install into THAT instead:" -ForegroundColor Yellow
+        Write-Host "  python -m venv .venv"
+        Write-Host "  .\.venv\Scripts\pip install -r requirements.txt"
+        Write-Host ""
+        Write-Host "Or install into system python right now:" -ForegroundColor Yellow
+        Write-Host "  pip install -r requirements.txt"
+    } else {
+        Write-Host "Install into the venv:" -ForegroundColor Yellow
+        Write-Host "  .\.venv\Scripts\pip install -r requirements.txt"
+    }
+    Write-Host ""
+    Write-Host "Re-run .\serve.ps1 after that." -ForegroundColor Yellow
     exit 1
 }
-Write-Host "Registered: $DashTask (starts at boot)" -ForegroundColor Green
 
-schtasks /Create /TN "$WatchTask" /TR "$WatchCmd" /SC ONSTART /RL HIGHEST /F | Out-Null
-if ($LASTEXITCODE -ne 0) {
-    Write-Host "Failed to register '$WatchTask'." -ForegroundColor Red
-    exit 1
-}
-Write-Host "Registered: $WatchTask (restarts the dashboard if it stops)" -ForegroundColor Green
-
-# Start them now so you don't have to reboot to test any of this.
-schtasks /Run /TN "$DashTask"  2>$null | Out-Null
-schtasks /Run /TN "$WatchTask" 2>$null | Out-Null
-Start-Sleep -Seconds 3
-
-try {
-    $r = Invoke-WebRequest -Uri "http://127.0.0.1:$Port/healthz" -TimeoutSec 5 -UseBasicParsing
-    Write-Host "Dashboard is answering on http://localhost:$Port" -ForegroundColor Green
-} catch {
-    Write-Host "Dashboard not answering yet - check logs\dashboard.log in a moment." -ForegroundColor Yellow
-}
-
-# ------------------------------------------------------------- tailscale ----
+# --------------------------------------------------------------- tailscale --
+# Enabled BEFORE the owner account is created / the sign-in link is printed,
+# so that link can carry the real tailnet URL instead of localhost, which is
+# useless on a phone. This was silently wrong before: auth.py had no way to
+# know a tailnet URL existed at all.
 if ($Tailscale) {
     if (-not (Get-Command tailscale -ErrorAction SilentlyContinue)) {
         Write-Host ""
@@ -151,15 +157,88 @@ if ($Tailscale) {
     }
     Write-Host ""
     Write-Host "Publishing the dashboard to your tailnet..." -ForegroundColor Cyan
-    tailscale serve --bg $Port
+    $serveOut = tailscale serve --bg $Port 2>&1
     if ($LASTEXITCODE -ne 0) {
         Write-Host "tailscale serve failed - is this machine signed in? (tailscale status)" -ForegroundColor Red
+        Write-Host $serveOut
         exit 1
     }
-    tailscale serve status
+    $statusOut = tailscale serve status 2>&1
+    $statusOut | ForEach-Object { Write-Host $_ }
+
+    # Pull the https URL out of `tailscale serve status` output, e.g.:
+    #   https://rufus.tail635959.ts.net/
+    #   |-- proxy http://127.0.0.1:8765
+    $tailnetUrl = ($statusOut | Select-String -Pattern 'https://\S+' | Select-Object -First 1)
+    if ($tailnetUrl) {
+        $url = ($tailnetUrl.Matches[0].Value).TrimEnd('/')
+        Set-Content -Path $UrlFile -Value $url -NoNewline
+        $env:RUFUS_DASHBOARD_URL = $url   # so THIS session's auth.py calls below use it too
+        Write-Host ""
+        Write-Host "Saved public URL to config\dashboard_url.txt: $url" -ForegroundColor Green
+        Write-Host "(sign-in links, and Discord/ntfy notifications, will use this from now on)"
+    } else {
+        Write-Host ""
+        Write-Host "Could not parse the tailnet URL from 'tailscale serve status' output." -ForegroundColor Yellow
+        Write-Host "Sign-in links will fall back to localhost until you set it by hand:"
+        Write-Host '  "https://your-machine.your-tailnet.ts.net" | Set-Content config\dashboard_url.txt'
+    }
     Write-Host ""
     Write-Host "Only devices signed into YOUR tailnet can reach that URL," -ForegroundColor Green
     Write-Host "and they still need a personal sign-in token to get past /login."
+}
+
+# Auth. An always-on dashboard with no users file trusts every tailnet
+# visitor as the owner, which is the exact failure this whole setup exists
+# to avoid.
+$UsersFile = Join-Path $Root "config\users.json"
+if (-not (Test-Path $UsersFile)) {
+    Write-Host ""
+    Write-Host "No config\users.json yet - creating the owner account." -ForegroundColor Cyan
+    & $Python (Join-Path $Root "scripts\auth.py") init
+    Write-Host ""
+    Write-Host "Save the link above. Add your partner with:" -ForegroundColor Cyan
+    Write-Host "  python scripts\auth.py add james --role partner"
+    Write-Host ""
+}
+
+# Scheduled tasks point at .bat wrappers, not python.exe directly: a bare
+# `schtasks /TR "python.exe ... dashboard.py"` has no log destination, so a
+# crash on startup (exactly what happens without the deps this script just
+# checked for) leaves zero trace anywhere. The .bat sets the working
+# directory and redirects stdout/stderr to logs\dashboard.log.
+schtasks /Create /TN "$DashTask" /TR "`"$DashBat`"" /SC ONSTART /RL HIGHEST /F | Out-Null
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "Failed to register '$DashTask' - run this PowerShell as Administrator." -ForegroundColor Red
+    exit 1
+}
+Write-Host "Registered: $DashTask (starts at boot)" -ForegroundColor Green
+
+schtasks /Create /TN "$WatchTask" /TR "`"$WatchBat`"" /SC ONSTART /RL HIGHEST /F | Out-Null
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "Failed to register '$WatchTask'." -ForegroundColor Red
+    exit 1
+}
+Write-Host "Registered: $WatchTask (restarts the dashboard if it stops)" -ForegroundColor Green
+
+# Start them now so you don't have to reboot to test any of this.
+schtasks /Run /TN "$DashTask"  2>$null | Out-Null
+schtasks /Run /TN "$WatchTask" 2>$null | Out-Null
+Start-Sleep -Seconds 4
+
+try {
+    $r = Invoke-WebRequest -Uri "http://127.0.0.1:$Port/healthz" -TimeoutSec 5 -UseBasicParsing
+    Write-Host "Dashboard is answering on http://localhost:$Port" -ForegroundColor Green
+} catch {
+    Write-Host "Dashboard not answering yet." -ForegroundColor Yellow
+    $log = Join-Path $Root "logs\dashboard.log"
+    if (Test-Path $log) {
+        Write-Host "Last lines of logs\dashboard.log:" -ForegroundColor Yellow
+        Get-Content $log -Tail 15 | ForEach-Object { Write-Host "  $_" }
+    } else {
+        Write-Host "logs\dashboard.log doesn't exist yet either - the task may not have run." -ForegroundColor Yellow
+        Write-Host "Try running it directly to see the error:  .\run_dashboard.bat"
+    }
 }
 
 Write-Host ""

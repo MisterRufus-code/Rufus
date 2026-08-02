@@ -67,7 +67,20 @@ def enabled() -> bool:
 
 
 def _dashboard_url() -> str:
-    return (os.environ.get("RUFUS_DASHBOARD_URL") or "").strip().rstrip("/")
+    """RUFUS_DASHBOARD_URL, falling back to config/dashboard_url.txt — the
+    same resolution auth.py uses, so a Discord/ntfy link and a sign-in link
+    always point at the same place. See auth._base_url() for why the file
+    exists (a `setx` env var doesn't reach a PowerShell window opened before
+    it was set; a file does)."""
+    env = (os.environ.get("RUFUS_DASHBOARD_URL") or "").strip().rstrip("/")
+    if env:
+        return env
+    try:
+        from pathlib import Path
+        url_file = Path(__file__).parent.parent / "config" / "dashboard_url.txt"
+        return url_file.read_text(encoding="utf-8").strip().rstrip("/")
+    except OSError:
+        return ""
 
 
 def configured() -> list[str]:
