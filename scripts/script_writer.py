@@ -316,11 +316,39 @@ def _content_tokens(text: str) -> set[str]:
     return {w for w in _word_tokens(text) if w not in stopwords and len(w) > 2}
 
 
+# Cliché FAMILIES, not fixed strings.
+#
+# The exact-phrase ban list is trivially routed around, and the model does it:
+# a shipped Monte dei Paschi script opened a scene with "Picture the Medici
+# family counting coins" ('picture this' is banned) and pivoted on "The truth?"
+# ('the truth is' is banned). Both passed every gate and went out. Banning the
+# construction instead of one spelling of it is what closes that.
+#
+# Scoped deliberately narrowly: only the imperative scene-setting opener and
+# the reveal-pivot form. "The picture showed a queue outside the bank" and
+# "investors could not imagine a default" are legitimate and must still pass.
+_BANNED_PATTERNS: list[tuple[re.Pattern, str]] = [
+    (re.compile(r"(?:^|(?<=[.!?…—]\s))\s*picture\s+(?:this|that|the|a|an|yourself)\b",
+                re.IGNORECASE | re.MULTILINE), "picture <scene> opener"),
+    (re.compile(r"(?:^|(?<=[.!?…—]\s))\s*imagine\s+(?:this|that|the|a|an|yourself|if)\b",
+                re.IGNORECASE | re.MULTILINE), "imagine <scene> opener"),
+    # No trailing \b on the punctuation branch: "The truth? Ignore history" has
+    # a space after the "?", which is not a word boundary, so a shared \b at the
+    # end silently failed to match the exact form that shipped.
+    (re.compile(r"\bhere'?s\s+the\s+truth\b|\bthe\s+truth\s+is\b|\bthe\s+truth\s*[?:,]",
+                re.IGNORECASE), "'the truth' reveal-pivot"),
+    (re.compile(r"\bask\s+yourself\b", re.IGNORECASE), "'ask yourself'"),
+]
+
+
 def _find_banned(script: str) -> str | None:
     text = script.lower()
     for phrase in _standards()["banned_phrases"]:
         if re.search(r"\b" + re.escape(phrase.lower()) + r"\b", text):
             return phrase
+    for pattern, label in _BANNED_PATTERNS:
+        if pattern.search(script):
+            return label
     return None
 
 
@@ -435,7 +463,48 @@ def _hook_grounding_check(hook: str, source_text: str) -> str | None:
     return None
 
 
-_REPEATED_NUM_RE = re.compile(r"\b\d{3,}\b")
+# Comma-grouped digits are ONE number, not several. The old pattern was
+# r"\b\d{3,}\b", which splits "10,000,000" on its commas into three separate
+# "000" tokens and then reports the script as repeating "000" 3x — a script
+# that in fact contains that figure exactly once. Observed live: three
+# consecutive false rejections on the Venezuela hyperinflation script
+# (2026-07-31 10:43), each one an entire wasted generation spent rewriting a
+# script that was never actually wrong. Matching the whole comma-grouped run
+# and stripping the separators is what makes the count mean what it claims.
+def _allowed_numbers_block(*sources: str) -> str:
+    """The exact figures a hook may use, listed for the generator.
+
+    _hook_grounding_check() rejects any number in a hook that isn't a token of
+    the source — but the PROMPT only ever said "use the source's numbers"
+    without saying WHICH, leaving the model to extract them from prose. It
+    routinely guessed plausible neighbours instead: four different Ibn Battuta
+    hooks invented 1331/1352/1354/1355 in one run, and invented figures were
+    the single largest accuracy failure live (21.4% of all rejections).
+
+    Listing the permitted tokens turns "don't invent numbers" from a rule the
+    model must infer into a closed set it can copy from. Derived with the SAME
+    regex the check uses, so the prompt and the gate can't disagree about what
+    counts as grounded.
+    """
+    tokens: list[str] = []
+    for src in sources:
+        for n in _HOOK_NUMBER_RE.findall(_strip_list_markers(src or "")):
+            if n not in tokens:
+                tokens.append(n)
+    if not tokens:
+        # No figures in the source at all — say so, rather than printing an
+        # empty list that reads as "no constraint".
+        return ("- The source contains NO numbers. Do not put any digit in a hook — "
+                "build it on a name, place, or documented event instead.\n")
+    shown = tokens[:40]
+    more = f" (+{len(tokens) - len(shown)} more in the source above)" if len(tokens) > len(shown) else ""
+    return (f"- NUMBERS YOU MAY USE — copy from this list EXACTLY, character for "
+            f"character. Any other digit is an automatic rejection, including a "
+            f"nearby year or a rounded version of one of these:\n"
+            f"  {', '.join(shown)}{more}\n")
+
+
+_REPEATED_NUM_RE = re.compile(r"\b\d[\d,]*\d\b|\b\d+\b")
 
 
 def _repeated_number(script: str) -> str | None:
@@ -446,7 +515,10 @@ def _repeated_number(script: str) -> str | None:
     specifics elsewhere in the source. Deterministic and free, so it catches
     this before an expensive LLM score gets spent on a redundant script."""
     counts: dict[str, int] = {}
-    for n in _REPEATED_NUM_RE.findall(script):
+    for raw in _REPEATED_NUM_RE.findall(script):
+        n = raw.replace(",", "")
+        if len(n) < 3:
+            continue          # 1-2 digit numbers repeat legitimately ("3 banks", "3 years")
         counts[n] = counts.get(n, 0) + 1
     repeats = {n: c for n, c in counts.items() if c >= 2}
     if not repeats:
@@ -519,44 +591,73 @@ def _hook_already_present(first_line: str, hook: str) -> bool:
     return len(hook_toks & _tokens(first_line)) / len(hook_toks) >= 0.6
 
 
-def _body_pre_check(script: str) -> str | None:
-    """Return rejection reason or None for the full body. Runs AFTER banned check."""
+def _body_violations(script: str) -> list[str]:
+    """EVERY rejection reason for this script, not just the first one.
+
+    Why this exists: _body_pre_check() historically returned on the first
+    failure, so a script that broke three rules was rejected three separate
+    times — one whole LLM generation burned per rule, each retry told about
+    only the single problem it had just been caught on. The live failure log
+    shows exactly that ladder (2026-08-02 01:15: too long → no opinion word →
+    hedging → banned phrase → no opinion word → loop echo, seven attempts on
+    one script). Collecting all of them means one generation produces the
+    complete correction list, so the next attempt can fix everything at once.
+
+    Order still matters for the caller's headline reason: the checks are
+    appended cheapest/most-structural first, so violations[0] stays the same
+    string the old single-return version would have produced.
+    """
     body = _standards()["body"]
+    out: list[str] = []
+
     words = len(script.split())
     if words < body["min_words"]:
-        return f"too short ({words} words, need ≥{body['min_words']})"
-    if words > body["max_words"]:
-        return f"too long ({words} words, cap {body['max_words']})"
+        out.append(f"too short ({words} words, need ≥{body['min_words']})")
+    elif words > body["max_words"]:
+        out.append(f"too long ({words} words, cap {body['max_words']})")
 
     density = _specificity_density(script)
     if density < body["specificity_per_25_words"]:
-        return f"low specificity ({density:.2f}/25w, need ≥{body['specificity_per_25_words']})"
+        out.append(f"low specificity ({density:.2f}/25w, need ≥{body['specificity_per_25_words']})")
 
     avg, n = _sentence_stats(script)
     if n < 3:
-        return f"too few sentences ({n})"
-    if avg > body["max_avg_sentence_words"]:
-        return f"sentences too long (avg {avg:.1f} words, cap {body['max_avg_sentence_words']})"
-    if avg < body["min_avg_sentence_words"]:
-        return f"sentences too short (avg {avg:.1f} words, floor {body['min_avg_sentence_words']})"
+        out.append(f"too few sentences ({n})")
+    elif avg > body["max_avg_sentence_words"]:
+        out.append(f"sentences too long (avg {avg:.1f} words, cap {body['max_avg_sentence_words']})")
+    elif avg < body["min_avg_sentence_words"]:
+        out.append(f"sentences too short (avg {avg:.1f} words, floor {body['min_avg_sentence_words']})")
 
     echoes, _ = _loop_echoes_hook(script)
     if not echoes:
-        return "loop no echo (second-to-last line shares no content tokens with hook)"
+        out.append("loop no echo (second-to-last line shares no content tokens with hook)")
 
     if not _has_opinion_word(script):
-        return "no opinion word (need ≥1 from opinion_pool)"
+        out.append("no opinion word (need ≥1 from opinion_pool)")
 
     if (h := _find_hedging(script)):
-        return f"hedging word: '{h}'"
+        out.append(f"hedging word: '{h}'")
 
     if (rep := _repeated_number(script)):
-        return rep
+        out.append(rep)
 
     if (dash := _em_dash_overuse(script)):
-        return dash
+        out.append(dash)
 
-    return _cadence_violation(script)
+    if (cad := _cadence_violation(script)):
+        out.append(cad)
+
+    return out
+
+
+def _body_pre_check(script: str) -> str | None:
+    """First rejection reason for the full body, or None. Runs AFTER banned check.
+
+    Thin wrapper over _body_violations() — kept because the headline reason is
+    what gets logged per attempt and shown in the dashboard's rejection table.
+    """
+    violations = _body_violations(script)
+    return violations[0] if violations else None
 
 
 def _cadence_violation(script: str) -> str | None:
@@ -701,6 +802,7 @@ def _hook_factory(client: OpenAI, seed: dict, analysis: str, niche_name: str,
 
     forbidden_str = ", ".join(f"'{x}'" for x in hs["forbidden_openers"][:8])
     novelty_blk   = _novelty_block(niche_name)
+    numbers_blk   = _allowed_numbers_block(seed_blk, analysis)
 
     prompt = (
         f"{seed_blk}\n"
@@ -716,6 +818,7 @@ def _hook_factory(client: OpenAI, seed: dict, analysis: str, niche_name: str,
         f"dollar amount, 'secret', or personal story — a fabricated hook fails the "
         f"downstream fact-check and kills the whole video. NEVER write in first "
         f"person ('I', 'my', 'we') — this is a faceless channel with no narrator persona.\n"
+        f"{numbers_blk}"
         f"- Must surface a contradiction, paradox, or pattern interrupt — not a report\n"
         f"- Must NOT start with any of: {forbidden_str}\n"
         f"- Must NOT use vague generalities — every word earns its place\n\n"
@@ -1579,17 +1682,46 @@ def write_script(scene_description: str, seed: dict | None = None,
             lines.insert(0, winning_hook)
             script = "\n".join(lines)
 
-        # Pre-score regex rejections (cheap)
-        _banned = _find_banned(script)
-        rejection = f"banned phrase: '{_banned}'" if _banned else None
-        if not rejection:
-            rejection = _body_pre_check(script)
+        # Pre-score regex rejections (cheap).
+        #
+        # A banned phrase is REPAIRED here rather than rejected outright. It was
+        # already being repaired unconditionally as a safety net further down
+        # (see _repair_banned at the end of this function), so rejecting first
+        # meant spending an entire extra generation to arrive at a fix we were
+        # willing to apply anyway. Banned phrases were 24.7% of all rejections
+        # live, overwhelmingly single-word swaps ('journey'→'path',
+        # 'crucial'→'key'). The model is still TOLD about it via accumulated_
+        # fixes, so later attempts stop reaching for the word — the correction
+        # survives, only the wasted round-trip goes away.
+        violations: list[str] = []
+        if (_banned := _find_banned(script)):
+            repaired = _repair_banned(script)
+            # Only accept the repair if it didn't wreck the script's structure —
+            # unmapped phrases get DELETED, which can gut a sentence.
+            if not _find_banned(repaired) and len(repaired.split()) >= _standards()["body"]["min_words"]:
+                print(f"[gpt] repaired banned phrase '{_banned}' in place (no retry spent)")
+                script = repaired
+                fix = _fix_for(f"banned phrase: '{_banned}'")
+                if fix and fix not in accumulated_fixes:
+                    accumulated_fixes.append(fix)
+            else:
+                violations.append(f"banned phrase: '{_banned}'")
+
+        violations += _body_violations(script)
+        rejection = violations[0] if violations else None
 
         if rejection:
             last_rejection = rejection  # carry forward to next attempt's push
-            fix = _fix_for(rejection)
-            if fix and fix not in accumulated_fixes:
-                accumulated_fixes.append(fix)   # remember it for ALL future attempts
+            # EVERY violation becomes a correction, not just the headline one —
+            # otherwise a script breaking three rules costs three generations to
+            # learn about all three (the observed 7-attempt ladders).
+            for v in violations:
+                fix = _fix_for(v)
+                if fix and fix not in accumulated_fixes:
+                    accumulated_fixes.append(fix)   # remembered for ALL future attempts
+            if len(violations) > 1:
+                print(f"[gpt]   (+{len(violations) - 1} more: "
+                      f"{'; '.join(v.split('(')[0].strip() for v in violations[1:])})")
             rejected_pool.append((len(script.split()), script))
             print(f"[gpt] attempt {attempt}/{max_attempts} – rejected ({rejection})")
             save_attempt(run_id=run_id, niche=active,
