@@ -66,25 +66,62 @@ def _auth(channel):
     return creds
 
 
-def fetch_analytics(channel_id: str = None):
+def fetch_analytics(channel_id: str = None, *, digest: bool = True):
+    """Refresh metrics for every enabled channel, then (optionally) post one
+    digest of what actually moved.
+
+    The digest is the point of running this daily for a human: the numbers
+    were already landing in SQLite, but nothing ever said them out loud, so
+    "how did last week do" meant opening the dashboard on purpose."""
     channels = [channel_id] if channel_id else list_channels()
+    collected: list[dict] = []
     for cid in channels:
         channel = load_channel(cid)
         if not channel.platform_enabled("youtube"):
             continue
         try:
-            _fetch_channel(channel)
+            collected += _fetch_channel(channel)
         except Exception as e:
             print(f"[analytics] channel {channel.id} failed: {e}")
+    if digest and collected:
+        _post_digest(collected)
+    return collected
 
 
-def _fetch_channel(channel):
+def _post_digest(rows: list[dict]) -> None:
+    """Summarize the fetch into one notification. Best effort by contract —
+    analytics is a reporting step and must never fail the run that calls it."""
+    try:
+        import notify
+    except Exception:
+        return
+    top = sorted(rows, key=lambda r: r["views"], reverse=True)[:5]
+    total_views = sum(r["views"] for r in rows)
+    watched = [r["watch_pct"] for r in rows if r["watch_pct"]]
+    avg_watch = sum(watched) / len(watched) if watched else 0.0
+
+    lines = [f"{total_views:,} views across {len(rows)} tracked video"
+             f"{'s' if len(rows) != 1 else ''}",
+             f"average watch {avg_watch:.1f}%", ""]
+    for r in top:
+        title = (r.get("title") or r["youtube_id"])[:60]
+        lines.append(f"• {r['views']:,} views · {r['watch_pct']:.0f}% · {title}")
+    try:
+        notify.notify_analytics("\n".join(lines), rows=len(rows))
+    except Exception as e:
+        print(f"[analytics] digest notification failed (non-fatal): {e}")
+
+
+def _fetch_channel(channel) -> list[dict]:
+    """Fetch + persist metrics for one channel. Returns what it saved, so the
+    caller can build a digest without re-reading the DB."""
     from googleapiclient.discovery import build
 
+    collected: list[dict] = []
     videos = get_recent_tracked_videos(days=RECENT_WINDOW_DAYS, channel=channel.id)
     if not videos:
         print(f"[analytics] {channel.id}: no videos uploaded in last {RECENT_WINDOW_DAYS} days.")
-        return
+        return collected
 
     creds    = _auth(channel)
     yt       = build("youtube",          "v3", credentials=creds)
@@ -99,12 +136,16 @@ def _fetch_channel(channel):
         vid_id = row["youtube_id"]
         db_id  = row["id"]
         try:
-            resp  = yt.videos().list(part="statistics", id=vid_id).execute()
+            # snippet as well as statistics: the digest needs a human-readable
+            # title, and get_recent_tracked_videos only carries ids. Parts are
+            # free here — videos.list costs 1 quota unit either way.
+            resp  = yt.videos().list(part="snippet,statistics", id=vid_id).execute()
             items = resp.get("items", [])
             if not items:
                 print(f"[analytics] {vid_id}: not found on YouTube")
                 continue
             stats = items[0]["statistics"]
+            title = items[0].get("snippet", {}).get("title", "")
             views = int(stats.get("viewCount", 0))
             likes = int(stats.get("likeCount", 0))
 
@@ -128,14 +169,22 @@ def _fetch_channel(channel):
 
             save_metrics(db_id, views=views, watch_pct=watch_pct, ctr=0.0, likes=likes)
             print(f"[analytics] {vid_id}: {views} views, {watch_pct:.1f}% watch")
+            collected.append({
+                "youtube_id": vid_id, "views": views, "likes": likes,
+                "watch_pct": watch_pct, "channel": channel.id, "title": title,
+            })
 
         except Exception as e:
             print(f"[analytics] {vid_id} failed: {e}")
+
+    return collected
 
 
 if __name__ == "__main__":
     import argparse
     ap = argparse.ArgumentParser()
     ap.add_argument("--channel", help="Fetch one channel (default: all enabled)")
+    ap.add_argument("--no-digest", action="store_true",
+                    help="Save metrics without posting the summary notification")
     args = ap.parse_args()
-    fetch_analytics(args.channel)
+    fetch_analytics(args.channel, digest=not args.no_digest)

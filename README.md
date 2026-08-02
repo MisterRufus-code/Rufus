@@ -236,8 +236,11 @@ still be flat. Four checks target the second problem specifically:
 python scripts/health_check.py        # pre-flight: deps, keys, config, disk, ComfyUI+stills template
 python scripts/review_scripts.py      # browse generated scripts from the DB
 python scripts/analyze_scripts.py     # script-writer funnel/cost/score analysis
-python scripts/analytics_fetcher.py   # pull YouTube metrics into the DB (cron daily)
+python scripts/analytics_fetcher.py   # pull YouTube metrics into the DB (cron daily) + Discord digest
 python scripts/feedback_analyzer.py   # turn metrics into config/learnings.json
+python scripts/image_gen.py "..."     # generate a thumbnail image on the GPU
+python scripts/auth.py list           # who can reach the dashboard
+python scripts/watchdog.py            # keep the dashboard answering (serve.ps1 runs this at boot)
 python -m pytest tests/ -q            # test suite
 ```
 
@@ -342,30 +345,160 @@ showed the top-8 aggregate, this is the full browser).
 deliberate: `/system` has routes that can start and kill processes on this
 machine, so "no login" alone isn't enough once those exist.
 
-**Access from your phone (or a reviewer who isn't you)**: use
-[Tailscale](https://tailscale.com), free, ~2 minutes, no router changes:
-1. Install Tailscale on this PC and on your phone, same account (or share
-   just this one machine with a reviewer's own account: Machines → your PC
-   → Share).
-2. On this PC: `tailscale serve --bg 8765` — proxies the dashboard onto
-   your private tailnet over https with an auto-renewed cert. The
-   dashboard itself never has to leave loopback; only devices already
-   signed into your tailnet can reach it.
-3. Open the `https://...` URL `tailscale serve status` prints, from your
-   phone (Tailscale connected).
-4. `tailscale serve --bg off` to stop sharing it.
-
 Never set `RUFUS_DASHBOARD_HOST=0.0.0.0` and never port-forward this —
 either one puts the process-control routes on your open WiFi or the
-internet with no login.
+internet. Publish it with `tailscale serve` instead (below), which keeps
+the dashboard on loopback and still reaches your phone.
 
 Knobs: `RUFUS_DASHBOARD_PORT` (8765), `RUFUS_DASHBOARD_HOST` (`127.0.0.1`).
 
 ---
 
+## Remote access & sharing with a second person
+
+### Why loopback is not a login
+
+`tailscale serve` terminates the connection and proxies to `127.0.0.1`, so
+**every tailnet visitor arrives at the dashboard as loopback**. Any check of
+the form "is this request from 127.0.0.1" therefore passes for anyone you
+share the tailnet URL with — including the routes that start and kill
+processes and the one that publishes to YouTube. Sharing the URL is not the
+same as sharing read access.
+
+So access is decided by a **token the caller holds**, not by where the
+request appears to come from.
+
+### Roles
+
+| Role | Can | Cannot |
+|---|---|---|
+| `owner` | everything | — |
+| `partner` | make videos, generate thumbnails, edit title/description, download media | approve/upload, settings, start or kill processes |
+| `viewer` | browse and download | generate anything |
+
+`config/users.json` is **gitignored** — the tokens in it are real
+credentials. With no such file the dashboard stays in legacy mode (loopback
+= owner), so an existing single-user setup is unchanged until you opt in.
+
+```powershell
+python scripts\auth.py init                      # create the file + owner link
+python scripts\auth.py add james --role partner  # prints james's sign-in link
+python scripts\auth.py list
+python scripts\auth.py revoke james              # kills that link immediately
+```
+
+Each command prints a `https://…/?token=…` URL. **The link is the password** —
+send it privately. Opening it once on a phone stores an HttpOnly,
+SameSite=Strict cookie, so the token stops trailing in URLs afterward.
+
+### Always-on server (Windows)
+
+```powershell
+.\serve.ps1 -Tailscale     # dashboard + watchdog start at boot, published to your tailnet
+.\serve.ps1 -Status        # what's registered, what's answering, who has access
+.\serve.ps1 -Unregister    # remove the boot tasks
+```
+
+Two Task Scheduler entries run at startup (before anyone logs in): the
+dashboard, and `scripts/watchdog.py`, which polls `/healthz` and restarts the
+dashboard if it stops answering — a crashed Flask process otherwise leaves
+the tailnet URL dead until someone happens to try it. Set
+`RUFUS_WATCHDOG_COMFY=1` plus `COMFY_START_CMD` to have it revive ComfyUI too.
+
+For the box to answer at 3am it must not sleep:
+`powercfg /change standby-timeout-ac 0`.
+
+### What a partner can actually do
+
+- **`/generate`** — describe a topic, start a real run on your RTX 3090. It
+  goes through every existing gate and lands in *your* review queue. It is
+  not published.
+- **`/thumbnails`** — describe an image, get it rendered on the GPU through
+  the same ComfyUI stills workflow the videos use, then **⬇ Save to phone**.
+  1280×720 (YouTube's thumbnail shape) or portrait.
+- **⬇ Download mp4** on any video page — the finished render, straight to
+  their phone.
+
+Same thing from the command line:
+
+```powershell
+python scripts\image_gen.py "a cracked hourglass spilling gold coins"
+python scripts\image_gen.py "..." --portrait --seed 42
+```
+
+(Distinct from `thumbnail_gen.py`, which brands a frame of an *already
+rendered* video.)
+
+### Discord
+
+```powershell
+$env:RUFUS_DISCORD_WEBHOOK="https://discord.com/api/webhooks/..."
+```
+
+Server Settings → Integrations → Webhooks → New Webhook. Unlike the phone-push
+backends, Discord carries the **artifact**: a published video and every
+generated thumbnail get posted into the channel, not just a link. Files over
+8MB are linked instead of uploaded (Discord rejects oversized uploads only
+after the whole body has been sent). `RUFUS_DISCORD_UPLOAD=0` for links only.
+
+The daily analytics run posts a digest there too — total views, average watch
+percentage, and the top five videos.
+
+---
+
+## YouTube API (upload + analytics)
+
+Both the uploader and the analytics fetcher are already written — this is
+purely a one-time credential setup. They share **one** token file and one
+scope list (`youtube_uploader.SCOPES`), so doing this once enables both.
+
+1. [Google Cloud Console](https://console.cloud.google.com) → create a project.
+2. **APIs & Services → Library** → enable **YouTube Data API v3** *and*
+   **YouTube Analytics API**.
+3. **OAuth consent screen** → External → add your own Google account under
+   **Test users**. (Leave it in "Testing"; publishing it triggers Google
+   verification you don't need for a personal channel. Test-mode refresh
+   tokens expire after 7 days — if uploads start failing weekly with an
+   auth error, that's this, and moving the app to "In production" fixes it.)
+4. **Credentials → Create credentials → OAuth client ID → Desktop app**.
+   Download the JSON as `config/client_secrets.json`.
+5. Authorize once, interactively, on the host PC:
+   ```powershell
+   python scripts\youtube_uploader.py media_library\output\some.mp4 "test"
+   ```
+   A browser opens → approve → `config/youtube_token.json` is written and
+   every later run is non-interactive.
+
+Then verify:
+
+```powershell
+python scripts\health_check.py
+python scripts\analytics_fetcher.py     # should print per-video views/watch%
+```
+
+**Quota**: the default 10,000 units/day allows ~6 uploads/day (1,600 units
+each); `videos.list` and analytics reads are 1 unit. A few runs a day is
+comfortably inside it.
+
+**Do the OAuth step at the keyboard, not over Tailscale** — it opens a local
+browser window and needs a real display. Adding a scope later invalidates the
+existing token: delete `config/youtube_token.json` and repeat step 5.
+
+Analytics runs daily inside `run_scheduled.bat` (before the render, so the day's
+script can learn from yesterday's numbers) and posts its digest to Discord.
+
+---
+
 ## Security invariants
 
-- `config/keys.json` is **gitignored** — never commit real keys.
+- `config/keys.json` and `config/users.json` are **gitignored** — never commit
+  real keys or dashboard access tokens.
+- Loopback is **not** treated as proof of identity once `config/users.json`
+  exists: `tailscale serve` proxies every tailnet visitor through `127.0.0.1`,
+  so authorization is by token and role, never by source address.
+- Only the `owner` role can publish. A `partner` can generate videos and
+  images and download them, but no role below owner can put anything on the
+  channel.
 - YouTube uploads default to **private**.
 - The quality gate (`RUFUS_MIN_UPLOAD_SCORE`, default 8) holds weak scripts back for review.
 - Every upload sets `status.containsSyntheticMedia=True` (`youtube_uploader.py`) — YouTube's altered/synthetic-content disclosure policy requires self-declaring this for realistic AI-generated video, and every Rufus video qualifies (GPT script, AI-generated imagery and motion, synthesized voice). Not optional/configurable — it's always true for this pipeline's output.
