@@ -627,10 +627,29 @@ def fetch_stackexchange_story(niche_name: str, used_ids: set | None = None) -> d
         title = _strip_html(q.get("title", ""))
         if TITLE_BAD_RE.search(title) or TITLE_OFFTOPIC_RE.search(title):
             continue
-        if not TITLE_STORY_RE.search(title):
-            continue
-        if topic_re and not (topic_re.search(title) or topic_re.search(body)):
-            continue
+        if topic_re:
+            # A general-purpose SE site (history.SE covers Vikings, wars,
+            # politics — anything) gets its "is this actually on-topic"
+            # signal from topic_re, not from TITLE_STORY_RE. Requiring BOTH
+            # was the bug: TITLE_STORY_RE wants a first-person narrative
+            # shape ("I lost $50k when…", a dollar sign, "years ago") that
+            # money.SE/workplace.SE questions genuinely have and academic
+            # history questions structurally don't — "Why did Roman denarii
+            # devalue?" is exactly the on-topic, well-sourced material this
+            # niche needs, and it fails TITLE_STORY_RE every time. Live
+            # symptom: history.SE returned 0 passing items out of 60 in
+            # every single logged run — not a strict filter, a mismatched
+            # one, blocking a source that already costs nothing and is
+            # never IP-blocked.
+            if not (topic_re.search(title) or topic_re.search(body)):
+                continue
+        else:
+            # money.SE / workplace.SE are inherently on-topic (every
+            # question there IS about money/work), so narrative shape is
+            # the only quality signal available — stays required here,
+            # unchanged from before.
+            if not TITLE_STORY_RE.search(title):
+                continue
         link = q.get("link", "")
         if "se:" + link in used_ids:
             continue

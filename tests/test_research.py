@@ -80,6 +80,42 @@ def test_fetch_stackexchange_finance_niche_unaffected_by_topic_filter():
     assert result is not None
 
 
+def test_fetch_stackexchange_accepts_academic_history_question_with_no_story_shape():
+    """The actual live bug, not a coincidental pass: a realistic academic
+    history.SE title with no dollar sign, no digit, and none of
+    TITLE_STORY_RE's narrative verbs — on-topic, well-sourced, and exactly
+    what this niche needs, but structurally unable to ever pass a filter that
+    wants a first-person story shape. Symptom in production: 0 of 60 items
+    passed, every single run — money.SE/workplace.SE's story-shape
+    requirement doesn't fit an academic Q&A site at all."""
+    items = [_se_item("Why did medieval European coin debasement violate usury laws?")]
+    assert not research.TITLE_STORY_RE.search(items[0]["title"]), \
+        "test setup: this title must NOT accidentally satisfy the old gate"
+    with patch.object(research.httpx, "get", return_value=_se_response(items)):
+        result = research.fetch_stackexchange_story("money_history")
+    assert result is not None
+
+
+def test_fetch_stackexchange_still_rejects_offtopic_even_with_story_shape():
+    """topic_re is still the real gate for history.SE — a narrative-shaped
+    but off-topic question (Vikings, not money) must still be rejected."""
+    items = [_se_item("I lost my sword and $12 in the Viking raid last year")]
+    with patch.object(research.httpx, "get", return_value=_se_response(items)):
+        result = research.fetch_stackexchange_story("money_history")
+    assert result is None
+
+
+def test_fetch_stackexchange_money_niche_still_requires_story_shape():
+    """The other half of the fix that must NOT change: money.SE/workplace.SE
+    have no topic_re, so TITLE_STORY_RE stays the only quality gate there —
+    an on-topic but non-narrative question must still be rejected."""
+    items = [_se_item("What is the difference between a Roth and Traditional IRA?")]
+    assert not research.TITLE_STORY_RE.search(items[0]["title"])
+    with patch.object(research.httpx, "get", return_value=_se_response(items)):
+        result = research.fetch_stackexchange_story("finance")
+    assert result is None
+
+
 # ── Wikipedia seed source (self-directed, grounded) ──────────────────────────────
 
 def _wiki_response(extract, title="Nixon shock"):
