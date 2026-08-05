@@ -1403,6 +1403,18 @@ def system_status():
     return _head() + body + PAGE_TAIL
 
 
+def _available_niches() -> list[str]:
+    """Niche ids from config/niches.json, or [] if unreadable. A dropdown
+    built from this can't offer a niche that doesn't exist — unlike the free-
+    text field it replaces, which silently no-ops on a typo (the pipeline
+    falls back to the schedule's default niche with no error shown here)."""
+    try:
+        data = json.loads((ROOT / "config" / "niches.json").read_text(encoding="utf-8"))
+        return list(data.get("niches", {}).keys())
+    except (OSError, json.JSONDecodeError, KeyError):
+        return []
+
+
 @app.route("/generate")
 def generate_page():
     """The partner-facing entry point: describe a video, start it, watch it run.
@@ -1411,6 +1423,12 @@ def generate_page():
     machine (kill a run, inspect ComfyUI) and stays owner-only; this page is
     just "make me a video," which is exactly the slice a collaborator needs
     and the only slice they should have.
+
+    Niche is a dropdown (not free text) and a "pick a look" gallery is
+    embedded directly here, rather than requiring a trip to /thumbnails and
+    back — a collaborator without shell/System access previously had no way
+    to build a genuinely CUSTOM video (a specific niche, a specific visual
+    style) beyond typing a topic string into a box and hoping.
     """
     auth.require("generate")
     channels = _channels()
@@ -1418,12 +1436,52 @@ def generate_page():
     running = [c for c in channels if _run_in_progress(c)]
     comfy_up = _comfyui_reachable()
 
+    niches = _available_niches()
+    niche_options = "".join(f'<option value="{_esc(n)}">{_esc(n)}</option>' for n in niches)
+
     status = ("<p class='muted'>Nothing running right now.</p>" if not running else
               "<p>" + " ".join(f"<span class='badge pending'>{_esc(c)} running</span>"
                                for c in running) + "</p>")
     gpu_warn = ("" if comfy_up else
                 "<div class='msg error'>ComfyUI is not reachable — a run started "
                 "now will fall back to stock footage instead of GPU stills.</div>")
+
+    # "Pick a look" — browse recently generated images and drop one straight
+    # into the topic field with one click, instead of retyping its prompt by
+    # hand or leaving this page to find it on /thumbnails.
+    gallery_html = "<p class='muted'>No generated images yet — try Thumbnails first.</p>"
+    try:
+        import image_gen
+        imgs = [i for i in image_gen.recent_images(limit=24) if i.get("prompt")]
+        if imgs:
+            # data-prompt, not an inline JS string literal built from the
+            # prompt text: HTML entities in an attribute value are decoded by
+            # the browser's HTML parser BEFORE any inline JS runs, so a
+            # prompt containing an apostrophe would have closed the JS string
+            # early (html.escape() is correct for an ATTRIBUTE VALUE, but
+            # that's not the same thing as correct for a JS STRING LITERAL
+            # embedded inside one — reading it back via `.dataset` at click
+            # time sidesteps the mismatch entirely, no JS escaping needed).
+            cards = "".join(
+                f'<div class="thumbcard pick-look" data-prompt="{_esc(i["prompt"])}">'
+                f'<img src="/thumbnails/file/{_urlquote(i["name"])}" loading="lazy" alt="">'
+                f'<div class="meta">{_esc(i["prompt"][:70])}</div>'
+                f'</div>' for i in imgs)
+            gallery_html = (
+                f'<div class="thumbgrid">{cards}</div>'
+                '<script>'
+                'document.querySelectorAll(".pick-look").forEach(function(el){'
+                '  el.style.cursor="pointer";'
+                '  el.addEventListener("click", function(){'
+                '    var f = document.getElementById("gen-topic");'
+                '    f.value = el.dataset.prompt;'
+                '    f.scrollIntoView({behavior:"smooth"});'
+                '  });'
+                '});'
+                '</script>'
+            )
+    except Exception:
+        pass
 
     body = f"""
     <a class="back" href="/">← back</a>
@@ -1439,13 +1497,19 @@ def generate_page():
       <select class="field" id="gen-channel" name="channel">
         <option value="">(default)</option>{channel_options}
       </select>''' if channels else ""}
-      <label for="gen-topic">Topic (optional — leave blank to let Rufus pick)</label>
+      <label for="gen-topic">Topic (optional — leave blank to let Rufus pick, or click a look below)</label>
       <input class="field" type="text" id="gen-topic" name="topic"
              placeholder="e.g. why the 1929 crash started in a Florida swamp">
-      <label for="gen-niche">Niche override (optional)</label>
-      <input class="field" type="text" id="gen-niche" name="niche" placeholder="(optional)">
+      <label for="gen-niche">Niche (optional)</label>
+      <select class="field" id="gen-niche" name="niche">
+        <option value="">(default)</option>{niche_options}
+      </select>
       <button class="btn save" type="submit">Start the run</button>
     </form>
+    <h2>Pick a look (optional)</h2>
+    <p class="muted">Click an image to build the video's topic around it —
+       generate more first on the <a href="/thumbnails">Thumbnails</a> page.</p>
+    {gallery_html}
     <h2>Recent</h2>
     {_videos_table(_recent_videos(limit=10))}
     """

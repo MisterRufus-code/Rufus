@@ -301,6 +301,24 @@ _SD_ANCHORS = [
     },
 ]
 
+# Which _SD_ANCHORS index each beat gets, in order (repeats once exhausted).
+# NOT a plain beat_index % 4 — that put "wide establishing" (index 2, the one
+# framing that pulls the viewer OUT to a spectator's view of the scene) into
+# every 4th beat mechanically, ~25% of a video, regardless of what the line
+# actually needed. Live feedback: the viewer doesn't feel "inside" the video.
+# A Short holds attention by staying physically close — hands, faces, the
+# object itself — not by cutting away to establish geography every four
+# beats like a documentary. Wide still exists (useful for a genuine scene-
+# setting moment, e.g. "picture a 19th-century marketplace") but now only
+# once every 6 beats (~17%) instead of every 4th (25%), with close-up and
+# portrait — the two intimate framings — carrying most of the video.
+_ANCHOR_SEQUENCE = [0, 1, 3, 1, 0, 2]   # close-up, portrait, object, portrait, close-up, wide
+
+
+def _anchor_for_beat(i: int) -> dict:
+    """The camera/subject/light anchor for beat index `i` (0-based)."""
+    return _SD_ANCHORS[_ANCHOR_SEQUENCE[i % len(_ANCHOR_SEQUENCE)]]
+
 
 def _split_beats(script: str, max_scenes: int = 10, min_words: int = 3) -> list[str]:
     """Split a script into ordered visual beats (one per spoken sentence).
@@ -495,7 +513,7 @@ def _build_sd_prompts(script: str, niche: str, max_scenes: int = 10) -> list[str
     color_grade = niche_style or "cinematic color grade, muted tones, film grain"
 
     def _fallback_prompt(i: int, beat: str) -> str:
-        a   = _SD_ANCHORS[i % len(_SD_ANCHORS)]
+        a   = _anchor_for_beat(i)
         cue = beat[:80].rstrip(".,;:! ")
         return (
             f"RAW photo, ({cue}:1.35), {a['subject_hint']}, {a['light']}, "
@@ -515,14 +533,14 @@ def _build_sd_prompts(script: str, niche: str, max_scenes: int = 10) -> list[str
                 "Add 'openai' key to config/keys.json or use RUFUS_VIDEO_SOURCE=pexels."
             )
         beat_lines = "\n".join(
-            f"  Beat {i+1} (CAMERA={_SD_ANCHORS[i % len(_SD_ANCHORS)]['camera'].split(',')[0]}): "
+            f"  Beat {i+1} (CAMERA={_anchor_for_beat(i)['camera'].split(',')[0]}): "
             f"\"{b}\""
             for i, b in enumerate(beats)
         )
         anchor_lines = "\n".join(
-            f"  Beat {i+1}: framing={_SD_ANCHORS[i % len(_SD_ANCHORS)]['subject_hint']}; "
-            f"lighting={_SD_ANCHORS[i % len(_SD_ANCHORS)]['light']}; "
-            f"lens={_SD_ANCHORS[i % len(_SD_ANCHORS)]['camera']}"
+            f"  Beat {i+1}: framing={_anchor_for_beat(i)['subject_hint']}; "
+            f"lighting={_anchor_for_beat(i)['light']}; "
+            f"lens={_anchor_for_beat(i)['camera']}"
             for i in range(n)
         )
         # FLUX (ComfyUI) reads full natural-language sentences and renders

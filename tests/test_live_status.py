@@ -363,3 +363,81 @@ def test_make_video_refuses_an_image_with_no_saved_prompt(client, monkeypatch):
     r = client.post("/thumbnails/make-video", data={"name": "a.png"})
     assert "error" in r.headers["Location"]
     assert launched == []
+
+
+# ── /generate upgrade: niche dropdown + embedded "pick a look" gallery ──────
+# Per clarified intent: a collaborator with dashboard access still couldn't
+# build a genuinely CUSTOM video (a specific niche, a specific visual style)
+# — /generate had a free-text niche field (silently no-ops on a typo) and no
+# way to pick a look without leaving the page. This is the fix, not an
+# approve/publish permission change — that boundary is untouched.
+
+def test_generate_page_lists_real_niches_in_a_dropdown(client):
+    client.get(f"/?token={OWNER_TOKEN}")
+    html = client.get("/generate").get_data(as_text=True)
+    assert '<select class="field" id="gen-niche"' in html
+    # At least one real niche id from config/niches.json must be offered.
+    import dashboard
+    niches = dashboard._available_niches()
+    assert niches, "config/niches.json produced no niches — check the fixture repo state"
+    assert f'value="{niches[0]}"' in html
+
+
+def test_available_niches_handles_a_missing_file(monkeypatch, tmp_path):
+    import dashboard
+    monkeypatch.setattr(dashboard, "ROOT", tmp_path)   # no config/niches.json here
+    assert dashboard._available_niches() == []
+
+
+def test_generate_page_shows_pick_a_look_gallery(client, monkeypatch):
+    import image_gen
+    monkeypatch.setattr(image_gen, "recent_images",
+                        lambda limit=40: [{"name": "a.png", "prompt": "a cracked hourglass",
+                                           "mtime": 0, "kb": 10}])
+    client.get(f"/?token={OWNER_TOKEN}")
+    html = client.get("/generate").get_data(as_text=True)
+    assert "pick-look" in html
+    assert "a cracked hourglass" in html
+    assert "/thumbnails/file/a.png" in html
+
+
+def test_generate_gallery_skips_images_with_no_saved_prompt(client, monkeypatch):
+    """An image with no prompt has nothing to seed a topic with — showing it
+    here would just be a dead click."""
+    import image_gen
+    monkeypatch.setattr(image_gen, "recent_images",
+                        lambda limit=40: [{"name": "a.png", "prompt": "",
+                                           "mtime": 0, "kb": 10}])
+    client.get(f"/?token={OWNER_TOKEN}")
+    html = client.get("/generate").get_data(as_text=True)
+    assert "pick-look" not in html
+
+
+def test_generate_gallery_prompt_is_html_escaped_in_the_data_attribute(client, monkeypatch):
+    """Regression guard for the actual bug caught while building this: a
+    prompt containing an apostrophe must not break out of the data-prompt
+    attribute or (worse) close an inline JS string early. html.escape() on
+    the attribute value, read back via .dataset in JS — never concatenated
+    into a JS string literal in the markup at all."""
+    import image_gen
+    monkeypatch.setattr(image_gen, "recent_images",
+                        lambda limit=40: [{"name": "a.png",
+                                           "prompt": "it's <b>a</b> test \"quote\"",
+                                           "mtime": 0, "kb": 10}])
+    client.get(f"/?token={OWNER_TOKEN}")
+    html = client.get("/generate").get_data(as_text=True)
+    # The raw prompt must never appear unescaped inside the attribute.
+    assert 'data-prompt="it\'s' not in html
+    assert "&#39;" in html or "&#x27;" in html   # apostrophe escaped
+    assert "&lt;b&gt;" in html                    # angle brackets escaped
+    assert "&quot;" in html                       # double quote escaped
+    # No inline onclick string literal was built from the prompt at all.
+    assert "onclick=" not in html
+
+
+def test_generate_page_still_requires_generate_permission(client):
+    """The actual bug found while building this: the @app.route decorator
+    landed on the wrong function (a helper, not generate_page) after a
+    refactor, so a viewer got 200 instead of 403. Locks in the fix."""
+    client.get(f"/?token={VIEWER_TOKEN}")
+    assert client.get("/generate").status_code == 403

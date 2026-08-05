@@ -66,16 +66,25 @@ MUSIC_VOL    = 0.14        # static music volume (simple-mix fallback path)
 MUSIC_BED    = 0.30        # music bed volume BEFORE sidechain ducking (full mix)
 BAR_HEIGHT   = 14          # retention progress bar thickness (px)
 
-# SFX layer gains (relative, 0-1). whoosh plays on EVERY cut (up to 9x per video)
-# so it's the one most likely to feel loud/repetitive — kept noticeably quieter
-# than hit/riser, which each play once per video.
-SFX_HIT_GAIN    = 0.90     # sub-bass hit on the hook (once, 0.03s in)
-# Transition swoosh into each cut. History: 0.65 → 0.35 → 0.15 → 0.05 → 0.02,
-# each step after channel-owner feedback that it was still noticeable across
-# ~9 cuts/video. Now effectively subliminal; env-tunable so the next adjustment
-# (either direction, incl. "0" = off) needs no code change.
-SFX_WHOOSH_GAIN = float(os.environ.get("RUFUS_WHOOSH_GAIN", "0.02"))
-SFX_RISER_GAIN  = 0.55     # riser leading into the final beat (once)
+# RUFUS_SFX=0 drops the whole synthesized layer (hit/whoosh/riser) — the
+# lever for "these effects don't belong on this channel" without touching
+# three separate gain values. Default stays on for anyone who hasn't
+# formed an opinion either way.
+SFX_ENABLED = os.environ.get("RUFUS_SFX", "1").strip().lower() not in ("0", "false", "no", "off")
+
+# SFX layer gains (relative, 0-1). whoosh plays on EVERY cut (up to 9x per
+# video) so it went through five rounds of channel-owner feedback pushing it
+# down to near-inaudible — hit and riser each play only ONCE per video and
+# were never tuned the same way, on the (wrong) assumption that "once" meant
+# "unlikely to bother anyone." Live feedback: the sub-bass hit at full volume
+# 0.03s into every single video and the riser's second-long swell before the
+# payoff read as "inappropriate background noise" on a history/finance
+# channel — a jump-scare boom doesn't suit the tone. Halved both and made
+# all three env-tunable the same way, so any future adjustment (including
+# "0" on an individual layer) needs no code change.
+SFX_HIT_GAIN    = float(os.environ.get("RUFUS_HIT_GAIN", "0.45"))     # sub-bass hit on the hook (once, 0.03s in)
+SFX_WHOOSH_GAIN = float(os.environ.get("RUFUS_WHOOSH_GAIN", "0.02"))  # transition swoosh into each cut
+SFX_RISER_GAIN  = float(os.environ.get("RUFUS_RISER_GAIN", "0.28"))   # riser leading into the final beat (once)
 
 # Cut planning
 FIRST_CUT_MIN = 2.0        # hook cut window — research: pattern interrupt by ~3s
@@ -888,12 +897,14 @@ def render(script: str, bg_paths: "Path | list[Path]", out_dir: Path,
         has_music   = music_path is not None and Path(music_path).exists()
 
         # SFX layer: hit on the hook, whoosh leading into every cut, riser into
-        # the final beat. Synthesized locally — skipped cleanly if unavailable.
+        # the final beat. Synthesized locally — skipped cleanly if unavailable,
+        # or entirely opted out of via RUFUS_SFX=0.
         sfx = {}
-        try:
-            sfx = _ensure_sfx()
-        except Exception:
-            sfx = {}
+        if SFX_ENABLED:
+            try:
+                sfx = _ensure_sfx()
+            except Exception:
+                sfx = {}
         sfx_files:  list[Path] = []
         sfx_events: list[tuple[float, float]] = []
         if sfx:

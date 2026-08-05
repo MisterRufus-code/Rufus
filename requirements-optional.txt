@@ -9,7 +9,20 @@
 # These are heavy (torch etc.) and can take a long time to resolve/build.
 
 # In-process Kokoro voice (RUFUS_TTS=kokoro) — instead of the Docker service
+#
+# numpy<2 is LOAD-BEARING here, not a style preference: kokoro's dependency
+# chain (torch's LSTM/weight_norm path) predates numpy 2's dtype interop and
+# fails at synthesis time with "Cannot interpret 'torch.float32' as a data
+# type" — not at install time, so `pip install -r` succeeds and the break
+# only surfaces mid-render, every single run, silently falling all the way
+# through to the worst-quality backend (Edge TTS) with nothing in the logs
+# pointing at numpy. Observed live: three consecutive runs, every one voiced
+# by Edge instead of the configured Kokoro/ElevenLabs, for exactly this
+# reason. tts_engine.py prints the same fix at runtime if this pin is
+# missing or was overridden after install — this line is what prevents
+# hitting it at all.
 kokoro>=0.9.2
+numpy<2
 soundfile
 
 # Google Trends trending-topic hook boost (research.py, auto-detected)

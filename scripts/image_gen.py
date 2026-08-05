@@ -13,6 +13,10 @@ Landscape by default (1280x720) because that's YouTube's thumbnail frame — the
 video pipeline's own stills are 1080x1920 portrait, the wrong shape here. Pass
 --portrait for a vertical image instead.
 
+Deduplicated against recent output (video frames AND other thumbnails, one
+shared history — see generate_image()'s docstring): a near-duplicate gets one
+automatic regeneration with a new seed before being accepted.
+
 Usage:
     python scripts/image_gen.py "a cracked hourglass spilling gold coins"
     python scripts/image_gen.py "..." --out my_image.png --seed 42
@@ -93,9 +97,24 @@ def generate_image(prompt: str, out_path: Path | None = None, *,
 
     `timeout` caps the wait for ComfyUI. The dashboard passes a short one
     because it renders inline on a single-threaded server — see WEB_TIMEOUT.
+
+    DEDUPLICATION: this module previously had none at all, unlike the video
+    pipeline (comfy_client.py), which perceptual-hashes every still and
+    regenerates on a near-duplicate. The reported symptom was exactly what
+    that gap predicts — asking for a thumbnail repeatedly landed on the same
+    or a near-identical image (a coin close-up, session after session) with
+    nothing to notice or push back on it. This now reuses the SAME hash
+    check and the SAME persisted history file the video pipeline reads and
+    writes (comfy_client._load_prior_hashes/_save_hashes), so a thumbnail
+    that looks like a recent VIDEO frame is caught too, not just other
+    thumbnails — one shared "recently generated" pool, not two blind ones.
+    Skipped when the caller passed an explicit `seed`: that means they're
+    deliberately trying to reproduce a specific past image, and silently
+    swapping the seed on them would defeat the point.
     """
     import comfy_client
     import comfy_template
+    from sd_client import DUP_THRESHOLD, MAX_DUP_RETRIES, _avg_hash, _hamming
 
     if not comfy_client.is_available():
         print(f"[image] ComfyUI not reachable at {comfy_client._host()} — start it first")
@@ -108,25 +127,70 @@ def generate_image(prompt: str, out_path: Path | None = None, *,
         return None
 
     full_prompt = comfy_client._with_detail(prompt) if add_detail else prompt
+    explicit_seed = seed is not None
     seed = random.randint(1, 2**31 - 1) if seed is None else seed
 
-    graph = comfy_template.prepare(tpl, prompt=full_prompt, seed=seed,
-                                   save_prefix="rufus_image")
-    _apply_image_dims(graph, width, height)
+    check_freshness = (not explicit_seed) and comfy_client._fresh_images_enabled()
+    accepted_hashes = comfy_client._load_prior_hashes() if check_freshness else []
 
     client_id = uuid.uuid4().hex
-    print(f"[image] rendering {width}x{height} (seed {seed}) …")
     started = time.time()
+    png_bytes: bytes | None = None
+    img_hash: int | None = None
+    max_tries = (MAX_DUP_RETRIES + 1) if check_freshness else 1
 
-    pid = comfy_client._submit(graph, client_id)
-    if not pid:
-        print("[image] ComfyUI rejected the workflow")
-        return None
+    for attempt in range(max_tries):
+        this_seed = seed if attempt == 0 else random.randint(1, 2**31 - 1)
+        graph = comfy_template.prepare(tpl, prompt=full_prompt, seed=this_seed,
+                                       save_prefix="rufus_image")
+        _apply_image_dims(graph, width, height)
 
-    png_bytes = comfy_client._await_image(pid, timeout=timeout)
+        print(f"[image] rendering {width}x{height} (seed {this_seed}) …")
+        pid = comfy_client._submit(graph, client_id)
+        if not pid:
+            print("[image] ComfyUI rejected the workflow")
+            return None
+
+        candidate = comfy_client._await_image(pid, timeout=timeout)
+        if not candidate:
+            print("[image] render produced no image")
+            return None
+
+        if not check_freshness:
+            png_bytes, seed = candidate, this_seed
+            break
+
+        # _avg_hash reads from a path, not raw bytes — a temp file round-trip
+        # is the cheapest way to reuse the exact hash function comfy_client
+        # already uses, rather than a second, possibly-drifting implementation.
+        import tempfile
+        with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tf:
+            tf.write(candidate)
+            tmp_path = Path(tf.name)
+        try:
+            h = _avg_hash(tmp_path)
+        finally:
+            tmp_path.unlink(missing_ok=True)
+
+        is_dup = (h is not None and accepted_hashes
+                 and min(_hamming(h, p) for p in accepted_hashes) < DUP_THRESHOLD)
+        if is_dup and attempt < max_tries - 1:
+            print(f"[image] near-duplicate of a recent image → regenerating "
+                  f"(retry {attempt + 1}/{max_tries - 1})")
+            continue
+
+        png_bytes, seed, img_hash = candidate, this_seed, h
+        if is_dup:
+            print(f"[image] still near-dup after {max_tries - 1} retries — keeping it anyway")
+        break
+
     if not png_bytes:
         print("[image] render produced no image")
         return None
+
+    if check_freshness and img_hash is not None:
+        accepted_hashes.append(img_hash)
+        comfy_client._save_hashes(accepted_hashes)
 
     if out_path is None:
         out_dir = paths.thumbnails_dir()

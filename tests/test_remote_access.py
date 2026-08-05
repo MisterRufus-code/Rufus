@@ -285,3 +285,152 @@ def test_await_image_still_defaults_to_gen_timeout(monkeypatch):
                         lambda *a, **k: seen.setdefault("hit", True) or
                         (_ for _ in ()).throw(RuntimeError("down")))
     assert comfy_client._await_image("pid") is None
+
+
+# ── image_gen dedup: the "always the same coin" bug ─────────────────────────
+# image_gen.py previously had NO freshness/dedup check at all, unlike the
+# video pipeline (comfy_client.py), which perceptual-hashes every still and
+# regenerates on a near-duplicate. Reported symptom: asking for a thumbnail
+# repeatedly landed on the same or a near-identical image with nothing to
+# notice or push back on it. These share the SAME hash history file the
+# video pipeline reads and writes, so the two pools can't drift apart.
+
+def test_dedup_accepts_a_fresh_image_and_saves_its_hash(monkeypatch, tmp_path):
+    import comfy_client
+    import sd_client
+
+    monkeypatch.setattr(comfy_client, "is_available", lambda: True)
+    monkeypatch.setattr(comfy_client, "_stills_template",
+                        lambda: {"1": {"class_type": "X", "inputs": {"t": "RUFUS_PROMPT"}}})
+    monkeypatch.setattr(comfy_client, "_submit", lambda g, c: "pid-1")
+    monkeypatch.setattr(comfy_client, "_await_image", lambda pid, timeout=None: b"fresh-bytes")
+    monkeypatch.setattr(comfy_client, "_fresh_images_enabled", lambda: True)
+    monkeypatch.setattr(comfy_client, "_load_prior_hashes", lambda: [0b0000])
+    saved = {}
+    monkeypatch.setattr(comfy_client, "_save_hashes", lambda hashes: saved.setdefault("hashes", hashes))
+    # Far from the one prior hash — no collision.
+    monkeypatch.setattr(sd_client, "_avg_hash", lambda path: 0b1111_1111_1111_1111_1111_1111_1111_1111)
+
+    path = image_gen.generate_image("a golden hourglass", tmp_path / "a.png")
+    assert path is not None
+    assert saved["hashes"][-1] == 0b1111_1111_1111_1111_1111_1111_1111_1111
+
+
+def test_dedup_regenerates_on_a_near_duplicate(monkeypatch, tmp_path):
+    """The exact reported bug: same-looking image, seed after seed, nothing
+    noticing. First render collides, must be retried with a new seed."""
+    import comfy_client
+    import sd_client
+
+    monkeypatch.setattr(comfy_client, "is_available", lambda: True)
+    monkeypatch.setattr(comfy_client, "_stills_template",
+                        lambda: {"1": {"class_type": "X", "inputs": {"t": "RUFUS_PROMPT"}}})
+    monkeypatch.setattr(comfy_client, "_submit", lambda g, c: "pid-1")
+    monkeypatch.setattr(comfy_client, "_await_image", lambda pid, timeout=None: b"bytes")
+    monkeypatch.setattr(comfy_client, "_fresh_images_enabled", lambda: True)
+    monkeypatch.setattr(comfy_client, "_load_prior_hashes", lambda: [0b0000])
+    monkeypatch.setattr(comfy_client, "_save_hashes", lambda hashes: None)
+
+    # First hash call collides with the prior hash (distance 0); second call
+    # (the retry) is far away — simulates "same coin" then "something else".
+    hashes = iter([0b0000, 0b1111_1111_1111_1111_1111_1111_1111_1111])
+    monkeypatch.setattr(sd_client, "_avg_hash", lambda path: next(hashes))
+
+    seeds_used = []
+    real_submit = comfy_client._submit
+    orig_prepare = None
+    import comfy_template
+    orig_prepare = comfy_template.prepare
+
+    def spy_prepare(tpl, **kw):
+        seeds_used.append(kw.get("seed"))
+        return orig_prepare(tpl, **kw)
+    monkeypatch.setattr(comfy_template, "prepare", spy_prepare)
+
+    path = image_gen.generate_image("a coin on a table", tmp_path / "a.png", seed=None)
+    assert path is not None
+    assert len(seeds_used) == 2, "expected exactly one retry with a new seed"
+    assert seeds_used[0] != seeds_used[1]
+
+
+def test_dedup_gives_up_after_max_retries_and_keeps_the_image(monkeypatch, tmp_path):
+    """Fail-open: even an image that never clears the dedup check must still
+    be returned, not dropped — a render that produced SOMETHING beats none."""
+    import comfy_client
+    import sd_client
+
+    monkeypatch.setattr(comfy_client, "is_available", lambda: True)
+    monkeypatch.setattr(comfy_client, "_stills_template",
+                        lambda: {"1": {"class_type": "X", "inputs": {"t": "RUFUS_PROMPT"}}})
+    monkeypatch.setattr(comfy_client, "_submit", lambda g, c: "pid-1")
+    monkeypatch.setattr(comfy_client, "_await_image", lambda pid, timeout=None: b"bytes")
+    monkeypatch.setattr(comfy_client, "_fresh_images_enabled", lambda: True)
+    monkeypatch.setattr(comfy_client, "_load_prior_hashes", lambda: [0b0000])
+    monkeypatch.setattr(comfy_client, "_save_hashes", lambda hashes: None)
+    monkeypatch.setattr(sd_client, "_avg_hash", lambda path: 0b0000)   # always collides
+
+    path = image_gen.generate_image("a coin", tmp_path / "a.png")
+    assert path is not None and path.exists()
+
+
+def test_dedup_is_skipped_for_an_explicit_seed(monkeypatch, tmp_path):
+    """An explicit seed means the caller is deliberately reproducing a past
+    image — swapping it out from under them would defeat the point."""
+    import comfy_client
+    import sd_client
+
+    monkeypatch.setattr(comfy_client, "is_available", lambda: True)
+    monkeypatch.setattr(comfy_client, "_stills_template",
+                        lambda: {"1": {"class_type": "X", "inputs": {"t": "RUFUS_PROMPT"}}})
+    monkeypatch.setattr(comfy_client, "_submit", lambda g, c: "pid-1")
+    monkeypatch.setattr(comfy_client, "_await_image", lambda pid, timeout=None: b"bytes")
+    monkeypatch.setattr(comfy_client, "_fresh_images_enabled", lambda: True)
+    hash_calls = []
+    monkeypatch.setattr(sd_client, "_avg_hash", lambda path: hash_calls.append(1) or 0)
+
+    path = image_gen.generate_image("a coin", tmp_path / "a.png", seed=42)
+    assert path is not None
+    assert hash_calls == [], "dedup ran even though an explicit seed was given"
+
+
+def test_dedup_is_skipped_when_freshness_disabled(monkeypatch, tmp_path):
+    import comfy_client
+    import sd_client
+
+    monkeypatch.setattr(comfy_client, "is_available", lambda: True)
+    monkeypatch.setattr(comfy_client, "_stills_template",
+                        lambda: {"1": {"class_type": "X", "inputs": {"t": "RUFUS_PROMPT"}}})
+    monkeypatch.setattr(comfy_client, "_submit", lambda g, c: "pid-1")
+    monkeypatch.setattr(comfy_client, "_await_image", lambda pid, timeout=None: b"bytes")
+    monkeypatch.setattr(comfy_client, "_fresh_images_enabled", lambda: False)
+    hash_calls = []
+    monkeypatch.setattr(sd_client, "_avg_hash", lambda path: hash_calls.append(1) or 0)
+
+    path = image_gen.generate_image("a coin", tmp_path / "a.png")
+    assert path is not None
+    assert hash_calls == []
+
+
+def test_thumbnail_and_video_pipeline_share_one_hash_history(monkeypatch, tmp_path):
+    """The point of reusing comfy_client's own load/save functions: a coin
+    generated by the VIDEO pipeline should make the THUMBNAIL tool avoid
+    repeating it too — one shared pool, not two blind ones."""
+    import comfy_client
+    import sd_client
+
+    monkeypatch.setattr(comfy_client, "is_available", lambda: True)
+    monkeypatch.setattr(comfy_client, "_stills_template",
+                        lambda: {"1": {"class_type": "X", "inputs": {"t": "RUFUS_PROMPT"}}})
+    monkeypatch.setattr(comfy_client, "_submit", lambda g, c: "pid-1")
+    monkeypatch.setattr(comfy_client, "_await_image", lambda pid, timeout=None: b"bytes")
+    monkeypatch.setattr(comfy_client, "_fresh_images_enabled", lambda: True)
+    # A hash the VIDEO pipeline saved in a past run.
+    monkeypatch.setattr(comfy_client, "_load_prior_hashes", lambda: [0b1010])
+    saved = {}
+    monkeypatch.setattr(comfy_client, "_save_hashes", lambda hashes: saved.setdefault("h", hashes))
+    monkeypatch.setattr(sd_client, "_avg_hash", lambda path: 0b1010)   # matches the video-pipeline hash
+
+    image_gen.generate_image("a coin", tmp_path / "a.png")
+    # It collided, retried, and (deterministically, single-branch mock)
+    # still saved something back to the SAME shared store.
+    assert "h" in saved

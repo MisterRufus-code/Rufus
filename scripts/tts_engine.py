@@ -299,6 +299,20 @@ def _elevenlabs(script: str, out_path: Path) -> None:
     with httpx.stream("POST", url, json=payload, headers=headers, timeout=120) as r:
         if r.status_code != 200:
             body = r.read()[:300].decode("utf-8", "ignore")
+            if r.status_code == 402 and "paid_plan_required" in body:
+                # Distilled, actionable — the raw 300-char JSON dump buried
+                # the actual cause every run: a "library" voice (a premade
+                # ElevenLabs voice, not a cloned one) is blocked from the API
+                # entirely on the free tier. No retry or code change fixes
+                # this; it's an account-tier limit. Same UX pattern as the
+                # Kokoro numpy-2 message below — name the fix, not the wire
+                # protocol.
+                raise RuntimeError(
+                    f"ElevenLabs voice {ELEVEN_VOICE} is a library (premade) "
+                    f"voice — free accounts cannot use those via the API "
+                    f"(only a cloned voice, or a paid plan). Either upgrade "
+                    f"ElevenLabs, or clone your own voice and set "
+                    f"RUFUS_ELEVEN_VOICE to its id.")
             raise RuntimeError(f"ElevenLabs HTTP {r.status_code}: {body}")
         with open(out_path, "wb") as f:
             for chunk in r.iter_bytes():

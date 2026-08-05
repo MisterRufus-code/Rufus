@@ -697,8 +697,19 @@ def fetch_wikipedia_fulltext(url_title: str) -> str:
 # before the pool actually runs dry. At 1 video/day the ~155-topic pool lasts
 # ~5 months; at 5/day (multi-run scheduling) that's ~1 month — this is what
 # keeps a scaled-up schedule from just running out.
-WIKI_REPLENISH_THRESHOLD = 30
-WIKI_REPLENISH_COUNT     = 40
+#
+# Raised from 30/40: at the OLD threshold, a niche didn't top up until it was
+# down to its last 30 topics — random.shuffle() over a shrinking, heavily-used
+# pool means the LAST third disproportionately reuses whatever GPT proposed
+# early on, since later replenishments only ever add another 40 on top of an
+# already-large used-history list feeding the "don't repeat" prompt (a longer
+# exclusion list gives GPT less room and it starts circling the same handful
+# of well-known events). Topping up earlier (50) and adding more each time
+# (60) keeps the ACTIVE unused pool bigger at all times, which is what
+# actually fixes "the topics started repeating" — not a bigger pool in total,
+# a bigger pool of topics not yet seen.
+WIKI_REPLENISH_THRESHOLD = 50
+WIKI_REPLENISH_COUNT     = 60
 
 
 def _unused_wiki_topic_count(niche_name: str, used_ids: set) -> int:
