@@ -85,3 +85,21 @@ def test_scheduled_and_active_niches_exist():
     assert data["active"] in NICHES
     for n in data.get("schedule", []):
         assert n in NICHES, f"scheduled niche '{n}' not defined"
+
+
+def test_money_history_permits_evergreen_concepts_not_just_events():
+    """Per clarified channel-owner direction: the niche was strictly
+    'one true, specific story from monetary history' — only 155 real
+    events exist, which is what produced the topic-repetition complaint.
+    Broadened to also permit timeless financial/economic CONCEPT scripts
+    (illustrated with a real historical example each time), while keeping
+    the existing boundaries (no investment advice, no motivational fluff)
+    fully intact — this locks in both halves of that change."""
+    gpt_system = NICHES["money_history"]["gpt_system"].lower()
+    assert "concept" in gpt_system
+    assert "compound interest" in gpt_system   # a concrete example concept present
+    # The boundaries that made this a real editorial call, not a scope
+    # blowout, must survive the change.
+    assert "no investment advice" in gpt_system
+    assert "no motivational fluff" in gpt_system
+    assert "no get-rich talk" in gpt_system

@@ -644,3 +644,36 @@ def test_fetch_wikipedia_story_skips_replenish_when_pool_healthy(monkeypatch, tm
         research.fetch_wikipedia_story("money_history")
 
     assert called == []
+
+
+def test_replenish_prompt_asks_for_concepts_not_just_events(monkeypatch, tmp_path):
+    """Per clarified direction: broaden money_history beyond a finite list of
+    155 real events by also proposing evergreen financial/economic CONCEPT
+    articles (compound interest, opportunity cost, ...) — each one gets
+    illustrated with a different real example when actually written, so it
+    isn't a repeat every time it's picked. Locks in that the replenishment
+    prompt itself asks for both kinds, not just discrete events."""
+    topics = tmp_path / "wiki_topics.json"
+    topics.write_text('{"money_history": []}')
+    monkeypatch.setattr(research, "WIKI_TOPICS_FILE", topics)
+    monkeypatch.setattr(research, "_load_keys", lambda: {"openai": "sk-real"})
+
+    captured = {}
+    fake_msg = MagicMock()
+    fake_msg.content = ""
+    fake_completion = MagicMock()
+    fake_completion.choices = [MagicMock(message=fake_msg)]
+
+    fake_client = MagicMock()
+
+    def fake_create(**kw):
+        captured.update(kw)
+        return fake_completion
+    fake_client.chat.completions.create.side_effect = fake_create
+
+    with patch("openai.OpenAI", return_value=fake_client):
+        research.replenish_wiki_topics("money_history", count=5)
+
+    prompt = captured["messages"][0]["content"].lower()
+    assert "concept" in prompt
+    assert "compound interest" in prompt

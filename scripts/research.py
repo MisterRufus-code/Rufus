@@ -778,11 +778,18 @@ def replenish_wiki_topics(niche_name: str, count: int = WIKI_REPLENISH_COUNT) ->
                 "content": (
                     f"List {count} REAL, EXISTING English Wikipedia article "
                     f"titles about the history of money/currency/finance "
-                    f"('{niche_name}' niche) — specific historical events, "
-                    f"currencies, financial crises, institutions, or figures. "
-                    f"Exact, correctly-spelled article titles only, one per "
-                    f"line, no numbering, no commentary. Do NOT repeat any of "
-                    f"these already-used topics: {existing_sample}"
+                    f"('{niche_name}' niche). Mix of two kinds: (1) specific "
+                    f"historical events, currencies, financial crises, "
+                    f"institutions, or figures, AND (2) timeless financial or "
+                    f"economic CONCEPTS with their own Wikipedia article — "
+                    f"compound interest, opportunity cost, moral hazard, "
+                    f"Gresham's law, the time value of money, sunk cost, "
+                    f"scarcity, diversification, and similar — a concept "
+                    f"article gets illustrated with a real historical example "
+                    f"when the script is written, so it isn't a repeat every "
+                    f"time it's picked. Exact, correctly-spelled article "
+                    f"titles only, one per line, no numbering, no commentary. "
+                    f"Do NOT repeat any of these already-used topics: {existing_sample}"
                 ),
             }],
             temperature=0.8,
