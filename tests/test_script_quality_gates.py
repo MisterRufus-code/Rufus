@@ -265,3 +265,131 @@ def test_cliche_patterns_are_not_auto_repaired_into_nonsense():
     rather than be silently patched."""
     script = "Picture the Medici family counting coins in Florence."
     assert sw._find_banned(sw._repair_banned(script)) is not None
+
+
+# ── Story architect grounding: catch it before the body, not after ──────────
+# Live pattern, verbatim across three consecutive runs: the architect wrote a
+# plausible-sounding STAKES GAP/THE TURN, the body writer dramatized it into
+# an unsupported claim ("revolutionary", "a political tide hardened the
+# transition", "gold coins vanished from circulation"), and only the FINAL
+# fact gate caught it — after a whole body-generation cycle had already been
+# spent. All three runs exhausted 3 cycles and still shipped at the hard cap.
+
+class _FakeArchitectClient:
+    """First call is the architect's own generation; every call whose prompt
+    contains 'SCRIPT TO VERIFY' is a _fact_gate check instead. `plan_replies`
+    are consumed in order for successive architect generations (retries);
+    `verdicts` likewise for successive fact-gate checks."""
+    def __init__(self, plan_replies, verdicts):
+        self.plan_replies = list(plan_replies)
+        self.verdicts = list(verdicts)
+        self.calls = []
+
+    class _Msg:
+        def __init__(self, content):
+            self.content = content
+
+    class _Choice:
+        def __init__(self, content):
+            self.message = _FakeArchitectClient._Msg(content)
+
+    class _Usage:
+        prompt_tokens = 10
+        completion_tokens = 5
+
+    class _Resp:
+        def __init__(self, content):
+            self.choices = [_FakeArchitectClient._Choice(content)]
+            self.usage = _FakeArchitectClient._Usage()
+
+    @property
+    def chat(self):
+        outer = self
+
+        class _Chat:
+            class completions:
+                @staticmethod
+                def create(**kw):
+                    outer.calls.append(kw)
+                    is_check = "SCRIPT TO VERIFY" in kw["messages"][0]["content"]
+                    if is_check:
+                        verdict = outer.verdicts.pop(0)
+                        content = "PASS" if verdict is True else f"FAIL: {verdict}"
+                    else:
+                        content = outer.plan_replies.pop(0)
+                    return _FakeArchitectClient._Resp(content)
+        return _Chat()
+
+
+def test_architect_plan_passing_the_gate_costs_one_generation_and_one_check(monkeypatch):
+    import script_writer as sw
+    monkeypatch.delenv("RUFUS_SCRIPT_ARCHITECT", raising=False)
+    client = _FakeArchitectClient(
+        plan_replies=["SPINE FACT: x\nTHE TURN: y\nSTAKES GAP: z\nWHY NOW: w"],
+        verdicts=[True])
+    plan, cost = sw._story_architect(client, {"content": "x"}, "analysis",
+                                     "hook", "run1", "finance")
+    assert "SPINE FACT" in plan
+    assert len(client.calls) == 2   # one generation, one check — no wasted retry
+
+
+def test_ungrounded_plan_is_regenerated_before_reaching_the_body(monkeypatch):
+    """The exact live failure: an ungrounded plan must be caught and retried
+    HERE, cheaply, rather than shipped to the body writer."""
+    import script_writer as sw
+    monkeypatch.delenv("RUFUS_SCRIPT_ARCHITECT", raising=False)
+    client = _FakeArchitectClient(
+        plan_replies=[
+            "SPINE FACT: x\nTHE TURN: a secret cabal orchestrated the transition\n"
+            "STAKES GAP: z\nWHY NOW: w",
+            "SPINE FACT: x\nTHE TURN: the government took control in 1936\n"
+            "STAKES GAP: z\nWHY NOW: w",
+        ],
+        verdicts=["asserts an unsupported secret motive", True])
+    plan, cost = sw._story_architect(client, {"content": "x"}, "analysis",
+                                     "hook", "run1", "finance")
+    assert "1936" in plan
+    assert "secret cabal" not in plan
+    assert len(client.calls) == 4   # gen 1, check 1 (fail), gen 2, check 2 (pass)
+
+
+def test_plan_retry_feeds_the_rejection_reason_back(monkeypatch):
+    """The regenerated plan must be told WHY the first one failed, not just
+    asked to try again blind."""
+    import script_writer as sw
+    monkeypatch.delenv("RUFUS_SCRIPT_ARCHITECT", raising=False)
+    client = _FakeArchitectClient(
+        plan_replies=["SPINE FACT: bad plan", "SPINE FACT: better plan"],
+        verdicts=["invented a secret motive not in the source", True])
+    sw._story_architect(client, {"content": "x"}, "analysis", "hook", "run1", "finance")
+    second_gen_prompt = client.calls[2]["messages"][0]["content"]
+    assert "invented a secret motive not in the source" in second_gen_prompt
+
+
+def test_plan_exhausting_retries_is_used_anyway_not_blocked(monkeypatch):
+    """Fail-open: this is a cost-saving pre-check, not the sole gate — the
+    body's own fact check still runs regardless, so a render must never be
+    blocked here even if both architect attempts stay ungrounded."""
+    import script_writer as sw
+    monkeypatch.delenv("RUFUS_SCRIPT_ARCHITECT", raising=False)
+    client = _FakeArchitectClient(
+        plan_replies=["SPINE FACT: attempt one", "SPINE FACT: attempt two"],
+        verdicts=["still ungrounded", "still ungrounded"])
+    plan, cost = sw._story_architect(client, {"content": "x"}, "analysis",
+                                     "hook", "run1", "finance")
+    assert plan == "SPINE FACT: attempt two"   # the last attempt, not blank
+    assert len(client.calls) == 4               # exactly 2 attempts, not unbounded
+
+
+def test_plan_check_makes_at_most_two_generation_attempts(monkeypatch):
+    """The cost-saving property depends on this staying small — an unbounded
+    retry here would recreate the exact waste this change removes."""
+    import script_writer as sw
+    monkeypatch.delenv("RUFUS_SCRIPT_ARCHITECT", raising=False)
+    client = _FakeArchitectClient(
+        plan_replies=["SPINE FACT: a", "SPINE FACT: b", "SPINE FACT: c"],
+        verdicts=[False, False, False])
+    sw._story_architect(client, {"content": "x"}, "analysis", "hook", "run1", "finance")
+    generation_calls = [c for c in client.calls
+                        if "SCRIPT TO VERIFY" not in c["messages"][0]["content"]]
+    assert len(generation_calls) == 2

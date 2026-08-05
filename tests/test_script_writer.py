@@ -788,48 +788,59 @@ def test_novelty_block_no_opener_section_when_diverse(monkeypatch):
 # ── Story architect: STAKES GAP + turn-must-follow-spine-fact ─────────────────
 
 def test_story_architect_prompt_includes_stakes_gap(monkeypatch):
+    """_story_architect now also fact-checks its own plan (see the function's
+    docstring), which means the SAME fake client sees a SECOND call — the
+    fact gate verifying the plan it just wrote. Capturing every call and
+    asserting on the FIRST is what isolates the architect's own prompt from
+    the fact-gate's ('PASS' short-circuits the retry so there's exactly one
+    of each call here)."""
     from script_writer import _story_architect
     monkeypatch.delenv("RUFUS_SCRIPT_ARCHITECT", raising=False)
-    captured = {}
+    calls = []
 
     class FakeClient:
         class chat:
             class completions:
                 @staticmethod
                 def create(**kw):
-                    captured.update(kw)
-                    msg = type("M", (), {"content": "SPINE FACT: x\nTHE TURN: y\n"
-                                                     "STAKES GAP: z\nWHY NOW: w"})()
+                    calls.append(kw)
+                    is_fact_check = "SCRIPT TO VERIFY" in kw["messages"][0]["content"]
+                    content = "PASS" if is_fact_check else (
+                        "SPINE FACT: x\nTHE TURN: y\nSTAKES GAP: z\nWHY NOW: w")
+                    msg = type("M", (), {"content": content})()
                     choice = type("C", (), {"message": msg})()
                     usage = type("U", (), {"prompt_tokens": 10, "completion_tokens": 5})()
                     return type("R", (), {"choices": [choice], "usage": usage})()
 
     plan, _ = _story_architect(FakeClient(), {"content": "x"}, "analysis",
                                "hook", "run1", "finance")
-    prompt = captured["messages"][0]["content"]
-    assert "STAKES GAP" in prompt
+    architect_prompt = calls[0]["messages"][0]["content"]
+    assert "STAKES GAP" in architect_prompt
     assert "STAKES GAP" in plan
+    assert len(calls) == 2, "expected exactly one architect call + one fact-gate check"
 
 
 def test_story_architect_prompt_requires_turn_follows_spine_fact(monkeypatch):
     from script_writer import _story_architect
     monkeypatch.delenv("RUFUS_SCRIPT_ARCHITECT", raising=False)
-    captured = {}
+    calls = []
 
     class FakeClient:
         class chat:
             class completions:
                 @staticmethod
                 def create(**kw):
-                    captured.update(kw)
-                    msg = type("M", (), {"content": "SPINE FACT: x"})()
+                    calls.append(kw)
+                    is_fact_check = "SCRIPT TO VERIFY" in kw["messages"][0]["content"]
+                    content = "PASS" if is_fact_check else "SPINE FACT: x"
+                    msg = type("M", (), {"content": content})()
                     choice = type("C", (), {"message": msg})()
                     usage = type("U", (), {"prompt_tokens": 5, "completion_tokens": 2})()
                     return type("R", (), {"choices": [choice], "usage": usage})()
 
     _story_architect(FakeClient(), {"content": "x"}, "analysis", "hook", "run1", "finance")
-    prompt = captured["messages"][0]["content"].lower()
-    assert "direct consequence of the spine fact" in prompt
+    architect_prompt = calls[0]["messages"][0]["content"].lower()
+    assert "direct consequence of the spine fact" in architect_prompt
 
 
 # ── Sensory disqualifier: early placement, not just presence ──────────────────

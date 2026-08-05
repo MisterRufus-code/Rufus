@@ -1030,7 +1030,25 @@ def _architect_enabled() -> bool:
 
 def _story_architect(client: OpenAI, seed: dict, analysis: str, hook: str,
                      run_id: str, niche_name: str) -> tuple[str, float]:
-    """Returns (plan_text, cost_usd). '' plan on any failure — fail-open."""
+    """Returns (plan_text, cost_usd) — a plan already checked against the
+    source, not just written with a grounding instruction and hoped for.
+
+    WHY THIS CHECK EXISTS: the architect's own prompt already tells it not to
+    invent motives, but nothing verified that it listened — its plan went
+    straight into the body prompt as "STORY PLAN (write to this shape)", so an
+    ungrounded THE TURN or STAKES GAP got faithfully dramatized into prose by
+    the body writer, and only the FINAL fact gate caught it — after an entire
+    body-generation cycle (up to 3 attempts, ~$0.03-0.04) had already been
+    spent writing to a plan that could never pass. Three consecutive live
+    runs hit exactly this: every one exhausted all 3 cycles and still shipped
+    at the hard-capped 4/10, needing manual review every time.
+
+    Checking the ~130-word plan through the same fact gate that would catch it
+    anyway costs about $0.002 — roughly 1/15th of one wasted body cycle — and
+    catches it BEFORE that spend, not after. Retries the plan itself (cheap)
+    rather than accepting a bad plan and hoping the body writer's own
+    grounding instructions save it (they didn't, three times running).
+    """
     if not _architect_enabled():
         return "", 0.0
     model = _standards()["models"].get("architect", "gpt-4o-mini")
@@ -1067,24 +1085,55 @@ def _story_architect(client: OpenAI, seed: dict, analysis: str, hook: str,
         "source does not actually state — the fact-check will reject the script and "
         "hold the whole video if you do."
     )
-    try:
-        t0 = time.time()
-        resp = client.chat.completions.create(
-            model=model, messages=[{"role": "user", "content": prompt}],
-            temperature=0.6, max_tokens=220, timeout=60)
-        ms    = int((time.time() - t0) * 1000)
-        usage = resp.usage
-        cost  = estimate_cost(model, usage.prompt_tokens, usage.completion_tokens)
-        plan  = resp.choices[0].message.content.strip()
+    # 2 attempts, not 3+: this is a cheap pre-check, not the main quality gate
+    # (the body still goes through the full fact gate regardless). Two shots
+    # at a ~130-word plan is enough to shake loose an invented motive without
+    # turning a cost-saving measure into its own expensive loop.
+    MAX_PLAN_ATTEMPTS = 2
+    total_cost = 0.0
+    last_plan, last_reason = "", ""
+
+    for attempt in range(1, MAX_PLAN_ATTEMPTS + 1):
+        this_prompt = prompt
+        if attempt > 1 and last_reason:
+            this_prompt += (
+                f"\n\nYour previous plan was REJECTED by the fact-checker: "
+                f"\"{last_reason}\"\nWrite a new plan that avoids this — stick "
+                f"to what the SOURCE literally states, no interpretive leaps."
+            )
+        try:
+            t0 = time.time()
+            resp = client.chat.completions.create(
+                model=model, messages=[{"role": "user", "content": this_prompt}],
+                temperature=0.6, max_tokens=220, timeout=60)
+            ms    = int((time.time() - t0) * 1000)
+            usage = resp.usage
+            cost  = estimate_cost(model, usage.prompt_tokens, usage.completion_tokens)
+            total_cost += cost
+            plan  = resp.choices[0].message.content.strip()
+        except Exception as e:
+            print(f"[gpt] story architect skipped (non-fatal): {e}")
+            return last_plan, total_cost   # fail-open: use whatever we have, even ""
+
+        passed, reason, check_cost = _fact_gate(client, seed, plan)
+        total_cost += check_cost
         log_attempt({
             "run_id": run_id, "niche": niche_name, "phase": "story_architect",
-            "attempt_n": 1, "model": model, "cost_usd": cost, "ms": ms,
-            "body": plan, "accepted": True,
+            "attempt_n": attempt, "model": model, "cost_usd": cost + check_cost,
+            "ms": ms, "body": plan, "accepted": passed,
+            "rejected_reason": None if passed else reason,
         })
-        return plan, cost
-    except Exception as e:
-        print(f"[gpt] story architect skipped (non-fatal): {e}")
-        return "", 0.0
+        if passed:
+            return plan, total_cost
+
+        print(f"[gpt] story architect attempt {attempt}/{MAX_PLAN_ATTEMPTS} "
+              f"ungrounded ({reason}) — {'retrying' if attempt < MAX_PLAN_ATTEMPTS else 'using anyway'}")
+        last_plan, last_reason = plan, reason
+
+    # Exhausted retries: use the last plan anyway rather than blocking the
+    # render — the body's OWN fact gate still runs at the end regardless, so
+    # this pre-check can only save cost, never be the sole line of defense.
+    return last_plan, total_cost
 
 
 # ── Phase C: Body generator ─────────────────────────────────────────────────────
