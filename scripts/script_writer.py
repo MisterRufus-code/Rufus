@@ -570,6 +570,21 @@ def _loop_echoes_hook(script: str) -> tuple[bool, set[str]]:
     return len(shared) >= needed, shared
 
 
+# The fear/anger-coded subset of opinion_pool — used to steer _build_system's
+# prompt toward the tension register channel-owner feedback asked for
+# ("scared" over "best", "crushed" over "real"), NOT as a new pass/fail gate.
+# Deliberately a prompt nudge, not a deterministic check: this session's own
+# debugging found that piling on another hard-fail gate is what produced the
+# 7-attempt rejection ladders in the first place (see _body_violations) — the
+# opinion-word requirement already passes at one word from the full pool, and
+# adding a second, narrower gate here would risk the same waste for a
+# stylistic preference, not a correctness one.
+_TENSION_WORDS = {
+    "worst", "scared", "ruined", "broken", "fake", "rigged", "lie",
+    "dead", "lost", "destroyed", "crushed", "ignored", "afraid",
+}
+
+
 def _has_opinion_word(text: str) -> bool:
     text_lower = text.lower()
     return any(re.search(r"\b" + re.escape(w) + r"\b", text_lower)
@@ -1196,6 +1211,7 @@ def _build_system(niche_cfg: dict, niche_name: str, cta: str, hook: str) -> str:
     banned_all    = ", ".join(f"'{p}'" for p in std["banned_phrases"])
     opinion_all   = ", ".join(std["opinion_pool"])
     hedging_all   = ", ".join(std["hedging_words"])
+    tension_hint  = ", ".join(_TENSION_WORDS & set(std["opinion_pool"])) or opinion_all
 
     return f"""You are the most exacting short-form script writer working today.
 Your standard: if a line does not earn its place, cut it. If a word is vague, replace it with something specific.
@@ -1208,6 +1224,8 @@ You are given REAL source material and a HOOK that has already been chosen. Writ
 
 VOICE:
 - Sound like someone who has been in this field for 20 years and is slightly impatient with people who haven't figured this out.
+- Make the viewer FEEL something specific — real fear or real anger at what happened, not just learn a fact. A viewer who finishes the video informed but unmoved is a script that failed, even if every number in it checks out.
+- Every beat should carry a little dread or indignation: what SHOULD have scared the people in this story and didn't, what SHOULD outrage the viewer about how it played out. That's the emotional register — not sadness, not inspiration.
 - Specific always beats vague. A name beats "someone". A number beats "many". A year beats "recently".
 - Short sentences ({body['min_avg_sentence_words']}-{body['max_avg_sentence_words']} words avg). Vary rhythm deliberately.
 - Never moralize. Never summarize. Trust the audience.
@@ -1230,6 +1248,9 @@ BODY ({body['min_words']}-{body['max_words']} words total including hook and CTA
 - Every sentence either adds evidence or builds tension. No filler.
 - Use specific names, numbers, dates, dollar amounts. At least one specific per 25 words.
 - OPINION WORD (required): body must contain at least one of these exact words: {opinion_all}
+  Prefer a FEAR/ANGER-coded one where the moment genuinely earns it — {tension_hint} —
+  over a milder one like "best" or "real"; the milder ones exist for beats that
+  aren't emotionally charged, not as the default choice.
 
 DELIVERY (this is read aloud by TTS, not just read on screen):
 - Punctuation IS the pacing — the voice engine pauses longer after ".", "?", "!",

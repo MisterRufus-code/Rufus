@@ -203,3 +203,64 @@ def test_elevenlabs_other_errors_still_pass_through_unmodified(monkeypatch):
     with pytest.raises(RuntimeError) as exc:
         tts_engine._elevenlabs("test script", Path("/tmp/out.mp3"))
     assert "invalid api key" in str(exc.value)
+
+
+# ── Emotion: "involve more emotion" — steer toward tension, not a new gate ──
+# Clarified direction: tension (fear/anger), not warmth/inspiration. Kept as a
+# PROMPT nudge rather than a new deterministic pass/fail gate — this session's
+# own debugging found that piling on another hard gate is exactly what
+# produced the 7-attempt rejection ladders (_body_violations' docstring);
+# adding a second, narrower opinion-word gate here would risk the same waste
+# for a stylistic preference, not a correctness one.
+
+def test_tension_words_are_a_subset_of_the_opinion_pool():
+    import script_writer as sw
+    std = sw._standards()
+    assert sw._TENSION_WORDS <= set(std["opinion_pool"]), \
+        "a tension word must still satisfy the existing opinion-word gate"
+
+
+def test_tension_words_are_fear_or_anger_coded_not_warm():
+    import script_writer as sw
+    warm_or_neutral = {"best", "smartest", "richest", "obvious", "truth",
+                       "alive", "won", "saved", "fixed", "beat", "always", "never"}
+    assert sw._TENSION_WORDS.isdisjoint(warm_or_neutral)
+
+
+def test_voice_prompt_asks_for_fear_or_anger_not_warmth():
+    import script_writer as sw
+    prompt = sw._build_system({"gpt_system": "x"}, "money_history", "cta", "hook")
+    low = prompt.lower()
+    assert "fear" in low and "anger" in low
+    # The clarified direction was explicitly NOT sadness/inspiration.
+    assert "sadness, not inspiration" in low or "not sadness" in low
+
+
+def test_opinion_word_instruction_steers_toward_tension_words():
+    import script_writer as sw
+    prompt = sw._build_system({"gpt_system": "x"}, "money_history", "cta", "hook")
+    assert "FEAR/ANGER-coded" in prompt
+    for w in sw._TENSION_WORDS:
+        assert w in prompt   # the steering list is actually present, not just claimed
+
+
+def test_emotion_change_does_not_add_a_new_hard_gate():
+    """Regression guard for the actual design decision: this must stay a
+    prompt nudge. A clean script with only a mild opinion word (e.g. "best")
+    must still pass — tension is preferred, not required."""
+    import script_writer as sw
+    mild_but_clean = (
+        "The first world currency was a local coin.\n"
+        "In 1497 Spain minted the Spanish dollar, and within decades merchants "
+        "from Manila to Antwerp priced their goods in it.\n"
+        "Then the mines ran dry.\n"
+        "Spain kept spending against silver nobody had dug yet.\n"
+        "Debts came due in Genoa, Antwerp and Naples on the same winter.\n"
+        "This is the best-documented default in early modern finance.\n"
+        "The worst part came later.\n"
+        "The coin that ruled global trade became the instrument of its own collapse.\n"
+        "Why did the world's first currency start as a local coin?\n"
+        "Follow for more."
+    )
+    assert sw._has_opinion_word(mild_but_clean) is True
+    assert sw._body_violations(mild_but_clean) == []
