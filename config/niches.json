@@ -345,7 +345,7 @@
       ],
       "ffmpeg_eq": "eq=contrast=1.10:saturation=0.90:gamma=1.03",
       "accent_color": "#D4AF37",
-      "style_suffix": "archival cinematic, warm sepia and gold tones, museum lighting, weathered historical textures, aged patina, fine film grain, 35mm film, photorealistic, dramatic chiaroscuro",
+      "style_suffix": "flat 2D vector illustration, warm sepia and antique-gold color palette, bold clean outlines of consistent weight, simplified flat color fills with no gradients, storybook / explainer-video illustration style, no photographic texture, no film grain, no photorealism",
       "youtube_category_id": "27",
       "video_source": "comfy",
       "comfy_model": "flux1-dev-fp8.safetensors"

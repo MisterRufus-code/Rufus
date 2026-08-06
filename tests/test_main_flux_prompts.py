@@ -92,10 +92,12 @@ def test_flux_instruction_steers_away_from_hard_to_render_faces(tmp_path, monkey
     assert "three-quarter" in prompt.lower()
 
 
-def test_flux_instruction_pushes_photorealism_over_illustration(tmp_path, monkeypatch):
-    """FLUX can drift toward a painterly/CGI/illustration look — the instruction
-    must explicitly demand photographic technique (real camera/lens, film
-    grain, natural skin texture) and ban the synthetic-looking alternative."""
+def test_flux_instruction_pushes_illustration_over_photorealism(tmp_path, monkeypatch):
+    """Per channel-owner direction (money_history's visual identity moved to
+    flat 2D illustration, matched by comfy_client.DEFAULT_DETAIL_SUFFIX and
+    config/niches.json's style_suffix — changed together): the instruction
+    must explicitly demand flat illustration technique and ban the
+    photographic/photorealistic alternative it used to require."""
     keys_file = tmp_path / "keys.json"
     keys_file.write_text(json.dumps({"openai": "sk-test-key-1234567890"}))
     monkeypatch.setattr(main, "CONFIG_DIR", tmp_path)
@@ -124,10 +126,14 @@ def test_flux_instruction_pushes_photorealism_over_illustration(tmp_path, monkey
     main._build_sd_prompts("Rome debased the denarius.", "money_history", max_scenes=2)
 
     prompt = captured["prompt"]
-    assert "PHOTOREALISM" in prompt
-    assert "not a painting" in prompt.lower() or "never a painting" in prompt.lower()
-    assert "film grain" in prompt.lower()
-    assert "lens" in prompt.lower()
+    assert "FLAT 2D ILLUSTRATION" in prompt
+    assert "not a photograph" in prompt.lower()
+    assert "flat" in prompt.lower() and "color fills" in prompt.lower()
+    # The old photorealistic requirement must be genuinely gone, not just
+    # supplemented — a leftover "shot on a real camera, film grain" demand
+    # would still push FLUX toward photorealism regardless of the new banner.
+    assert "shot on a Leica" not in prompt
+    assert "visible film grain" not in prompt.lower()
 
 
 # ── No-readable-text net (_defuse_readable_text) ──────────────────────────────

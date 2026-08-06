@@ -515,13 +515,21 @@ def test_free_not_called_in_stills_only_mode(monkeypatch, tmp_path):
 # descriptive prose — NOT sd_client's booru-style "8k, masterpiece" tag stack,
 # which is the SD1.5 idiom and is out-of-distribution here.
 
-def test_with_detail_appends_photographic_direction(monkeypatch):
+def test_with_detail_appends_illustration_direction(monkeypatch):
+    """DEFAULT_DETAIL_SUFFIX is flat 2D illustration, not photorealism — see
+    its docstring and main.py's _FLUX_INSTRUCTION, changed together."""
     monkeypatch.delenv("RUFUS_STILLS_DETAIL", raising=False)
     out = c._with_detail("A macro shot of a tarnished coin")
-    assert "85mm" in out and "depth of field" in out
+    assert "flat 2d vector illustration" in out.lower()
     assert "A macro shot of a tarnished coin" in out
     # natural language, not the SD1.5 tag idiom
     assert "masterpiece" not in out.lower() and "8k" not in out.lower()
+    # the old photorealistic direction must actually be gone, not just added
+    # to — "depth of field" itself still legitimately appears as part of the
+    # new text's own "no lens blur or depth of field" prohibition, so check
+    # for the specific old positive instruction instead of the bare phrase.
+    assert "85mm" not in out
+    assert "shallow depth of field: the subject is tack-sharp" not in out
 
 
 def test_with_detail_is_env_overridable(monkeypatch):
@@ -561,4 +569,5 @@ def test_generate_clips_sends_the_detailed_prompt(monkeypatch):
                       lambda png, clip, duration=8.0, idx=0: clip.write_bytes(b"x" * 60_000) or True):
         c.generate_clips(["a vintage ledger"], n=1)
 
-    assert seen and "85mm" in seen[0] and "a vintage ledger" in seen[0]
+    assert seen and "flat 2d vector illustration" in seen[0].lower()
+    assert "a vintage ledger" in seen[0]

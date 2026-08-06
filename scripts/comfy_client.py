@@ -212,27 +212,34 @@ _flux2_template = _stills_template
 # a tag dump.
 #
 # Tune or replace wholesale with RUFUS_STILLS_DETAIL; set it empty to disable.
+#
+# Flat 2D illustration, not photorealism — changed together with
+# main.py's _FLUX_INSTRUCTION (its "PHOTOREALISM, NOT ILLUSTRATION" section
+# became "FLAT 2D ILLUSTRATION, NOT A PHOTOGRAPH") and money_history's
+# style_suffix in config/niches.json, so all three agree instead of fighting
+# each other in the same prompt. SCOPE NOTE: this constant is genuinely
+# global — every ComfyUI stills render uses it, both the video pipeline
+# (comfy_client.generate_clips, currently only reached by the money_history
+# niche — it's the only one with video_source=comfy) AND the standalone
+# thumbnail tool (image_gen.py, used from the dashboard for any prompt,
+# regardless of niche). If a second niche adopts video_source=comfy wanting
+# a PHOTOREALISTIC look, this default needs to become niche-aware rather
+# than edited in place again — RUFUS_STILLS_DETAIL is the per-run escape
+# hatch until then.
 DEFAULT_DETAIL_SUFFIX = (
-    "Shot on a full-frame camera with an 85mm f/1.4 prime at close range, "
-    "shallow depth of field: the subject is tack-sharp with visible focus "
-    "falloff, the background dissolving into soft round bokeh. Motivated "
-    "directional key light rakes across the surface at a low angle so every "
-    "raised and recessed detail casts its own micro-shadow, with a soft fill "
-    "opening the darker side and real gradient falloff — never flat lighting. "
-    "Extreme surface fidelity, legible down to the smallest scale: individual "
-    "material grain and pores, hairline scratches and scuffs, worn and "
-    "rounded edges, dust motes and lint caught in the light, fingerprints and "
-    "smudges, tarnish and patina pooling in recesses, fibres standing off cut "
-    "paper, the weave and loose threads of fabric, condensation beading, "
-    "chipped paint, oxidation, the faint irregularity of anything handmade. "
-    "Nothing is pristine or computer-clean — every surface carries the "
-    "evidence of having existed and been handled. Fine natural film grain, "
-    "true-to-life colour response, natural chromatic falloff toward the frame "
-    "edges, no digital over-sharpening, no plastic smoothing, no HDR halos. "
-    "Caught as a decisive moment mid-action rather than posed or arranged: the "
-    "moving element shows a touch of natural motion blur while the rest of the "
-    "frame stays sharp, so the instant reads as continuing past the shutter. "
-    "Documentary photojournalism captured on a real camera."
+    "Flat 2D vector illustration style, not a photograph: clean confident "
+    "outlines of consistent stroke weight, simplified geometric shapes "
+    "rendered in flat, unshaded color fills. No gradients, no photographic "
+    "lighting, no film grain, no lens blur or depth of field, no skin pores "
+    "or fabric-weave texture. Figures and objects are graphic and stylized "
+    "rather than anatomically photographic — bold silhouettes, minimal "
+    "internal linework, an expressive pose read through shape and posture. "
+    "Lighting is rendered as bold graphic contrast — a hard-edged light "
+    "shape or color-block shadow — never a soft photographic gradient. "
+    "Backgrounds simplify into clean shapes and generous negative space "
+    "rather than photographic clutter. Reads like modern explainer-video or "
+    "storybook illustration: crisp, deliberate, and stylized, never a "
+    "photograph or a photo-real render."
 )
 
 

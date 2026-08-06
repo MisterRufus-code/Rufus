@@ -21,6 +21,11 @@ if exist ".venv\Scripts\activate.bat" call ".venv\Scripts\activate.bat"
 
 set RUFUS_GPU=1
 set RUFUS_VIDEO_SOURCE=comfy
+REM Stills only, meanwhile — no Hunyuan/WAN/LTX/SVD motion pass on any beat.
+REM One switch instead of setting all four motion engines to 0 individually;
+REM remove this line (or set it to 0) once motion is wanted back on the
+REM automated runs. See scripts/svd_client.py's RUFUS_STILLS_ONLY docs.
+set RUFUS_STILLS_ONLY=1
 REM Uncomment for the Kokoro voice (needs the Docker container on :8880):
 REM set RUFUS_TTS=kokoro_api
 

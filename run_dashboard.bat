@@ -15,6 +15,13 @@ cd /d "%~dp0"
 
 if exist ".venv\Scripts\activate.bat" call ".venv\Scripts\activate.bat"
 
+REM Stills only, meanwhile — the dashboard process's own env is what every
+REM run IT launches inherits (_launch_run in dashboard.py copies os.environ),
+REM so this is what makes /generate and /thumbnails runs (including a
+REM partner's) default to stills-only too, not just run.bat/run_scheduled.bat.
+REM Remove this line (or set it to 0) once motion is wanted back everywhere.
+set RUFUS_STILLS_ONLY=1
+
 if not exist "logs" mkdir "logs"
 
 echo. >> logs\dashboard.log
