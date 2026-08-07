@@ -390,6 +390,10 @@ SETTINGS_SCHEMA = [
     ("RUFUS_LTX", "LTX motion engine", "bool", "Enable/disable the LTX-2.3 engine."),
     ("RUFUS_HUNYUAN", "Hunyuan motion engine", "bool", "Enable/disable the Hunyuan engine."),
     ("RUFUS_WAN", "Wan motion engine", "bool", "Enable/disable the Wan engine."),
+    ("RUFUS_CHARACTER_MODE", "Recurring character", "bool",
+     "Global on/off for character_engine.py's recurring-character feature "
+     "(per-niche detail — description, timeless design, enable/disable a "
+     "specific niche's character — is edited in config/niches.json)."),
 ]
 
 

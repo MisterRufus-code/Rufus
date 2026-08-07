@@ -1193,6 +1193,22 @@ def test_settings_route_blocks_non_localhost(client):
     assert r.status_code == 401
 
 
+def test_settings_page_exposes_character_mode_toggle(client, tmp_path, monkeypatch):
+    """RUFUS_CHARACTER_MODE — the global kill switch for character_engine.py
+    — must be editable from the dashboard like every other feature toggle,
+    not only by hand-editing niches.json."""
+    monkeypatch.setattr(dashboard, "SETTINGS_FILE", tmp_path / "settings.json")
+    r = client.get("/settings")
+    assert r.status_code == 200
+    assert b"Recurring character" in r.data
+
+
+def test_settings_save_persists_character_mode_off(client, tmp_path, monkeypatch):
+    monkeypatch.setattr(dashboard, "SETTINGS_FILE", tmp_path / "settings.json")
+    client.post("/settings/save", data={"RUFUS_CHARACTER_MODE": "0"})
+    assert dashboard._load_settings() == {"RUFUS_CHARACTER_MODE": "0"}
+
+
 def test_launch_run_applies_saved_settings_as_env_overrides(tmp_path, monkeypatch):
     import subprocess
     monkeypatch.setattr(dashboard, "ROOT", tmp_path)
