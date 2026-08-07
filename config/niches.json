@@ -348,7 +348,13 @@
       "style_suffix": "flat 2D vector illustration, warm sepia and antique-gold color palette, bold clean outlines of consistent weight, simplified flat color fills with no gradients, storybook / explainer-video illustration style, no photographic texture, no film grain, no photorealism",
       "youtube_category_id": "27",
       "video_source": "comfy",
-      "comfy_model": "flux1-dev-fp8.safetensors"
+      "comfy_model": "flux1-dev-fp8.safetensors",
+      "character": {
+        "enabled": false,
+        "name": "the Chronicler",
+        "description": "an ageless narrator-guide, gender-neutral silhouette-friendly design: close-cropped grey hair, warm brown skin, round wire spectacles, a weathered brown leather satchel worn cross-body over a plain collarless linen shirt with sleeves rolled to the elbow, calm attentive expression, hands often mid-gesture toward whatever the scene shows",
+        "reference_image": "config/character_reference_money_history.png"
+      }
     }
   }
 }

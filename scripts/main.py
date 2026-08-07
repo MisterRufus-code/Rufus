@@ -558,6 +558,12 @@ def _build_sd_prompts(script: str, niche: str, max_scenes: int = 10) -> list[str
 
         fresh_block = _freshness_block()
 
+        try:
+            import character_engine
+            char_clause = character_engine.character_clause(niche) if is_flux else ""
+        except Exception:
+            char_clause = ""
+
         _FLUX_INSTRUCTION = (
             "You write prompts for FLUX.1-dev, which understands full "
             "natural-language sentences (NOT comma tag-soup).\n"
@@ -600,6 +606,7 @@ def _build_sd_prompts(script: str, niche: str, max_scenes: int = 10) -> list[str
             "the object / the wider scene. For a named real person, evoke them through "
             "the setting, period, and action rather than a tight portrait. When a face "
             "is visible, describe it as natural, calm, and anatomically normal.\n"
+            f"{char_clause}"
             "- FLAT 2D ILLUSTRATION, NOT A PHOTOGRAPH: this must read as clean vector-"
             "style illustration — never a photograph, 3D render, or photorealistic "
             "CGI. Simplified geometric shapes, confident bold outlines of consistent "
@@ -1132,7 +1139,7 @@ def run(skip_upload: bool = False, niche_override: str = None, output_dir: Path 
                 # model is whatever's exported to config/stills_api.json
                 # (Z-Image-Turbo recommended, Apache 2.0/commercial-safe).
                 from comfy_client import generate_clips as comfy_generate
-                candidates = comfy_generate(prompts, n=len(prompts))
+                candidates = comfy_generate(prompts, n=len(prompts), niche=active)
                 if not candidates:
                     print("           ⚠ ComfyUI offline — trying A1111 SD...")
                     from sd_client import generate_clips as sd_generate

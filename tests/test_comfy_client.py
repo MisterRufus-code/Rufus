@@ -434,7 +434,7 @@ def test_two_phase_all_renders_before_any_motion(monkeypatch, tmp_path):
         clip.write_bytes(b"x" * 60_000)
         return True
 
-    def fake_render(prompt, seed, client_id):
+    def fake_render(prompt, seed, client_id, niche=None):
         order.append(("render", None))
         return b"PNG"
 
@@ -464,7 +464,7 @@ def test_failed_image_reuses_previous_still_for_beat_alignment(monkeypatch, tmp_
     keeps matching beat[i]."""
     calls = {"n": 0}
 
-    def fake_render(prompt, seed, client_id):
+    def fake_render(prompt, seed, client_id, niche=None):
         calls["n"] += 1
         # Fail every render attempt for the SECOND prompt only
         if "SECOND" in prompt:
@@ -556,7 +556,7 @@ def test_generate_clips_sends_the_detailed_prompt(monkeypatch):
     monkeypatch.delenv("RUFUS_STILLS_DETAIL", raising=False)
     seen = []
 
-    def fake_render(prompt, seed, client_id):
+    def fake_render(prompt, seed, client_id, niche=None):
         seen.append(prompt)
         return b"PNG"
 
@@ -571,3 +571,213 @@ def test_generate_clips_sends_the_detailed_prompt(monkeypatch):
 
     assert seen and "flat 2d vector illustration" in seen[0].lower()
     assert "a vintage ledger" in seen[0]
+
+
+# ── Recurring-character path (character_engine.py integration) ───────────────
+# _render_image tries the character path first when the niche has one
+# enabled, and must fall back to the plain stills template on ANY miss along
+# that path (no template exported, reference bootstrap failed, render
+# failed) — character mode must never turn a working pipeline into a broken
+# one. generate_clips(niche=...) threads niche through unchanged for every
+# existing caller that doesn't pass it (defaults to None → character path
+# never even attempted, identical to pre-character-mode behavior).
+
+def test_render_image_skips_character_path_without_niche(monkeypatch):
+    """No niche passed (every pre-existing caller) → character_engine must
+    not even be consulted, let alone change behavior."""
+    monkeypatch.setattr(c, "_stills_template", lambda: _dummy_tpl())
+    with patch.object(c, "_render_character_image") as char_render, \
+         patch.object(c, "_submit", return_value="pid-1"), \
+         patch.object(c, "_await_image", return_value=b"IMG"):
+        assert c._render_image("x", 1, "cid") == b"IMG"
+    char_render.assert_not_called()
+
+
+def test_render_image_skips_character_path_when_niche_not_enabled(monkeypatch):
+    import character_engine
+    monkeypatch.setattr(character_engine, "enabled", lambda niche: False)
+    monkeypatch.setattr(c, "_stills_template", lambda: _dummy_tpl())
+    with patch.object(c, "_render_character_image") as char_render, \
+         patch.object(c, "_submit", return_value="pid-1"), \
+         patch.object(c, "_await_image", return_value=b"IMG"):
+        assert c._render_image("x", 1, "cid", niche="money_history") == b"IMG"
+    char_render.assert_not_called()
+
+
+def test_render_image_uses_character_path_when_enabled(monkeypatch):
+    import character_engine
+    monkeypatch.setattr(character_engine, "enabled", lambda niche: True)
+    with patch.object(c, "_render_character_image", return_value=b"CHAR_IMG") as char_render, \
+         patch.object(c, "_submit") as sub:
+        out = c._render_image("x", 1, "cid", niche="money_history")
+    assert out == b"CHAR_IMG"
+    char_render.assert_called_once_with("x", 1, "cid", "money_history")
+    sub.assert_not_called()   # plain path never reached once character path succeeds
+
+
+def test_render_image_falls_back_to_plain_when_character_path_misses(monkeypatch):
+    """Character path returning None (no template exported yet, reference
+    bootstrap failed, etc.) must fall through to the ordinary stills
+    template — never leave the beat with no image at all."""
+    import character_engine
+    monkeypatch.setattr(character_engine, "enabled", lambda niche: True)
+    monkeypatch.setattr(c, "_stills_template", lambda: _dummy_tpl())
+    with patch.object(c, "_render_character_image", return_value=None), \
+         patch.object(c, "_submit", return_value="pid-1"), \
+         patch.object(c, "_await_image", return_value=b"PLAIN_IMG"):
+        out = c._render_image("x", 1, "cid", niche="money_history")
+    assert out == b"PLAIN_IMG"
+
+
+def test_render_image_falls_back_when_character_engine_raises(monkeypatch):
+    """A broken character_engine import/call must never take down a render
+    that would otherwise succeed via the plain path — fail-open."""
+    import character_engine
+    def _boom(niche):
+        raise RuntimeError("broken config")
+    monkeypatch.setattr(character_engine, "enabled", _boom)
+    monkeypatch.setattr(c, "_stills_template", lambda: _dummy_tpl())
+    with patch.object(c, "_submit", return_value="pid-1"), \
+         patch.object(c, "_await_image", return_value=b"PLAIN_IMG"):
+        out = c._render_image("x", 1, "cid", niche="money_history")
+    assert out == b"PLAIN_IMG"
+
+
+def test_character_template_none_when_missing(monkeypatch, tmp_path):
+    monkeypatch.setattr(c, "CHARACTER_TEMPLATE", tmp_path / "missing.json")
+    monkeypatch.delenv("RUFUS_CHARACTER_TEMPLATE", raising=False)
+    assert c._character_template() is None
+
+
+def test_character_template_loads_when_exported(monkeypatch, tmp_path):
+    p = tmp_path / "character_stills_api.json"
+    p.write_text(json.dumps({
+        "1": {"class_type": "LoadImage", "inputs": {"image": "ref.png"}},
+        "2": {"class_type": "CLIPTextEncode", "inputs": {"text": "RUFUS_PROMPT"}},
+        "3": {"class_type": "SaveImage", "inputs": {"filename_prefix": "s", "images": ["2", 0]}},
+    }))
+    monkeypatch.setattr(c, "CHARACTER_TEMPLATE", p)
+    monkeypatch.delenv("RUFUS_CHARACTER_TEMPLATE", raising=False)
+    assert c._character_template() is not None
+
+
+def test_character_template_env_kill_switch(monkeypatch, tmp_path):
+    p = tmp_path / "character_stills_api.json"
+    p.write_text(json.dumps({
+        "1": {"class_type": "CLIPTextEncode", "inputs": {"text": "RUFUS_PROMPT"}},
+    }))
+    monkeypatch.setattr(c, "CHARACTER_TEMPLATE", p)
+    monkeypatch.setenv("RUFUS_CHARACTER_TEMPLATE", "0")
+    assert c._character_template() is None
+
+
+def test_ensure_character_reference_returns_existing_file(monkeypatch, tmp_path):
+    import character_engine
+    ref = tmp_path / "ref.png"
+    ref.write_bytes(b"already rendered")
+    monkeypatch.setattr(character_engine, "reference_image_path", lambda niche: ref)
+    with patch.object(c, "_submit") as sub:
+        got = c._ensure_character_reference("money_history", "cid")
+    assert got == ref
+    sub.assert_not_called()   # existing reference is reused, never re-rendered
+
+
+def test_ensure_character_reference_bootstraps_when_missing(monkeypatch, tmp_path):
+    import character_engine
+    ref = tmp_path / "ref.png"
+    monkeypatch.setattr(character_engine, "reference_image_path", lambda niche: ref)
+    monkeypatch.setattr(character_engine, "character_sheet_prompt",
+                        lambda niche: "a character reference sheet")
+    monkeypatch.setattr(c, "_stills_template", lambda: _dummy_tpl())
+    with patch.object(c, "_submit", return_value="pid-1"), \
+         patch.object(c, "_await_image", return_value=b"REF_PNG"):
+        got = c._ensure_character_reference("money_history", "cid")
+    assert got == ref
+    assert ref.read_bytes() == b"REF_PNG"
+
+
+def test_ensure_character_reference_none_without_plain_template(monkeypatch, tmp_path):
+    import character_engine
+    ref = tmp_path / "ref.png"
+    monkeypatch.setattr(character_engine, "reference_image_path", lambda niche: ref)
+    monkeypatch.setattr(character_engine, "character_sheet_prompt",
+                        lambda niche: "a character reference sheet")
+    monkeypatch.setattr(c, "_stills_template", lambda: None)
+    assert c._ensure_character_reference("money_history", "cid") is None
+    assert not ref.exists()
+
+
+def _dummy_character_tpl():
+    """A minimal valid character-consistency template — a LoadImage feeding
+    the reference portrait alongside RUFUS_PROMPT, standing in for a real
+    IPAdapter/PuLID export."""
+    return {
+        "1": {"class_type": "LoadImage", "inputs": {"image": "placeholder.png"}},
+        "2": {"class_type": "CLIPTextEncode", "inputs": {"text": "RUFUS_PROMPT"}},
+        "3": {"class_type": "SaveImage",
+              "inputs": {"filename_prefix": "s", "images": ["2", 0]}},
+    }
+
+
+def test_render_character_image_none_without_character_template(monkeypatch):
+    monkeypatch.setattr(c, "_character_template", lambda: None)
+    with patch.object(c, "_submit") as sub:
+        assert c._render_character_image("x", 1, "cid", "money_history") is None
+    sub.assert_not_called()
+
+
+def test_render_character_image_none_when_reference_unavailable(monkeypatch):
+    monkeypatch.setattr(c, "_character_template", lambda: _dummy_tpl())
+    monkeypatch.setattr(c, "_ensure_character_reference", lambda niche, cid: None)
+    with patch.object(c, "_submit") as sub:
+        assert c._render_character_image("x", 1, "cid", "money_history") is None
+    sub.assert_not_called()
+
+
+def test_render_character_image_uses_uploaded_reference(monkeypatch, tmp_path):
+    ref = tmp_path / "ref.png"
+    ref.write_bytes(b"x")
+    monkeypatch.setattr(c, "_character_template", lambda: _dummy_character_tpl())
+    monkeypatch.setattr(c, "_ensure_character_reference", lambda niche, cid: ref)
+    import svd_client
+    monkeypatch.setattr(svd_client, "_upload_image", lambda p: "uploaded_ref.png")
+    with patch.object(c, "_submit", return_value="pid-1") as sub, \
+         patch.object(c, "_await_image", return_value=b"CHAR_PNG"):
+        out = c._render_character_image("prompt text", 1, "cid", "money_history")
+    assert out == b"CHAR_PNG"
+    submitted_graph = sub.call_args[0][0]
+    assert submitted_graph["1"]["inputs"]["image"] == "uploaded_ref.png"
+
+
+def test_render_character_image_none_when_upload_fails(monkeypatch, tmp_path):
+    ref = tmp_path / "ref.png"
+    ref.write_bytes(b"x")
+    monkeypatch.setattr(c, "_character_template", lambda: _dummy_character_tpl())
+    monkeypatch.setattr(c, "_ensure_character_reference", lambda niche, cid: ref)
+    import svd_client
+    monkeypatch.setattr(svd_client, "_upload_image", lambda p: None)
+    with patch.object(c, "_submit") as sub:
+        assert c._render_character_image("x", 1, "cid", "money_history") is None
+    sub.assert_not_called()
+
+
+def test_generate_clips_threads_niche_into_render(monkeypatch):
+    """generate_clips(niche=...) must reach _render_image so character mode
+    can activate — a regression guard for the plumbing, not the feature
+    logic itself (covered above)."""
+    seen_niches = []
+
+    def fake_render(prompt, seed, client_id, niche=None):
+        seen_niches.append(niche)
+        return b"PNG"
+
+    with patch.object(c, "is_available", return_value=True), \
+         patch.object(c, "_stills_template", return_value=_dummy_tpl()), \
+         patch.object(c, "_render_image", side_effect=fake_render), \
+         patch.object(c, "_fit_to_portrait", lambda b, p: p.write_bytes(b"i" * 25_000) or True), \
+         patch.object(c, "_avg_hash", return_value=None), \
+         patch.object(c, "_animate_to_clip",
+                      lambda png, clip, duration=8.0, idx=0: clip.write_bytes(b"x" * 60_000) or True):
+        c.generate_clips(["a prompt"], n=1, niche="money_history")
+
+    assert seen_niches == ["money_history"]

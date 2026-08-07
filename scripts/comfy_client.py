@@ -260,20 +260,118 @@ def _with_detail(prompt: str) -> str:
     return f"{prompt.rstrip().rstrip('.')}. {tail}"
 
 
-def _render_image(prompt: str, seed: int, client_id: str) -> bytes | None:
-    """Render one still via config/stills_api.json → raw PNG bytes, or None.
+def _render_image(prompt: str, seed: int, client_id: str,
+                  niche: str | None = None) -> bytes | None:
+    """Render one still → raw PNG bytes, or None.
 
-    No built-in fallback model — see the module docstring for why (licensing).
-    Returns None if no template is exported, or if the render itself fails;
-    the caller's own retry loop (generate_clips' MAX_DUP_RETRIES) and
-    beat-alignment reuse already handle a transient failure, same as any
-    other clip-generation error."""
+    Tries the recurring-character path first when the niche has one
+    configured and enabled (see character_engine.py); falls through to the
+    plain stills template on any character-path miss (no template exported,
+    reference bootstrap failed, render failed) so character mode can never
+    turn a working pipeline into a broken one — same fail-open contract as
+    every other optional feature in this codebase.
+
+    No built-in fallback MODEL though — see the module docstring for why
+    (licensing). Returns None if no plain template is exported either, or if
+    the render itself fails; the caller's own retry loop (generate_clips'
+    MAX_DUP_RETRIES) and beat-alignment reuse already handle a transient
+    failure, same as any other clip-generation error."""
+    if niche:
+        try:
+            import character_engine
+            if character_engine.enabled(niche):
+                out = _render_character_image(prompt, seed, client_id, niche)
+                if out is not None:
+                    return out
+        except Exception as e:
+            print(f"[comfy] character path skipped (non-fatal): {e}")
+
     tpl = _stills_template()
     if tpl is None:
         return None
     import comfy_template
     g = comfy_template.prepare(tpl, prompt=prompt, seed=seed,
                                save_prefix="rufus_stills")
+    pid = _submit(g, client_id)
+    if not pid:
+        return None
+    return _await_image(pid)
+
+
+CHARACTER_TEMPLATE = Path(__file__).parent.parent / "config" / "character_stills_api.json"
+
+
+def _character_template() -> dict | None:
+    """The exported image-conditioning workflow (IPAdapter/PuLID/etc.) for
+    recurring-character stills, or None if it hasn't been exported yet.
+    Honors RUFUS_CHARACTER_TEMPLATE=0 as an explicit opt-out even when the
+    file exists. Same load/placeholder contract as _stills_template()."""
+    if os.environ.get("RUFUS_CHARACTER_TEMPLATE", "1").strip().lower() in \
+            ("0", "false", "no", "off"):
+        return None
+    import comfy_template
+    tpl = comfy_template.load_template(CHARACTER_TEMPLATE)
+    if tpl is not None and comfy_template.has_placeholder(tpl):
+        return tpl
+    return None
+
+
+def _ensure_character_reference(niche: str, client_id: str) -> Path | None:
+    """The persistent reference portrait for this niche's character, rendering
+    it once (via the PLAIN stills template) if it doesn't exist yet. Returns
+    None on any failure — the caller then falls back to the ordinary
+    pipeline, it never blocks a run."""
+    import character_engine
+    ref_path = character_engine.reference_image_path(niche)
+    if ref_path is None:
+        return None
+    if ref_path.exists() and ref_path.stat().st_size > 0:
+        return ref_path
+
+    sheet_prompt = character_engine.character_sheet_prompt(niche)
+    tpl = _stills_template()
+    if sheet_prompt is None or tpl is None:
+        return None
+    import comfy_template
+    g = comfy_template.prepare(tpl, prompt=_with_detail(sheet_prompt),
+                               seed=random.randint(1, 2_000_000_000),
+                               save_prefix="rufus_character_ref")
+    pid = _submit(g, client_id)
+    if not pid:
+        return None
+    img_bytes = _await_image(pid)
+    if not img_bytes:
+        return None
+    try:
+        ref_path.parent.mkdir(parents=True, exist_ok=True)
+        ref_path.write_bytes(img_bytes)
+        print(f"[comfy] bootstrapped character reference → {ref_path}")
+    except OSError as e:
+        print(f"[comfy] couldn't save character reference: {e}")
+        return None
+    return ref_path
+
+
+def _render_character_image(prompt: str, seed: int, client_id: str,
+                            niche: str) -> bytes | None:
+    """Render one recurring-character still via config/character_stills_api.json
+    (an IPAdapter/PuLID-style image-conditioning template), or None if the
+    template isn't exported yet, the reference portrait can't be produced, or
+    the render fails — any of which sends the caller back to the plain
+    stills path."""
+    tpl = _character_template()
+    if tpl is None:
+        return None
+    ref_path = _ensure_character_reference(niche, client_id)
+    if ref_path is None:
+        return None
+    from svd_client import _upload_image
+    image_name = _upload_image(ref_path)
+    if not image_name:
+        return None
+    import comfy_template
+    g = comfy_template.prepare(tpl, prompt=prompt, image_name=image_name,
+                               seed=seed, save_prefix="rufus_character")
     pid = _submit(g, client_id)
     if not pid:
         return None
@@ -361,12 +459,17 @@ def _await_image(prompt_id: str, timeout: float | None = None) -> bytes | None:
 
 
 def generate_clips(queries: list[str], n: int = 4,
-                   clip_duration: float = 8.0) -> list[Path]:
+                   clip_duration: float = 8.0, niche: str | None = None) -> list[Path]:
     """Generate one Ken Burns clip per query via ComfyUI, in order.
 
     Pipeline per clip:
       query → stills model (config/stills_api.json) 832×1472 → Lanczos 2× →
       crop 1080×1920 → Ken Burns mp4
+
+    `niche` is optional and only used to route into the recurring-character
+    path (character_engine.py) when that niche has one configured — omitting
+    it (or passing one with no character configured) is identical to the
+    behavior before character mode existed.
 
     Matches sd_client.generate_clips' contract: returns a list of 1080×1920 mp4
     Paths (one per query), or [] if ComfyUI is not running / no stills template
@@ -476,7 +579,13 @@ def generate_clips(queries: list[str], n: int = 4,
     if n_prior:
         print(f"[comfy] freshness: {n_prior} image hash(es) from recent runs loaded")
     clips: list[Path] = []
-    print(f"[comfy] stills: config/stills_api.json  base_seed={master_seed}")
+    try:
+        import character_engine
+        _char_on = character_engine.enabled(niche) and _character_template() is not None
+    except Exception:
+        _char_on = False
+    print(f"[comfy] stills: config/stills_api.json  base_seed={master_seed}"
+          + ("  [recurring character ON]" if _char_on else ""))
 
     # Every run keeps its keyframes + prompts, not just RUFUS_DEBUG=1 runs —
     # the quality-review workflow needs every image logged, not a sampled
@@ -500,7 +609,7 @@ def generate_clips(queries: list[str], n: int = 4,
         for retry in range(MAX_DUP_RETRIES + 1):
             # %(2**31) keeps the seed in range for any backend; offset per clip/retry.
             seed  = (master_seed + i + 1000 * retry) % (2**31 - 1)
-            img_bytes = _render_image(prompt, seed, client_id)
+            img_bytes = _render_image(prompt, seed, client_id, niche=niche)
             if not img_bytes:
                 # A hard generation error (vs. a plain duplicate) is often a
                 # transient GPU/model-loading hiccup on the ComfyUI side —

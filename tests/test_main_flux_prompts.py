@@ -136,6 +136,92 @@ def test_flux_instruction_pushes_illustration_over_photorealism(tmp_path, monkey
     assert "visible film grain" not in prompt.lower()
 
 
+def test_flux_instruction_includes_character_clause_when_niche_has_one(tmp_path, monkeypatch):
+    """When a niche's character block is enabled (character_engine.py), the
+    FLUX instruction sent to GPT must carry the recurring-character clause so
+    every beat's prompt describes the same person — the text-level layer of
+    the "fixed character across scenes" feature."""
+    keys_file = tmp_path / "keys.json"
+    keys_file.write_text(json.dumps({"openai": "sk-test-key-1234567890"}))
+    monkeypatch.setattr(main, "CONFIG_DIR", tmp_path)
+
+    niches_file = tmp_path / "niches.json"
+    niches_file.write_text(json.dumps({"niches": {"money_history": {
+        "video_source": "comfy",
+        "character": {
+            "enabled": True,
+            "name": "the Chronicler",
+            "description": "grey hair, round spectacles, brown leather satchel",
+        },
+    }}}))
+    monkeypatch.setattr(main, "NICHES_FILE", niches_file)
+    monkeypatch.setenv("RUFUS_VIDEO_SOURCE", "comfy")
+    monkeypatch.delenv("RUFUS_CHARACTER_MODE", raising=False)
+
+    import character_engine
+    monkeypatch.setattr(character_engine, "NICHES_FILE", niches_file)
+
+    captured = {}
+
+    class FakeClient:
+        def __init__(self, api_key=None):
+            pass
+
+        class chat:
+            class completions:
+                @staticmethod
+                def create(model, messages, **kw):
+                    captured["prompt"] = messages[0]["content"]
+                    return _fake_openai_response(
+                        [f"A scene depicting beat number {i}." for i in range(2)])
+
+    monkeypatch.setattr("openai.OpenAI", FakeClient)
+
+    main._build_sd_prompts("Rome debased the denarius.", "money_history", max_scenes=2)
+
+    prompt = captured["prompt"]
+    assert "the Chronicler" in prompt
+    assert "grey hair, round spectacles, brown leather satchel" in prompt
+    assert "SAME person" in prompt
+
+
+def test_flux_instruction_omits_character_clause_without_niche_config(tmp_path, monkeypatch):
+    """A niche with no "character" block in niches.json (every niche today)
+    must get an instruction identical in shape to before this feature —
+    no stray clause, no crash."""
+    keys_file = tmp_path / "keys.json"
+    keys_file.write_text(json.dumps({"openai": "sk-test-key-1234567890"}))
+    monkeypatch.setattr(main, "CONFIG_DIR", tmp_path)
+
+    niches_file = tmp_path / "niches.json"
+    niches_file.write_text(json.dumps({"niches": {"money_history": {"video_source": "comfy"}}}))
+    monkeypatch.setattr(main, "NICHES_FILE", niches_file)
+    monkeypatch.setenv("RUFUS_VIDEO_SOURCE", "comfy")
+
+    import character_engine
+    monkeypatch.setattr(character_engine, "NICHES_FILE", niches_file)
+
+    captured = {}
+
+    class FakeClient:
+        def __init__(self, api_key=None):
+            pass
+
+        class chat:
+            class completions:
+                @staticmethod
+                def create(model, messages, **kw):
+                    captured["prompt"] = messages[0]["content"]
+                    return _fake_openai_response(
+                        [f"A scene depicting beat number {i}." for i in range(2)])
+
+    monkeypatch.setattr("openai.OpenAI", FakeClient)
+
+    main._build_sd_prompts("Rome debased the denarius.", "money_history", max_scenes=2)
+
+    assert "RECURRING CHARACTER" not in captured["prompt"]
+
+
 # ── No-readable-text net (_defuse_readable_text) ──────────────────────────────
 # Seen live: "calendar page turning to December 31, 2022", "newspaper
 # headlines about the crisis", "'Follow' button with Bitcoin graphics" —

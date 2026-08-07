@@ -103,3 +103,15 @@ def test_money_history_permits_evergreen_concepts_not_just_events():
     assert "no investment advice" in gpt_system
     assert "no motivational fluff" in gpt_system
     assert "no get-rich talk" in gpt_system
+
+
+def test_money_history_character_ships_configured_but_disabled():
+    """The recurring-character feature (character_engine.py) is scaffolded
+    for money_history so a real image-conditioning template + description
+    can be turned on with a one-line edit, but must NOT be live in real
+    videos until the owner has supplied their own description/reference art
+    — locks in "enabled": false as the shipped default."""
+    char = NICHES["money_history"].get("character")
+    assert isinstance(char, dict)
+    assert char.get("description")            # a real starter description exists
+    assert char.get("enabled") is False        # but off until the owner opts in
