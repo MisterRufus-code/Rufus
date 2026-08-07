@@ -1249,7 +1249,7 @@ def run(skip_upload: bool = False, niche_override: str = None, output_dir: Path 
     if not skip_upload:
         try:
             from thumbnail_gen import make_thumbnail
-            thumb_path = make_thumbnail(output_path, script)
+            thumb_path = make_thumbnail(output_path, script, niche=active)
             print(f"           thumbnail: {thumb_path.name}")
         except Exception as e:
             print(f"           ⚠ thumbnail generation skipped: {e}")

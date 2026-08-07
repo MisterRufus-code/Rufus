@@ -162,8 +162,54 @@ def _draw_accent_bar(draw: ImageDraw.Draw, accent_rgb: tuple[int, int, int]) -> 
     draw.rectangle([(0, 0), (12, THUMB_H)], fill=accent_rgb + (220,))
 
 
-def make_thumbnail(video_path: Path, script: str, out_path: Path = None) -> Path:
-    """Render a branded thumbnail JPG with hook text over a strong video frame."""
+def _composite_character_badge(img: Image.Image, ref_path: Path,
+                               accent_rgb: tuple[int, int, int]) -> Image.Image:
+    """Paste a circular 'brand badge' of the niche's recurring character
+    (character_engine.py) in the top-right corner, ringed in the niche's
+    accent color — the same channel-recognition trick real branded channels
+    use: whatever the video's own scene is, the SAME face in the SAME corner
+    every time makes the channel instantly recognizable in a crowded feed,
+    which is a real lever on click-through and subscriber recall, not just
+    a visual nicety. Crops the top square of the reference portrait (a
+    head-to-waist character sheet — the head is what a small badge needs).
+    Silently no-ops on any image error; a thumbnail must never fail because
+    the badge couldn't be drawn."""
+    try:
+        ref = Image.open(ref_path).convert("RGBA")
+    except Exception as e:
+        print(f"[thumb] character badge skipped (non-fatal): {e}")
+        return img
+
+    badge_d = int(THUMB_W * 0.30)
+    w, h = ref.size
+    side = min(w, h)
+    left = (w - side) // 2
+    ref = ref.crop((left, 0, left + side, side)).resize((badge_d, badge_d), Image.LANCZOS)
+
+    mask = Image.new("L", (badge_d, badge_d), 0)
+    ImageDraw.Draw(mask).ellipse((0, 0, badge_d, badge_d), fill=255)
+
+    ring_pad = 7
+    ring_d   = badge_d + ring_pad * 2
+    ring     = Image.new("RGBA", (ring_d, ring_d), (0, 0, 0, 0))
+    ImageDraw.Draw(ring).ellipse((0, 0, ring_d, ring_d), fill=accent_rgb + (255,))
+
+    margin = 44
+    x = THUMB_W - ring_d - margin
+    y = margin
+    img.paste(ring, (x, y), ring)
+    img.paste(ref, (x + ring_pad, y + ring_pad), mask)
+    return img
+
+
+def make_thumbnail(video_path: Path, script: str, out_path: Path = None,
+                   niche: str | None = None) -> Path:
+    """Render a branded thumbnail JPG with hook text over a strong video frame.
+
+    `niche` is optional — when it has an enabled recurring character with a
+    bootstrapped reference portrait (character_engine.py), that character's
+    face is badged into the corner for cross-video brand recognition.
+    Omitting it (every pre-existing caller) is identical to before this."""
     video_path = Path(video_path)
     if not video_path.exists():
         raise FileNotFoundError(video_path)
@@ -199,6 +245,21 @@ def make_thumbnail(video_path: Path, script: str, out_path: Path = None) -> Path
 
         # Merge overlay onto frame
         img = Image.alpha_composite(img, overlay)
+
+        # Recurring-character brand badge (top-right corner), if this niche
+        # has one enabled AND a reference portrait has actually been
+        # bootstrapped already (character_engine.py / comfy_client.py) — a
+        # video that hasn't rendered a single character-mode image yet has
+        # nothing to badge with, so this silently no-ops until then.
+        try:
+            import character_engine
+            if character_engine.enabled(niche):
+                ref_path = character_engine.reference_image_path(niche)
+                if ref_path and ref_path.exists():
+                    img = _composite_character_badge(img, ref_path, accent_rgb)
+        except Exception as e:
+            print(f"[thumb] character badge skipped (non-fatal): {e}")
+
         draw = ImageDraw.Draw(img)
 
         # Load font
