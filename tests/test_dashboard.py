@@ -212,7 +212,7 @@ def test_approve_uploads_and_marks_approved(client, tmp_path, monkeypatch):
                                 title="T", description="D", channel="main_en")
 
     captured = {}
-    def fake_upload(path, script, thumbnail_path=None, metadata=None):
+    def fake_upload(path, script, thumbnail_path=None, metadata=None, **kwargs):
         captured["path"] = path
         captured["metadata"] = metadata
         return "https://youtube.com/shorts/abc123", "abc123"
@@ -442,7 +442,7 @@ def test_approve_restores_env_vars_after_upload(client, tmp_path, monkeypatch):
                                 score=9, channel="side_channel")
 
     captured = {}
-    def fake_upload(path, script, thumbnail_path=None, metadata=None):
+    def fake_upload(path, script, thumbnail_path=None, metadata=None, **kwargs):
         captured["channel"] = _os.environ.get("RUFUS_CHANNEL")
         captured["niche"] = _os.environ.get("RUFUS_NICHE_OVERRIDE")
         return "https://youtube.com/shorts/x", "x"

@@ -188,10 +188,40 @@ def post_cta_comment(youtube, video_id: str, niche_cfg: dict) -> None:
         print(f"[youtube] CTA comment skipped: {e}")
 
 
+def post_source_comment(youtube, video_id: str, source_url: str,
+                        seed_source: str = None) -> None:
+    """Post a comment citing the real source the script was grounded in
+    (a Wikipedia article, a Stack Exchange question, ...) — trust/
+    differentiation lever against generic "AI slop" history channels, not
+    just an engagement CTA. Same API limitation as post_cta_comment: the
+    public YouTube Data API has no endpoint to PIN a comment, only to post
+    one — pinning stays a manual step (see the daily checklist). A no-op
+    when there's no URL (older rows from before seed_url existed, or a
+    seed type — the wisdom pool — that never carried one). Never raises."""
+    if not source_url:
+        return
+    label = f" ({seed_source})" if seed_source else ""
+    text = f"Source for this one{label}: {source_url}"
+    try:
+        youtube.commentThreads().insert(
+            part="snippet",
+            body={"snippet": {
+                "videoId": video_id,
+                "topLevelComment": {"snippet": {"textOriginal": text}},
+            }},
+        ).execute()
+        print(f"[youtube] source comment posted: {source_url}")
+    except Exception as e:
+        print(f"[youtube] source comment skipped: {e}")
+
+
 def upload(video_path: Path, script: str, thumbnail_path: Path = None,
-           metadata: dict = None) -> tuple[str, str]:
+           metadata: dict = None, source_url: str = None,
+           seed_source: str = None) -> tuple[str, str]:
     """Upload video (+ optional thumbnail); return (video_url, video_id).
-    Pass `metadata` to reuse a pre-built dict (avoids a second GPT call)."""
+    Pass `metadata` to reuse a pre-built dict (avoids a second GPT call).
+    Pass `source_url` (+ optionally `seed_source` for a nicer label) to also
+    post a source-citation comment — see post_source_comment()."""
     from googleapiclient.http import MediaFileUpload
 
     channel               = _channel()
@@ -270,6 +300,7 @@ def upload(video_path: Path, script: str, thumbnail_path: Path = None,
             print(f"[youtube] thumbnail upload skipped: {e}")
 
     post_cta_comment(youtube, video_id, niche_cfg)
+    post_source_comment(youtube, video_id, source_url, seed_source)
 
     return video_url, video_id
 

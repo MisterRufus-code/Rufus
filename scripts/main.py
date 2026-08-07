@@ -1274,6 +1274,7 @@ def run(skip_upload: bool = False, niche_override: str = None, output_dir: Path 
             seed_type=seed.get("type"),
             seed_source=seed.get("source"),
             seed_content=(seed.get("content", "") or "")[:1000],
+            seed_url=seed.get("url") or None,
             run_id=result.get("run_id"),
             score=result.get("score", 0),
             criterion_scores=result.get("criterion_scores"),
@@ -1341,7 +1342,8 @@ def run(skip_upload: bool = False, niche_override: str = None, output_dir: Path 
                 update_title(db_id, meta["title"])
 
             yt_url, yt_id = upload(output_path, script, thumbnail_path=thumb_path,
-                                   metadata=meta)
+                                   metadata=meta, source_url=seed.get("url") or None,
+                                   seed_source=seed.get("source"))
             print(f"           → {yt_url}\n")
 
             if db_id and yt_id:

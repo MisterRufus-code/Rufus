@@ -110,3 +110,91 @@ def test_upload_declares_synthetic_media(tmp_path, monkeypatch):
         youtube_uploader.upload(video, "script text", metadata=meta)
 
     assert captured["body"]["status"]["containsSyntheticMedia"] is True
+
+
+# ── Source-citation comment ──────────────────────────────────────────────────
+# Trust/differentiation lever: cite the real source (Wikipedia / Stack
+# Exchange URL) a script was grounded in, same posting mechanism as the
+# existing CTA comment. Pinning isn't possible via the public API (see the
+# function's own docstring) — this only POSTS the comment.
+
+def test_post_source_comment_noop_without_url():
+    fake_youtube = MagicMock()
+    youtube_uploader.post_source_comment(fake_youtube, "vid123", None)
+    fake_youtube.commentThreads.assert_not_called()
+
+
+def test_post_source_comment_noop_with_empty_string():
+    fake_youtube = MagicMock()
+    youtube_uploader.post_source_comment(fake_youtube, "vid123", "")
+    fake_youtube.commentThreads.assert_not_called()
+
+
+def test_post_source_comment_posts_url_and_label():
+    captured = {}
+    fake_youtube = MagicMock()
+
+    def fake_insert(part, body):
+        captured["body"] = body
+        return MagicMock()
+
+    fake_youtube.commentThreads.return_value.insert.side_effect = fake_insert
+
+    youtube_uploader.post_source_comment(
+        fake_youtube, "vid123",
+        "https://en.wikipedia.org/wiki/Bretton_Woods_Conference",
+        seed_source="Wikipedia",
+    )
+
+    text = captured["body"]["snippet"]["topLevelComment"]["snippet"]["textOriginal"]
+    assert "https://en.wikipedia.org/wiki/Bretton_Woods_Conference" in text
+    assert "Wikipedia" in text
+    assert captured["body"]["snippet"]["videoId"] == "vid123"
+
+
+def test_post_source_comment_works_without_a_label():
+    fake_youtube = MagicMock()
+    fake_youtube.commentThreads.return_value.insert.return_value = MagicMock()
+    # Must not raise just because seed_source wasn't passed.
+    youtube_uploader.post_source_comment(fake_youtube, "vid123", "https://example.com/x")
+
+
+def test_post_source_comment_never_raises_on_api_error():
+    fake_youtube = MagicMock()
+    fake_youtube.commentThreads.return_value.insert.side_effect = RuntimeError("quota exceeded")
+    youtube_uploader.post_source_comment(fake_youtube, "vid123", "https://example.com/x")
+
+
+def test_upload_posts_source_comment_when_url_provided(tmp_path, monkeypatch):
+    video = tmp_path / "out.mp4"
+    video.write_bytes(b"fake mp4 bytes")
+
+    fake_youtube = MagicMock()
+
+    def fake_insert(part, body, media_body):
+        req = MagicMock()
+        req.next_chunk.return_value = (None, {"id": "vid123"})
+        return req
+
+    fake_youtube.videos.return_value.insert.side_effect = fake_insert
+
+    monkeypatch.setattr(youtube_uploader, "_channel", lambda: _FakeChannel())
+    monkeypatch.setattr(youtube_uploader, "get_authenticated_service", lambda channel=None: fake_youtube)
+    monkeypatch.setattr(youtube_uploader, "load_niche", lambda: ({"cta": "x"}, "money_history"))
+    monkeypatch.setattr(youtube_uploader, "post_cta_comment", lambda *a, **k: None)
+
+    captured = {}
+    monkeypatch.setattr(
+        youtube_uploader, "post_source_comment",
+        lambda youtube, video_id, source_url, seed_source=None: captured.update(
+            video_id=video_id, source_url=source_url, seed_source=seed_source))
+
+    meta = {"title": "t", "description": "d", "tags": ["a"], "categoryId": "22"}
+    with patch("googleapiclient.http.MediaFileUpload", MagicMock()):
+        youtube_uploader.upload(video, "script text", metadata=meta,
+                                source_url="https://en.wikipedia.org/wiki/X",
+                                seed_source="Wikipedia")
+
+    assert captured == {"video_id": "vid123",
+                        "source_url": "https://en.wikipedia.org/wiki/X",
+                        "seed_source": "Wikipedia"}

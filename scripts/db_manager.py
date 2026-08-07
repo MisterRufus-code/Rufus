@@ -71,6 +71,12 @@ def init_db():
             # the approval queue needs it persisted so it can be reviewed/
             # edited BEFORE the upload decision, not only after.
             "ALTER TABLE videos ADD COLUMN description TEXT",
+            # seed_source already held a short LABEL ("Wikipedia",
+            # "history.stackexchange.com") but never the actual clickable
+            # link — meaning the one piece of data needed to cite a source
+            # (the source-citation comment posted after upload) was thrown
+            # away at save time. seed_url is the real link.
+            "ALTER TABLE videos ADD COLUMN seed_url TEXT",
         ):
             try:
                 c.execute(ddl)
@@ -135,6 +141,7 @@ def save_video(niche: str, script_hook: str, scene_desc: str,
                script_full: str = None,
                seed_type: str = None, seed_source: str = None,
                seed_content: str = None,
+               seed_url: str = None,
                run_id: str = None,
                criterion_scores: dict = None,
                attempts_used: int = None,
@@ -150,15 +157,15 @@ def save_video(niche: str, script_hook: str, scene_desc: str,
         cur = c.execute(
             "INSERT INTO videos "
             "(niche, script_hook, script_full, scene_desc, "
-            " seed_type, seed_source, seed_content, "
+            " seed_type, seed_source, seed_content, seed_url, "
             " youtube_id, video_file, score, "
             " run_id, score_specificity, score_hook, score_compression, "
             " score_loop, score_human, attempts_used, final_temperature, "
             " score_reasoning, title, channel, hold_reason, description, "
             " upload_status) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (niche, script_hook, script_full, scene_desc,
-             seed_type, seed_source, seed_content,
+             seed_type, seed_source, seed_content, seed_url,
              youtube_id, video_file, score,
              run_id,
              crits.get("specificity"), crits.get("hook"),

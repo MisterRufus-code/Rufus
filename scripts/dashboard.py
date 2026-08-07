@@ -498,7 +498,7 @@ def _recent_videos(limit: int = 60, channel: str | None = None,
 
 def _video_detail(video_id: int) -> dict | None:
     q = ("SELECT id, upload_date, niche, script_hook, script_full, scene_desc, "
-         "seed_type, seed_source, seed_content, youtube_id, video_file, score, "
+         "seed_type, seed_source, seed_content, seed_url, youtube_id, video_file, score, "
          "run_id, score_specificity, score_hook, score_compression, score_loop, "
          "score_human, attempts_used, final_temperature, score_reasoning, "
          "title, channel, hold_reason, description, upload_status "
@@ -511,7 +511,7 @@ def _video_detail(video_id: int) -> dict | None:
     if not row:
         return None
     cols = ["id", "upload_date", "niche", "script_hook", "script_full",
-            "scene_desc", "seed_type", "seed_source", "seed_content",
+            "scene_desc", "seed_type", "seed_source", "seed_content", "seed_url",
             "youtube_id", "video_file", "score", "run_id",
             "score_specificity", "score_hook", "score_compression",
             "score_loop", "score_human", "attempts_used", "final_temperature",
@@ -2201,7 +2201,8 @@ def approve_video(video_id):
         with _scoped_env(**env_overrides):
             yt_url, yt_id = yt_mod.upload(video_file, v["script_full"] or "",
                                           thumbnail_path=thumb if thumb.exists() else None,
-                                          metadata=meta)
+                                          metadata=meta, source_url=v.get("seed_url") or None,
+                                          seed_source=v.get("seed_source"))
     except Exception as e:
         # Upload itself failed — the video did NOT go up, so re-approving is
         # safe. Record it like main.py does so report.py's FAILED count sees

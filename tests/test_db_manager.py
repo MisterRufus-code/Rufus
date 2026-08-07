@@ -24,6 +24,12 @@ def test_init_db_creates_hold_reason_column(isolated_db):
     assert "hold_reason" in cols
 
 
+def test_init_db_creates_seed_url_column(isolated_db):
+    with isolated_db._conn() as c:
+        cols = {row[1] for row in c.execute("PRAGMA table_info(videos)")}
+    assert "seed_url" in cols
+
+
 def test_init_db_idempotent(isolated_db):
     """Running init_db twice (every startup does) must not raise even though
     hold_reason already exists from the first call."""
@@ -40,6 +46,29 @@ def test_save_video_persists_hold_reason(isolated_db):
     with isolated_db._conn() as c:
         row = c.execute("SELECT hold_reason FROM videos WHERE id=?", (vid,)).fetchone()
     assert row[0] == "score 5/10 < 8/10 threshold"
+
+
+def test_save_video_persists_seed_url(isolated_db):
+    """The real source link (a Wikipedia/Stack Exchange URL) — needed for
+    youtube_uploader.post_source_comment — must survive the DB round-trip,
+    not just the short seed_source label."""
+    vid = isolated_db.save_video(
+        niche="money_history", script_hook="Hook", scene_desc="s",
+        video_file="v.mp4", score=8,
+        seed_source="history.stackexchange.com",
+        seed_url="https://history.stackexchange.com/questions/1234",
+    )
+    with isolated_db._conn() as c:
+        row = c.execute("SELECT seed_url FROM videos WHERE id=?", (vid,)).fetchone()
+    assert row[0] == "https://history.stackexchange.com/questions/1234"
+
+
+def test_save_video_seed_url_defaults_to_none(isolated_db):
+    vid = isolated_db.save_video(niche="finance", script_hook="H", scene_desc="s",
+                                 video_file="v.mp4")
+    with isolated_db._conn() as c:
+        row = c.execute("SELECT seed_url FROM videos WHERE id=?", (vid,)).fetchone()
+    assert row[0] is None
 
 
 def test_save_video_hold_reason_defaults_to_none(isolated_db):

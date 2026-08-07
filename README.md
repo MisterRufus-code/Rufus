@@ -547,6 +547,16 @@ existing token: delete `config/youtube_token.json` and repeat step 5.
 Analytics runs daily inside `run_scheduled.bat` (before the render, so the day's
 script can learn from yesterday's numbers) and posts its digest to Discord.
 
+**Two comments auto-post right after every upload** (`youtube_uploader.py`,
+needs the `youtube.force-ssl` scope already in `SCOPES` above): a CTA line
+from the niche's `cta_pool`, and — when the video's seed carried a real link
+(Wikipedia article, Stack Exchange question; not the wisdom-pool fallback,
+which has none) — a second comment citing that exact source. Both are a real
+trust/differentiation lever against generic "AI slop" channels, but neither
+can be **pinned** via the public YouTube Data API (no such endpoint exists,
+confirmed) — pinning the source comment stays a manual 10-second step if you
+want it pinned, same as the existing CTA-comment note.
+
 ---
 
 ## Security invariants
