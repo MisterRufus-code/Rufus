@@ -560,7 +560,14 @@ def _build_sd_prompts(script: str, niche: str, max_scenes: int = 10) -> list[str
 
         try:
             import character_engine
-            char_clause = character_engine.character_clause(niche) if is_flux else ""
+            # Not is_flux-gated — character_engine.py is generic per-niche
+            # (money_history's timeless Chronicler is comfy/FLUX, but the SD
+            # niches — finance/motivation/mindset/business/personal_development
+            # — each ship their own starter character too, disabled by
+            # default). character_clause() itself returns "" for any niche
+            # without an enabled character block, so this is a no-op today
+            # for every SD niche until the owner opts one in.
+            char_clause = character_engine.character_clause(niche)
         except Exception:
             char_clause = ""
 
@@ -703,6 +710,7 @@ def _build_sd_prompts(script: str, niche: str, max_scenes: int = 10) -> list[str
                     "• ZERO ABSTRACT SYMBOLISM: never 'envelope signifying decisions', 'road "
                     "representing the journey'. If the beat is abstract, find the most concrete "
                     "object a real person would actually see in that situation.\n"
+                    f"{char_clause}"
                     "• EMOTION SECOND: once the literal subject is locked, add real emotion through "
                     "posture, expression, lighting — never a neutral or smiling pose, never looking at camera.\n"
                     "• BEAT 1 = the scroll-stopper: highest contrast, most arresting framing of the "

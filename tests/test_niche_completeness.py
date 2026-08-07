@@ -121,3 +121,24 @@ def test_money_history_character_is_timeless_and_enabled():
     # Must NOT anchor the design to any one era's fashion — that's the whole
     # point of choosing a hooded/archetypal figure over period dress.
     assert "not tied to any historical period" in desc or "not pinned" in desc
+
+
+def test_every_sd_niche_has_a_starter_character_disabled_by_default():
+    """character_engine.py is generic per-niche, not FLUX/money_history-only
+    — finance/motivation/mindset/business/personal_development each ship a
+    distinct starter mascot (per channel-owner direction: 'build characters
+    for more niches, I'll use them in the future if I want'), but OFF by
+    default since none has been reviewed/approved for real videos yet."""
+    sd_niches = [n for n, cfg in NICHES.items() if cfg.get("video_source") == "sd"]
+    assert sd_niches   # sanity: the SD niches actually exist in this config
+    names = set()
+    for niche in sd_niches:
+        char = NICHES[niche].get("character")
+        assert isinstance(char, dict), f"{niche} missing a character block"
+        assert char.get("enabled") is False, f"{niche}'s character must ship disabled"
+        assert char.get("name"), f"{niche} character has no name"
+        assert char.get("description"), f"{niche} character has no description"
+        names.add(char["name"])
+    # Each niche's mascot must be visually distinct — not the same character
+    # relabeled across niches.
+    assert len(names) == len(sd_niches)

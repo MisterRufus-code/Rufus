@@ -72,7 +72,12 @@
       "accent_color": "#FFC53D",
       "style_suffix": "muted teal and orange color grade, glass and steel surfaces, shallow depth of field, 35mm film, cinematic",
       "youtube_category_id": "25",
-      "video_source": "sd"
+      "video_source": "sd",
+      "character": {
+        "enabled": false,
+        "name": "the Strategist",
+        "description": "a composed South Asian woman in her late 30s, sharp asymmetric bob, tailored charcoal blazer over a crisp white shirt, steady analytical gaze, faint knowing half-smile, always poised rather than tense"
+      }
     },
     "motivation": {
       "display_name": "Motivation & Grind",
@@ -136,7 +141,12 @@
       "accent_color": "#FF5C33",
       "style_suffix": "golden hour rim lighting, gritty texture, high contrast, anamorphic lens flare, cinematic",
       "youtube_category_id": "22",
-      "video_source": "sd"
+      "video_source": "sd",
+      "character": {
+        "enabled": false,
+        "name": "the Grinder",
+        "description": "a lean muscular man in his early 30s, close-cropped fade, weathered olive skin, worn grey hoodie with sleeves pushed to the forearm, jaw set with quiet intensity, faint scar through one eyebrow, never smiling at camera"
+      }
     },
     "mindset": {
       "display_name": "Mindset & Psychology",
@@ -201,7 +211,12 @@
       "accent_color": "#3DD9C5",
       "style_suffix": "soft diffused natural light, muted earth tones, morning fog, medium format film, contemplative",
       "youtube_category_id": "27",
-      "video_source": "sd"
+      "video_source": "sd",
+      "character": {
+        "enabled": false,
+        "name": "the Observer",
+        "description": "a serene woman in her mid-40s, natural greying hair loosely tied back, soft cream linen sweater, calm unhurried posture, gentle knowing eyes that suggest she has already sat with the question being asked"
+      }
     },
     "business": {
       "display_name": "Business & Entrepreneurship",
@@ -247,7 +262,12 @@
       "accent_color": "#4DA3FF",
       "style_suffix": "modern architectural lines, cool daylight, clean minimal composition, 50mm lens, editorial",
       "youtube_category_id": "27",
-      "video_source": "sd"
+      "video_source": "sd",
+      "character": {
+        "enabled": false,
+        "name": "the Builder",
+        "description": "a confident Black man in his mid-30s, close-cropped hair, fitted navy quarter-zip over a plain white tee, relaxed but alert posture, faint entrepreneurial smirk, always mid-motion rather than posed"
+      }
     },
     "personal_development": {
       "display_name": "Personal Development",
@@ -293,7 +313,12 @@
       "accent_color": "#6EE07A",
       "style_suffix": "warm morning sunlight, soft shadows, natural tones, lifestyle photography, hopeful",
       "youtube_category_id": "27",
-      "video_source": "sd"
+      "video_source": "sd",
+      "character": {
+        "enabled": false,
+        "name": "the Climber",
+        "description": "a warm-eyed woman in her late 20s, loose natural curls catching the light, soft oatmeal cardigan over a plain tee, open hopeful expression, always caught mid-stride or mid-reach rather than standing still"
+      }
     },
     "money_history": {
       "display_name": "History of Money",

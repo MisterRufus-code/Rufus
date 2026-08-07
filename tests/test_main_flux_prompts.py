@@ -222,6 +222,104 @@ def test_flux_instruction_omits_character_clause_without_niche_config(tmp_path, 
     assert "RECURRING CHARACTER" not in captured["prompt"]
 
 
+# ── SD (Realistic Vision) prompt branch also gets the character clause ───────
+# character_engine.py is generic per-niche, not FLUX-only — finance,
+# motivation, mindset, business, and personal_development each ship their
+# own starter character (disabled by default) alongside money_history's
+# Chronicler, so the SD-token prompt branch must carry the clause too.
+
+def test_sd_instruction_includes_character_clause_when_niche_has_one(tmp_path, monkeypatch):
+    keys_file = tmp_path / "keys.json"
+    keys_file.write_text(json.dumps({"openai": "sk-test-key-1234567890"}))
+    monkeypatch.setattr(main, "CONFIG_DIR", tmp_path)
+
+    niches_file = tmp_path / "niches.json"
+    niches_file.write_text(json.dumps({"niches": {"finance": {
+        "video_source": "sd",
+        "character": {
+            "enabled": True,
+            "name": "the Strategist",
+            "description": "sharp asymmetric bob, charcoal blazer",
+        },
+    }}}))
+    monkeypatch.setattr(main, "NICHES_FILE", niches_file)
+    monkeypatch.delenv("RUFUS_VIDEO_SOURCE", raising=False)
+    monkeypatch.delenv("RUFUS_CHARACTER_MODE", raising=False)
+
+    import character_engine
+    monkeypatch.setattr(character_engine, "NICHES_FILE", niches_file)
+
+    captured = {}
+
+    class FakeClient:
+        def __init__(self, api_key=None):
+            pass
+
+        class chat:
+            class completions:
+                @staticmethod
+                def create(model, messages, **kw):
+                    captured["prompt"] = messages[0]["content"]
+                    return _fake_openai_response(
+                        [f"RAW photo, (a scene:1.35), doing thing {i}, a "
+                         f"setting, soft light, 50mm f/1.4, cinematic grade"
+                         for i in range(2)])
+
+    monkeypatch.setattr("openai.OpenAI", FakeClient)
+
+    main._build_sd_prompts("People overspend on rent.", "finance", max_scenes=2)
+
+    prompt = captured["prompt"]
+    assert "the Strategist" in prompt
+    assert "sharp asymmetric bob, charcoal blazer" in prompt
+
+
+def test_sd_instruction_omits_character_clause_by_default(tmp_path, monkeypatch):
+    """Production default: every SD niche ships its character disabled, so
+    a real run's prompt must carry no trace of it until the owner opts in."""
+    keys_file = tmp_path / "keys.json"
+    keys_file.write_text(json.dumps({"openai": "sk-test-key-1234567890"}))
+    monkeypatch.setattr(main, "CONFIG_DIR", tmp_path)
+
+    niches_file = tmp_path / "niches.json"
+    niches_file.write_text(json.dumps({"niches": {"finance": {
+        "video_source": "sd",
+        "character": {
+            "enabled": False,
+            "name": "the Strategist",
+            "description": "sharp asymmetric bob, charcoal blazer",
+        },
+    }}}))
+    monkeypatch.setattr(main, "NICHES_FILE", niches_file)
+    monkeypatch.delenv("RUFUS_VIDEO_SOURCE", raising=False)
+
+    import character_engine
+    monkeypatch.setattr(character_engine, "NICHES_FILE", niches_file)
+
+    captured = {}
+
+    class FakeClient:
+        def __init__(self, api_key=None):
+            pass
+
+        class chat:
+            class completions:
+                @staticmethod
+                def create(model, messages, **kw):
+                    captured["prompt"] = messages[0]["content"]
+                    return _fake_openai_response(
+                        [f"RAW photo, (a scene:1.35), doing thing {i}, a "
+                         f"setting, soft light, 50mm f/1.4, cinematic grade"
+                         for i in range(2)])
+
+    monkeypatch.setattr("openai.OpenAI", FakeClient)
+
+    main._build_sd_prompts("People overspend on rent.", "finance", max_scenes=2)
+
+    assert "the Strategist" not in captured["prompt"]
+    assert "RECURRING CHARACTER" not in captured["prompt"]
+
+
 # ── No-readable-text net (_defuse_readable_text) ──────────────────────────────
 # Seen live: "calendar page turning to December 31, 2022", "newspaper
 # headlines about the crisis", "'Follow' button with Bitcoin graphics" —
