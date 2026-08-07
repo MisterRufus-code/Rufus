@@ -88,9 +88,11 @@ def enabled(niche: str | None) -> bool:
     niche has a character block configured — same on/off convention as every
     other Rufus feature toggle (RUFUS_STILLS_ONLY, RUFUS_SFX, ...). The
     niche's own "enabled" field (default True once a character block exists)
-    is the per-niche switch — money_history ships with one but "enabled":
-    false, since a real look needs the owner's description/reference art
-    before it should start showing up in real videos."""
+    is the per-niche switch — money_history's "the Chronicler" is a
+    deliberately timeless/archetypal design (a Calliope-Labs-style hooded
+    storyteller, not pinned to any era's fashion) specifically so it can be
+    on by default without fighting the PERIOD ACCURACY rule the rest of
+    every scene still has to follow."""
     if _off("RUFUS_CHARACTER_MODE"):
         return False
     cfg = niche_character(niche)
@@ -114,8 +116,13 @@ def character_clause(niche: str | None) -> str:
         f"MUST show the SAME person — {name}: {desc}. Use this exact "
         f"description (or a close paraphrase) in every such prompt, varying "
         f"ONLY their pose, action, and framing per the beat — never their "
-        f"face, hair, build, or wardrobe. A beat with no person (an object, "
-        f"place, or document alone) doesn't need the character.\n"
+        f"face, hair, build, or wardrobe. This character is a timeless "
+        f"narrator/guide figure, not a literal inhabitant of the historical "
+        f"scene — the PERIOD ACCURACY rule below still governs everything "
+        f"else in the frame (setting, other people, objects), but never "
+        f"redesign {name}'s own appearance to fit the beat's era. A beat "
+        f"with no person (an object, place, or document alone) doesn't need "
+        f"the character.\n"
     )
 
 

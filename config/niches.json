@@ -350,9 +350,9 @@
       "video_source": "comfy",
       "comfy_model": "flux1-dev-fp8.safetensors",
       "character": {
-        "enabled": false,
+        "enabled": true,
         "name": "the Chronicler",
-        "description": "an ageless narrator-guide, gender-neutral silhouette-friendly design: close-cropped grey hair, warm brown skin, round wire spectacles, a weathered brown leather satchel worn cross-body over a plain collarless linen shirt with sleeves rolled to the elbow, calm attentive expression, hands often mid-gesture toward whatever the scene shows",
+        "description": "a timeless, archetypal storyteller-guide, deliberately NOT tied to any historical period or fashion: a deep hooded cloak in weathered sepia-and-antique-gold fabric that falls in simple flat folds, a calm weathered face with warm brown skin and sharp attentive eyes visible beneath the hood's shadow, no era-specific clothing visible beneath the cloak, carrying either a glowing bronze lantern or a worn leather-bound ledger. Reads as a symbolic narrator standing OUTSIDE time — equally at home beside ancient Lydian traders, in Weimar Germany, or in the present day. Never redesign the cloak/hood/lantern to match a scene's period — that timelessness is the point.",
         "reference_image": "config/character_reference_money_history.png"
       }
     }

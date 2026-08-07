@@ -105,13 +105,19 @@ def test_money_history_permits_evergreen_concepts_not_just_events():
     assert "no get-rich talk" in gpt_system
 
 
-def test_money_history_character_ships_configured_but_disabled():
-    """The recurring-character feature (character_engine.py) is scaffolded
-    for money_history so a real image-conditioning template + description
-    can be turned on with a one-line edit, but must NOT be live in real
-    videos until the owner has supplied their own description/reference art
-    — locks in "enabled": false as the shipped default."""
+def test_money_history_character_is_timeless_and_enabled():
+    """The recurring-character feature (character_engine.py) is live for
+    money_history: a deliberately timeless/archetypal design (per the
+    channel-owner's Calliope-Labs direction) that reads as a narrator/guide
+    rather than a literal period inhabitant, specifically so it can stay on
+    without fighting the PERIOD ACCURACY rule the rest of every scene still
+    follows."""
     char = NICHES["money_history"].get("character")
     assert isinstance(char, dict)
-    assert char.get("description")            # a real starter description exists
-    assert char.get("enabled") is False        # but off until the owner opts in
+    assert char.get("enabled") is True
+    desc = char.get("description", "").lower()
+    assert desc
+    assert "timeless" in desc
+    # Must NOT anchor the design to any one era's fashion — that's the whole
+    # point of choosing a hooded/archetypal figure over period dress.
+    assert "not tied to any historical period" in desc or "not pinned" in desc
