@@ -1008,3 +1008,238 @@ def test_frames_per_beat_one_keeps_the_original_single_still_path(monkeypatch):
     assert len(clips) == 1
     assert len(renders) == 1
     assert concats == [], "single-frame mode must not go through concat"
+
+
+# ── i2i: chain each frame from the previous, then interpolate to real motion ──
+
+def test_beat_motion_defaults_to_legacy(monkeypatch):
+    monkeypatch.delenv("RUFUS_BEAT_MOTION", raising=False)
+    assert c._beat_motion() == ""
+
+
+def test_beat_motion_accepts_known_modes_only(monkeypatch):
+    for mode in c.BEAT_MOTION_MODES:
+        monkeypatch.setenv("RUFUS_BEAT_MOTION", mode.upper())
+        assert c._beat_motion() == mode
+    monkeypatch.setenv("RUFUS_BEAT_MOTION", "nonsense")
+    assert c._beat_motion() == "", "unknown mode must fall back to legacy, not crash"
+
+
+def test_i2i_template_none_when_not_exported(monkeypatch, tmp_path):
+    monkeypatch.setattr(c, "I2I_TEMPLATE", tmp_path / "missing.json")
+    monkeypatch.delenv("RUFUS_I2I_TEMPLATE", raising=False)
+    assert c._i2i_template() is None
+
+
+def test_i2i_template_loads_and_has_kill_switch(monkeypatch, tmp_path):
+    p = tmp_path / "stills_i2i_api.json"
+    p.write_text(json.dumps({
+        "1": {"class_type": "LoadImage", "inputs": {"image": "x.png"}},
+        "2": {"class_type": "CLIPTextEncode", "inputs": {"text": "RUFUS_PROMPT"}},
+    }))
+    monkeypatch.setattr(c, "I2I_TEMPLATE", p)
+    monkeypatch.delenv("RUFUS_I2I_TEMPLATE", raising=False)
+    assert c._i2i_template() is not None
+    monkeypatch.setenv("RUFUS_I2I_TEMPLATE", "0")
+    assert c._i2i_template() is None
+
+
+def test_i2i_step_prompt_moves_forward_only():
+    """Unlike the `cut` arc, every i2i step is relative to the frame it starts
+    FROM, so the sequence only ever advances."""
+    base = "A gold florin changing hands"
+    assert "later" in c._i2i_step_prompt(base, 1).lower()
+    assert base in c._i2i_step_prompt(base, 1)
+    # Past the end of the step list it clamps rather than raising.
+    assert c._i2i_step_prompt(base, 99)
+
+
+def test_build_i2i_chain_feeds_each_frame_into_the_next(tmp_path):
+    """The whole point: frame k is generated FROM frame k-1, which is what
+    makes the frames continuous enough to interpolate between."""
+    inits = []
+
+    def fake_i2i(prompt, seed, client_id, init_png):
+        inits.append(Path(init_png).read_bytes())
+        return b"RAW" + bytes([len(inits)])
+
+    with patch.object(c, "_render_image_i2i", side_effect=fake_i2i), \
+         patch.object(c, "_fit_to_portrait",
+                      lambda b, p: p.write_bytes(b"i" * 25_000) or True):
+        frames = c._build_i2i_chain(
+            base_png=tmp_path / "base.png", base_raw=b"RAW0", prompt="a florin",
+            seed=1, client_id="cid", n=4, tmp_dir=tmp_path, stamp="s", beat=0)
+
+    assert len(frames) == 4
+    # frame 1 starts from the base render, frame 2 from frame 1's output, etc.
+    assert inits[0] == b"RAW0"
+    assert inits[1] == b"RAW" + bytes([1])
+    assert inits[2] == b"RAW" + bytes([2])
+
+
+def test_build_i2i_chain_uses_a_different_seed_each_link(tmp_path):
+    """One seed reused across an img2img chain pulls every step back toward the
+    same result — the previous image already supplies the continuity."""
+    seeds = []
+
+    with patch.object(c, "_render_image_i2i",
+                      side_effect=lambda p, s, cid, init: seeds.append(s) or b"RAW"), \
+         patch.object(c, "_fit_to_portrait",
+                      lambda b, p: p.write_bytes(b"i" * 25_000) or True):
+        c._build_i2i_chain(base_png=tmp_path / "b.png", base_raw=b"R", prompt="x",
+                           seed=5, client_id="cid", n=4, tmp_dir=tmp_path,
+                           stamp="s", beat=0)
+
+    assert len(seeds) == 3 and len(set(seeds)) == 3
+
+
+def test_build_i2i_chain_stops_early_without_losing_the_beat(tmp_path):
+    calls = {"n": 0}
+
+    def flaky(prompt, seed, client_id, init_png):
+        calls["n"] += 1
+        return None if calls["n"] == 3 else b"RAW"
+
+    with patch.object(c, "_render_image_i2i", side_effect=flaky), \
+         patch.object(c, "_fit_to_portrait",
+                      lambda b, p: p.write_bytes(b"i" * 25_000) or True):
+        frames = c._build_i2i_chain(base_png=tmp_path / "b.png", base_raw=b"R",
+                                    prompt="x", seed=1, client_id="cid", n=5,
+                                    tmp_dir=tmp_path, stamp="s", beat=0)
+
+    assert len(frames) == 3, "keeps base + the two links that worked"
+
+
+def test_build_i2i_chain_cleans_up_its_raw_intermediates(tmp_path):
+    """The raw model outputs exist only to be fed to the next link."""
+    with patch.object(c, "_render_image_i2i", return_value=b"RAW"), \
+         patch.object(c, "_fit_to_portrait",
+                      lambda b, p: p.write_bytes(b"i" * 25_000) or True):
+        c._build_i2i_chain(base_png=tmp_path / "b.png", base_raw=b"R", prompt="x",
+                           seed=1, client_id="cid", n=4, tmp_dir=tmp_path,
+                           stamp="s", beat=0)
+    assert list(tmp_path.glob("*_raw*.png")) == []
+
+
+def test_assemble_smooth_beat_empty_is_false(tmp_path):
+    assert c._assemble_smooth_beat([], tmp_path / "o.mp4", 4.0) is False
+
+
+def test_assemble_smooth_beat_single_frame_uses_ken_burns(tmp_path):
+    """Nothing to interpolate between — must not build a one-frame sequence."""
+    frame = tmp_path / "f.png"
+    frame.write_bytes(b"x")
+    with patch.object(c, "_animate_to_clip", return_value=True) as kb:
+        assert c._assemble_smooth_beat([frame], tmp_path / "o.mp4", 4.0) is True
+    kb.assert_called_once()
+
+
+def test_assemble_smooth_beat_stages_the_last_frame_twice(tmp_path, monkeypatch):
+    """Measured: minterpolate emits only (N-2) intervals because it needs a
+    frame to interpolate TOWARD, so without a duplicate the beat came out
+    3.63s instead of 4.80s and the final keyframe was never shown."""
+    frames = []
+    for k in range(3):
+        f = tmp_path / f"f{k}.png"
+        f.write_bytes(bytes([k]) * 10)
+        frames.append(f)
+
+    staged = {}
+
+    def fake_run(cmd, **kw):
+        seq = tmp_path / "o_seq"
+        staged["files"] = sorted(p.name for p in seq.glob("*.png"))
+        staged["contents"] = [(seq / n).read_bytes()[:1] for n in staged["files"]]
+        out = tmp_path / "o.mp4"
+        out.write_bytes(b"x" * 20_000)
+        return type("R", (), {"returncode": 0, "stderr": ""})()
+
+    monkeypatch.setattr(c.subprocess, "run", fake_run)
+    assert c._assemble_smooth_beat(frames, tmp_path / "o.mp4", 4.0) is True
+    assert len(staged["files"]) == 4, "3 frames staged plus a duplicate tail"
+    assert staged["contents"][-1] == staged["contents"][-2], "tail is the last frame again"
+
+
+def test_i2i_mode_falls_back_when_no_template_exported(monkeypatch):
+    """Must degrade to plain stills, not produce a broken run."""
+    monkeypatch.setenv("RUFUS_BEAT_MOTION", "i2i")
+    monkeypatch.setenv("RUFUS_FRESH_IMAGES", "0")
+    for var in ("RUFUS_WAN", "RUFUS_HUNYUAN", "RUFUS_LTX", "RUFUS_IMG2VID"):
+        monkeypatch.setenv(var, "0")
+
+    with patch.object(c, "is_available", return_value=True), \
+         patch.object(c, "_stills_template", return_value=_dummy_tpl()), \
+         patch.object(c, "_i2i_template", return_value=None), \
+         patch.object(c, "_render_image", return_value=b"PNG"), \
+         patch.object(c, "_fit_to_portrait", lambda b, p: p.write_bytes(b"i" * 25_000) or True), \
+         patch.object(c, "_avg_hash", return_value=None), \
+         patch.object(c, "_build_i2i_chain") as chain, \
+         patch.object(c, "_animate_to_clip",
+                      lambda png, clip, duration=8.0, idx=0, min_bytes=50_000:
+                          clip.write_bytes(b"x" * 60_000) or True):
+        clips = c.generate_clips(["a florin"], n=1, clip_duration=4.8)
+
+    assert len(clips) == 1
+    chain.assert_not_called()
+
+
+def test_i2i_mode_interpolates_instead_of_cutting(monkeypatch, tmp_path):
+    monkeypatch.setenv("RUFUS_BEAT_MOTION", "i2i")
+    monkeypatch.setenv("RUFUS_FRAMES_PER_BEAT", "4")
+    monkeypatch.setenv("RUFUS_FRESH_IMAGES", "0")
+    for var in ("RUFUS_WAN", "RUFUS_HUNYUAN", "RUFUS_LTX", "RUFUS_IMG2VID"):
+        monkeypatch.setenv(var, "0")
+
+    fake_frames = []
+    for k in range(4):
+        f = tmp_path / f"chain{k}.png"
+        f.write_bytes(b"x" * 25_000)
+        fake_frames.append(f)
+
+    with patch.object(c, "is_available", return_value=True), \
+         patch.object(c, "_stills_template", return_value=_dummy_tpl()), \
+         patch.object(c, "_i2i_template", return_value=_dummy_tpl()), \
+         patch.object(c, "_render_image", return_value=b"PNG"), \
+         patch.object(c, "_fit_to_portrait", lambda b, p: p.write_bytes(b"i" * 25_000) or True), \
+         patch.object(c, "_avg_hash", return_value=None), \
+         patch.object(c, "_build_i2i_chain", return_value=fake_frames), \
+         patch.object(c, "_assemble_smooth_beat",
+                      side_effect=lambda frames, out, dur:
+                          out.write_bytes(b"x" * 60_000) or True) as smooth, \
+         patch.object(c, "_concat_clips") as concat:
+        clips = c.generate_clips(["a florin"], n=1, clip_duration=4.8)
+
+    assert len(clips) == 1
+    smooth.assert_called_once()
+    assert smooth.call_args[0][0] == fake_frames, "all chain frames interpolated"
+    assert not concat.called, "i2i must interpolate, not hard-cut"
+
+
+def test_i2v_mode_forces_the_motion_chain_despite_frames_per_beat(monkeypatch):
+    """A stale RUFUS_FRAMES_PER_BEAT must not silently bypass an explicit
+    request for the motion model."""
+    monkeypatch.setenv("RUFUS_BEAT_MOTION", "i2v")
+    monkeypatch.setenv("RUFUS_FRAMES_PER_BEAT", "3")
+    monkeypatch.setenv("RUFUS_FRESH_IMAGES", "0")
+    monkeypatch.delenv("RUFUS_WAN", raising=False)
+    monkeypatch.setenv("RUFUS_HUNYUAN", "0")
+    monkeypatch.setenv("RUFUS_LTX", "0")
+    monkeypatch.setenv("RUFUS_IMG2VID", "0")
+
+    import wan_client
+    monkeypatch.setattr(wan_client, "enabled", lambda: True)
+    monkeypatch.setattr(wan_client, "ready", lambda: (True, "test"))
+    animated = []
+    monkeypatch.setattr(wan_client, "animate_image",
+                        lambda png, clip, **k: animated.append(1) or
+                        (clip.write_bytes(b"x" * 60_000) or True))
+
+    with patch.object(c, "is_available", return_value=True), \
+         patch.object(c, "_stills_template", return_value=_dummy_tpl()), \
+         patch.object(c, "_render_image", return_value=b"PNG"), \
+         patch.object(c, "_fit_to_portrait", lambda b, p: p.write_bytes(b"i" * 25_000) or True), \
+         patch.object(c, "_avg_hash", return_value=None), \
+         patch.object(c, "_free_comfy_memory", lambda: None):
+        c.generate_clips(["a florin"], n=1, clip_duration=4.8)
+
+    assert animated == [1], "i2v mode must actually run the motion engine"

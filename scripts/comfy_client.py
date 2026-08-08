@@ -37,6 +37,7 @@ Usage:
 import json
 import os
 import random
+import shutil
 import subprocess
 import time
 import uuid
@@ -120,6 +121,136 @@ def _frames_per_beat() -> int:
         return 1
 
 
+# How a beat moves. One selector instead of four interacting flags, because
+# these are alternatives, not layers:
+#   i2v      motion model per still (Wan/Hunyuan/LTX/SVD). Best-looking real
+#            motion; measured 600-1800s PER CLIP on a 3090, i.e. hours a video.
+#   i2i      each frame img2img'd from the previous one at low denoise, so the
+#            frames genuinely continue each other, then crossfaded. ~1-2s a
+#            frame. Needs config/stills_i2i_api.json.
+#   cut      several independent stills on one seed, hard cut. No extra setup.
+#   kenburns one still, zoom only.
+# Unset keeps the historical behaviour exactly: RUFUS_FRAMES_PER_BEAT>1 means
+# `cut`, otherwise the motion chain.
+BEAT_MOTION_MODES = ("i2v", "i2i", "cut", "kenburns")
+I2I_DEFAULT_FRAMES = 5
+
+
+def _beat_motion() -> str:
+    mode = os.environ.get("RUFUS_BEAT_MOTION", "").strip().lower()
+    return mode if mode in BEAT_MOTION_MODES else ""
+
+
+I2I_TEMPLATE = Path(__file__).parent.parent / "config" / "stills_i2i_api.json"
+
+
+def _i2i_template() -> dict | None:
+    """The exported img2img workflow used to chain frames, or None.
+
+    Same proven-template contract as every other engine: the channel owner
+    builds LoadImage → VAEEncode → KSampler(denoise ~0.4, 10-12 steps) in
+    ComfyUI, verifies it, sets the positive prompt to RUFUS_PROMPT and exports.
+    Steps matter here — Z-Image-Turbo's 8-step default leaves only ~3 effective
+    steps at denoise 0.4, too few to move the picture."""
+    if os.environ.get("RUFUS_I2I_TEMPLATE", "1").strip().lower() in \
+            ("0", "false", "no", "off"):
+        return None
+    import comfy_template
+    tpl = comfy_template.load_template(I2I_TEMPLATE)
+    if tpl is not None and comfy_template.has_placeholder(tpl):
+        return tpl
+    return None
+
+
+def _render_image_i2i(prompt: str, seed: int, client_id: str,
+                      init_png: Path) -> bytes | None:
+    """One img2img step from `init_png`. Returns raw PNG bytes or None.
+
+    Deliberately takes the PREVIOUS RAW model output rather than the finished
+    1080×1920 frame: the pipeline's _fit_to_portrait upscales and crops, and
+    feeding that back in would re-resample on every link of the chain, so the
+    degradation compounds down the beat."""
+    tpl = _i2i_template()
+    if tpl is None:
+        return None
+    from svd_client import _upload_image
+    image_name = _upload_image(init_png)
+    if not image_name:
+        return None
+    import comfy_template
+    g = comfy_template.prepare(tpl, prompt=prompt, image_name=image_name,
+                               seed=seed, save_prefix="rufus_i2i")
+    pid = _submit(g, client_id)
+    if not pid:
+        return None
+    return _await_image(pid)
+
+
+# Forward nudges for the i2i chain. Unlike the `cut` arc (before/peak/after),
+# each step here is relative to the image it starts FROM, so the sequence only
+# ever moves forward — which is also what keeps drift bounded per beat.
+_I2I_STEPS = [
+    "The same scene an instant later: the action has advanced a little.",
+    "The same scene a moment later: the action continues.",
+    "The same scene slightly later still: the movement carries on.",
+    "The same scene moments later: the action is nearly complete.",
+    "The same scene just after: the action has finished, everything settling.",
+]
+
+
+def _i2i_step_prompt(base: str, k: int) -> str:
+    """Prompt for the k-th chained frame (k>=1)."""
+    step = _I2I_STEPS[min(k - 1, len(_I2I_STEPS) - 1)]
+    return f"{base.rstrip().rstrip('.')}. {step}"
+
+
+def _build_i2i_chain(*, base_png: Path, base_raw: bytes, prompt: str, seed: int,
+                     client_id: str, n: int, tmp_dir: Path, stamp: str,
+                     beat: int) -> list[Path]:
+    """Chain `n` frames for one beat, each img2img'd from the previous.
+
+    Returns the finished 1080×1920 frames in play order. Stops early rather
+    than failing the beat: a broken link just makes this beat shorter, and the
+    frames already produced stay usable.
+
+    Each link runs on a DIFFERENT seed. Reusing one seed across an img2img
+    chain pulls every step back toward the same result, which defeats the
+    point — the previous image is already supplying the continuity."""
+    frames = [base_png]
+    raws: list[Path] = []
+    prev_raw = tmp_dir / f"{stamp}_{beat}_raw0.png"
+    try:
+        prev_raw.write_bytes(base_raw)
+        raws.append(prev_raw)
+    except OSError as e:
+        print(f"[comfy] i2i chain could not stage the first frame: {e}")
+        return frames
+
+    for k in range(1, n):
+        step_seed = (seed + k * 101) % (2**31 - 1)
+        nxt = _render_image_i2i(_i2i_step_prompt(prompt, k), step_seed,
+                                client_id, prev_raw)
+        if not nxt:
+            print(f"[comfy] i2i chain stopped at frame {k+1} of clip {beat+1} "
+                  f"— beat keeps {len(frames)} frame(s)")
+            break
+        raw_path = tmp_dir / f"{stamp}_{beat}_raw{k}.png"
+        fitted = tmp_dir / f"{stamp}_{beat}_{k}.png"
+        try:
+            raw_path.write_bytes(nxt)
+        except OSError:
+            break
+        raws.append(raw_path)
+        if not _fit_to_portrait(nxt, fitted):
+            break
+        frames.append(fitted)
+        prev_raw = raw_path
+
+    for r in raws:
+        r.unlink(missing_ok=True)
+    return frames
+
+
 # A micro-arc within one beat. Index 1 is empty on purpose: that is the prompt
 # exactly as written, i.e. the peak moment the prompt-builder actually composed.
 # The others nudge the SAME scene a moment before/after, so the seed keeps the
@@ -137,6 +268,90 @@ def _progression_modifiers(n: int) -> list[str]:
     if n <= 1:
         return [""]
     return _PROGRESSION_STEPS[:min(n, len(_PROGRESSION_STEPS))]
+
+
+# Target playback fps for the interpolated i2i beat. Matches sd_client.FPS /
+# svd_client's assembly so every clip entering the renderer is 30fps.
+SMOOTH_FPS = 30
+
+
+def _assemble_smooth_beat(frames: list[Path], out_path: Path,
+                          duration: float) -> bool:
+    """Turn a beat's i2i keyframes into ONE smooth clip.
+
+    Crossfading stills still reads as a slideshow; what actually produces
+    motion is interpolating BETWEEN the keyframes. That only works because the
+    i2i chain makes consecutive frames genuine continuations of each other —
+    motion estimation has something real to track. Run over independent images
+    the same filter produces warping mush.
+
+    mi_mode=mci is motion-compensated (true in-between frames). svd_client's
+    assembly uses the cheaper mi_mode=blend, which is a cross-dissolve — right
+    there, because SVD already outputs 25 real frames and only needs topping
+    up to 30fps. Here the source is a handful of keyframes, so blend would put
+    the slideshow back. Falls back to blend if mci errors."""
+    if not frames:
+        return False
+    if len(frames) == 1:
+        return _animate_to_clip(frames[0], out_path, duration=duration,
+                                idx=0, min_bytes=10_000)
+
+    seq_dir = out_path.parent / f"{out_path.stem}_seq"
+    try:
+        seq_dir.mkdir(parents=True, exist_ok=True)
+        for k, frame in enumerate(frames):
+            shutil.copyfile(frame, seq_dir / f"frame_{k:04d}.png")
+        # Stage the LAST keyframe twice. Measured: minterpolate emits only
+        # (N-2) intervals, not (N-1) — it needs a frame to interpolate TOWARD,
+        # so the final input frame is never emitted. Verified at n=5 and n=7:
+        # without this the beat came out 3.63s instead of 4.80s and the last
+        # keyframe of every beat was invisible. The duplicate is the frame that
+        # gets dropped, so all the real keyframes survive.
+        shutil.copyfile(frames[-1], seq_dir / f"frame_{len(frames):04d}.png")
+    except OSError as e:
+        print(f"[comfy] could not stage frames for interpolation: {e}")
+        return False
+
+    n_staged = len(frames) + 1
+    src_fps = max(0.05, (n_staged - 2) / max(duration, 0.1))
+
+    # Interpolate at HALF linear resolution and upscale after. Measured on a
+    # 4.8s beat: 117.9s at full 1080x1920 vs 27.6s here — 4.3x, and the whole
+    # point of this mode is that it beats a motion model on time. Flat 2D
+    # illustration upscales cleanly (no fine texture to lose) and interpolated
+    # in-between frames are approximate regardless.
+    try:
+        small_w = max(2, int(os.environ.get("RUFUS_SMOOTH_SCALE", OUT_W // 2)))
+    except ValueError:
+        small_w = OUT_W // 2
+    small_h = max(2, round(small_w * OUT_H / OUT_W / 2) * 2)
+
+    for mi_mode, extra in (("mci", ":me_mode=bidir:mc_mode=aobmc"), ("blend", "")):
+        vf = (f"scale={small_w}:{small_h}:flags=bilinear,"
+              f"minterpolate=fps={SMOOTH_FPS}:mi_mode={mi_mode}{extra},"
+              f"scale={OUT_W}:{OUT_H}:flags=lanczos,setsar=1,format=yuv420p")
+        try:
+            r = subprocess.run(
+                ["ffmpeg", "-y", "-loglevel", "error",
+                 "-framerate", f"{src_fps:.4f}",
+                 "-i", str(seq_dir / "frame_%04d.png"),
+                 "-vf", vf, "-t", f"{duration:.2f}",
+                 "-c:v", "libx264", "-preset", "fast", "-crf", "14",
+                 "-pix_fmt", "yuv420p", str(out_path)],
+                capture_output=True, text=True,
+                timeout=max(300, int(duration * 120)))
+        except subprocess.SubprocessError as e:
+            print(f"[comfy] interpolation ({mi_mode}) failed: {e}")
+            continue
+        if r.returncode == 0 and out_path.exists() and out_path.stat().st_size > 10_000:
+            if mi_mode == "blend":
+                print("[comfy] motion interpolation fell back to blend")
+            shutil.rmtree(seq_dir, ignore_errors=True)
+            return True
+        print(f"[comfy] interpolation ({mi_mode}) failed: {r.stderr[-200:]}")
+
+    shutil.rmtree(seq_dir, ignore_errors=True)
+    return False
 
 
 def _concat_clips(parts: list[Path], out_path: Path) -> bool:
@@ -558,7 +773,24 @@ def generate_clips(queries: list[str], n: int = 4,
               "section. Falling back.")
         return []
 
+    beat_mode = _beat_motion()
     frames_per_beat = _frames_per_beat()
+    if beat_mode == "i2i":
+        if _i2i_template() is None:
+            print("[comfy] RUFUS_BEAT_MOTION=i2i but no img2img workflow at "
+                  "config/stills_i2i_api.json — export one from ComfyUI "
+                  "(LoadImage → VAEEncode → KSampler denoise ~0.4, 10-12 steps, "
+                  "prompt = RUFUS_PROMPT). Falling back to single stills.")
+            beat_mode = ""
+        else:
+            if frames_per_beat == 1:
+                frames_per_beat = I2I_DEFAULT_FRAMES
+            print(f"[comfy] beat motion: i2i chain, {frames_per_beat} frames/beat "
+                  f"→ motion-interpolated to {SMOOTH_FPS}fps")
+    elif beat_mode == "kenburns":
+        frames_per_beat = 1
+    elif beat_mode == "cut" and frames_per_beat == 1:
+        frames_per_beat = 3
 
     # Image-to-video: animate each still into real motion instead of the
     # Ken Burns zoom, via an ORDERED engine chain resolved once per run —
@@ -566,7 +798,11 @@ def generate_clips(queries: list[str], n: int = 4,
     # Ken Burns. Any per-image failure walks down the chain, so a clip is
     # never lost to a fancier engine.
     motion_engines: list[tuple[str, object]] = []
-    if frames_per_beat > 1:
+    if beat_mode == "i2v":
+        # Explicitly asked for the motion chain — a stale RUFUS_FRAMES_PER_BEAT
+        # must not quietly bypass it.
+        frames_per_beat = 1
+    elif frames_per_beat > 1 and beat_mode != "i2i":
         # Mutually exclusive with the motion chain by design — both answer
         # "how does this beat move", and running both would animate each
         # sub-frame separately, which is not what cutting between stills is.
@@ -581,8 +817,9 @@ def generate_clips(queries: list[str], n: int = 4,
     if frames_per_beat > 1:
         # Reuse the existing "why is motion off" plumbing so each engine
         # reports the real reason instead of silently vanishing from the log.
-        _stills_only_reason = (f"RUFUS_FRAMES_PER_BEAT={frames_per_beat} "
-                               f"cuts between stills instead")
+        _stills_only_reason = (
+            f"RUFUS_BEAT_MOTION=i2i chains stills instead" if beat_mode == "i2i"
+            else f"RUFUS_FRAMES_PER_BEAT={frames_per_beat} cuts between stills instead")
     try:
         import wan_client
         if frames_per_beat == 1 and wan_client.enabled():
@@ -745,6 +982,23 @@ def generate_clips(queries: list[str], n: int = 4,
         # it is slotted at the peak's position in the arc rather than simply
         # placed first — otherwise the sequence plays peak → peak → after, with
         # the "moment earlier" frame never rendered at all.
+        if beat_mode == "i2i":
+            beat_frames = _build_i2i_chain(
+                base_png=png_path, base_raw=img_bytes, prompt=prompt, seed=seed,
+                client_id=client_id, n=frames_per_beat, tmp_dir=tmp_dir,
+                stamp=stamp, beat=i)
+            if debug_dir is not None:
+                try:
+                    for f_idx, fp in enumerate(beat_frames):
+                        sfx = "" if f_idx == 0 else chr(ord("a") + f_idx)
+                        (debug_dir / f"{i+1:02d}{sfx}.png").write_bytes(fp.read_bytes())
+                    (debug_dir / f"{i+1:02d}.txt").write_text(
+                        f"FLUX PROMPT:\n{prompt}\n", encoding="utf-8")
+                except Exception as e:
+                    print(f"[comfy] debug-save failed for clip {i+1}: {e}")
+            stills.append((i, beat_frames, prompt))
+            continue
+
         modifiers = _progression_modifiers(frames_per_beat)
         peak_pos = modifiers.index("") if "" in modifiers else 0
         slots: list[Path | None] = [None] * len(modifiers)
@@ -796,6 +1050,22 @@ def generate_clips(queries: list[str], n: int = 4,
         # from it, so reusing it keeps the camera moving in one direction
         # across the cuts and reads as a single continuous shot with the
         # action advancing, instead of three unrelated shots.
+        # i2i: the frames genuinely continue each other, so interpolate BETWEEN
+        # them into real motion rather than cutting. Cutting here would throw
+        # away the continuity the chain just paid for.
+        if beat_mode == "i2i" and len(beat_frames) > 1:
+            made = _assemble_smooth_beat(beat_frames, clip_path, clip_duration)
+            if made:
+                clips.append(clip_path)
+                print(f"[comfy] clip {i+1} ready "
+                      f"({len(beat_frames)} i2i frames → interpolated)")
+            else:
+                print(f"[comfy] smooth assembly failed for clip {i+1} — later "
+                      f"images may drift ahead of narration")
+            for frame in beat_frames:
+                frame.unlink(missing_ok=True)
+            continue
+
         if len(beat_frames) > 1:
             share = clip_duration / len(beat_frames)
             # The 50KB default floor is calibrated for a full-length beat clip
