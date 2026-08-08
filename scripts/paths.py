@@ -61,6 +61,16 @@ def thumbnails_dir() -> Path:
     return _env_path("RUFUS_THUMBNAIL_DIR", media_root() / "thumbnails")
 
 
+def character_dataset_dir() -> Path:
+    """LoRA training sets for the recurring characters (character_dataset.py).
+
+    Separate from thumbnails/ and debug/ because this is a training corpus, not
+    a run artifact: it is curated by hand after generation, fed to an external
+    trainer, and must survive the debug sweep that clears per-run folders."""
+    return _env_path("RUFUS_CHARACTER_DATASET_DIR",
+                     media_root() / "character_datasets")
+
+
 def write_run_report(run_id: str, *, script: str = "", prompts: list[str] | None = None,
                      meta: dict | None = None,
                      motion: list[dict] | None = None) -> "Path | None":
