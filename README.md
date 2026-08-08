@@ -159,6 +159,34 @@ RUFUS_GPU=1 python scripts/main.py
 
 ---
 
+## Free local AI critique of a finished video
+
+`scripts/video_critique.py` — standalone, **not** wired into the pipeline,
+run it by hand whenever you want a second opinion on a rendered video.
+Samples frames evenly across the video, sends them + the script to a
+**local** vision model via [Ollama](https://ollama.com/download) (free,
+zero per-video API cost, runs on the same RTX 3090 — same philosophy as
+local Whisper/Realistic Vision/Z-Image elsewhere in this project), and
+prints a structured report (hook strength, pacing, whether the images
+actually match the narration, visible AI artifacts, caption legibility).
+
+```powershell
+# One-time setup
+# 1. install Ollama, then:
+ollama pull llama3.2-vision      # or: ollama pull llava (lighter/faster)
+
+# Every time you want a critique
+python scripts\video_critique.py media_library\output\some.mp4 "the script text"
+```
+
+Saves the report next to the video as `<video>.critique.txt`. `OLLAMA_HOST`
+(default `http://localhost:11434`) and `OLLAMA_VISION_MODEL` (default
+`llama3.2-vision`) are overridable. Purely advisory for now — it does not
+touch the score, the approval gate, or anything automatic; if that changes
+later it'll be a deliberate, separate decision.
+
+---
+
 ## Niches
 
 Configured in `config/niches.json` (`finance`, `motivation`, `mindset`,
