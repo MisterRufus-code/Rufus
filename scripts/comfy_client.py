@@ -37,6 +37,7 @@ Usage:
 import json
 import os
 import random
+import subprocess
 import time
 import uuid
 from pathlib import Path
@@ -99,6 +100,75 @@ FRESH_HASH_CAP  = 120   # ~12 runs of history — enough to stop déjà vu, smal
 def _fresh_images_enabled() -> bool:
     return os.environ.get("RUFUS_FRESH_IMAGES", "1").strip().lower() \
         not in ("0", "false", "no", "off")
+
+
+# ── Frames-per-beat: animate by cutting between stills, not by a motion model ──
+# A motion model (Hunyuan/Wan/LTX) costs ~10 min/video on a 3090. Z-Image-Turbo
+# renders a still in ~2-4s, so in that same budget you can render 100+ images.
+# Generating SEVERAL stills per beat that advance the same action, then hard-
+# cutting between them, buys an animated feel for a fraction of the time — the
+# limited-animation approach, rather than interpolated motion.
+#
+# 1 (default) = unchanged single-still-per-beat behaviour. >1 switches the run
+# to this mode and BYPASSES the motion engines entirely: they are two different
+# answers to the same question, and running both would animate each sub-frame
+# separately, which is not what this is for.
+def _frames_per_beat() -> int:
+    try:
+        return max(1, int(os.environ.get("RUFUS_FRAMES_PER_BEAT", "1")))
+    except ValueError:
+        return 1
+
+
+# A micro-arc within one beat. Index 1 is empty on purpose: that is the prompt
+# exactly as written, i.e. the peak moment the prompt-builder actually composed.
+# The others nudge the SAME scene a moment before/after, so the seed keeps the
+# composition and only the action advances.
+_PROGRESSION_STEPS = [
+    "Captured a moment earlier: the action is only just beginning.",
+    "",
+    "Captured a moment later: the action has just completed.",
+    "Captured a beat afterwards: the aftermath, everything settling.",
+]
+
+
+def _progression_modifiers(n: int) -> list[str]:
+    """`n` prompt modifiers spanning one beat's micro-arc, peak included."""
+    if n <= 1:
+        return [""]
+    return _PROGRESSION_STEPS[:min(n, len(_PROGRESSION_STEPS))]
+
+
+def _concat_clips(parts: list[Path], out_path: Path) -> bool:
+    """Join same-codec clips into one via the ffmpeg concat demuxer.
+
+    Stream-copy, so this is near-instant and adds no generation loss: every
+    part comes from _animate_to_clip, which emits identical libx264/yuv420p at
+    one resolution and fps. as_posix() because the demuxer's list file wants
+    forward slashes even on Windows."""
+    if not parts:
+        return False
+    if len(parts) == 1:
+        parts[0].replace(out_path)
+        return out_path.exists()
+
+    listfile = out_path.with_suffix(".concat.txt")
+    try:
+        listfile.write_text(
+            "".join(f"file '{p.as_posix()}'\n" for p in parts), encoding="utf-8")
+        r = subprocess.run(
+            ["ffmpeg", "-y", "-loglevel", "error", "-f", "concat", "-safe", "0",
+             "-i", str(listfile), "-c", "copy", str(out_path)],
+            capture_output=True, text=True, timeout=120)
+        if r.returncode != 0:
+            print(f"[comfy] concat failed: {r.stderr[-300:]}")
+            return False
+    except (OSError, subprocess.SubprocessError) as e:
+        print(f"[comfy] concat failed: {e}")
+        return False
+    finally:
+        listfile.unlink(missing_ok=True)
+    return out_path.exists() and out_path.stat().st_size > 20_000
 
 
 def _load_prior_hashes() -> list[int]:
@@ -488,21 +558,34 @@ def generate_clips(queries: list[str], n: int = 4,
               "section. Falling back.")
         return []
 
+    frames_per_beat = _frames_per_beat()
+
     # Image-to-video: animate each still into real motion instead of the
     # Ken Burns zoom, via an ORDERED engine chain resolved once per run —
     # Wan 2.2 (best temporal consistency, takes a motion prompt) → SVD →
     # Ken Burns. Any per-image failure walks down the chain, so a clip is
     # never lost to a fancier engine.
     motion_engines: list[tuple[str, object]] = []
+    if frames_per_beat > 1:
+        # Mutually exclusive with the motion chain by design — both answer
+        # "how does this beat move", and running both would animate each
+        # sub-frame separately, which is not what cutting between stills is.
+        print(f"[comfy] frames-per-beat: {frames_per_beat} stills per beat, "
+              f"hard-cut — motion engines bypassed (RUFUS_FRAMES_PER_BEAT)")
     try:
         import svd_client
         _stills_only_reason = ("RUFUS_STILLS_ONLY=1 forces images-only"
                                if svd_client._stills_only() else None)
     except Exception:
         _stills_only_reason = None
+    if frames_per_beat > 1:
+        # Reuse the existing "why is motion off" plumbing so each engine
+        # reports the real reason instead of silently vanishing from the log.
+        _stills_only_reason = (f"RUFUS_FRAMES_PER_BEAT={frames_per_beat} "
+                               f"cuts between stills instead")
     try:
         import wan_client
-        if wan_client.enabled():
+        if frames_per_beat == 1 and wan_client.enabled():
             wan_ok, wan_why = wan_client.ready()
             print(f"[comfy] motion wan 2.2: {'ON' if wan_ok else 'off'} — {wan_why}")
             if wan_ok:
@@ -514,7 +597,7 @@ def generate_clips(queries: list[str], n: int = 4,
         print(f"[comfy] wan unavailable ({e})")
     try:
         import hunyuan_client
-        if hunyuan_client.enabled():
+        if frames_per_beat == 1 and hunyuan_client.enabled():
             hy_ok, hy_why = hunyuan_client.ready()
             print(f"[comfy] motion hunyuan 1.5: {'ON' if hy_ok else 'off'} — {hy_why}")
             if hy_ok:
@@ -529,7 +612,7 @@ def generate_clips(queries: list[str], n: int = 4,
         print(f"[comfy] hunyuan unavailable ({e})")
     try:
         import ltx_client
-        if ltx_client.enabled():
+        if frames_per_beat == 1 and ltx_client.enabled():
             lx_ok, lx_why = ltx_client.ready()
             print(f"[comfy] motion ltx 2.3: {'ON' if lx_ok else 'off'} — {lx_why}")
             if lx_ok:
@@ -541,7 +624,7 @@ def generate_clips(queries: list[str], n: int = 4,
         print(f"[comfy] ltx unavailable ({e})")
     try:
         import svd_client
-        if svd_client.img2vid_enabled():
+        if frames_per_beat == 1 and svd_client.img2vid_enabled():
             svd_engine, svd_why = svd_client.resolve_engine()
             print(f"[comfy] motion svd: "
                   f"{'ON via ' + svd_engine if svd_engine else 'off'} — {svd_why}")
@@ -600,7 +683,9 @@ def generate_clips(queries: list[str], n: int = 4,
     print(f"[comfy] keeping keyframes in {debug_dir}")
 
     # ── Phase 1: generate every still (the stills model stays loaded the whole time) ────
-    stills: list[tuple[int, Path, str]] = []   # (beat index, png path, prompt)
+    # `stills` holds a LIST of frames per beat — length 1 in normal mode, and
+    # frames_per_beat when animating by cutting between stills.
+    stills: list[tuple[int, list[Path], str]] = []   # (beat index, png paths, prompt)
     for i, prompt in enumerate(prompts):
         print(f"[comfy] {i+1}/{len(prompts)}: {prompt}")
         png_path = tmp_dir / f"{stamp}_{i}.png"
@@ -644,20 +729,50 @@ def generate_clips(queries: list[str], n: int = 4,
             if stills:
                 print(f"[comfy] no usable image for clip {i+1} — reusing "
                       f"previous still to keep images aligned with narration")
-                png_path.write_bytes(stills[-1][1].read_bytes())
+                png_path.write_bytes(stills[-1][1][0].read_bytes())
             else:
                 print(f"[comfy] no usable image for clip {i+1} — skipping")
                 continue
 
+        # Extra frames for this beat: SAME seed (so the seed holds the
+        # composition) plus a progression modifier that advances the action.
+        # Deliberately NOT hash-checked: these are meant to resemble the base
+        # frame closely, which is exactly what the dedup gate exists to reject,
+        # and hashing them into accepted_hashes would make every later beat
+        # look like a duplicate. A failed sub-frame just shortens the beat.
+        #
+        # The already-rendered png_path IS the peak (the prompt as written), so
+        # it is slotted at the peak's position in the arc rather than simply
+        # placed first — otherwise the sequence plays peak → peak → after, with
+        # the "moment earlier" frame never rendered at all.
+        modifiers = _progression_modifiers(frames_per_beat)
+        peak_pos = modifiers.index("") if "" in modifiers else 0
+        slots: list[Path | None] = [None] * len(modifiers)
+        slots[peak_pos] = png_path
+        for pos, modifier in enumerate(modifiers):
+            if pos == peak_pos:
+                continue
+            sub_path = tmp_dir / f"{stamp}_{i}_{pos}.png"
+            sub_prompt = f"{prompt.rstrip().rstrip('.')}. {modifier}"
+            sub_bytes = _render_image(sub_prompt, seed, client_id, niche=niche)
+            if sub_bytes and _fit_to_portrait(sub_bytes, sub_path):
+                slots[pos] = sub_path
+            else:
+                print(f"[comfy] sub-frame {pos+1} of clip {i+1} failed — "
+                      f"beat will be shorter by one frame")
+        beat_frames = [p for p in slots if p is not None]
+
         if debug_dir is not None:
             try:
-                (debug_dir / f"{i+1:02d}.png").write_bytes(png_path.read_bytes())
+                for f_idx, fp in enumerate(beat_frames):
+                    suffix = "" if f_idx == 0 else chr(ord("a") + f_idx)
+                    (debug_dir / f"{i+1:02d}{suffix}.png").write_bytes(fp.read_bytes())
                 (debug_dir / f"{i+1:02d}.txt").write_text(
                     f"FLUX PROMPT:\n{prompt}\n", encoding="utf-8")
             except Exception as e:
                 print(f"[comfy] debug-save failed for clip {i+1}: {e}")
 
-        stills.append((i, png_path, prompt))
+        stills.append((i, beat_frames, prompt))
 
     # ── Phase 2: animate every still ────────────────────────────────────────
     # Two phases instead of image→animate per clip: interleaving forced
@@ -671,8 +786,45 @@ def generate_clips(queries: list[str], n: int = 4,
         _free_comfy_memory()
 
     motion_log: list[dict] = []
-    for i, png_path, prompt in stills:
+    for i, beat_frames, prompt in stills:
+        png_path = beat_frames[0]
         clip_path = tmp_dir / f"{stamp}_{i}.mp4"
+
+        # Frames-per-beat mode: Ken Burns each frame for its share of the beat,
+        # then hard-cut them together. The SAME `idx` is used for every
+        # sub-frame on purpose — _animate_to_clip picks its zoom/pan pattern
+        # from it, so reusing it keeps the camera moving in one direction
+        # across the cuts and reads as a single continuous shot with the
+        # action advancing, instead of three unrelated shots.
+        if len(beat_frames) > 1:
+            share = clip_duration / len(beat_frames)
+            # The 50KB default floor is calibrated for a full-length beat clip
+            # and rejects valid short ones (a 1.0s flat-illustration clip
+            # measures ~47KB), so scale it to this sub-clip's duration. Kept
+            # well UNDER the measured encode rate (~43KB/s on detailed flat
+            # art, less on simple art) on purpose — this gate only has to
+            # catch "ffmpeg wrote nothing usable", not judge quality, and a
+            # tight floor silently drops valid frames and shortens the beat.
+            floor = max(10_000, int(share * 8_000))
+            parts: list[Path] = []
+            for f_idx, frame in enumerate(beat_frames):
+                part = tmp_dir / f"{stamp}_{i}_{f_idx}.mp4"
+                if _animate_to_clip(frame, part, duration=share, idx=i,
+                                    min_bytes=floor):
+                    parts.append(part)
+            made = _concat_clips(parts, clip_path)
+            for part in parts:
+                part.unlink(missing_ok=True)
+            if made:
+                clips.append(clip_path)
+                print(f"[comfy] clip {i+1} ready ({len(parts)} cut frames)")
+            else:
+                print(f"[comfy] animation failed for clip {i+1} — later images "
+                      f"may drift ahead of narration")
+            for frame in beat_frames:
+                frame.unlink(missing_ok=True)
+            continue
+
         made_via = None
         tried: list[str] = []
         for eng_name, animate in motion_engines:

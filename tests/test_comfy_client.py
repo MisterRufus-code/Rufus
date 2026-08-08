@@ -781,3 +781,230 @@ def test_generate_clips_threads_niche_into_render(monkeypatch):
         c.generate_clips(["a prompt"], n=1, niche="money_history")
 
     assert seen_niches == ["money_history"]
+
+
+# ── Frames-per-beat: animate by cutting between stills, not a motion model ────
+# A motion model costs ~10 min/video; Z-Image-Turbo renders a still in seconds,
+# so several stills per beat + hard cuts buys an animated feel far cheaper.
+
+def test_progression_modifiers_single_frame_is_a_noop():
+    assert c._progression_modifiers(1) == [""]
+
+
+def test_progression_modifiers_include_the_unmodified_peak():
+    """One modifier must be empty — that slot is the prompt exactly as the
+    prompt-builder composed it, and the base render fills it."""
+    for n in (2, 3, 4):
+        mods = c._progression_modifiers(n)
+        assert len(mods) == n
+        assert "" in mods
+
+
+def test_progression_modifiers_are_ordered_earlier_then_later():
+    mods = c._progression_modifiers(3)
+    assert "earlier" in mods[0].lower()
+    assert mods[1] == ""
+    assert "later" in mods[2].lower()
+
+
+def test_progression_modifiers_clamped_to_available_steps():
+    assert len(c._progression_modifiers(99)) == len(c._PROGRESSION_STEPS)
+
+
+def test_frames_per_beat_defaults_to_one(monkeypatch):
+    monkeypatch.delenv("RUFUS_FRAMES_PER_BEAT", raising=False)
+    assert c._frames_per_beat() == 1
+
+
+def test_frames_per_beat_reads_env_and_floors_at_one(monkeypatch):
+    monkeypatch.setenv("RUFUS_FRAMES_PER_BEAT", "3")
+    assert c._frames_per_beat() == 3
+    monkeypatch.setenv("RUFUS_FRAMES_PER_BEAT", "0")
+    assert c._frames_per_beat() == 1
+    monkeypatch.setenv("RUFUS_FRAMES_PER_BEAT", "nonsense")
+    assert c._frames_per_beat() == 1
+
+
+def test_concat_clips_empty_is_false(tmp_path):
+    assert c._concat_clips([], tmp_path / "out.mp4") is False
+
+
+def test_concat_clips_single_part_is_a_rename_not_a_reencode(tmp_path):
+    part = tmp_path / "p0.mp4"
+    part.write_bytes(b"x" * 100)
+    out = tmp_path / "out.mp4"
+    assert c._concat_clips([part], out) is True
+    assert out.read_bytes() == b"x" * 100
+    assert not part.exists()
+
+
+def _multiframe_env(monkeypatch, n):
+    monkeypatch.setenv("RUFUS_FRAMES_PER_BEAT", str(n))
+    for var in ("RUFUS_WAN", "RUFUS_HUNYUAN", "RUFUS_LTX", "RUFUS_IMG2VID"):
+        monkeypatch.setenv(var, "0")
+
+
+def test_multiframe_renders_n_frames_per_beat_at_one_seed(monkeypatch):
+    """Same seed across the sub-frames is what holds the composition steady
+    while the progression modifier advances only the action."""
+    _multiframe_env(monkeypatch, 3)
+    calls = []
+
+    def fake_render(prompt, seed, client_id, niche=None):
+        calls.append((prompt, seed))
+        return b"PNG"
+
+    with patch.object(c, "is_available", return_value=True), \
+         patch.object(c, "_stills_template", return_value=_dummy_tpl()), \
+         patch.object(c, "_render_image", side_effect=fake_render), \
+         patch.object(c, "_fit_to_portrait", lambda b, p: p.write_bytes(b"i" * 25_000) or True), \
+         patch.object(c, "_avg_hash", return_value=None), \
+         patch.object(c, "_animate_to_clip",
+                      lambda png, clip, duration=8.0, idx=0, min_bytes=0:
+                          clip.write_bytes(b"x" * 60_000) or True), \
+         patch.object(c, "_concat_clips",
+                      lambda parts, out: out.write_bytes(b"x" * 60_000) or True):
+        clips = c.generate_clips(["a gold florin"], n=1, clip_duration=6.0)
+
+    assert len(clips) == 1
+    assert len(calls) == 3, "one render per frame"
+    assert len({seed for _, seed in calls}) == 1, "all sub-frames share the seed"
+    joined = " | ".join(p for p, _ in calls)
+    assert "earlier" in joined and "later" in joined
+
+
+def test_multiframe_orders_frames_earlier_peak_later(monkeypatch):
+    """Regression: the base render IS the peak, so it must be slotted at the
+    peak's position in the arc. Placing it first instead re-rendered the peak
+    and dropped the 'moment earlier' frame entirely."""
+    _multiframe_env(monkeypatch, 3)
+    frame_order = []
+
+    # Identify each frame by CONTENT, not filename: the temp stamp itself
+    # contains an underscore ("<epoch>_<pid>"), so the base frame's name also
+    # ends in "_<beat>.png" and cannot be told apart from a sub-frame by suffix.
+    def fake_render(prompt, seed, client_id, niche=None):
+        low = prompt.lower()
+        return b"EARLIER" if "earlier" in low else (
+            b"LATER" if "later" in low else b"PEAK")
+
+    def fake_animate(png, clip, duration=8.0, idx=0, min_bytes=0):
+        frame_order.append(Path(png).read_bytes().split(b"|")[0].decode())
+        clip.write_bytes(b"x" * 60_000)
+        return True
+
+    with patch.object(c, "is_available", return_value=True), \
+         patch.object(c, "_stills_template", return_value=_dummy_tpl()), \
+         patch.object(c, "_render_image", side_effect=fake_render), \
+         patch.object(c, "_fit_to_portrait",
+                      lambda b, p: p.write_bytes(b + b"|" + b"x" * 25_000) or True), \
+         patch.object(c, "_avg_hash", return_value=None), \
+         patch.object(c, "_animate_to_clip", side_effect=fake_animate), \
+         patch.object(c, "_concat_clips",
+                      lambda parts, out: out.write_bytes(b"x" * 60_000) or True):
+        c.generate_clips(["a gold florin"], n=1, clip_duration=6.0)
+
+    assert frame_order == ["EARLIER", "PEAK", "LATER"]
+
+
+def test_multiframe_bypasses_motion_engines(monkeypatch):
+    """The two are different answers to 'how does this beat move' — running
+    both would animate each sub-frame separately."""
+    _multiframe_env(monkeypatch, 3)
+    monkeypatch.delenv("RUFUS_WAN", raising=False)   # would otherwise be ON
+    import wan_client
+    monkeypatch.setattr(wan_client, "enabled", lambda: True)
+    monkeypatch.setattr(wan_client, "ready", lambda: (True, "test"))
+    animated = []
+    monkeypatch.setattr(wan_client, "animate_image",
+                        lambda *a, **k: animated.append(1) or True)
+
+    with patch.object(c, "is_available", return_value=True), \
+         patch.object(c, "_stills_template", return_value=_dummy_tpl()), \
+         patch.object(c, "_render_image", return_value=b"PNG"), \
+         patch.object(c, "_fit_to_portrait", lambda b, p: p.write_bytes(b"i" * 25_000) or True), \
+         patch.object(c, "_avg_hash", return_value=None), \
+         patch.object(c, "_animate_to_clip",
+                      lambda png, clip, duration=8.0, idx=0, min_bytes=0:
+                          clip.write_bytes(b"x" * 60_000) or True), \
+         patch.object(c, "_concat_clips",
+                      lambda parts, out: out.write_bytes(b"x" * 60_000) or True):
+        c.generate_clips(["a gold florin"], n=1, clip_duration=6.0)
+
+    assert animated == [], "motion engine must not run in frames-per-beat mode"
+
+
+def test_multiframe_sub_frames_are_not_hash_checked(monkeypatch):
+    """Sub-frames are MEANT to resemble the base frame — running them through
+    the dup gate would reject them, and adding their hashes to the accepted
+    pool would make every later beat look like a duplicate."""
+    _multiframe_env(monkeypatch, 3)
+    # No prior-hash history: otherwise the BASE frame legitimately hits the dup
+    # path and re-hashes on each retry, which would mask what this is measuring.
+    monkeypatch.setenv("RUFUS_FRESH_IMAGES", "0")
+    hashed = []
+
+    with patch.object(c, "is_available", return_value=True), \
+         patch.object(c, "_stills_template", return_value=_dummy_tpl()), \
+         patch.object(c, "_render_image", return_value=b"PNG"), \
+         patch.object(c, "_fit_to_portrait", lambda b, p: p.write_bytes(b"i" * 25_000) or True), \
+         patch.object(c, "_avg_hash", side_effect=lambda p: hashed.append(p) or 123), \
+         patch.object(c, "_animate_to_clip",
+                      lambda png, clip, duration=8.0, idx=0, min_bytes=0:
+                          clip.write_bytes(b"x" * 60_000) or True), \
+         patch.object(c, "_concat_clips",
+                      lambda parts, out: out.write_bytes(b"x" * 60_000) or True):
+        c.generate_clips(["a gold florin"], n=1, clip_duration=6.0)
+
+    assert len(hashed) == 1, "only the base frame is hashed, not the sub-frames"
+
+
+def test_multiframe_survives_a_failed_sub_frame(monkeypatch):
+    """A sub-frame failing shortens the beat; it must not lose the whole clip."""
+    _multiframe_env(monkeypatch, 3)
+    calls = {"n": 0}
+
+    def flaky(prompt, seed, client_id, niche=None):
+        calls["n"] += 1
+        return None if calls["n"] == 2 else b"PNG"
+
+    animated = []
+
+    with patch.object(c, "is_available", return_value=True), \
+         patch.object(c, "_stills_template", return_value=_dummy_tpl()), \
+         patch.object(c, "_render_image", side_effect=flaky), \
+         patch.object(c, "_fit_to_portrait", lambda b, p: p.write_bytes(b"i" * 25_000) or True), \
+         patch.object(c, "_avg_hash", return_value=None), \
+         patch.object(c, "_animate_to_clip",
+                      lambda png, clip, duration=8.0, idx=0, min_bytes=0:
+                          animated.append(png) or clip.write_bytes(b"x" * 60_000) or True), \
+         patch.object(c, "_concat_clips",
+                      lambda parts, out: out.write_bytes(b"x" * 60_000) or True):
+        clips = c.generate_clips(["a gold florin"], n=1, clip_duration=6.0)
+
+    assert len(clips) == 1
+    assert len(animated) == 2, "beat keeps the two frames that rendered"
+
+
+def test_frames_per_beat_one_keeps_the_original_single_still_path(monkeypatch):
+    """Default must be byte-for-byte the old behaviour: one render, one
+    Ken Burns clip, no concat."""
+    monkeypatch.setenv("RUFUS_FRAMES_PER_BEAT", "1")
+    for var in ("RUFUS_WAN", "RUFUS_HUNYUAN", "RUFUS_LTX", "RUFUS_IMG2VID"):
+        monkeypatch.setenv(var, "0")
+    renders, concats = [], []
+
+    with patch.object(c, "is_available", return_value=True), \
+         patch.object(c, "_stills_template", return_value=_dummy_tpl()), \
+         patch.object(c, "_render_image", side_effect=lambda *a, **k: renders.append(1) or b"PNG"), \
+         patch.object(c, "_fit_to_portrait", lambda b, p: p.write_bytes(b"i" * 25_000) or True), \
+         patch.object(c, "_avg_hash", return_value=None), \
+         patch.object(c, "_animate_to_clip",
+                      lambda png, clip, duration=8.0, idx=0, min_bytes=50_000:
+                          clip.write_bytes(b"x" * 60_000) or True), \
+         patch.object(c, "_concat_clips", side_effect=lambda parts, out: concats.append(1) or True):
+        clips = c.generate_clips(["a gold florin"], n=1, clip_duration=6.0)
+
+    assert len(clips) == 1
+    assert len(renders) == 1
+    assert concats == [], "single-frame mode must not go through concat"

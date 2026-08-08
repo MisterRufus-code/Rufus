@@ -100,6 +100,7 @@ Everything is free except OpenAI credits. Mix and match:
 | `RUFUS_FLUX2` | `0`/`1` | `1` | Back-compat alias: an existing `config/flux2_api.json` is still honored as a stills template. Prefer `config/stills_api.json` for new setups. |
 | `RUFUS_CHARACTER_MODE` | `0`/`1` | `1` | Global kill switch for the recurring-character feature (`character_engine.py`) — `0` forces every niche back to the ordinary, no-character pipeline even if a niche has one configured and enabled. See "Recurring character" below. |
 | `RUFUS_CHARACTER_TEMPLATE` | `0`/`1` | `1` | Whether to use an exported `config/character_stills_api.json` for image-level character consistency. `0` keeps text-level consistency (the character clause in prompts) but never attempts the IPAdapter/PuLID render path. |
+| `RUFUS_FRAMES_PER_BEAT` | `1`-`4` | `1` | **Animate by cutting between stills instead of by a motion model.** `3` renders three stills per beat — the same scene a moment earlier, at the peak, and a moment later, all on the *same seed* so the composition holds — Ken Burns's each for a third of the beat and hard-cuts them together. A motion model costs ~10 min/video; Z-Image-Turbo renders a still in seconds, so this buys an animated feel far cheaper and sidesteps every current motion-engine glitch. **Mutually exclusive with the motion chain** — Wan/Hunyuan/LTX/SVD are bypassed when this is >1, and say so in the log. |
 
 Each niche picks its own source via `"video_source"` in `config/niches.json`
 (default: all niches → `sd`). `RUFUS_VIDEO_SOURCE` overrides it for one run.

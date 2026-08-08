@@ -353,7 +353,8 @@ def _crop_to_portrait(img_bytes: bytes, out_path: Path) -> bool:
 # ── Ken Burns animation ───────────────────────────────────────────────────────
 
 def _animate_to_clip(img_path: Path, out_path: Path,
-                     duration: float = 8.0, idx: int = 0) -> bool:
+                     duration: float = 8.0, idx: int = 0,
+                     min_bytes: int = 50_000) -> bool:
     """Animate a 1080×1920 PNG into a Ken Burns mp4 via FFmpeg zoompan.
 
     4-pattern rotation so consecutive clips always feel different:
@@ -361,6 +362,14 @@ def _animate_to_clip(img_path: Path, out_path: Path,
       1: zoom out, pan left   (pull-back reveal)
       2: zoom in, pan up      (upward momentum)
       3: zoom out, pan down   (downward weight)
+
+    `min_bytes` is the "ffmpeg produced something real" sanity floor. The 50KB
+    default is calibrated for a full-length beat clip; it is NOT a safe floor
+    for short ones. Measured: a 1.0s clip of flat 2D illustration encodes to
+    ~47KB and would be rejected here despite being perfectly valid, while the
+    same content at 1.3s reaches 59KB. Callers that deliberately produce short
+    sub-clips (comfy_client's frames-per-beat path) must pass a floor that
+    matches their duration rather than inheriting this one.
     """
     total_frames = int(duration * FPS)
     zoom_max = 1.0 + KENBURNS_ZOOM_RANGE
@@ -407,7 +416,7 @@ def _animate_to_clip(img_path: Path, out_path: Path,
     r = subprocess.run(cmd, capture_output=True, text=True, timeout=180)
     if r.returncode != 0:
         print(f"[sd] ffmpeg animate failed: {r.stderr[-300:]}")
-    return r.returncode == 0 and out_path.exists() and out_path.stat().st_size > 50_000
+    return r.returncode == 0 and out_path.exists() and out_path.stat().st_size > min_bytes
 
 
 # ── Perceptual de-duplication ───────────────────────────────────────────────────
