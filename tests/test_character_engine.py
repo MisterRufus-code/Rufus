@@ -107,8 +107,82 @@ def test_character_clause_names_the_character_and_locks_wardrobe(monkeypatch, tm
     clause = ce.character_clause("money_history")
     assert "the Chronicler" in clause
     assert "grey hair, round spectacles, brown leather satchel" in clause
-    assert "SAME person" in clause
-    assert "never their face, hair, build, or wardrobe" in clause
+    assert "SAME figure" in clause
+    assert "vary ONLY pose, action, and framing" in clause
+
+
+# ── short_ref: the compact per-beat form ─────────────────────────────────────
+# The full description and the per-beat prompt budget ("2 to 4 sentences",
+# ~180 tokens each) are arithmetically incompatible. Live, demanding a
+# ~100-word description in every prompt made the rule unsatisfiable and the
+# model dropped the character from all 10 prompts. short_ref is the fix.
+
+def test_short_ref_prefers_short_description(monkeypatch, tmp_path):
+    cfg = dict(_CHAR, short_description="a hooded figure with a bronze lantern")
+    monkeypatch.setattr(ce, "NICHES_FILE", _write_niches(tmp_path, character=cfg))
+    assert ce.short_ref("money_history") == "a hooded figure with a bronze lantern"
+
+
+def test_short_ref_falls_back_to_first_clause_of_description(monkeypatch, tmp_path):
+    """A niche that never defined a short form must still work, and must still
+    produce something far shorter than the full description."""
+    long_desc = ("a timeless guide, NOT tied to any era: a deep hooded cloak in "
+                 "weathered sepia. Reads as a narrator outside time. Never "
+                 "redesign the cloak to match a scene's period.")
+    cfg = {"enabled": True, "name": "the Chronicler", "description": long_desc}
+    monkeypatch.setattr(ce, "NICHES_FILE", _write_niches(tmp_path, character=cfg))
+    got = ce.short_ref("money_history")
+    assert got == "a deep hooded cloak in weathered sepia"
+    assert len(got) < len(long_desc) / 2
+
+
+def test_short_ref_empty_without_character(monkeypatch, tmp_path):
+    monkeypatch.setattr(ce, "NICHES_FILE", _write_niches(tmp_path, character=None))
+    assert ce.short_ref("money_history") == ""
+
+
+def test_character_clause_uses_short_form_not_full_description(monkeypatch, tmp_path):
+    """The whole point of the split — the clause must carry the compact token,
+    never the full character sheet."""
+    cfg = dict(_CHAR, short_description="a hooded figure with a bronze lantern")
+    monkeypatch.setattr(ce, "NICHES_FILE", _write_niches(tmp_path, character=cfg))
+    monkeypatch.delenv("RUFUS_CHARACTER_MODE", raising=False)
+    clause = ce.character_clause("money_history")
+    assert "a hooded figure with a bronze lantern" in clause
+    assert "grey hair, round spectacles, brown leather satchel" not in clause
+
+
+def test_character_sheet_prompt_still_uses_the_full_description(monkeypatch, tmp_path):
+    """The one-time reference portrait is exactly where the full detail belongs
+    — short_ref must NOT have leaked into it."""
+    cfg = dict(_CHAR, short_description="a hooded figure with a bronze lantern")
+    monkeypatch.setattr(ce, "NICHES_FILE", _write_niches(tmp_path, character=cfg))
+    prompt = ce.character_sheet_prompt("money_history")
+    assert "grey hair, round spectacles, brown leather satchel" in prompt
+
+
+def test_character_clause_stays_compact_enough_for_the_prompt_budget(monkeypatch, tmp_path):
+    """Regression guard for the arithmetic conflict that killed the feature:
+    the clause competes with a '2 to 4 sentences per prompt' budget, so it must
+    stay far below the ~1,300 chars it was when the model gave up on it."""
+    monkeypatch.setattr(ce, "NICHES_FILE", _write_niches(tmp_path, character=_CHAR))
+    monkeypatch.delenv("RUFUS_CHARACTER_MODE", raising=False)
+    assert len(ce.character_clause("money_history")) < 700
+
+
+def test_real_money_history_character_ships_a_short_description():
+    """The shipped config must define the short form explicitly rather than
+    relying on the truncation fallback."""
+    import json as _json
+    from pathlib import Path as _Path
+    real = _json.loads((_Path(__file__).parent.parent / "config" / "niches.json")
+                       .read_text(encoding="utf-8"))
+    char = real["niches"]["money_history"]["character"]
+    assert char.get("short_description")
+    assert len(char["short_description"].split()) <= 25
+    # 'ledger' would trip main._defuse_readable_text and push the character's
+    # own prop out of focus — the short form deliberately carries the lantern.
+    assert "ledger" not in char["short_description"].lower()
 
 
 def test_character_clause_falls_back_to_generic_name(monkeypatch, tmp_path):

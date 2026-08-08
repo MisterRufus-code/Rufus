@@ -568,7 +568,13 @@ def _build_sd_prompts(script: str, niche: str, max_scenes: int = 10) -> list[str
             # without an enabled character block, so this is a no-op today
             # for every SD niche until the owner opts one in.
             char_clause = character_engine.character_clause(niche)
-        except Exception:
+        except Exception as e:
+            # Fail-open like every other optional step, but SAY SO. This used to
+            # swallow the error silently, which meant a broken character config
+            # was indistinguishable from a working one that the model ignored —
+            # exactly the ambiguity that made the live "character never appears"
+            # report expensive to diagnose.
+            print(f"           ⚠ character clause skipped (non-fatal): {e}")
             char_clause = ""
 
         _FLUX_INSTRUCTION = (
@@ -583,7 +589,16 @@ def _build_sd_prompts(script: str, niche: str, max_scenes: int = 10) -> list[str
             "and be period-accurate.\n\n"
             "SPOKEN BEATS (prompt N must show beat N):\n"
             f"{beat_lines}\n\n"
-            "RULES:\n"
+            # Character clause sits HERE, immediately after the CRITICAL block
+            # and before the 15-rule list, not buried inside it. It was
+            # previously rule 8 of 15 (~41% into an 8KB instruction) with 3.5KB
+            # of further rules after it and no restatement — and live runs
+            # produced 10/10 prompts with no character at all. Head position +
+            # the closer restatement below put it in both spots the model
+            # actually weights.
+            f"{char_clause}"
+            + ("\n" if char_clause else "")
+            + "RULES:\n"
             "- 2 to 4 vivid natural-language sentences per prompt.\n"
             "- DESCRIBE ONLY WHAT THE CAMERA SEES. Never quote, repeat, or paraphrase "
             "the beat's narration text inside the prompt — the narration is the "
@@ -613,7 +628,6 @@ def _build_sd_prompts(script: str, niche: str, max_scenes: int = 10) -> list[str
             "the object / the wider scene. For a named real person, evoke them through "
             "the setting, period, and action rather than a tight portrait. When a face "
             "is visible, describe it as natural, calm, and anatomically normal.\n"
-            f"{char_clause}"
             "- FLAT 2D ILLUSTRATION, NOT A PHOTOGRAPH: this must read as clean vector-"
             "style illustration — never a photograph, 3D render, or photorealistic "
             "CGI. Simplified geometric shapes, confident bold outlines of consistent "
@@ -664,7 +678,15 @@ def _build_sd_prompts(script: str, niche: str, max_scenes: int = 10) -> list[str
             "numerals are legible. (Rufus overlays its own captions.)\n"
             "- All prompts must be visually distinct.\n"
             f"{fresh_block}\n"
-            f"Output EXACTLY {n} prompts, one per line. No numbering, no labels, no blank lines."
+            # Restated last, in the model's other high-attention position. The
+            # freshness block above is an explicit "do NOT repeat anything from
+            # recent videos" list that can run ~2.7KB — without this line right
+            # after it, a recurring character reads as exactly the thing it's
+            # telling the model to stop doing.
+            + (f"REMINDER — the recurring character above is REQUIRED and is the one "
+               f"element that SHOULD repeat across prompts and across videos; the "
+               f"freshness list never applies to it.\n\n" if char_clause else "")
+            + f"Output EXACTLY {n} prompts, one per line. No numbering, no labels, no blank lines."
         )
 
         client = OpenAI(api_key=key)

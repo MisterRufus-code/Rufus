@@ -28,6 +28,74 @@ def test_every_niche_has_wisdom_pool():
             assert q.get("text") and q.get("author"), f"malformed entry in {niche}.json"
 
 
+def test_every_niche_has_gold_examples():
+    """Gold examples are the strongest quality lever in the script writer —
+    gold_examples.json's own note says "the model mimics these more than any
+    instruction, so they define the voice". A niche with none ships a system
+    prompt with ZERO demonstrations (_build_gold_block returns "" on an empty
+    list), which is exactly how money_history ran in production while every
+    other niche had two: its scripts opened as biography ("In 1397, Giovanni
+    di Bicci de' Medici opened the Medici Bank") instead of viewer-first, the
+    one thing the note explicitly warns against."""
+    gold = json.loads((ROOT / "config" / "gold_examples.json").read_text())
+    for niche in NICHES:
+        examples = gold.get(niche, [])
+        assert len(examples) >= 2, \
+            f"{niche} has {len(examples)} gold example(s) in gold_examples.json, need >= 2"
+        for ex in examples:
+            assert ex.get("script"), f"{niche} gold example missing 'script'"
+            assert ex.get("seed_content"), f"{niche} gold example missing 'seed_content'"
+
+
+# Legacy gold examples (everything except money_history) predate the word cap,
+# the cadence check and the em-dash check, and 9 of the 10 of them would be
+# REJECTED by the pipeline's own gates today — they demonstrate 122-128 word
+# scripts against a 115 cap, and uniform sentence lengths against the cadence
+# rule. That is actively harmful few-shot data: the model mimics the example,
+# then burns a generation attempt getting rejected for copying it. Fixing them
+# means rewriting five niches' channel voice, which is the owner's call, so
+# they are pinned here rather than silently tolerated or silently rewritten.
+_LEGACY_GOLD_NICHES = {"finance", "motivation", "mindset", "business",
+                       "personal_development"}
+_KNOWN_FAILING_LEGACY_EXAMPLES = 9
+
+
+def test_money_history_gold_examples_pass_the_pipelines_own_body_gates():
+    """money_history is the niche actually in production, and its examples were
+    written against the current gates. A gold example the pipeline would reject
+    teaches the model to write scripts that get rejected, so these must stay
+    clean. Uses the real _body_violations rather than re-checking the rules."""
+    import script_writer
+
+    gold = json.loads((ROOT / "config" / "gold_examples.json").read_text())
+    for i, ex in enumerate(gold.get("money_history", []), 1):
+        violations = script_writer._body_violations(ex["script"])
+        assert not violations, \
+            f"money_history gold example {i} would be REJECTED by the pipeline: {violations}"
+
+
+def test_legacy_gold_examples_do_not_get_worse():
+    """Ratchet, not an endorsement — see _KNOWN_FAILING_LEGACY_EXAMPLES above.
+    Adding another gate-failing example to a legacy niche fails this test; fixing
+    the existing ones fails it too, with a message saying to lower the number."""
+    import script_writer
+
+    gold = json.loads((ROOT / "config" / "gold_examples.json").read_text())
+    failing = [
+        f"{niche}#{i}: {script_writer._body_violations(ex['script'])}"
+        for niche in sorted(_LEGACY_GOLD_NICHES)
+        for i, ex in enumerate(gold.get(niche, []), 1)
+        if script_writer._body_violations(ex["script"])
+    ]
+    assert len(failing) <= _KNOWN_FAILING_LEGACY_EXAMPLES, (
+        f"a legacy gold example now fails the body gates that didn't before:\n"
+        + "\n".join(failing))
+    assert len(failing) == _KNOWN_FAILING_LEGACY_EXAMPLES, (
+        f"legacy gold examples were fixed ({len(failing)} now failing, expected "
+        f"{_KNOWN_FAILING_LEGACY_EXAMPLES}) — lower _KNOWN_FAILING_LEGACY_EXAMPLES "
+        f"to lock the improvement in.")
+
+
 def test_every_niche_has_music_mood():
     from music_fetcher import MOOD_MAP
     for niche in NICHES:

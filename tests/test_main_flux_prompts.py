@@ -182,7 +182,20 @@ def test_flux_instruction_includes_character_clause_when_niche_has_one(tmp_path,
     prompt = captured["prompt"]
     assert "the Chronicler" in prompt
     assert "grey hair, round spectacles, brown leather satchel" in prompt
-    assert "SAME person" in prompt
+    assert "SAME figure" in prompt
+
+    # POSITION, not just presence. The clause was previously rule 8 of 15,
+    # ~41% into an 8KB instruction, with 3.5KB of further rules after it and
+    # no restatement — and a live run produced 10/10 prompts with no character
+    # in them. It must now sit ahead of the diluting rule list, and be restated
+    # after the freshness block (which otherwise reads as an order to stop
+    # repeating the one element that must repeat).
+    assert prompt.index("RECURRING CHARACTER") < prompt.index("RULES:"), \
+        "character clause must precede the rule list, not be buried inside it"
+    assert prompt.count("RECURRING CHARACTER") == 1, "clause duplicated"
+    reminder = prompt.index("REMINDER — the recurring character")
+    assert reminder > prompt.index("RECURRING CHARACTER")
+    assert reminder > len(prompt) * 0.8, "closing reminder must sit at the tail"
 
 
 def test_flux_instruction_omits_character_clause_without_niche_config(tmp_path, monkeypatch):
@@ -220,6 +233,9 @@ def test_flux_instruction_omits_character_clause_without_niche_config(tmp_path, 
     main._build_sd_prompts("Rome debased the denarius.", "money_history", max_scenes=2)
 
     assert "RECURRING CHARACTER" not in captured["prompt"]
+    # The closing reminder is character-only — it must not appear either, or a
+    # no-character niche gets a dangling reference to nothing.
+    assert "REMINDER — the recurring character" not in captured["prompt"]
 
 
 # ── SD (Realistic Vision) prompt branch also gets the character clause ───────

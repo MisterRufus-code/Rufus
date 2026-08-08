@@ -101,28 +101,55 @@ def enabled(niche: str | None) -> bool:
     return cfg.get("enabled", True) is not False
 
 
+def short_ref(niche: str | None) -> str:
+    """The COMPACT per-beat form of the character — a short repeatable visual
+    token, not the full character sheet.
+
+    This split exists because the full `description` and the per-beat prompt
+    budget are arithmetically incompatible. The prompt builder tells GPT to
+    write "2 to 4 vivid natural-language sentences per prompt" and allots
+    roughly 180 tokens each; money_history's `description` alone is ~100 words
+    over 3 sentences. Asking for it verbatim in EVERY prompt consumed the whole
+    budget, left no room for the beat's literal subject (which the surrounding
+    rules demand in much stronger language), and the model resolved the
+    impossible constraint by dropping the character entirely — observed live as
+    10/10 scene prompts with no character in them at all.
+
+    So: `short_description` (~15 words) goes in every beat prompt, and the full
+    `description` is reserved for character_sheet_prompt(), where a one-time
+    reference portrait genuinely wants every detail. Falls back to the first
+    sentence of `description` when a niche hasn't defined a short form, so an
+    existing character block keeps working."""
+    cfg = niche_character(niche)
+    if not cfg:
+        return ""
+    short = (cfg.get("short_description") or "").strip()
+    if short:
+        return short
+    # Fall back to the leading clause of the long description — better than
+    # shipping 100 words into a 2-sentence budget.
+    return (cfg["description"].split(".")[0].split(":")[-1]).strip()
+
+
 def character_clause(niche: str | None) -> str:
-    """Instruction line for _build_sd_prompts' FLUX system prompt, telling
-    GPT to depict the SAME recurring character in every beat that shows a
-    person. Returns "" when character mode isn't on for this niche, so
-    callers can always safely append the result without an extra branch."""
+    """Instruction line for _build_sd_prompts' prompt, telling GPT to depict the
+    SAME recurring character in every beat that shows a person. Returns "" when
+    character mode isn't on for this niche, so callers can always safely append
+    the result without an extra branch.
+
+    Deliberately built from short_ref(), not `description` — see short_ref's
+    docstring for why the long form makes this rule unsatisfiable."""
     cfg = niche_character(niche) if enabled(niche) else None
     if not cfg:
         return ""
     name = cfg.get("name") or "the recurring character"
-    desc = cfg["description"]
     return (
-        f"- RECURRING CHARACTER: every beat that shows a person on-screen "
-        f"MUST show the SAME person — {name}: {desc}. Use this exact "
-        f"description (or a close paraphrase) in every such prompt, varying "
-        f"ONLY their pose, action, and framing per the beat — never their "
-        f"face, hair, build, or wardrobe. This character is a timeless "
-        f"narrator/guide figure, not a literal inhabitant of the historical "
-        f"scene — the PERIOD ACCURACY rule below still governs everything "
-        f"else in the frame (setting, other people, objects), but never "
-        f"redesign {name}'s own appearance to fit the beat's era. A beat "
-        f"with no person (an object, place, or document alone) doesn't need "
-        f"the character.\n"
+        f"- RECURRING CHARACTER (non-negotiable): every beat showing a person "
+        f"MUST show the SAME figure — {name}: {short_ref(niche)}. Repeat that "
+        f"description near-verbatim in each such prompt; vary ONLY pose, "
+        f"action, and framing. {name} is a timeless narrator-guide, not an "
+        f"inhabitant of the era, so the PERIOD ACCURACY rule governs the rest "
+        f"of the frame but never {name}'s own appearance.\n"
     )
 
 
