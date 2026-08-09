@@ -325,7 +325,55 @@ def _await_frames(prompt_id: str, timeout: float | None = None) -> list[bytes]:
         time.sleep(POLL_INTERVAL)
 
     print(f"[svd] timed out after {timeout or SVD_TIMEOUT:.0f}s waiting for frames")
+    _abandon(prompt_id)
     return []
+
+
+def _abandon(prompt_id: str) -> None:
+    """Stop a job we've given up waiting for. Best-effort, never raises.
+
+    WHY THIS EXISTS — measured, from a live 10-clip run. Giving up on a clip
+    used to mean only that RUFUS stopped waiting; the job kept running on
+    ComfyUI, which has ONE queue. So the next clip was submitted behind a job
+    still holding the GPU, and every clip after it inherited the delay. The
+    ComfyUI log shows it exactly:
+
+        Prompt executed in 00:13:36     <- clip 1, normal
+        Prompt executed in 00:10:46     <- clip 2, normal
+        got prompt                      <- clip 3 starts
+        12/12 [04:18]                   <- its sampler finishes in 4 minutes
+        got prompt                      <- clip 4  ) submitted after RUFUS
+        got prompt                      <- clip 5  ) gave up on 3, and now
+        got prompt                      <- clip 6  ) queued behind it
+        Prompt executed in 01:31:04     <- clip 3 finally ends, 91 MINUTES
+
+    Clip 3's sampling took a normal 4:18; the remaining 87 minutes were VAE
+    decode thrashing on a 16GB-RAM box. Clips 4 and 5 never had a chance —
+    they were queued behind it and were reported as their own timeouts. Three
+    "failures", 90 minutes, one actual cause.
+
+    Cancelling turns that into one lost clip instead of three, and hands the
+    GPU straight to the next one."""
+    try:
+        r = requests.get(f"{_host()}/queue", timeout=10)
+        r.raise_for_status()
+        q = r.json()
+        running = any(prompt_id in str(item) for item in q.get("queue_running", []))
+    except Exception:
+        running = True      # can't tell — assume the worst and interrupt
+    try:
+        # Pending: remove it so it never starts.
+        requests.post(f"{_host()}/queue", json={"delete": [prompt_id]}, timeout=10)
+        # Running: only /interrupt stops it, and it takes no id — ComfyUI
+        # interrupts whatever is executing, which is this job precisely
+        # because the queue is serial and we are the only submitter.
+        if running:
+            requests.post(f"{_host()}/interrupt", timeout=10)
+        print(f"[svd] cancelled abandoned job {prompt_id[:8]} — "
+              f"freeing the queue for the next clip")
+    except Exception as e:
+        print(f"[svd] could not cancel {prompt_id[:8]} ({e}) — "
+              f"the next clip may queue behind it")
 
 
 _diffusers_pipe = None   # lazy singleton — ~9GB of weights, load once per process
