@@ -336,7 +336,7 @@ def test_sd_instruction_omits_character_clause_by_default(tmp_path, monkeypatch)
     assert "RECURRING CHARACTER" not in captured["prompt"]
 
 
-# ── No-readable-text net (_defuse_readable_text) ──────────────────────────────
+# ── Blank-surfaces net (_defuse_readable_text) ────────────────────────────────
 # Seen live: "calendar page turning to December 31, 2022", "newspaper
 # headlines about the crisis", "'Follow' button with Bitcoin graphics" —
 # diffusion models render these as garbled AI gibberish, the single most
@@ -346,7 +346,7 @@ def test_defuse_appends_clause_for_text_props():
     import main
     p = main._defuse_readable_text(
         "An extreme close-up of a newspaper headline about the crisis")
-    assert "no" in p.lower() and "readable text" in p.lower()
+    assert main._DETEXT_SENTINEL in p.lower()
 
 
 def test_defuse_covers_screens_and_buttons():
@@ -356,7 +356,20 @@ def test_defuse_covers_screens_and_buttons():
                   "a weathered ledger open on a desk",
                   "a stock ticker board with numbers"):
         out = main._defuse_readable_text(risky)
-        assert "readable text" in out.lower(), risky
+        assert main._DETEXT_SENTINEL in out.lower(), risky
+
+
+def test_defuse_clause_never_names_text_in_the_positive_prompt():
+    """The whole point of the rewrite. CLIP has no "not" operator: the old
+    clause said "absolutely no readable text, numbers, or interface elements"
+    and the sampler painted exactly those. Suppression words belong in the
+    negative conditioning (comfy_client.DEFAULT_STILLS_NEGATIVE) — this clause
+    may only describe the surface affirmatively."""
+    import main
+    clause = main._DETEXT_CLAUSE.lower()
+    for banned in ("readable", "text", "lettering", "writing", "numeral",
+                   " no ", "words"):
+        assert banned not in clause, f"positive clause must not contain {banned!r}"
 
 
 def test_defuse_leaves_clean_prompts_untouched():

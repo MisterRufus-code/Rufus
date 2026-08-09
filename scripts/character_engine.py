@@ -131,25 +131,72 @@ def short_ref(niche: str | None) -> str:
     return (cfg["description"].split(".")[0].split(":")[-1]).strip()
 
 
-def character_clause(niche: str | None) -> str:
-    """Instruction line for _build_sd_prompts' prompt, telling GPT to depict the
-    SAME recurring character in every beat that shows a person. Returns "" when
-    character mode isn't on for this niche, so callers can always safely append
-    the result without an extra branch.
+CHARACTER_BEAT_MODES = ("all", "anchor")
+
+
+def beat_mode(niche: str | None = None) -> str:
+    """Which beats carry the recurring character: "all" or "anchor".
+
+    "all"    — every beat that shows a person (the original behaviour).
+    "anchor" — only the opening, one middle, and the closing beat; every other
+               beat is character-free. Fewer, better appearances.
+
+    RUFUS_CHARACTER_BEATS wins, then the niche's own `character.beats`, then
+    "all" so an existing config keeps behaving exactly as it did."""
+    env = os.environ.get("RUFUS_CHARACTER_BEATS", "").strip().lower()
+    if env in CHARACTER_BEAT_MODES:
+        return env
+    cfg = niche_character(niche) or {}
+    cfgd = str(cfg.get("beats", "")).strip().lower()
+    return cfgd if cfgd in CHARACTER_BEAT_MODES else "all"
+
+
+def anchor_beats(n_beats: int) -> list[int]:
+    """1-based beat numbers the character appears in under "anchor" mode:
+    the first, the middle, and the last. Deduplicated and ordered, so a
+    2-beat script yields [1, 2] rather than a repeat."""
+    if n_beats <= 0:
+        return []
+    return sorted({1, (n_beats + 1) // 2, n_beats})
+
+
+def character_clause(niche: str | None, n_beats: int | None = None) -> str:
+    """Instruction line for _build_sd_prompts' prompt, telling GPT which beats
+    depict the SAME recurring character. Returns "" when character mode isn't
+    on for this niche, so callers can always safely append the result without
+    an extra branch.
 
     Deliberately built from short_ref(), not `description` — see short_ref's
-    docstring for why the long form makes this rule unsatisfiable."""
+    docstring for why the long form makes this rule unsatisfiable.
+
+    The ALL-OR-NOTHING sentence is not decoration. Live, a batch came back with
+    a clean-shaven man in a MODERN BUSINESS SUIT holding the Chronicler's
+    bronze lantern, and another in a lab coat holding it — the model had kept
+    the character's most concrete prop and dropped everything else that makes
+    him him. A stray lantern in a boardroom is worse than no character at all:
+    it reads as a continuity error rather than a motif."""
     cfg = niche_character(niche) if enabled(niche) else None
     if not cfg:
         return ""
     name = cfg.get("name") or "the recurring character"
+    mode = beat_mode(niche)
+    if mode == "anchor" and n_beats:
+        which = ", ".join(str(b) for b in anchor_beats(n_beats))
+        scope = (f"ONLY beats {which} show {name}. Every other beat has NO "
+                 f"{name} in it at all — not the figure, not the cloak, not "
+                 f"the lantern, nothing of his. ")
+    else:
+        scope = f"Every beat showing a person MUST show {name}. "
     return (
-        f"- RECURRING CHARACTER (non-negotiable): every beat showing a person "
-        f"MUST show the SAME figure — {name}: {short_ref(niche)}. Repeat that "
-        f"description near-verbatim in each such prompt; vary ONLY pose, "
-        f"action, and framing. {name} is a timeless narrator-guide, not an "
-        f"inhabitant of the era, so the PERIOD ACCURACY rule governs the rest "
-        f"of the frame but never {name}'s own appearance.\n"
+        f"- RECURRING CHARACTER (non-negotiable): {scope}"
+        f"{name} is the SAME figure every time: {short_ref(niche)}. Repeat "
+        f"that description near-verbatim wherever he appears; vary ONLY pose, "
+        f"action, and framing. He is a timeless narrator-guide, not an "
+        f"inhabitant of the era, so PERIOD ACCURACY governs the rest of the "
+        f"frame, never him.\n"
+        f"- ALL OR NOTHING: he appears as the COMPLETE figure above, or not at "
+        f"all. Never hand his cloak, hood, or lantern to anyone else. A modern "
+        f"businessman holding his lantern is a continuity ERROR.\n"
     )
 
 

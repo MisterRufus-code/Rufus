@@ -13,6 +13,9 @@ to the literal placeholder RUFUS_PROMPT, exports with
 proven graph, substituting only:
 
   - any input string equal to "RUFUS_PROMPT"      → the per-clip prompt
+  - any input string equal to "RUFUS_NEGATIVE"    → the per-clip negative, or
+    else the text node already wired to the         appended to whatever the
+    sampler's `negative` input                      export already had there
   - the first LoadImage node's image              → the uploaded init frame
   - any seed / noise_seed input                   → a fresh random seed
   - width/height/length on nodes that have all 3  → Rufus portrait dims+frames
@@ -33,6 +36,7 @@ from pathlib import Path
 import requests
 
 PLACEHOLDER = "RUFUS_PROMPT"
+NEG_PLACEHOLDER = "RUFUS_NEGATIVE"
 
 # Nodes that write a video container — replaced with SaveImage frames because
 # Rufus assembles its own mp4 (interpolation, upscale, freeze-extend).
@@ -153,14 +157,118 @@ def _loader_choices(class_type: str, host: str) -> set[str] | None:
     return names or None
 
 
+# ── Negative conditioning ────────────────────────────────────────────────────
+# Why this exists: every text-suppression rule Rufus had lived in the POSITIVE
+# prompt, phrased as a negation ("absolutely no readable text, numbers, or
+# interface elements"). CLIP has no "not" operator — it sees the tokens text,
+# numbers, readable, lettering and happily paints them. A live money_history
+# batch came back with garbled words on a coin, a newspaper, a ledger, a bank
+# facade and two documents; the de-text clause was present in every one of
+# those prompts. Suppression only works from the negative conditioning, so
+# find the text node the export already wired to the sampler's `negative`
+# input and append to it — a substitution into a proven wire, exactly like the
+# seed/dims ones, never a re-wire.
+
+# Inputs that carry prompt text on an encode node, most specific first.
+_TEXT_INPUT_KEYS = ("text", "text_g", "text_l", "prompt", "string")
+
+# How far back to walk from a sampler's `negative` link before giving up.
+# Real graphs put 0-3 conditioning ops (FluxGuidance, ConditioningZeroOut,
+# ConditioningSetTimestepRange) between the encode and the sampler.
+_NEG_WALK_DEPTH = 5
+
+
+def _link_target(value) -> str | None:
+    """The node id a ComfyUI API-format input link points at, else None."""
+    if isinstance(value, list) and len(value) == 2:
+        return str(value[0])
+    return None
+
+
+def _text_nodes_behind(graph: dict, root: str) -> set[str]:
+    """Ids of text-carrying nodes reachable backwards from node `root`."""
+    found: set[str] = set()
+    seen: set[str] = set()
+    frontier = [(root, 0)]
+    while frontier:
+        nid, depth = frontier.pop()
+        if nid in seen or depth > _NEG_WALK_DEPTH or nid not in graph:
+            continue
+        seen.add(nid)
+        inputs = graph[nid].get("inputs") or {}
+        if any(isinstance(inputs.get(k), str) for k in _TEXT_INPUT_KEYS):
+            found.add(nid)
+            continue          # the encode itself — no reason to walk past it
+        for v in inputs.values():
+            tgt = _link_target(v)
+            if tgt is not None:
+                frontier.append((tgt, depth + 1))
+    return found
+
+
+def negative_text_nodes(graph: dict) -> list[str]:
+    """Text-encode node ids feeding a sampler's `negative` input.
+
+    Excludes anything also reachable from a `positive` input: some minimal
+    workflows wire one encode into both, and appending Rufus' suppression
+    terms there would poison the positive prompt with the very words it is
+    trying to keep out of the image."""
+    negative: set[str] = set()
+    positive: set[str] = set()
+    for node in graph.values():
+        inputs = node.get("inputs")
+        if not isinstance(inputs, dict):
+            continue
+        for key, bucket in (("negative", negative), ("positive", positive)):
+            tgt = _link_target(inputs.get(key))
+            if tgt is not None:
+                bucket |= _text_nodes_behind(graph, tgt)
+    return sorted(negative - positive)
+
+
+def _apply_negative(g: dict, negative: str) -> bool:
+    """Substitute `negative` into the graph. True if it landed somewhere.
+
+    An explicit RUFUS_NEGATIVE placeholder wins and is REPLACED — the author
+    put it there to say "this text is mine to control". Otherwise the terms
+    are APPENDED to the export's own negative, because that text was part of
+    the run the owner verified and is not ours to discard."""
+    placed = False
+    for node in g.values():
+        inputs = node.get("inputs")
+        if not isinstance(inputs, dict):
+            continue
+        for k, v in list(inputs.items()):
+            if isinstance(v, str) and NEG_PLACEHOLDER in v:
+                inputs[k] = v.replace(NEG_PLACEHOLDER, negative)
+                placed = True
+    if placed:
+        return True
+    for nid in negative_text_nodes(g):
+        inputs = g[nid]["inputs"]
+        for k in _TEXT_INPUT_KEYS:
+            if isinstance(inputs.get(k), str):
+                existing = inputs[k].strip().rstrip(",")
+                if negative.lower() in existing.lower():
+                    placed = True
+                    continue
+                inputs[k] = f"{existing}, {negative}" if existing else negative
+                placed = True
+    return placed
+
+
 def prepare(graph: dict, *, prompt: str | None = None,
             image_name: str | None = None, seed: int | None = None,
             dims: tuple[int, int, int] | None = None,
             save_prefix: str = "rufus_tpl",
+            negative: str | None = None,
             keep_video_writers: bool = False) -> dict:
     """Deep-copy the template and substitute Rufus' per-run values (see module
     docstring for the exact substitution contract)."""
     g = copy.deepcopy(graph)
+
+    if negative:
+        _apply_negative(g, negative)
 
     image_set = False
     for node in g.values():

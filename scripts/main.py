@@ -385,17 +385,30 @@ _TEXT_PROP_RE = re.compile(
     r"parchment|statement|contract|certificate|chart|graph|ticker|keyboard|"
     r"billboard|menu|book|page|note)\b")
 
+# PHRASED AFFIRMATIVELY, ON PURPOSE. The previous version of this clause read
+# "…absolutely no readable text, numbers, or interface elements anywhere in the
+# image" — a negation inside the POSITIVE prompt, which is the one place it
+# cannot work: CLIP has no "not" operator, so the encoder saw the tokens text,
+# numbers, readable, lettering and the sampler painted them. A live batch of 40
+# money_history stills came back with invented lettering on a coin, a
+# newspaper, a ledger, a bank facade and two documents — every one of those
+# prompts carried the old clause. The suppression now lives in the negative
+# conditioning (comfy_client.DEFAULT_STILLS_NEGATIVE, substituted by
+# comfy_template into the sampler's own negative wire); what stays here is a
+# POSITIVE description of the surface we want — blank paper — which the
+# sampler can actually render.
+_DETEXT_SENTINEL = "blank and unmarked"
 _DETEXT_CLAUSE = (
-    " Any paper, screen, sign, or lettering in the frame appears only at a "
-    "distance, at an oblique angle, or softly out of focus — absolutely no "
-    "readable text, numbers, or interface elements anywhere in the image.")
+    " Every page, sign, coin face, and screen in the frame is blank and "
+    "unmarked — plain smooth empty surfaces, angled away or seen at a "
+    "distance, described by shape, color and wear alone.")
 
 
 def _defuse_readable_text(prompt: str) -> str:
-    """Append the no-readable-text clause to prompts that mention a
-    text-bearing prop. Only when triggered — a clean prompt stays untouched
-    (keeps token budgets tight and avoids diluting every prompt)."""
-    if _TEXT_PROP_RE.search(prompt) and "no readable text" not in prompt.lower():
+    """Append the blank-surfaces clause to prompts that mention a text-bearing
+    prop. Only when triggered — a clean prompt stays untouched (keeps token
+    budgets tight and avoids diluting every prompt)."""
+    if _TEXT_PROP_RE.search(prompt) and _DETEXT_SENTINEL not in prompt.lower():
         return prompt.rstrip() + _DETEXT_CLAUSE
     return prompt
 
@@ -595,7 +608,9 @@ def _build_sd_prompts(script: str, niche: str, max_scenes: int = 10) -> list[str
             # default). character_clause() itself returns "" for any niche
             # without an enabled character block, so this is a no-op today
             # for every SD niche until the owner opts one in.
-            char_clause = character_engine.character_clause(niche)
+            # n_beats lets "anchor" mode name the exact beat numbers the
+            # character appears in; "all" mode ignores it.
+            char_clause = character_engine.character_clause(niche, len(beats))
         except Exception as e:
             # Fail-open like every other optional step, but SAY SO. This used to
             # swallow the error silently, which meant a broken character config
@@ -696,14 +711,18 @@ def _build_sd_prompts(script: str, niche: str, max_scenes: int = 10) -> list[str
             "people, or object) through the sequence and let its CONDITION evolve with "
             "the story: pristine → strained → transformed. The last frame should feel "
             "like the consequence of the first, not an unrelated image.\n"
-            "- NO READABLE TEXT, EVER — this model garbles written words and the "
-            "gibberish instantly exposes the image as AI. Never make a text-bearing "
-            "object the subject: no readable newspaper headlines, calendar dates, "
-            "phone/computer screens with UI or buttons, signs, labels, ledgers with "
-            "legible writing, or documents shot close enough to read. If the beat "
-            "involves such an object, show it OBLIQUELY — at a distance, at a sharp "
-            "angle, partially out of focus, or from behind — so no lettering or "
-            "numerals are legible. (Rufus overlays its own captions.)\n"
+            "- NEVER NAME WORDS THAT WOULD BE PRINTED IN THE FRAME. The image model "
+            "garbles written words, and the gibberish instantly exposes the image as "
+            "AI. The moment your prompt says WHAT a headline/coin/sign/ledger/document "
+            "reads, the model tries to paint those letters and fails. So: never quote "
+            "or describe wording, never name the newspaper, bank, or company, never "
+            "give a date or figure that would appear ON an object. Write the object as "
+            "a blank physical thing instead — 'a folded newspaper, its page blank "
+            "newsprint' not 'a newspaper headlined BANK PANIC'; 'a worn gold coin, its "
+            "face a smooth featureless disc' not 'a coin stamped 1907'. Better still, "
+            "pick a subject that carries no writing at all: hands, faces, a queue, a "
+            "locked door, an empty vault, spilled coins. (Rufus overlays its own "
+            "captions — the image never needs to say anything.)\n"
             "- All prompts must be visually distinct.\n"
             f"{fresh_block}\n"
             # Restated last, in the model's other high-attention position. The

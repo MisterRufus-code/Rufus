@@ -142,7 +142,8 @@ def generate_image(prompt: str, out_path: Path | None = None, *,
     for attempt in range(max_tries):
         this_seed = seed if attempt == 0 else random.randint(1, 2**31 - 1)
         graph = comfy_template.prepare(tpl, prompt=full_prompt, seed=this_seed,
-                                       save_prefix="rufus_image")
+                                       save_prefix="rufus_image",
+                                       negative=comfy_client._stills_negative())
         _apply_image_dims(graph, width, height)
 
         print(f"[image] rendering {width}x{height} (seed {this_seed}) …")

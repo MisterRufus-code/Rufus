@@ -179,7 +179,8 @@ def _render_image_i2i(prompt: str, seed: int, client_id: str,
         return None
     import comfy_template
     g = comfy_template.prepare(tpl, prompt=prompt, image_name=image_name,
-                               seed=seed, save_prefix="rufus_i2i")
+                               seed=seed, save_prefix="rufus_i2i",
+                               negative=_stills_negative())
     pid = _submit(g, client_id)
     if not pid:
         return None
@@ -528,6 +529,35 @@ DEFAULT_DETAIL_SUFFIX = (
 )
 
 
+# ── Negative conditioning ────────────────────────────────────────────────────
+# Suppression belongs HERE, not in the positive prompt. A live money_history
+# batch of 40 stills came back with invented lettering on a coin ("national"),
+# a newspaper ("NEVLES / NAOTRO"), a ledger, a bank facade and two documents —
+# and every one of those prompts already carried main.py's de-text clause.
+# That clause is a negation inside the POSITIVE prompt, where CLIP reads its
+# tokens (text, numbers, lettering, readable) as things to paint. Garbled
+# words are the single most obvious "AI slop" tell in a finished Short, so
+# this list leads with them. Overridable per-run; RUFUS_STILLS_NEGATIVE="" or
+# "0" turns it off entirely for a template whose own negative is already tuned.
+DEFAULT_STILLS_NEGATIVE = (
+    "text, letters, words, writing, lettering, typography, caption, subtitle, "
+    "watermark, signature, logo, brand name, numbers, digits, gibberish text, "
+    "garbled writing, fake language, misspelled words, distorted letterforms, "
+    "photorealistic, photograph, 3d render, gradient shading, film grain, "
+    "extra fingers, deformed hands, extra limbs, mutated face, blurry, "
+    "lowres, jpeg artifacts"
+)
+
+
+def _stills_negative() -> str:
+    """Negative conditioning for stills, or "" when disabled."""
+    raw = os.environ.get("RUFUS_STILLS_NEGATIVE")
+    if raw is None:
+        return DEFAULT_STILLS_NEGATIVE
+    raw = raw.strip()
+    return "" if raw.lower() in ("0", "false", "no", "off") else raw
+
+
 def _detail_suffix() -> str:
     return os.environ.get("RUFUS_STILLS_DETAIL", DEFAULT_DETAIL_SUFFIX).strip()
 
@@ -576,7 +606,8 @@ def _render_image(prompt: str, seed: int, client_id: str,
         return None
     import comfy_template
     g = comfy_template.prepare(tpl, prompt=prompt, seed=seed,
-                               save_prefix="rufus_stills")
+                               save_prefix="rufus_stills",
+                               negative=_stills_negative())
     pid = _submit(g, client_id)
     if not pid:
         return None
@@ -620,7 +651,8 @@ def _ensure_character_reference(niche: str, client_id: str) -> Path | None:
     import comfy_template
     g = comfy_template.prepare(tpl, prompt=_with_detail(sheet_prompt),
                                seed=random.randint(1, 2_000_000_000),
-                               save_prefix="rufus_character_ref")
+                               save_prefix="rufus_character_ref",
+                               negative=_stills_negative())
     pid = _submit(g, client_id)
     if not pid:
         return None
@@ -656,7 +688,8 @@ def _render_character_image(prompt: str, seed: int, client_id: str,
         return None
     import comfy_template
     g = comfy_template.prepare(tpl, prompt=prompt, image_name=image_name,
-                               seed=seed, save_prefix="rufus_character")
+                               seed=seed, save_prefix="rufus_character",
+                               negative=_stills_negative())
     pid = _submit(g, client_id)
     if not pid:
         return None
