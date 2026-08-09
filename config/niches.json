@@ -376,6 +376,7 @@
       "comfy_model": "z-image-turbo (informational only — the real model is whatever's baked into your exported config/stills_api.json; FLUX.1/FLUX.2 are non-commercial-licensed and must not be used)",
       "character": {
         "enabled": true,
+        "beats": "anchor",
         "name": "the Chronicler",
         "short_description": "a hooded figure in a weathered sepia-and-antique-gold cloak, calm face beneath the hood, carrying a small bronze lantern",
         "description": "a timeless, archetypal storyteller-guide, deliberately NOT tied to any historical period or fashion: a deep hooded cloak in weathered sepia-and-antique-gold fabric that falls in simple flat folds, a calm weathered face with warm brown skin and sharp attentive eyes visible beneath the hood's shadow, no era-specific clothing visible beneath the cloak, carrying either a glowing bronze lantern or a worn leather-bound ledger. Reads as a symbolic narrator standing OUTSIDE time — equally at home beside ancient Lydian traders, in Weimar Germany, or in the present day. Never redesign the cloak/hood/lantern to match a scene's period — that timelessness is the point.",

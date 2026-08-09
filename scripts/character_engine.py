@@ -55,6 +55,7 @@ is what gives the cross-topic continuity the owner asked for.
 
 import json
 import os
+import re
 from pathlib import Path
 
 NICHES_FILE = Path(__file__).parent.parent / "config" / "niches.json"
@@ -179,24 +180,30 @@ def character_clause(niche: str | None, n_beats: int | None = None) -> str:
     if not cfg:
         return ""
     name = cfg.get("name") or "the recurring character"
+    # Names are configured with their article ("the Chronicler"), which reads
+    # correctly mid-sentence but produces "NO the Chronicler" when it follows
+    # a determiner. A prompt that is itself ungrammatical is a worse instruction
+    # than one that is blunt.
+    bare = re.sub(r"(?i)^the\s+", "", name).strip() or name
+    lead = name[0].upper() + name[1:]
     mode = beat_mode(niche)
     if mode == "anchor" and n_beats:
         which = ", ".join(str(b) for b in anchor_beats(n_beats))
-        scope = (f"ONLY beats {which} show {name}. Every other beat has NO "
-                 f"{name} in it at all — not the figure, not the cloak, not "
-                 f"the lantern, nothing of his. ")
+        scope = (f"ONLY beats {which} show {name}. Every other beat has no "
+                 f"sign of him at all — not the figure, not the cloak, not the "
+                 f"lantern, nothing of his. Those beats show the scene alone. ")
     else:
         scope = f"Every beat showing a person MUST show {name}. "
     return (
         f"- RECURRING CHARACTER (non-negotiable): {scope}"
-        f"{name} is the SAME figure every time: {short_ref(niche)}. Repeat "
+        f"{lead} is the SAME figure every time: {short_ref(niche)}. Repeat "
         f"that description near-verbatim wherever he appears; vary ONLY pose, "
         f"action, and framing. He is a timeless narrator-guide, not an "
         f"inhabitant of the era, so PERIOD ACCURACY governs the rest of the "
         f"frame, never him.\n"
-        f"- ALL OR NOTHING: he appears as the COMPLETE figure above, or not at "
-        f"all. Never hand his cloak, hood, or lantern to anyone else. A modern "
-        f"businessman holding his lantern is a continuity ERROR.\n"
+        f"- ALL OR NOTHING: {lead} appears as the COMPLETE figure above, or "
+        f"not at all. Never hand his cloak, hood, or lantern to anyone else. A "
+        f"modern businessman holding his lantern is a continuity ERROR.\n"
     )
 
 

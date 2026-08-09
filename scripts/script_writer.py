@@ -908,7 +908,13 @@ def _hook_scorer(client: OpenAI, hooks: list[str], seed: dict, niche_name: str,
     """Score hooks (regex pre-filter then LLM). Returns (winner_idx, score, reason, cost)."""
     std       = _standards()
     model     = std["models"]["hook_score"]
-    seed_text = (seed.get("content") or "")[:300] if seed else ""
+    # 1200, not 300: the scorer is asked below whether a hook's contradiction is
+    # SUPPORTED by the source, and it cannot answer that from a lead sentence.
+    # Live (run #59, Comstock Lode) the deciding fact — "named after Canadian
+    # miner Henry Comstock" — sat just past the 300-char cut, so the scorer gave
+    # a top score to a hook the source contradicts. Same argument as the
+    # architect's 600 → 2500 widening, and the cost is one prompt, once.
+    seed_text = (seed.get("content") or "")[:1200] if seed else ""
     # Full grounding corpus for the invented-number check — the whole seed
     # (not the 300-char scoring excerpt) plus the pre-analysis, since a
     # legitimate hook may cite a figure the analysis surfaced from the source.
@@ -948,8 +954,19 @@ def _hook_scorer(client: OpenAI, hooks: list[str], seed: dict, niche_name: str,
         "STEP 1 — BINARY GATE (if ANY gate fails → maximum score is 3, hard cap):\n"
         "  • Contains a specific number, dollar amount, year, or proper noun (real person/place)?\n"
         "  • States or implies the OPPOSITE of common belief (contradiction/paradox)?\n"
+        "  • Is that contradiction ACTUALLY SUPPORTED BY THE SOURCE ABOVE? Read the\n"
+        "    source and answer honestly. A hook asserting something the source does\n"
+        "    not state — or that the source contradicts — FAILS this gate no matter\n"
+        "    how good it sounds. Example of a failure: source says a silver lode was\n"
+        "    \"named after Canadian miner Henry Comstock\" and the hook claims \"Henry\n"
+        "    Comstock didn't discover the Comstock Lode\" — the source does not say\n"
+        "    that, so the hook is a guess dressed as a revelation. This gate exists\n"
+        "    because the gate above REWARDS contradiction, and an unsupported\n"
+        "    contradiction is the single most expensive thing you can approve: the\n"
+        "    hook cannot be changed later, so the whole script, all its images, its\n"
+        "    voiceover and its render get built on it before a fact-check rejects it.\n"
         "  • ≤10 words?\n"
-        "If all three pass, proceed to Step 2. If any fail → score 1-3 and stop.\n\n"
+        "If all four pass, proceed to Step 2. If any fail → score 1-3 and stop.\n\n"
         "STEP 2 — SURPRISE INTENSITY (only when all gates pass — score 4-10):\n"
         "  • LOW surprise — viewer half-expected this, mild paradox: 4-6\n"
         "  • MEDIUM surprise — viewer wouldn't have predicted this: 7-8\n"

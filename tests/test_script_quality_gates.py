@@ -476,3 +476,90 @@ def test_restate_only_touches_the_total_not_the_criteria():
         "SPECIFICITY: 2/3\nHOOK: 2/2\nCOMPRESSION: 1/2\nTOTAL: 7/10", 7, 4)
     assert "SPECIFICITY: 2/3" in out and "HOOK: 2/2" in out
     assert "COMPRESSION: 1/2" in out
+
+
+# ── The hook's contradiction must be grounded ────────────────────────────────
+# Run #59 (Comstock Lode) cost a whole run — 10 images, TTS and a render — to a
+# hook that was never checked. "Henry Comstock didn't discover the Comstock
+# Lode" scores perfectly against the scorer's own rubric: proper noun, opposite
+# of common belief, under 10 words, high surprise. The source says only that
+# the lode was "named after Canadian miner Henry Comstock", so the final fact
+# gate rejected it and capped 8/10 → 4/10.
+#
+# The cause is in the rubric itself: the binary gate REWARDS contradiction and
+# never asks whether the contradiction is true. And the hook is the one thing
+# that cannot be repaired downstream — the architect is handed it as "HOOK
+# (already chosen, will not change)".
+
+def _scorer_prompt(monkeypatch,
+                   seed_content="The Comstock Lode is a lode of silver ore "
+                                "named after Canadian miner Henry Comstock."):
+    """The scorer's real prompt, captured through a stub client.
+
+    The scorer persists every pre-filter rejection, which needs a database
+    this test has no business creating — stub the two writers out."""
+    import re
+    import script_writer
+
+    monkeypatch.setattr(script_writer, "save_attempt", lambda **kw: None)
+    monkeypatch.setattr(script_writer, "log_attempt", lambda *a, **kw: None)
+    captured = {}
+
+    class Resp:
+        class C:
+            class M:
+                content = '[{"i": 1, "score": 9, "reason": "ok"}]'
+            message = M()
+        choices = [C()]
+
+        class U:
+            prompt_tokens = completion_tokens = 10
+        usage = U()
+
+    class Client:
+        class Chat:
+            class Completions:
+                @staticmethod
+                def create(**kw):
+                    captured["prompt"] = kw["messages"][0]["content"]
+                    return Resp()
+            completions = Completions()
+        chat = Chat()
+
+    script_writer._hook_scorer(
+        Client(), ["Henry Comstock didn't discover the Comstock Lode.",
+                   "In 1859 a silver strike made Nevada rich.",
+                   "The Comstock Lode paid for San Francisco."],
+        {"content": seed_content, "title": "Comstock Lode", "type": "wikipedia"},
+        "money_history", "run-test")
+    return re.sub(r"\s+", " ", captured.get("prompt", ""))
+
+
+def test_scorer_requires_the_contradiction_to_be_supported(monkeypatch):
+    p = _scorer_prompt(monkeypatch).lower()
+    assert "actually supported by the source" in p
+    assert "fails this gate" in p
+
+
+def test_scorer_gate_count_matches_the_gates_listed(monkeypatch):
+    """An off-by-one here silently lets a hook through: "if all three pass"
+    beside four bullets tells the model one gate is optional."""
+    p = _scorer_prompt(monkeypatch)
+    assert "If all four pass" in p
+    assert "If all three pass" not in p
+
+
+def test_scorer_is_shown_enough_source_to_judge_grounding(monkeypatch):
+    """The deciding fact in run #59 sat past the old 300-char cut, so the
+    scorer was asked a question it had no way to answer."""
+    long_seed = ("A" * 400) + " named after Canadian miner Henry Comstock. " + ("B" * 400)
+    p = _scorer_prompt(monkeypatch, long_seed)
+    assert "named after Canadian miner Henry Comstock" in p
+
+
+def test_scorer_still_rewards_a_genuine_contradiction(monkeypatch):
+    """The fix must not turn the gate into "no contradictions" — the paradox
+    hook is the format. Only UNSUPPORTED ones are rejected."""
+    p = _scorer_prompt(monkeypatch)
+    assert "OPPOSITE of common belief" in p
+    assert "SURPRISE INTENSITY" in p
