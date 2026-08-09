@@ -71,7 +71,16 @@ def _stills_only() -> bool:
     AND RUFUS_IMG2VID=0 by hand. wan_client/hunyuan_client/svd_client's own
     enabled() checks all defer to this first — every beat falls straight to
     Ken Burns, the fastest and most reliable path (no motion-model GPU time at
-    all, and it can't warp/distort anything since it never touches pixels)."""
+    all, and it can't warp/distort anything since it never touches pixels).
+
+    RUFUS_BEAT_MOTION=i2v wins over it. That flag is the specific, deliberate
+    request ("use the motion model for this run"), while RUFUS_STILLS_ONLY is a
+    blanket default that lives permanently in run.bat — so without this,
+    asking for i2v on a machine set up that way would be silently ignored and
+    every beat would come out as a Ken Burns zoom with nothing in the log
+    explaining why."""
+    if os.environ.get("RUFUS_BEAT_MOTION", "").strip().lower() == "i2v":
+        return False
     return os.environ.get("RUFUS_STILLS_ONLY", "0").strip().lower() \
         in ("1", "true", "yes", "on")
 

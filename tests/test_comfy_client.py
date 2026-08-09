@@ -1243,3 +1243,36 @@ def test_i2v_mode_forces_the_motion_chain_despite_frames_per_beat(monkeypatch):
         c.generate_clips(["a florin"], n=1, clip_duration=4.8)
 
     assert animated == [1], "i2v mode must actually run the motion engine"
+
+
+def test_i2v_mode_overrides_a_standing_stills_only_flag(monkeypatch):
+    """run.bat hardcodes RUFUS_STILLS_ONLY=1, so without this an explicit
+    request for the motion model is silently ignored and every beat comes out
+    a Ken Burns zoom with nothing in the log explaining why."""
+    import svd_client
+    monkeypatch.setenv("RUFUS_STILLS_ONLY", "1")
+
+    monkeypatch.delenv("RUFUS_BEAT_MOTION", raising=False)
+    assert svd_client._stills_only() is True
+
+    monkeypatch.setenv("RUFUS_BEAT_MOTION", "i2v")
+    assert svd_client._stills_only() is False, \
+        "an explicit i2v request must beat the blanket stills-only default"
+
+    # Other modes must NOT punch through it — only i2v asks for motion models.
+    for mode in ("i2i", "cut", "kenburns"):
+        monkeypatch.setenv("RUFUS_BEAT_MOTION", mode)
+        assert svd_client._stills_only() is True, mode
+
+
+def test_i2v_mode_actually_enables_hunyuan_under_stills_only(monkeypatch):
+    """End-to-end version of the above, through hunyuan_client.enabled()."""
+    import hunyuan_client
+    monkeypatch.setenv("RUFUS_STILLS_ONLY", "1")
+    monkeypatch.delenv("RUFUS_HUNYUAN", raising=False)
+
+    monkeypatch.delenv("RUFUS_BEAT_MOTION", raising=False)
+    assert hunyuan_client.enabled() is False
+
+    monkeypatch.setenv("RUFUS_BEAT_MOTION", "i2v")
+    assert hunyuan_client.enabled() is True
