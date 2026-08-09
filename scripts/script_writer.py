@@ -1939,8 +1939,10 @@ def write_script(scene_description: str, seed: dict | None = None,
         else:
             print(f"[gpt]   score capped {best['score']} → {capped} "
                   f"(upload will be held for review)")
+            best["reasoning"] = (f"FACT GATE: {fact_reason} | "
+                                 + _restate_total(best.get("reasoning") or "",
+                                                  best["score"], capped))
             best["score"] = capped
-            best["reasoning"] = f"FACT GATE: {fact_reason} | " + (best.get("reasoning") or "")
 
     if best["score"] < score_min:
         print(f"[gpt] ⚠ best score was {best['score']}/10 (target ≥{score_min}) — using best attempt")
@@ -1977,6 +1979,25 @@ def write_script(scene_description: str, seed: dict | None = None,
         "reasoning": best["reasoning"],
         "cost_usd": total_cost,
     }
+
+
+def _restate_total(reasoning: str, raw: int, capped: int) -> str:
+    """Rewrite the critic's own "TOTAL: n/10" line to show the fact-gate cap.
+
+    The cap itself is deliberate and correct — a script the fact gate rejected
+    must not be able to present as publishable. What was NOT correct is that the
+    critic's verbatim reasoning was kept alongside it, still ending "TOTAL:
+    8/10" while the header showed 4/10. A reviewer reading the dashboard sees
+    two different scores for the same video and has no way to tell which one
+    the pipeline acted on; every external review of these runs flagged it as a
+    scoring bug. Both numbers are shown, with the reason, so the cap reads as
+    the decision it is."""
+    if raw == capped:
+        return reasoning
+    return re.sub(
+        r"(?i)\bTOTAL:\s*\d+\s*/\s*10\b",
+        f"TOTAL: {capped}/10 (critic scored {raw}/10, capped by the fact gate)",
+        reasoning, count=1)
 
 
 def _grounded_rewrite(client: OpenAI, *, system: str, base_usr: str,

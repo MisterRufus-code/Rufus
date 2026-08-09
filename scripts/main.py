@@ -413,6 +413,67 @@ def _defuse_readable_text(prompt: str) -> str:
     return prompt
 
 
+# ── Per-beat era ─────────────────────────────────────────────────────────────
+# A money_history script is NOT set in one period. It opens in history and lands
+# in the viewer's present — that pivot is the whole format. A period rule applied
+# to the WHOLE run therefore contradicts the beats that were written to be
+# modern, and the contradiction was live three times over:
+#
+#   run #58 beat 08  "a group of economists and policymakers in a CONTEMPORARY
+#                     setting" + "Period setting: 1791 ... no business suits"
+#   run #58 beat 10  the Chronicler in a "timeless green field" + the same 1791
+#                     clause, which is why he came back in modern dress
+#   run #53 beat 10  "a CONTEMPORARY classroom" + "Period setting: 1791" — on a
+#                     script about the 1923 Rentenmark, so the year was wrong
+#                     for the whole video, not just that beat
+#
+# The era is therefore derived per beat, from THIS run's script, and stated in
+# the instruction the prompt-writer reads — rather than pasted onto every prompt
+# after the fact, where it can only ever fight the beats it doesn't fit.
+
+# Words that mean "the viewer's present", not "the past being described".
+_PRESENT_DAY_RE = re.compile(
+    r"(?i)(\btoday\b|\bnowadays\b|\bthese days\b|\bright now\b|\bmodern\b|"
+    r"\bmodern-day\b|\bcontemporary\b|\bcurrent(ly)?\b|\b21st century\b|"
+    r"\bstill (happens|going|true|works|do|does)\b|\byour\b|\byou've\b|"
+    r"\byou're\b|\byou\b)")
+
+# A 3- or 4-digit year, optionally BC/BCE/AD. Bare 3-digit numbers are too
+# easily a quantity ("under five percent"), so they need the era marker.
+_YEAR_RE = re.compile(
+    r"(?i)\b(\d{4}|\d{3}\s?(?:BC|BCE|AD|CE))\b")
+
+
+def _script_period(script: str) -> str:
+    """The historical period this script is set in, as a short phrase, or "".
+
+    Taken from the EARLIEST year the script names, because the format opens in
+    the past and moves toward the present: the opening year is the setting, a
+    later one is usually the payoff. Derived per run from the run's own script,
+    which is what stops a previous video's period leaking into this one."""
+    years = _YEAR_RE.findall(script)
+    if not years:
+        return ""
+    def _numeric(y: str) -> int:
+        n = int(re.sub(r"\D", "", y))
+        return -n if re.search(r"(?i)bc", y) else n
+    return min((y[0] if isinstance(y, tuple) else y for y in years), key=_numeric).strip()
+
+
+def _beat_is_present_day(beat: str) -> bool:
+    """True when this beat speaks about the viewer's present rather than the
+    past. These beats must NOT get a period rule — that is the contradiction
+    that put 18th-century dress instructions on a modern classroom."""
+    return bool(_PRESENT_DAY_RE.search(beat))
+
+
+def _beat_era_tag(beat: str, period: str) -> str:
+    """The era label shown next to a beat in the prompt-writer's instruction."""
+    if _beat_is_present_day(beat) or not period:
+        return "present day"
+    return period
+
+
 def _strip_beat_echo(line: str, beat: str) -> str:
     """Remove the beat's narration text if the prompt-writer echoed it.
 
@@ -573,8 +634,10 @@ def _build_sd_prompts(script: str, niche: str, max_scenes: int = 10) -> list[str
                 "OpenAI key missing — SD prompt generation requires GPT-4o-mini.\n"
                 "Add 'openai' key to config/keys.json or use RUFUS_VIDEO_SOURCE=pexels."
             )
+        period = _script_period(script)
         beat_lines = "\n".join(
-            f"  Beat {i+1} (CAMERA={_anchor_for_beat(i)['camera'].split(',')[0]}): "
+            f"  Beat {i+1} [ERA={_beat_era_tag(b, period)}] "
+            f"(CAMERA={_anchor_for_beat(i)['camera'].split(',')[0]}): "
             f"\"{b}\""
             for i, b in enumerate(beats)
         )
@@ -657,9 +720,17 @@ def _build_sd_prompts(script: str, niche: str, max_scenes: int = 10) -> list[str
             "'Weimar hyperinflation' -> 1923 Germany, a wheelbarrow overflowing with "
             "near-worthless Reichsmark banknotes on a cobbled street; 'Bretton Woods' -> "
             "a 1944 conference hall, men in 1940s suits around a long table.\n"
-            "- PERIOD ACCURACY: zero anachronisms — no modern objects, clothing, logos, "
-            "screens, or writing in a historical scene. Show present-day items only if "
-            "the beat is explicitly about today.\n"
+            "- ERA — OBEY THE [ERA=...] TAG ON EACH BEAT ABOVE, PER BEAT. This script "
+            "deliberately moves from the past to the viewer's present; the beats are "
+            "NOT all in one period, and treating them as if they were is the single "
+            "worst thing you can do here.\n"
+            "  • [ERA=<a year>] → every visible detail belongs to that time and place: "
+            "clothing, hairstyles, footwear, tools, vehicles, architecture, money. No "
+            "business suits, t-shirts, jeans, trainers, backpacks, cars, tarmac, street "
+            "lighting, power lines, screens, printed banknotes or credit cards.\n"
+            "  • [ERA=present day] → an ordinary scene of TODAY. Do NOT give it "
+            "historical dress, props, or setting. A period costume on a present-day "
+            "beat is a hard failure, exactly as bad as a phone in a 1791 scene.\n"
             "- Vary framing across consecutive beats (macro object, wide establishing "
             "shot of a place, a person's hands handling the item, overhead of documents). "
             "Never repeat the same framing back-to-back.\n"

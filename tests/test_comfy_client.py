@@ -543,11 +543,25 @@ def test_with_detail_disabled_when_env_empty(monkeypatch):
 
 
 def test_with_detail_skips_prompt_that_already_has_direction(monkeypatch):
-    """A niche style_suffix or hand-written --topic prompt already carrying
-    photographic direction must not get a second, contradictory one."""
-    monkeypatch.delenv("RUFUS_STILLS_DETAIL", raising=False)
+    """A prompt already carrying photographic direction must not get a second,
+    contradictory one — but only when the STYLE is itself photographic, where
+    the prompt's spec is a more specific version of the same intent."""
+    monkeypatch.setenv("RUFUS_STILLS_DETAIL",
+                       "photorealistic, shot on a real camera")
     p = "a coin, 85mm f/1.4, moody light"
     assert c._with_detail(p) == p
+
+
+def test_with_detail_strips_camera_spec_under_a_flat_style(monkeypatch):
+    """Under the flat-2D default the prompt's camera spec is a CONTRADICTION,
+    not a second opinion. Skipping the suffix (the old behaviour) rendered that
+    one beat photoreal among nine flat-vector ones — a mixed look inside a
+    single Short, which reads worse than either look on its own."""
+    monkeypatch.delenv("RUFUS_STILLS_DETAIL", raising=False)
+    out = c._with_detail("a coin, 85mm f/1.4, moody light")
+    assert "Flat 2D vector illustration" in out
+    assert "85mm" not in out and "f/1.4" not in out
+    assert "moody light" in out
 
 
 def test_generate_clips_sends_the_detailed_prompt(monkeypatch):

@@ -437,3 +437,42 @@ def test_system_prompt_forbids_narrating_the_videos_own_purpose():
     p = _system_prompt().lower()
     assert "ignoring this would mean missing" in p
     assert "commentary about the script" in p
+
+
+# ── Fact-gate cap is shown, not hidden ───────────────────────────────────────
+# Every external review of runs #48-#51 reported the same "scoring bug": the
+# dashboard header said 4/10 while the critic reasoning under it ended
+# "TOTAL: 8/10". The cap itself is deliberate and correct — a script the fact
+# gate rejected must not present as publishable — but keeping the critic's
+# verbatim TOTAL beside it showed a reviewer two different scores for one video
+# with no way to tell which one the pipeline acted on.
+
+def test_capped_reasoning_restates_the_total():
+    import script_writer
+    out = script_writer._restate_total(
+        "SPECIFICITY: 2/3 — good.\nHOOK: 2/2 — fine.\nTOTAL: 8/10", 8, 4)
+    assert "TOTAL: 4/10" in out
+    assert "critic scored 8/10" in out
+    assert "capped by the fact gate" in out
+    assert "TOTAL: 8/10" not in out
+
+
+def test_uncapped_reasoning_is_left_verbatim():
+    import script_writer
+    r = "SPECIFICITY: 3/3.\nTOTAL: 10/10"
+    assert script_writer._restate_total(r, 10, 10) == r
+
+
+def test_restate_survives_reasoning_with_no_total_line():
+    """Fail-open: an unparseable critic reply must not lose the reasoning."""
+    import script_writer
+    r = "The script was fine but unsupported in places."
+    assert script_writer._restate_total(r, 8, 4) == r
+
+
+def test_restate_only_touches_the_total_not_the_criteria():
+    import script_writer
+    out = script_writer._restate_total(
+        "SPECIFICITY: 2/3\nHOOK: 2/2\nCOMPRESSION: 1/2\nTOTAL: 7/10", 7, 4)
+    assert "SPECIFICITY: 2/3" in out and "HOOK: 2/2" in out
+    assert "COMPRESSION: 1/2" in out

@@ -37,6 +37,7 @@ Usage:
 import json
 import os
 import random
+import re
 import shutil
 import subprocess
 import time
@@ -562,16 +563,71 @@ def _detail_suffix() -> str:
     return os.environ.get("RUFUS_STILLS_DETAIL", DEFAULT_DETAIL_SUFFIX).strip()
 
 
+# Photographic direction that CONTRADICTS the flat-2D style: camera bodies,
+# lens/aperture specs, depth-of-field and film-stock language. The prompt-writer
+# emits these out of habit — a live batch carried "Shot on a Canon EOS 5D Mark
+# IV, 50mm f/1.8 lens, with warm sepia tones and fine film grain" on beat 01 —
+# and the old guard treated their presence as "this prompt has its own style,
+# leave it alone", which silently rendered that ONE beat photoreal while the
+# other nine were flat vector. Mixed looks inside a single Short are more
+# obvious than either look on its own.
+_PHOTO_SPEC_RE = re.compile(
+    r"(?i)\b(shot on|captured on|"
+    r"canon|nikon|sony|fujifilm|leica|pentax|panasonic|olympus|contax|"
+    r"hasselblad|rolleiflex|"
+    r"\d{2,3}\s?mm|f/\d|depth of field|bokeh|film grain|"
+    r"photorealistic|hyperrealistic|photojournalism|full-frame)\b")
+
+
+def _strip_photo_direction(prompt: str) -> str:
+    """Remove camera/lens/film language from a prompt. Used only when the style
+    suffix is a non-photographic one, where such language is a contradiction
+    rather than a second opinion.
+
+    Works at CLAUSE level, not token level. These specs are always written as
+    whole comma-separated clauses ("Shot on a Canon EOS 5D Mark IV", "50mm
+    f/1.8 lens", "with warm sepia tones and fine film grain"), and deleting the
+    matched token alone leaves debris — ".8 lens, with warm sepia tones and
+    fine ." — which is worse than the contradiction it was fixing. A sentence
+    left empty by the removal is dropped entirely."""
+    kept_sentences = []
+    for sentence in re.split(r"(?<=[.!?])\s+", prompt):
+        clauses = [c for c in sentence.split(",")
+                   if not _PHOTO_SPEC_RE.search(c)]
+        rebuilt = ",".join(clauses).strip(" ,.")
+        if rebuilt:
+            kept_sentences.append(rebuilt + ".")
+    return re.sub(r"\s{2,}", " ", " ".join(kept_sentences)).strip()
+
+
+def _is_photographic(style: str) -> bool:
+    """Whether a style suffix asks for a photograph. Decides how a prompt's own
+    camera language is treated: a second opinion (leave the prompt alone) or a
+    contradiction (strip it)."""
+    low = style.lower()
+    return "not a photograph" not in low and (
+        "photorealistic" in low or "photojournalism" in low
+        or "shot on" in low or "real camera" in low)
+
+
 def _with_detail(prompt: str) -> str:
-    """Append the detail/realism direction, unless it's disabled or the prompt
-    already carries its own photographic direction (a niche style_suffix, or a
-    hand-written --topic prompt, shouldn't get a second contradictory one)."""
+    """Append the style direction, reconciling it with any photographic
+    direction the prompt already carries.
+
+    Photographic style → the prompt's own camera spec is a legitimate,
+    more specific choice; leave the prompt untouched.
+    Non-photographic style (the flat-2D default) → the prompt's camera spec
+    directly contradicts the look; strip it and apply the style anyway. The
+    style is a channel-wide decision and must never lose to one stray line."""
     tail = _detail_suffix()
     if not tail:
         return prompt
     low = prompt.lower()
-    if "f/1.4" in low or "depth of field" in low:
+    has_photo_spec = bool(_PHOTO_SPEC_RE.search(prompt)) or "depth of field" in low
+    if has_photo_spec and _is_photographic(tail):
         return prompt
+    if has_photo_spec:
+        prompt = _strip_photo_direction(prompt)
     return f"{prompt.rstrip().rstrip('.')}. {tail}"
 
 
