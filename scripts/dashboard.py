@@ -2123,6 +2123,7 @@ def video_detail(video_id):
     <table style="max-width:320px">{crit_rows}</table>
     {actions_html}
     {edit_html}
+    {_preview_block(v['run_id'])}
     <h2>Script</h2>
     <div class="script">{_esc(v['script_full'] or v['script_hook'])}</div>
     <h2>Why this score (critic reasoning)</h2>
@@ -2276,6 +2277,56 @@ def edit_video(video_id):
     description = request.form.get("description", "").strip()
     db_manager.update_metadata(video_id, title=title or None, description=description or None)
     return _redirect_detail(video_id, ok="saved")
+
+
+def _preview_block(run_id: str) -> str:
+    """Hear-it-and-see-it review, sized for a phone on cellular.
+
+    Before this, judging a run remotely meant downloading the 15-25MB master
+    (as_attachment, so not even a preview) or opening 8-10 debug PNGs at
+    1.1-2.7MB each — i.e. the same 20MB, one tap at a time. Both are unusable
+    away from the desk, which is why every review of these runs has been done
+    by pasting walls of text instead of looking at the video.
+
+    What review actually needs is small: the voiceover (~800KB, and the whole
+    question being asked is whether the SCRIPT SOUNDS GOOD ALOUD) and one
+    contact sheet of the beats (~300KB). Roughly 1MB for both, versus 20MB.
+
+    preload="none" is load-bearing: without it the browser fetches the audio on
+    page load, and the page costs its 800KB whether or not you press play."""
+    if not run_id:
+        return ""
+    folder = (DEBUG_ROOT / run_id).resolve()
+    if folder.parent != DEBUG_ROOT.resolve() or not folder.is_dir():
+        return ""
+
+    parts = []
+    voice = folder / "voiceover.mp3"
+    if voice.exists():
+        parts.append(
+            f'<audio controls preload="none" style="width:100%;max-width:520px" '
+            f'src="/debug/{_esc(run_id)}/voiceover.mp3"></audio>'
+            f'<div class="muted" style="margin:4px 0 12px">'
+            f'voiceover · {voice.stat().st_size // 1024}KB</div>')
+
+    try:
+        import review_proxy
+        sheet = review_proxy.contact_sheet(folder)
+    except Exception as e:                        # never break the page
+        print(f"[dashboard] contact sheet unavailable ({e})")
+        sheet = None
+    if sheet is not None:
+        parts.append(
+            f'<a href="/debug/{_esc(run_id)}/{_esc(sheet.name)}" target="_blank">'
+            f'<img src="/debug/{_esc(run_id)}/{_esc(sheet.name)}" loading="lazy" '
+            f'style="width:100%;max-width:760px;border-radius:8px" '
+            f'alt="every beat in order"></a>'
+            f'<div class="muted" style="margin-top:4px">'
+            f'all beats in order · {sheet.stat().st_size // 1024}KB · tap to enlarge</div>')
+
+    if not parts:
+        return ""
+    return "<h2>Preview</h2>" + "".join(parts)
 
 
 @app.route("/debug/<run_id>/<path:filename>")

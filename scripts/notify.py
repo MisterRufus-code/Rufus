@@ -198,6 +198,21 @@ def send_file(path, *, caption: str = "") -> bool:
         return False
 
     size = p.stat().st_size
+    if size > DISCORD_MAX_UPLOAD_BYTES and p.suffix.lower() == ".mp4":
+        # A finished 1080x1920 Short is 15-25MB, i.e. ALWAYS over the wall, so
+        # without this branch the video path of this function never actually
+        # delivered a video — it posted a link every single time, which is the
+        # dead end it was supposed to replace. Encode a small review copy and
+        # send that; the master is untouched and is still what gets uploaded.
+        try:
+            import review_proxy
+            small = review_proxy.build(p)
+        except Exception as e:                    # observability, never fatal
+            print(f"[notify] review proxy unavailable ({e})")
+            small = None
+        if small is not None and Path(small).stat().st_size <= DISCORD_MAX_UPLOAD_BYTES:
+            p, size = Path(small), Path(small).stat().st_size
+
     if size > DISCORD_MAX_UPLOAD_BYTES:
         # Say so rather than failing silently: "why didn't the video appear in
         # Discord" is otherwise a mystery with no trace anywhere.
@@ -258,11 +273,20 @@ def send(title: str, body: str, *, url: str | None = None,
 
 
 def notify_pending_review(*, title: str, score, niche: str,
-                          video_id=None, hold_reason: str | None = None) -> bool:
+                          video_id=None, hold_reason: str | None = None,
+                          video_path=None) -> bool:
     """The one that matters: a rendered video is waiting for a human.
 
     Deep-links straight to that video's page when RUFUS_DASHBOARD_URL is set,
-    so approving from a phone is two taps rather than hunting for the row."""
+    so approving from a phone is two taps rather than hunting for the row.
+
+    When Discord is configured, the video itself is posted alongside the alert
+    (as a small review copy — see review_proxy). Reviewing used to mean opening
+    the dashboard and downloading 15-25MB before seeing a frame; this way the
+    thing you are being asked to judge arrives WITH the request to judge it.
+    Best-effort and always after the text alert: the alert is the contract, the
+    attachment is a convenience, and a failed upload must never swallow the
+    notification that a video is waiting."""
     link = _dashboard_url()
     if link and video_id is not None:
         link = f"{link}/video/{video_id}"
@@ -270,8 +294,14 @@ def notify_pending_review(*, title: str, score, niche: str,
     if hold_reason:
         lines.append(f"auto-gate note: {hold_reason}")
     lines.append("Approve or reject in the dashboard.")
-    return send(f"Rufus: \"{title}\" needs review",
-                "\n".join(lines), url=link, priority="high")
+    ok = send(f"Rufus: \"{title}\" needs review",
+              "\n".join(lines), url=link, priority="high")
+    if video_path:
+        try:
+            send_file(video_path, caption=f"🎬 {title} — {score}/10, awaiting review")
+        except Exception as e:
+            print(f"[notify] review video not posted ({e})")
+    return ok
 
 
 def notify_published(*, title: str, youtube_id: str | None = None,
