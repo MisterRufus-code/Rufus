@@ -153,9 +153,17 @@ def main() -> int:
               f"positive prompt to that literal string and re-export.")
         return 1
 
+    # character_stills_api.json is deliberately NOT derived here any more.
+    # Deriving it produced a plain img2img graph, and a character reference fed
+    # in as the START LATENT can only be redrawn: run #59 rendered the same
+    # hooded figure on a plain background for all ten beats, ignoring prompts
+    # that asked for miners, a newspaper office, a mining camp and a classroom.
+    # An identity lock needs the reference as CONDITIONING (IPAdapter / PuLID /
+    # InstantID) with the latent still starting from noise — a node this script
+    # cannot invent, and exactly the case comfy_template.py's header reserves
+    # for a user-exported proven workflow.
     targets = [
         (CONFIG / "stills_i2i_api.json", args.i2i_denoise, "rufus_i2i"),
-        (CONFIG / "character_stills_api.json", args.character_denoise, "rufus_character"),
     ]
     written = 0
     for path, denoise, prefix in targets:

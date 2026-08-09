@@ -182,8 +182,10 @@ def test_shipped_templates_load_through_comfy_client():
     import comfy_client
     import comfy_template
 
-    for path in (Path(__file__).parent.parent / "config" / "stills_i2i_api.json",
-                 Path(__file__).parent.parent / "config" / "character_stills_api.json"):
+    # character_stills_api.json is deliberately NOT in this list any more — see
+    # test_derived_character_template_is_rejected below for why deriving one
+    # was wrong.
+    for path in (Path(__file__).parent.parent / "config" / "stills_i2i_api.json",):
         assert path.exists(), f"{path.name} missing"
         tpl = comfy_template.load_template(path)
         assert tpl is not None, f"{path.name} is not a loadable API export"
@@ -193,3 +195,96 @@ def test_shipped_templates_load_through_comfy_client():
         sampler = mct._sampler_id(tpl)
         assert sampler and tpl[sampler]["inputs"]["denoise"] < 1.0, \
             f"{path.name} is not actually img2img (denoise must be < 1.0)"
+
+
+# ── A derived character template is the wrong thing entirely ─────────────────
+# config/character_stills_api.json used to be derived here, mechanically, as
+# plain img2img at denoise 0.55. That is not an identity lock — it makes the
+# reference portrait the START LATENT, so the sampler can only redraw it.
+#
+# Run #59 is the proof. All ten beats came back as the same hooded figure
+# standing centred on a plain background; the prompts had asked for miners
+# swinging pickaxes, a newspaper office, a mining camp, a portrait wall and a
+# classroom door, and not one of those scenes appeared. The near-duplicate
+# detector fired on every single clip and was RIGHT — they genuinely were the
+# same picture, three times over per beat counting the wasted retries.
+#
+# An identity lock needs the reference as CONDITIONING (IPAdapter / PuLID /
+# InstantID) with the latent still starting from noise. That node cannot be
+# invented from an existing txt2img export, which is exactly the case
+# comfy_template.py's header reserves for a user-exported proven workflow.
+
+def _img2img_graph():
+    """The shape that was shipped: LoadImage → VAEEncode → sampler latent."""
+    return {
+        "1": {"class_type": "UNETLoader", "inputs": {"unet_name": "z.safetensors"}},
+        "2": {"class_type": "CLIPTextEncode", "inputs": {"text": "RUFUS_PROMPT"}},
+        "img": {"class_type": "LoadImage", "inputs": {"image": "rufus_init.png"}},
+        "enc": {"class_type": "VAEEncode", "inputs": {"pixels": ["img", 0]}},
+        "3": {"class_type": "KSampler",
+              "inputs": {"denoise": 0.55, "positive": ["2", 0],
+                         "latent_image": ["enc", 0]}},
+        "9": {"class_type": "SaveImage", "inputs": {"images": ["3", 0]}},
+    }
+
+
+def test_generator_no_longer_writes_a_character_template(tmp_path, monkeypatch):
+    src = Path(__file__).parent.parent / "config" / "stills_api.json"
+    monkeypatch.setattr(mct, "CONFIG", tmp_path)
+    monkeypatch.setattr(sys, "argv", ["make_comfy_templates.py", "--source", str(src)])
+    mct.main()
+    assert (tmp_path / "stills_i2i_api.json").exists(), "the i2i template is still derived"
+    assert not (tmp_path / "character_stills_api.json").exists()
+
+
+def test_img2img_is_detected_as_not_image_conditioned():
+    import comfy_template
+    g = _img2img_graph()
+    assert comfy_template.starts_from_loaded_image(g)
+    assert not comfy_template.is_image_conditioned(g)
+
+
+def test_an_ipadapter_graph_is_accepted():
+    """The real thing: reference as conditioning, latent from noise."""
+    import comfy_template
+    g = _img2img_graph()
+    g["ipa"] = {"class_type": "IPAdapterApply", "inputs": {"image": ["img", 0]}}
+    g["3"]["inputs"]["latent_image"] = ["empty", 0]
+    g["empty"] = {"class_type": "EmptyLatentImage",
+                  "inputs": {"width": 832, "height": 1472}}
+    assert comfy_template.is_image_conditioned(g)
+    assert not comfy_template.starts_from_loaded_image(g)
+
+
+def test_character_path_refuses_an_img2img_template(tmp_path, monkeypatch, capsys):
+    """The durable guard: even if this file reappears, the run must not spend
+    ten renders reproducing one portrait."""
+    import comfy_client
+    bad = tmp_path / "character_stills_api.json"
+    bad.write_text(json.dumps(_img2img_graph()))
+    monkeypatch.setattr(comfy_client, "CHARACTER_TEMPLATE", bad)
+    monkeypatch.delenv("RUFUS_CHARACTER_TEMPLATE", raising=False)
+    assert comfy_client._character_template() is None
+    assert "plain img2img" in capsys.readouterr().out
+
+
+def test_character_path_accepts_a_real_conditioning_template(tmp_path, monkeypatch):
+    import comfy_client
+    g = _img2img_graph()
+    g["ipa"] = {"class_type": "PuLIDApply", "inputs": {"image": ["img", 0]}}
+    g["3"]["inputs"]["latent_image"] = ["empty", 0]
+    g["empty"] = {"class_type": "EmptyLatentImage", "inputs": {"width": 832}}
+    good = tmp_path / "character_stills_api.json"
+    good.write_text(json.dumps(g))
+    monkeypatch.setattr(comfy_client, "CHARACTER_TEMPLATE", good)
+    monkeypatch.delenv("RUFUS_CHARACTER_TEMPLATE", raising=False)
+    assert comfy_client._character_template() is not None
+
+
+def test_the_i2i_template_is_still_allowed_to_be_img2img():
+    """Chained frames genuinely SHOULD continue the previous frame — the guard
+    must not spill onto the mode it was never about."""
+    import comfy_template
+    tpl = comfy_template.load_template(
+        Path(__file__).parent.parent / "config" / "stills_i2i_api.json")
+    assert comfy_template.starts_from_loaded_image(tpl)

@@ -157,6 +157,65 @@ def _loader_choices(class_type: str, host: str) -> set[str] | None:
     return names or None
 
 
+# ── Image conditioning vs. img2img ───────────────────────────────────────────
+# These are two different things and confusing them produced a whole ruined
+# run. A recurring-character workflow must take the reference portrait as
+# CONDITIONING (IPAdapter / PuLID / InstantID / a reference style model) while
+# the latent still starts from noise, so the scene is free to be whatever the
+# prompt says and only the identity is carried over.
+#
+# Feed the same reference in as the STARTING LATENT instead — LoadImage →
+# VAEEncode → KSampler.latent_image, i.e. ordinary img2img — and the sampler
+# can only redraw the reference. At denoise 0.55 the composition is locked to
+# it. Live: config/character_stills_api.json had exactly that shape, and all
+# ten beats of run #59 came back as the same hooded figure standing centred on
+# a plain background. The prompts asked for miners swinging pickaxes, a
+# newspaper office, a mining camp and a classroom; none of them appeared. The
+# near-duplicate detector fired on every clip and was RIGHT — they genuinely
+# were the same picture.
+_IMAGE_CONDITIONING_HINTS = (
+    "ipadapter", "pulid", "instantid", "faceid", "reference",
+    "stylemodel", "redux", "controlnet", "clipvision",
+)
+
+
+def is_image_conditioned(graph: dict) -> bool:
+    """True if the reference image reaches the sampler as CONDITIONING.
+
+    False for a plain img2img graph, where the reference is the start latent
+    and the sampler can only reproduce it."""
+    for node in graph.values():
+        ct = str(node.get("class_type", "")).lower()
+        if any(h in ct for h in _IMAGE_CONDITIONING_HINTS):
+            return True
+    return False
+
+
+def starts_from_loaded_image(graph: dict) -> bool:
+    """True if a LoadImage becomes the sampler's starting latent (img2img).
+
+    Legitimate for chained frames — stills_i2i_api.json genuinely wants to
+    continue the previous frame — and wrong for a character reference, where
+    it means every beat renders the reference portrait again."""
+    load_ids = {nid for nid, n in graph.items()
+                if str(n.get("class_type", "")) == "LoadImage"}
+    if not load_ids:
+        return False
+    encode_ids = set()
+    for nid, node in graph.items():
+        if "VAEEncode" not in str(node.get("class_type", "")):
+            continue
+        for v in (node.get("inputs") or {}).values():
+            if _link_target(v) in load_ids:
+                encode_ids.add(nid)
+    if not encode_ids:
+        return False
+    for node in graph.values():
+        if _link_target((node.get("inputs") or {}).get("latent_image")) in encode_ids:
+            return True
+    return False
+
+
 # ── Negative conditioning ────────────────────────────────────────────────────
 # Why this exists: every text-suppression rule Rufus had lived in the POSITIVE
 # prompt, phrased as a negation ("absolutely no readable text, numbers, or

@@ -677,15 +677,41 @@ def _character_template() -> dict | None:
     """The exported image-conditioning workflow (IPAdapter/PuLID/etc.) for
     recurring-character stills, or None if it hasn't been exported yet.
     Honors RUFUS_CHARACTER_TEMPLATE=0 as an explicit opt-out even when the
-    file exists. Same load/placeholder contract as _stills_template()."""
+    file exists. Same load/placeholder contract as _stills_template().
+
+    REJECTS a plain img2img graph, which is a different thing wearing the same
+    filename. Image conditioning carries the character's IDENTITY while the
+    latent still starts from noise, so the scene is whatever the prompt says.
+    Img2img makes the reference the STARTING LATENT, so the sampler can only
+    redraw it. Live (run #59) this file had the img2img shape at denoise 0.55,
+    and all ten beats came back as the same hooded figure standing centred on a
+    plain background — prompts asking for miners with pickaxes, a newspaper
+    office, a mining camp and a classroom produced none of those. The
+    near-duplicate detector fired on all ten and was correct.
+
+    Falling back to the plain stills path costs only the image-level identity
+    lock; the text-level character clause still works there, which is how the
+    Chronicler appeared in varied scenes before this file existed. Rendering
+    the same portrait ten times is strictly worse than that."""
     if os.environ.get("RUFUS_CHARACTER_TEMPLATE", "1").strip().lower() in \
             ("0", "false", "no", "off"):
         return None
     import comfy_template
     tpl = comfy_template.load_template(CHARACTER_TEMPLATE)
-    if tpl is not None and comfy_template.has_placeholder(tpl):
-        return tpl
-    return None
+    if tpl is None or not comfy_template.has_placeholder(tpl):
+        return None
+    if not comfy_template.is_image_conditioned(tpl) and \
+            comfy_template.starts_from_loaded_image(tpl):
+        print(f"[comfy] {CHARACTER_TEMPLATE.name} is a plain img2img graph, not "
+              f"an image-conditioning one — the reference is the start latent, "
+              f"so every beat would render the reference portrait instead of "
+              f"its scene. Ignoring it and using the plain stills path "
+              f"(text-level character consistency still applies). To enable "
+              f"the identity lock, build a workflow with an IPAdapter/PuLID/"
+              f"InstantID node in ComfyUI, verify it, and Export (API) over "
+              f"this file — see character_engine.py's header.")
+        return None
+    return tpl
 
 
 def _ensure_character_reference(niche: str, client_id: str) -> Path | None:
