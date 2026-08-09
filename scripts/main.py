@@ -431,12 +431,28 @@ def _defuse_readable_text(prompt: str) -> str:
 # the instruction the prompt-writer reads — rather than pasted onto every prompt
 # after the fact, where it can only ever fight the beats it doesn't fit.
 
-# Words that mean "the viewer's present", not "the past being described".
+# Words that mean "the viewer's present", unambiguously.
 _PRESENT_DAY_RE = re.compile(
-    r"(?i)(\btoday\b|\bnowadays\b|\bthese days\b|\bright now\b|\bmodern\b|"
-    r"\bmodern-day\b|\bcontemporary\b|\bcurrent(ly)?\b|\b21st century\b|"
-    r"\bstill (happens|going|true|works|do|does)\b|\byour\b|\byou've\b|"
-    r"\byou're\b|\byou\b)")
+    r"(?i)(\btoday\b|\btoday's\b|\bnowadays\b|\bthese days\b|\bright now\b|"
+    r"\bmodern\b|\bmodern-day\b|\bcontemporary\b|\bcurrent(ly)?\b|"
+    r"\b21st century\b|\bstill (happens|going|true|works|do|does)\b)")
+
+# Second person is a WEAK signal, and the reason is a collision between two
+# rules this pipeline sets itself. The SOUND section requires every script to
+# address the viewer at least once ("A script with no 'you' in it is a
+# lecture"), so "you" appears in historical beats as a rhetorical device:
+# "You could swap cheaper silver for premium gold at the fixed rate" is 1873,
+# not now. Treating "you" as present-day on its own tagged that beat modern and
+# produced "a wide establishing shot of a MODERN BANK ... sleek architecture
+# and digital displays" inside an 1865 story. So second person only means the
+# present when nothing marks the sentence as past.
+_SECOND_PERSON_RE = re.compile(r"(?i)\b(you|your|you're|you've|yours)\b")
+
+# Past-tense markers that override a rhetorical "you". Modals first: "could",
+# "would" and "had" are what carry the hypothetical-historical framing.
+_PAST_MARKER_RE = re.compile(
+    r"(?i)\b(was|were|had|did|could|would|used to|"
+    r"\w+ed)\b")
 
 # A 3- or 4-digit year, optionally BC/BCE/AD. Bare 3-digit numbers are too
 # easily a quantity ("under five percent"), so they need the era marker.
@@ -463,8 +479,15 @@ def _script_period(script: str) -> str:
 def _beat_is_present_day(beat: str) -> bool:
     """True when this beat speaks about the viewer's present rather than the
     past. These beats must NOT get a period rule — that is the contradiction
-    that put 18th-century dress instructions on a modern classroom."""
-    return bool(_PRESENT_DAY_RE.search(beat))
+    that put 18th-century dress instructions on a modern classroom.
+
+    An explicit marker ("today", "modern", "these days") decides on its own.
+    Second person decides only when nothing marks the sentence as past, because
+    this pipeline's own SOUND rule puts "you" into historical beats on purpose
+    — see _SECOND_PERSON_RE."""
+    if _PRESENT_DAY_RE.search(beat):
+        return True
+    return bool(_SECOND_PERSON_RE.search(beat)) and not _PAST_MARKER_RE.search(beat)
 
 
 def _beat_era_tag(beat: str, period: str) -> str:

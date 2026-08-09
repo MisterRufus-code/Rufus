@@ -164,10 +164,25 @@ def test_character_sheet_prompt_still_uses_the_full_description(monkeypatch, tmp
 def test_character_clause_stays_compact_enough_for_the_prompt_budget(monkeypatch, tmp_path):
     """Regression guard for the arithmetic conflict that killed the feature:
     the clause competes with a '2 to 4 sentences per prompt' budget, so it must
-    stay far below the ~1,300 chars it was when the model gave up on it."""
+    stay far below the ~1,300 chars it was when the model gave up on it.
+
+    Ceiling raised 700 -> 850 when the all-or-nothing rule was added, after a
+    live beat put the lantern alone on a table with no Chronicler in the frame.
+    What the budget actually constrains is the description the model must
+    REPEAT in every prompt — short_ref, pinned separately below — not the rule
+    text around it, which the model reads once. The 1,300-char figure that
+    broke the feature was 100 words of DESCRIPTION, and short_ref is still
+    ~120 chars."""
     monkeypatch.setattr(ce, "NICHES_FILE", _write_niches(tmp_path, character=_CHAR))
     monkeypatch.delenv("RUFUS_CHARACTER_MODE", raising=False)
-    assert len(ce.character_clause("money_history")) < 700
+    assert len(ce.character_clause("money_history")) < 850
+
+
+def test_the_repeated_part_stays_tiny(monkeypatch, tmp_path):
+    """The real budget constraint: what goes into EVERY prompt is short_ref,
+    and that is what must stay small however the surrounding rules grow."""
+    monkeypatch.setattr(ce, "NICHES_FILE", _write_niches(tmp_path, character=_CHAR))
+    assert len(ce.short_ref("money_history")) < 200
 
 
 def test_real_money_history_character_ships_a_short_description():

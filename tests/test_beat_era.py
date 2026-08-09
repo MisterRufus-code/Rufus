@@ -169,3 +169,43 @@ def test_default_style_is_recognised_as_non_photographic():
     assert not comfy_client._is_photographic(comfy_client.DEFAULT_DETAIL_SUFFIX)
     assert comfy_client._is_photographic(
         "photorealistic, documentary photojournalism captured on a real camera")
+
+
+# ── Second person is NOT a present-day marker on its own ─────────────────────
+# Two rules this pipeline sets itself collided. The SOUND section requires
+# every script to address the viewer ("A script with no 'you' in it is a
+# lecture"), so "you" turns up in HISTORICAL beats as a rhetorical device.
+# Treating it as present-day tagged one of those modern, and the prompt-writer
+# obeyed: run #61's beat 6 came back as "a wide establishing shot of a MODERN
+# BANK ... sleek architecture and digital displays" inside an 1865 story about
+# the Latin Monetary Union.
+
+def test_rhetorical_you_in_a_past_tense_beat_stays_historical():
+    """The exact live beat: 'You could swap cheaper silver for premium gold at
+    the fixed rate' is 1873, not now."""
+    for beat in ("You could swap cheaper silver for premium gold at the fixed rate.",
+                 "You would have paid in silver.",
+                 "You had no way to check the coin's weight.",
+                 "Your grandfather was paid in these."):
+        assert not main._beat_is_present_day(beat), beat
+
+
+def test_second_person_in_the_present_still_reads_as_now():
+    for beat in ("Your money looks fine too.",
+                 "You spend the worst coin first.",
+                 "You do it now, with the worn note and the crisp one."):
+        assert main._beat_is_present_day(beat), beat
+
+
+def test_an_explicit_marker_beats_a_past_tense_verb():
+    """"Today's banks still repeated the mistake" is about now, whatever tense
+    the verb is in — an explicit marker must not be cancelled by one."""
+    assert main._beat_is_present_day("Today's banks repeated exactly that.")
+    assert main._beat_is_present_day("Modern central banks had the same gap.")
+
+
+def test_a_historical_beat_with_no_second_person_is_unaffected():
+    for beat in ("Traders exploited it — a quick way to profit.",
+                 "The union was disbanded quietly.",
+                 "Silver's value plunged in 1873."):
+        assert not main._beat_is_present_day(beat), beat

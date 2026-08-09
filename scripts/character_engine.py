@@ -201,9 +201,11 @@ def character_clause(niche: str | None, n_beats: int | None = None) -> str:
         f"action, and framing. He is a timeless narrator-guide, not an "
         f"inhabitant of the era, so PERIOD ACCURACY governs the rest of the "
         f"frame, never him.\n"
-        f"- ALL OR NOTHING: {lead} appears as the COMPLETE figure above, or "
-        f"not at all. Never hand his cloak, hood, or lantern to anyone else. A "
-        f"modern businessman holding his lantern is a continuity ERROR.\n"
+        f"- ALL OR NOTHING: {lead} appears as the COMPLETE figure above or not "
+        f"at all. The cloak, hood and lantern are HIS — never on another "
+        f"person, and never in a frame without him: not on a table, not "
+        f"lighting a room. A lantern glowing over a ledger in a beat he is "
+        f"absent from is a continuity ERROR.\n"
     )
 
 
