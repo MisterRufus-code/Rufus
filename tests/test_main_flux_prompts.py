@@ -370,3 +370,43 @@ def test_defuse_is_idempotent():
     once  = main._defuse_readable_text("a newspaper on a desk")
     twice = main._defuse_readable_text(once)
     assert once == twice
+
+
+# ── Merged-reply recovery (_split_merged_prompts) ────────────────────────────
+# Observed live: the model ignored "one prompt per line" and returned all ten
+# as one paragraph. The newline split then yielded ONE enormous prompt, main.py
+# called generate_clips with n=1, and a 40-second video was rendered from a
+# SINGLE image — with nothing but a log warning to show for it.
+
+def _merged_blob(count):
+    return " ".join(
+        f"A medium portrait of historical scene number {i}, with people mid-action "
+        f"and period-accurate detail throughout the frame." for i in range(count))
+
+
+def test_split_merged_recovers_each_prompt():
+    got = main._split_merged_prompts(_merged_blob(10), 10)
+    assert len(got) == 10
+    assert all(len(g) > 20 for g in got)
+    assert "number 0" in got[0] and "number 9" in got[-1]
+
+
+def test_split_merged_preserves_beat_order():
+    got = main._split_merged_prompts(_merged_blob(6), 6)
+    assert [g.split("number ")[1][0] for g in got] == list("012345")
+
+
+def test_split_merged_leaves_a_genuinely_single_prompt_alone():
+    """A real single prompt is 2-4 sentences; against n=10 it must NOT be
+    chopped into ten fragments — that would be worse than the bug."""
+    single = ("A wide establishing shot of a Roman forum. Traders argue over a "
+              "scale. Coins spill across the stone. Dust hangs in the light.")
+    assert main._split_merged_prompts(single, 10) == []
+
+
+def test_split_merged_noop_for_single_beat():
+    assert main._split_merged_prompts(_merged_blob(10), 1) == []
+
+
+def test_split_merged_rejects_chunks_that_would_be_too_short():
+    assert main._split_merged_prompts("a. b. c. d. e. f. g. h. i. j.", 10) == []

@@ -1230,6 +1230,27 @@ VOICE:
 - Short sentences ({body['min_avg_sentence_words']}-{body['max_avg_sentence_words']} words avg). Vary rhythm deliberately.
 - Never moralize. Never summarize. Trust the audience.
 
+SOUND — THIS IS HEARD, NOT READ:
+- Every line gets spoken aloud by a voice engine. Write what a person SAYS, not
+  what an encyclopedia prints. "Rome ran out of silver" is speech. "The
+  debasement represented a transformation in monetary policy" is print.
+- BANNED — abstract nouns built from verbs: transformation, evolution,
+  implementation, development, consideration, significance, importance,
+  relevance, emergence, adoption, expansion, transition, progression. Use the
+  VERB instead: not "the shekel's transformation from weight to coin" but
+  "the shekel stopped being a weight and became a coin". This single swap is
+  the difference between a script that sounds alive and one that sounds like
+  a textbook read aloud.
+- Talk TO the viewer at least once. Use "you" or "your" somewhere in the body.
+  Not "people ignored these gaps" — "you've held one of these and never
+  thought about it". A script with no "you" in it is a lecture.
+- NEVER narrate the video's own purpose. Lines like "ignoring this would mean
+  missing how X shaped Y", "this is a truth still relevant today", or "this
+  matters because" are commentary ABOUT the script, not the script. Show the
+  thing and stop. The viewer draws the conclusion.
+- Contractions and fragments are good: "It wasn't." "Not even close." "Then
+  the money stopped working." They are how people actually talk.
+
 STRUCTURE — 3-BEAT ARC, NON-NEGOTIABLE:
 LINE 1 (HOOK): USE EXACTLY THIS LINE, DO NOT REWRITE OR REPHRASE IT:
 "{hook}"

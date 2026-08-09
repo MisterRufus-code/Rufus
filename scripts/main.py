@@ -489,6 +489,34 @@ def _freshness_block() -> str:
     )
 
 
+def _split_merged_prompts(blob: str, n: int) -> list[str]:
+    """Recover `n` image prompts from a reply that arrived as one paragraph.
+
+    The prompt builder asks for one prompt per line; when the model ignores
+    that, the newline split yields a single enormous "prompt" and the run
+    renders ONE image for the whole video. Each prompt is 2-4 sentences, so
+    the sentences are regrouped into n even chunks — imperfect where a chunk
+    boundary lands mid-scene, but far better than one image per video.
+
+    Returns [] when the blob plainly isn't a merged batch (too few sentences
+    to split), so the caller keeps whatever it already had."""
+    import re as _re
+    sentences = [s.strip() for s in _re.split(r"(?<=[.!?])\s+", blob.strip()) if s.strip()]
+    # Need at least one sentence per prompt to chunk at all. A genuinely
+    # single prompt (2-4 sentences) against n=10 fails this and is left alone,
+    # which is the protection against mangling a reply that wasn't merged.
+    if n <= 1 or len(sentences) < n:
+        return []
+    per = len(sentences) / n
+    out = []
+    for i in range(n):
+        chunk = " ".join(sentences[int(round(i * per)):int(round((i + 1) * per))]).strip()
+        if len(chunk) <= 20:
+            return []
+        out.append(chunk)
+    return out if len(out) == n else []
+
+
 def _build_sd_prompts(script: str, niche: str, max_scenes: int = 10) -> list[str]:
     """One ultra-detailed SD prompt per spoken beat, in narration order.
 
@@ -782,6 +810,19 @@ def _build_sd_prompts(script: str, niche: str, max_scenes: int = 10) -> list[str
         lines = [re.sub(r"^[\d\.\-\)\s]+", "", l).strip()
                  for l in raw_lines if l.strip()]
         lines = [l for l in lines if len(l) > 20]
+
+        # The whole batch arriving as ONE paragraph is a real, observed failure:
+        # the instruction says "one per line", the model ignored it, and the
+        # split above yielded a single line. main.py then calls generate_clips
+        # with n=1, so a 40-second video was built from ONE image — with only a
+        # log warning to show for it. Recover the individual prompts rather than
+        # shipping that.
+        if len(lines) < n and lines:
+            recovered = _split_merged_prompts(max(lines, key=len), n)
+            if recovered:
+                print(f"[sd] GPT ignored 'one per line' — recovered {len(recovered)} "
+                      f"prompts from the merged reply")
+                lines = recovered
         lines = [_strip_beat_echo(l, beats[i]) if i < len(beats) else l
                  for i, l in enumerate(lines)]
         lines = [_defuse_readable_text(l) for l in lines]

@@ -393,3 +393,47 @@ def test_plan_check_makes_at_most_two_generation_attempts(monkeypatch):
     generation_calls = [c for c in client.calls
                         if "SCRIPT TO VERIFY" not in c["messages"][0]["content"]]
     assert len(generation_calls) == 2
+
+
+# ── SOUND: the script is heard, not read ─────────────────────────────────────
+# Diagnosed from a live 8/10 script that was correct and dull: two abstract
+# nouns ("evolution", "transformation"), ZERO second-person words, and the
+# architect's STAKES GAP pasted in as meta-commentary ("Ignoring this would
+# mean missing how ancient practices shaped modern currencies"). Prompt-level
+# nudges rather than new hard gates — this repo has already been bitten by
+# stacking deterministic gates for stylistic preferences.
+
+def _system_prompt():
+    """Whitespace-normalised: the prompt is wrapped source, so a phrase can
+    straddle a newline and a naive substring check would miss it."""
+    import re
+    import script_writer
+    raw = script_writer._build_system(
+        hook="A test hook line", cta="A test CTA", niche_name="money_history",
+        niche_cfg={"gpt_system": "Write about money history."})
+    return re.sub(r"\s+", " ", raw)
+
+
+def test_system_prompt_bans_verb_derived_abstract_nouns():
+    p = _system_prompt()
+    assert "SOUND" in p
+    for word in ("transformation", "evolution", "significance"):
+        assert word in p, f"the banned-abstract-noun list must name '{word}'"
+    assert "Use the" in p and "VERB" in p
+
+
+def test_system_prompt_requires_talking_to_the_viewer():
+    """Every gold example addresses the viewer; the dull live script had no
+    'you' anywhere in it."""
+    p = _system_prompt()
+    low = p.lower()
+    assert '"you" or "your"' in low or "use \"you\"" in low
+    assert "lecture" in low
+
+
+def test_system_prompt_forbids_narrating_the_videos_own_purpose():
+    """The live script ended on the architect's STAKES GAP verbatim — that is
+    commentary about the script, not the script."""
+    p = _system_prompt().lower()
+    assert "ignoring this would mean missing" in p
+    assert "commentary about the script" in p
