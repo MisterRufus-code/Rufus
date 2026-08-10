@@ -25,6 +25,18 @@ faster-whisper>=1.2
 # images (thumbnails, crops, perceptual dedup)
 Pillow>=10.0
 
+# PINNED BELOW 2.0: the Kokoro TTS backend (tts_engine._kokoro) fails on
+# numpy 2.x with "Cannot interpret 'torch.float32' as a data type", and Kokoro
+# is the best free local voice this pipeline has — Edge TTS, the fallback,
+# reads audibly flat, which caps the quality of every video regardless of how
+# good the images are. Verified working on this box at numpy 1.26.4 with
+# torch 2.13.0 / kokoro 0.9.4. Nothing else here needs numpy 2.
+#
+# This pin was previously absent, so a fresh `pip install -r` would resolve
+# numpy 2.x and silently drop every run back to the flat voice — with no error,
+# because tts_engine falls back to Edge on any Kokoro failure by design.
+numpy<2
+
 # pixel-level face detection (Haar cascade) — catches faces the SVD prompt-text
 # heuristic misses, e.g. an engraved/printed portrait on a banknote or coin
 # that GPT described without literally saying "portrait"/"face".
@@ -33,7 +45,12 @@ Pillow>=10.0
 # downloaded model file) — verified by installing it and watching
 # CascadeClassifier disappear. Stay on the 4.x line, which bundles the cascade
 # with zero downloads.
-opencv-python-headless>=4.8,<5
+# PINNED BELOW 4.12: from 4.12 the wheels for Python 3.9+ are built against
+# numpy 2 and declare `numpy>=2`, which collides head-on with the Kokoro pin
+# above. 4.11.0.86 is the last release that still supports numpy 1.x. Left
+# unpinned, pip installs 4.14 and prints a dependency-conflict error on every
+# single install — the state this box was actually in.
+opencv-python-headless>=4.8,<4.12
 
 # cross-platform locking (single-instance + seed history)
 filelock>=3.12
