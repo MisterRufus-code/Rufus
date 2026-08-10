@@ -711,3 +711,74 @@ def test_system_prompt_warns_against_reaching_for_adjectives():
     low = _system_prompt().lower()
     assert "devastating" in low and "shocking" in low
     assert "understatement outperforms emphasis" in low
+
+
+# ── A hook may round a source figure ─────────────────────────────────────────
+# A Short is HEARD. "$4,210,500,000,000 for one dollar?" — which shipped in a
+# real video — is read out as forty syllables of numerals: unfollowable, and
+# the clearest possible signal that a machine wrote it. A person says "four
+# point two trillion marks".
+#
+# The writer could not say that. The grounding check compared number TOKENS, so
+# "4.2 trillion" was rejected as "number '4.2' not in source (invented figure)"
+# while the unspeakable full form passed. The rule against invented figures was
+# mandating unspeakable ones — the same shape of collision as "you"/present-day
+# and motive/HUMAN.
+
+_HYPERINFLATION_SOURCE = (
+    "By November 1923, one US dollar was worth 4,210,500,000,000 marks. "
+    "The national debt was 156 billion marks. 99.3% of notes returned.")
+
+
+def _grounding(hook, source=_HYPERINFLATION_SOURCE):
+    import script_writer
+    return script_writer._hook_grounding_check(hook, source)
+
+
+def test_a_correct_rounding_is_grounded():
+    """4.2 trillion IS 4,210,500,000,000 to two significant figures."""
+    assert _grounding("4.2 trillion marks for one dollar.") is None
+    assert _grounding("4.21 trillion marks for one dollar.") is None
+
+
+def test_the_verbatim_figure_still_passes():
+    assert _grounding("$4,210,500,000,000 for one dollar?") is None
+
+
+def test_an_invented_magnitude_is_still_rejected():
+    """Loosening must not open the door the rule was built to close."""
+    assert _grounding("9.9 trillion marks for one dollar.") is not None
+    assert _grounding("$50 billion vanished.") is not None
+    assert _grounding("Debt hit 900 billion marks.") is not None
+
+
+def test_a_scale_word_is_read_as_part_of_the_number():
+    """Parsed without it, "4.2 trillion" is the number 4.2 — which matches
+    nothing in the source and is also not what the hook says."""
+    import script_writer
+    vals = dict((raw, v) for raw, v, _ in
+                script_writer._numeric_values("4.2 trillion and 156 billion"))
+    assert vals["4.2"] == 4.2e12
+    assert vals["156"] == 156e9
+
+
+def test_years_and_percentages_are_unaffected():
+    assert _grounding("In 1923 the mark died.") is None
+    assert _grounding("99.3% of the notes came back.") is None
+
+
+def test_first_person_check_still_runs_before_numbers():
+    """Order matters: a fabricated persona is rejected on its own terms, not
+    left to the number check."""
+    reason = _grounding("I escaped 4.2 trillion marks of debt.")
+    assert reason and "first-person" in reason
+
+
+# ── The writer is told to speak them ─────────────────────────────────────────
+
+def test_system_prompt_requires_spoken_number_forms():
+    p = _system_prompt()
+    assert "NUMBERS ARE SPOKEN, NOT PRINTED" in p
+    low = p.lower()
+    assert "four point two trillion" in low
+    assert "one big number per script" in low

@@ -440,6 +440,75 @@ def _strip_list_markers(text: str) -> str:
     return _LIST_MARKER_RE.sub("", text or "")
 
 
+# ── Spoken vs. written numbers ───────────────────────────────────────────────
+# A Short is HEARD. "$4,210,500,000,000 for one dollar?" is a real figure from
+# a real source, and a voice engine reads it as forty syllables of digits that
+# nobody can follow and that instantly sounds machine-generated. A person says
+# "four point two trillion marks".
+#
+# But the writer could not say that: the grounding check compares number TOKENS
+# against the source, so "4.2 trillion" was rejected as "number '4.2' not in
+# source (invented figure)" while the unreadable full form passed. The rule
+# meant to stop invented figures was forcing unspeakable ones.
+#
+# So the check is magnitude-aware: a hook number is grounded when it is a
+# correct ROUNDING of a source number, not only when its digits appear
+# verbatim. 4.2 trillion is 4,210,500,000,000 to two significant figures — the
+# same fact, said out loud.
+_SCALE_WORDS = {
+    "thousand": 1e3, "million": 1e6, "billion": 1e9, "trillion": 1e12,
+    "quadrillion": 1e15,
+}
+_SCALED_NUM_RE = re.compile(
+    r"(?i)(\d+(?:[.,]\d+)*)\s*(thousand|million|billion|trillion|quadrillion)?")
+
+
+def _numeric_values(text: str) -> list[tuple[str, float, int]]:
+    """Every number in `text` as (as-written, value, significant digits).
+
+    "4.2 trillion" -> ("4.2", 4.2e12, 2)
+    "4,210,500,000,000" -> ("4,210,500,000,000", 4.2105e12, 11)
+
+    Reading the scale WORD as part of the number is the whole point: parsed
+    without it, "4.2 trillion" is the number 4.2, which matches nothing."""
+    out: list[tuple[str, float, int]] = []
+    for raw, scale in _SCALED_NUM_RE.findall(text):
+        digits = raw.replace(",", "")
+        try:
+            value = float(digits)
+        except ValueError:
+            continue
+        sig = len(digits.replace(".", "").lstrip("0")) or 1
+        if scale:
+            value *= _SCALE_WORDS[scale.lower()]
+        out.append((raw, value, sig))
+    return out
+
+
+def _rounds_to(source_value: float, hook_value: float, sig: int) -> bool:
+    """Is `hook_value` what you get by rounding `source_value` to `sig` figures?"""
+    if source_value == 0 or hook_value == 0:
+        return source_value == hook_value
+    import math
+    exponent = math.floor(math.log10(abs(source_value)))
+    factor = 10 ** (exponent - sig + 1)
+    return abs(round(source_value / factor) * factor - hook_value) < abs(factor) / 2
+
+
+def _ungrounded_number(hook: str, source_text: str) -> str | None:
+    """The first hook number that is neither in the source verbatim nor a
+    correct rounding of a source figure. None when every number checks out."""
+    src_tokens = {n.replace(",", "") for n in _HOOK_NUMBER_RE.findall(source_text)}
+    src_values = [v for _, v, _ in _numeric_values(source_text)]
+    for raw, value, sig in _numeric_values(hook):
+        if raw.replace(",", "") in src_tokens:
+            continue                       # verbatim, as before
+        if any(_rounds_to(s, value, sig) for s in src_values):
+            continue                       # "4.2 trillion" of 4,210,500,000,000
+        return raw
+    return None
+
+
 def _hook_grounding_check(hook: str, source_text: str) -> str | None:
     """Reject hooks the fact gate is guaranteed to kill later. Deterministic.
 
@@ -456,10 +525,9 @@ def _hook_grounding_check(hook: str, source_text: str) -> str | None:
     # of the source year "1873". Tokenizing both sides and requiring set
     # membership closes that (a live 5/10-cap cause), while "1873" still
     # matches the real "1873" token.
-    src_num_tokens = {n.replace(",", "") for n in _HOOK_NUMBER_RE.findall(source_text)}
-    for num in _HOOK_NUMBER_RE.findall(hook):
-        if num.replace(",", "") not in src_num_tokens:
-            return f"number '{num}' not in source/analysis (invented figure)"
+    bad = _ungrounded_number(hook, source_text)
+    if bad is not None:
+        return f"number '{bad}' not in source/analysis (invented figure)"
     return None
 
 
@@ -1277,6 +1345,27 @@ MOTIVE — THE ONE THING THAT KILLS A FINISHED VIDEO:
     ✓ "The announcement came after the banks had already closed."  (event)
 - This does NOT mean writing blandly. Indignation about what HAPPENED is
   wanted. Certainty about what someone was thinking is what gets rejected.
+
+NUMBERS ARE SPOKEN, NOT PRINTED:
+- A voice engine reads every digit you write. "$4,210,500,000,000 for one
+  dollar?" comes out as forty syllables of numerals — unfollowable, and the
+  single clearest signal to a viewer that a machine wrote this. That exact
+  line shipped in a real video of this channel.
+- Write the figure the way a person SAYS it: "four point two trillion marks
+  for a single dollar". Rounding to two or three significant figures is not
+  a loss of accuracy — nobody parses 4,210,500,000,000 while watching, and
+  the grounding check accepts a correct rounding of a source number.
+- Same rule for every other unspeakable form:
+    ₹15.3 lakh crore  ->  "fifteen point three lakh crore" (or "almost all
+      of it", when the exact figure is not the point)
+    99.3%             ->  "ninety-nine point three percent", or better,
+      "all but a fraction of it came back"
+    1:15.5            ->  "fifteen and a half ounces of silver to one of gold"
+- Give a number its UNIT and its MEANING in the same breath. "156 billion
+  marks" is a quantity; "a debt the size of the entire prewar economy" is a
+  fact the ear can hold.
+- ONE big number per script, at most. A second one cancels the first — the
+  viewer stops counting and starts skipping.
 
 WHERE THE FEELING ACTUALLY COMES FROM:
 - The instinct, when a script feels dry, is to reach for adjectives
