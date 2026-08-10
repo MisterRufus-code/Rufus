@@ -541,10 +541,22 @@ DEFAULT_DETAIL_SUFFIX = (
 # this list leads with them. Overridable per-run; RUFUS_STILLS_NEGATIVE="" or
 # "0" turns it off entirely for a template whose own negative is already tuned.
 DEFAULT_STILLS_NEGATIVE = (
+    # 1. Lettering. Leads the list because garbled words are the most obvious
+    #    AI tell in a finished Short, and early terms carry more weight.
     "text, letters, words, writing, lettering, typography, caption, subtitle, "
     "watermark, signature, logo, brand name, numbers, digits, gibberish text, "
     "garbled writing, fake language, misspelled words, distorted letterforms, "
-    "photorealistic, photograph, 3d render, gradient shading, film grain, "
+    # 2. Style contamination. A flat-2D look drifts toward whatever medium the
+    #    subject usually appears in — a 1923 street becomes sepia photography,
+    #    a coin becomes a 3D product render — and one drifted beat inside nine
+    #    flat ones reads worse than either look on its own. Naming the mediums
+    #    to stay out of holds the style far better than asking for it once in
+    #    the positive prompt.
+    "photorealistic, photograph, 3d render, cgi, octane render, film grain, "
+    "watercolor, oil painting, acrylic, pencil sketch, charcoal, engraving, "
+    "airbrush, gradient shading, soft shading, ambient occlusion, bloom, "
+    "lens flare, depth of field, bokeh, noise, rough texture, canvas texture, "
+    # 3. Anatomy and encoding faults, last: cheapest to fix, least distinctive.
     "extra fingers, deformed hands, extra limbs, mutated face, blurry, "
     "lowres, jpeg artifacts"
 )

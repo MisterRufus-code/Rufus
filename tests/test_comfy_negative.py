@@ -175,3 +175,24 @@ def test_empty_negative_is_not_applied():
     append an empty string."""
     out = comfy_template.prepare(_graph(), prompt="a coin", negative="")
     assert out["3"]["inputs"]["text"] == "ugly, deformed"
+
+
+def test_negative_blocks_style_contamination_not_only_text(monkeypatch):
+    """A flat-2D look drifts toward whatever medium the subject usually appears
+    in — a 1923 street toward sepia photography, a coin toward a 3D product
+    render — and one drifted beat among nine flat ones reads worse than either
+    look on its own. Naming the mediums to stay out of holds the style far
+    better than asking for it once in the positive prompt."""
+    import comfy_client
+    neg = comfy_client.DEFAULT_STILLS_NEGATIVE
+    for term in ("watercolor", "oil painting", "3d render", "pencil sketch",
+                 "bokeh", "rough texture", "gradient shading"):
+        assert term in neg, term
+
+
+def test_text_terms_still_come_first():
+    """Ordering is load-bearing: early terms weigh more, and garbled words are
+    the most visible defect."""
+    import comfy_client
+    neg = comfy_client.DEFAULT_STILLS_NEGATIVE
+    assert neg.index("text") < neg.index("watercolor") < neg.index("extra fingers")
