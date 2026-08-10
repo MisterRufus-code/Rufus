@@ -554,11 +554,22 @@ def test_fix_for_rejection_cadence_message():
 # so the script pads itself with the SAME fact restated rather than new ones.
 
 def test_repeated_number_flags_a_figure_used_twice():
+    """A FIGURE restated verbatim is padding. A YEAR is the story's setting and
+    is now allowed twice — see test_a_year_may_appear_twice in
+    test_script_quality_gates.py, where holding years to this limit killed five
+    of six body attempts on a script about 1973."""
     from script_writer import _repeated_number
-    script = "The bank opened in 1873. By 1873 it was the largest lender."
+    script = "The bank lost 45000 marks. The 45000 marks never came back."
     result = _repeated_number(script)
     assert result is not None
-    assert "1873" in result
+    assert "45000" in result
+
+
+def test_repeated_year_still_flagged_on_the_third_use():
+    from script_writer import _repeated_number
+    script = "It opened in 1873. By 1873 it led. In 1873 it failed."
+    result = _repeated_number(script)
+    assert result is not None and "1873" in result
 
 
 def test_repeated_number_passes_when_each_figure_is_unique():

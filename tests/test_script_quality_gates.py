@@ -782,3 +782,70 @@ def test_system_prompt_requires_spoken_number_forms():
     low = p.lower()
     assert "four point two trillion" in low
     assert "one big number per script" in low
+
+
+# ── MIND-READ must not swallow documented behaviour ──────────────────────────
+# The category was added to catch invented motive, and immediately over-fired.
+# A live run on the 1973 oil crisis lost BOTH cycles to it:
+#
+#   FACT GATE FAILED: MIND-READ — implies feelings of desperation and chaos
+#   FACT GATE FAILED: MIND-READ — implies a specific emotional response
+#
+# Long queues at American gas stations in 1973 are documented history. Naming
+# a category made the checker apply it to observable collective behaviour,
+# which is exactly the over-strictness the categories were meant to end.
+
+def test_gate_separates_inner_life_from_observable_behaviour():
+    p = _fact_gate_prompt()
+    assert "could a camera have filmed it" in p.lower()
+    assert "panic buying emptied the pumps" in p
+    assert "documented collective behaviours" in p
+
+
+def test_gate_still_names_the_real_mind_reads():
+    p = _fact_gate_prompt()
+    for quoted in ("policymakers were scared to act",
+                   "Comstock merely took credit",
+                   "silenced by those who feared inflation"):
+        assert quoted in p
+
+
+# ── A year is the setting, not a statistic ───────────────────────────────────
+# The same run lost five of six body attempts to "number '1973' repeated" —
+# on a script about 1973. One of the drafts it rejected went on to score 9/10.
+
+def test_a_year_may_appear_twice():
+    import script_writer
+    assert script_writer._repeated_number(
+        "Oil prices soared in 1973. The 1973 embargo changed everything.") is None
+
+
+def test_a_year_three_times_is_still_padding():
+    import script_writer
+    assert script_writer._repeated_number(
+        "In 1973 it began. In 1973 it peaked. By 1973 it was over.") is not None
+
+
+def test_a_non_year_figure_still_fails_on_the_second_use():
+    """The gate's real target: under grounding pressure the model reaches for
+    its one verified number again instead of finding a fresh specific."""
+    import script_writer
+    assert script_writer._repeated_number(
+        "It cost 156 billion. The 156 billion was never repaid.") is not None
+    assert script_writer._repeated_number(
+        "The lode gave 70000 tons. Some say 70000 tons more.") is not None
+
+
+def test_two_different_years_are_fine():
+    import script_writer
+    assert script_writer._repeated_number(
+        "In 1973 the embargo began. By 1974 prices had tripled.") is None
+
+
+def test_year_detection_bounds():
+    import script_writer
+    assert script_writer._looks_like_a_year("1973")
+    assert script_writer._looks_like_a_year("2016")
+    assert not script_writer._looks_like_a_year("9999")   # not a plausible date
+    assert not script_writer._looks_like_a_year("156")    # too short
+    assert not script_writer._looks_like_a_year("70000")  # a quantity

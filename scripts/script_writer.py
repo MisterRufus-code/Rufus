@@ -588,12 +588,25 @@ def _repeated_number(script: str) -> str | None:
         if len(n) < 3:
             continue          # 1-2 digit numbers repeat legitimately ("3 banks", "3 years")
         counts[n] = counts.get(n, 0) + 1
-    repeats = {n: c for n, c in counts.items() if c >= 2}
+    # A YEAR is the story's SETTING, not one of its statistics. A video about
+    # the 1973 oil crisis names 1973 in the hook and again in the body, and
+    # that is orientation, not padding. Holding years to the same limit as
+    # figures killed five of six body attempts in one live run — every cycle
+    # rejected for "number '1973' repeated" on a script about 1973 — and one
+    # of the salvaged drafts went on to score 9/10. Three mentions is still
+    # padding; two is how you tell a story about a year.
+    repeats = {n: c for n, c in counts.items()
+               if c >= (3 if _looks_like_a_year(n) else 2)}
     if not repeats:
         return None
     worst = max(repeats, key=repeats.get)
     return (f"number '{worst}' repeated {repeats[worst]}x — restate with a "
             f"NEW specific each time, not the same figure")
+
+
+def _looks_like_a_year(n: str) -> bool:
+    """A bare 4-digit number in the range a history script uses as a date."""
+    return len(n) == 4 and n.isdigit() and 1000 <= int(n) <= 2099
 
 
 def _em_dash_overuse(script: str) -> str | None:
@@ -2258,10 +2271,18 @@ def _fact_gate(client: OpenAI, seed: dict | None, script: str) -> tuple[bool, st
         "  INVENTED     — a specific number, date, name or quote that is in "
         "neither the source nor mainstream history. (\"hawala dates back to "
         "1327\" — that year exists nowhere.)\n"
-        "  MIND-READ    — asserts what someone FELT, FEARED, INTENDED or secretly "
-        "planned. Sources record what people DID. (\"policymakers were scared to "
-        "act\", \"Comstock merely took credit\", \"silenced by those who feared "
-        "inflation\".)\n"
+        "  MIND-READ    — attributes an INTERNAL state or hidden motive to a "
+        "named actor as the EXPLANATION for why they acted. (\"policymakers "
+        "were scared to act\", \"Comstock merely took credit\", \"silenced by "
+        "those who feared inflation\".)\n"
+        "                 NOT mind-reading: describing what people were "
+        "OBSERVED to do, even when the behaviour has an emotional name. "
+        "\"Drivers queued for hours\", \"panic buying emptied the pumps\", "
+        "\"crowds ran on the banks\", \"desperate customers demanded metal\" "
+        "are documented collective behaviours, not claims about anyone's inner "
+        "life. THE TEST: could a camera have filmed it? Then it is an EVENT, "
+        "and events are what this channel is made of. Only an unfilmable "
+        "claim — what a person privately felt, feared or intended — fails.\n"
         "  CONSPIRACY   — hidden cabals, 'what they don't want you to know', or "
         "framing drawn from a known misinformation source.\n"
         "  ABSENT       — true, or ordinary mainstream history, simply not in "

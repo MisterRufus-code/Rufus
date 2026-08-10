@@ -77,7 +77,11 @@ def test_fact_gate_prompt_carves_out_ordinary_editorializing():
     _fact_gate(client, _SEED, "some script")
     prompt = client.chat.completions.create.call_args.kwargs["messages"][0]["content"]
     low = prompt.lower()
-    assert "secret" in low or "covert" in low
+    # Vocabulary moved from "secret/covert motive" to the named categories
+    # MIND-READ ("hidden motive") and CONSPIRACY ("hidden cabals"); the target
+    # is the same narrow one.
+    assert "hidden motive" in low or "hidden cabals" in low \
+        or "secret" in low or "covert" in low
     assert "cause-and-effect" in low or "ordinary editorial" in low \
         or "normal explanatory" in low
     assert "simpler for trade" in low, "the worked example must survive"
