@@ -406,6 +406,13 @@ def _concat_clips(parts: list[Path], out_path: Path) -> bool:
 # often a perfectly good image was rejected and re-rendered for nothing.
 FRESH_DUP_THRESHOLD = 3
 
+# A CHAINED shot (shot_chain.py) is generated from the previous beat's image on
+# purpose, so resembling it is the goal, not the defect — the ordinary dup gate
+# would reject every one of them. What must still be caught is the opposite
+# failure: an edit template that behaves like img2img and hands back the source
+# picture unchanged. Below this many differing bits the "new scene" isn't one.
+CHAIN_COPY_THRESHOLD = 2
+
 
 def _is_duplicate(h: int, accepted: list[int], n_prior: int) -> bool:
     """Whether hash `h` is too close to an already-accepted image.
@@ -1080,16 +1087,41 @@ def generate_clips(queries: list[str], n: int = 4,
     # ── Phase 1: generate every still (the stills model stays loaded the whole time) ────
     # `stills` holds a LIST of frames per beat — length 1 in normal mode, and
     # frames_per_beat when animating by cutting between stills.
+    # Shot chaining: when the storyboard says a beat continues the last one,
+    # generate it FROM the last one's picture instead of from fresh noise —
+    # "the same coin, now thinner" cannot be produced by a model that has never
+    # seen the coin. Inert unless an edit template is exported (shot_chain.py).
+    import shot_chain
+    chain_ready, chain_why = shot_chain.ready()
+    print(f"[comfy] {chain_why}")
+    anchor_png: Path | None = None    # previous beat's RAW model output
+    anchor_hash: int | None = None
+
     stills: list[tuple[int, list[Path], str]] = []   # (beat index, png paths, prompt)
     for i, prompt in enumerate(prompts):
         print(f"[comfy] {i+1}/{len(prompts)}: {prompt}")
         png_path = tmp_dir / f"{stamp}_{i}.png"
         accepted = False
+        accepted_raw: bytes | None = None
+        accepted_hash: int | None = None
 
         for retry in range(MAX_DUP_RETRIES + 1):
             # %(2**31) keeps the seed in range for any backend; offset per clip/retry.
             seed  = (master_seed + i + 1000 * retry) % (2**31 - 1)
-            img_bytes = _render_image(prompt, seed, client_id, niche=niche)
+            # Only the first attempt chains. A retry means the chained result
+            # was unusable, so falling back to a fresh render is the point.
+            chained = False
+            img_bytes = None
+            if chain_ready and retry == 0 and anchor_png is not None:
+                img_bytes = shot_chain.continue_shot(
+                    anchor_png, prompt, seed, client_id,
+                    negative=_stills_negative())
+                if img_bytes:
+                    chained = True
+                    print(f"[comfy] clip {i+1} continued from clip {i}: "
+                          f"{shot_chain.carried(prompt)}")
+            if img_bytes is None:
+                img_bytes = _render_image(prompt, seed, client_id, niche=niche)
             if not img_bytes:
                 # A hard generation error (vs. a plain duplicate) is often a
                 # transient GPU/model-loading hiccup on the ComfyUI side —
@@ -1102,7 +1134,17 @@ def generate_clips(queries: list[str], n: int = 4,
                 continue
 
             h = _avg_hash(png_path)
-            is_dup = h is not None and _is_duplicate(h, accepted_hashes, n_prior)
+            if chained and h is not None and anchor_hash is not None \
+                    and _hamming(h, anchor_hash) < CHAIN_COPY_THRESHOLD:
+                # The edit template redrew its input instead of editing it —
+                # the img2img failure mode, caught here rather than shipped.
+                print(f"[comfy] chained clip {i+1} came back as a copy of clip "
+                      f"{i} — rendering it fresh instead")
+                continue
+            # A chained shot is SUPPOSED to resemble its predecessor; the copy
+            # check above is its gate, so the near-dup gate would only undo it.
+            is_dup = (h is not None and not chained
+                      and _is_duplicate(h, accepted_hashes, n_prior))
             if is_dup and retry < MAX_DUP_RETRIES:
                 print(f"[comfy] dup on clip {i+1} → regen (retry {retry+1})")
                 continue
@@ -1111,6 +1153,7 @@ def generate_clips(queries: list[str], n: int = 4,
             if h is not None:
                 accepted_hashes.append(h)
             accepted = True
+            accepted_raw, accepted_hash = img_bytes, h
             break
 
         if not accepted:
@@ -1127,6 +1170,17 @@ def generate_clips(queries: list[str], n: int = 4,
             else:
                 print(f"[comfy] no usable image for clip {i+1} — skipping")
                 continue
+
+        # What the NEXT beat continues from, when it says it continues something.
+        # The raw model output, not png_path: _fit_to_portrait upscales and
+        # crops, and re-feeding that would re-resample on every link, so the
+        # degradation would compound down the whole video instead of stopping
+        # at one beat. On a reused still there is no new raw output, so the last
+        # real one stays the anchor rather than the chain breaking.
+        if chain_ready and accepted_raw:
+            anchor_png = tmp_dir / f"{stamp}_{i}_raw.png"
+            anchor_png.write_bytes(accepted_raw)
+            anchor_hash = accepted_hash
 
         # Extra frames for this beat: SAME seed (so the seed holds the
         # composition) plus a progression modifier that advances the action.

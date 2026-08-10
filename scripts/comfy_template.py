@@ -191,16 +191,12 @@ def is_image_conditioned(graph: dict) -> bool:
     return False
 
 
-def starts_from_loaded_image(graph: dict) -> bool:
-    """True if a LoadImage becomes the sampler's starting latent (img2img).
-
-    Legitimate for chained frames — stills_i2i_api.json genuinely wants to
-    continue the previous frame — and wrong for a character reference, where
-    it means every beat renders the reference portrait again."""
+def _samplers_starting_from_loaded_image(graph: dict) -> list[dict]:
+    """Nodes whose `latent_image` traces back to a LoadImage through a VAEEncode."""
     load_ids = {nid for nid, n in graph.items()
                 if str(n.get("class_type", "")) == "LoadImage"}
     if not load_ids:
-        return False
+        return []
     encode_ids = set()
     for nid, node in graph.items():
         if "VAEEncode" not in str(node.get("class_type", "")):
@@ -209,11 +205,42 @@ def starts_from_loaded_image(graph: dict) -> bool:
             if _link_target(v) in load_ids:
                 encode_ids.add(nid)
     if not encode_ids:
-        return False
-    for node in graph.values():
-        if _link_target((node.get("inputs") or {}).get("latent_image")) in encode_ids:
-            return True
-    return False
+        return []
+    return [node for node in graph.values()
+            if _link_target((node.get("inputs") or {}).get("latent_image")) in encode_ids]
+
+
+def starts_from_loaded_image(graph: dict) -> bool:
+    """True if a LoadImage becomes the sampler's starting latent (img2img).
+
+    Legitimate for chained frames — stills_i2i_api.json genuinely wants to
+    continue the previous frame — and wrong for a character reference, where
+    it means every beat renders the reference portrait again."""
+    return bool(_samplers_starting_from_loaded_image(graph))
+
+
+def loaded_image_denoise(graph: dict) -> float | None:
+    """Denoise of the sampler that starts from a loaded image, else None.
+
+    This one number separates two graphs that are wired identically. An EDIT
+    model (Qwen-Image-Edit, Kontext) legitimately encodes the source image into
+    the start latent and samples at denoise 1.0 — the picture is rebuilt from
+    noise and the source acts as instruction, so the scene can change completely
+    while the world holds. A plain img2img graph has the same wiring at denoise
+    0.4-0.6, where the sampler can only redraw what it was handed.
+
+    That distinction is not academic here: config/character_stills_api.json was
+    the second kind at denoise 0.55, and every one of the ten beats came back as
+    the reference portrait. Wiring alone could not tell them apart; this can.
+
+    None when no sampler starts from a loaded image, or when the value isn't a
+    plain number (a link, say) — callers treat None as "can't tell", not "safe".
+    """
+    for node in _samplers_starting_from_loaded_image(graph):
+        val = (node.get("inputs") or {}).get("denoise")
+        if isinstance(val, (int, float)) and not isinstance(val, bool):
+            return float(val)
+    return None
 
 
 # ── Negative conditioning ────────────────────────────────────────────────────
