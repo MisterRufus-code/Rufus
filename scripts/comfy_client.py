@@ -388,6 +388,37 @@ def _concat_clips(parts: list[Path], out_path: Path) -> bool:
     return out_path.exists() and out_path.stat().st_size > 20_000
 
 
+# Two different questions, so two different thresholds.
+#
+# WITHIN a run: "are two beats of THIS video the same picture?" A viewer sees
+# them 4 seconds apart, so even a loose resemblance is a real defect and
+# DUP_THRESHOLD (6 of 64 bits) is right.
+#
+# ACROSS runs: "does this look like a video I published last week?" Nobody
+# watches two of them back to back, so only a near-identical frame matters.
+# Judging that at the same threshold is what broke: a single-image test run
+# with NO in-run predecessors was flagged as a duplicate twice in a row, purely
+# against the 120-hash history. aHash reduces an image to an 8x8 grayscale
+# grid, and this channel's flat-2D style — cream ground, few flat shapes,
+# generous negative space — occupies a tiny corner of that space. With 120
+# accumulated hashes almost any new flat image lands within 6 bits of
+# something, so the pool became a ratchet: the longer the channel ran, the more
+# often a perfectly good image was rejected and re-rendered for nothing.
+FRESH_DUP_THRESHOLD = 3
+
+
+def _is_duplicate(h: int, accepted: list[int], n_prior: int) -> bool:
+    """Whether hash `h` is too close to an already-accepted image.
+
+    `accepted[:n_prior]` came from previous runs and is judged strictly (a
+    near-identical frame only); the rest is this run and uses the normal
+    threshold."""
+    prior, current = accepted[:n_prior], accepted[n_prior:]
+    if current and min(_hamming(h, p) for p in current) < DUP_THRESHOLD:
+        return True
+    return bool(prior) and min(_hamming(h, p) for p in prior) < FRESH_DUP_THRESHOLD
+
+
 def _load_prior_hashes() -> list[int]:
     try:
         data = json.loads(FRESH_HASH_FILE.read_text())
@@ -1071,8 +1102,7 @@ def generate_clips(queries: list[str], n: int = 4,
                 continue
 
             h = _avg_hash(png_path)
-            is_dup = (h is not None and accepted_hashes
-                      and min(_hamming(h, p) for p in accepted_hashes) < DUP_THRESHOLD)
+            is_dup = h is not None and _is_duplicate(h, accepted_hashes, n_prior)
             if is_dup and retry < MAX_DUP_RETRIES:
                 print(f"[comfy] dup on clip {i+1} → regen (retry {retry+1})")
                 continue

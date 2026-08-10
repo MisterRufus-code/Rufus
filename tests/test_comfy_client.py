@@ -1290,3 +1290,62 @@ def test_i2v_mode_actually_enables_hunyuan_under_stills_only(monkeypatch):
 
     monkeypatch.setenv("RUFUS_BEAT_MOTION", "i2v")
     assert hunyuan_client.enabled() is True
+
+
+# ── Cross-run freshness must be judged more loosely than within-run ──────────
+# Proof this was wrong, from a live single-image test run:
+#
+#   [comfy] freshness: 120 image hash(es) from recent runs loaded
+#   [comfy] 1/1: a worn gold coin on a wooden table...
+#   [comfy] dup on clip 1 -> regen (retry 1)
+#   [comfy] dup on clip 1 -> regen (retry 2)
+#
+# ONE image, no in-run predecessors, flagged twice. The only thing it could
+# collide with was the 120-hash history. aHash reduces an image to an 8x8
+# grayscale grid, and this channel's flat-2D style occupies a tiny corner of
+# that space, so with enough accumulated history almost any new flat image
+# lands within 6 bits of something. The pool became a ratchet: the longer the
+# channel ran, the more good images were rejected and re-rendered for nothing.
+
+def test_within_run_duplicate_still_caught_at_the_normal_threshold():
+    """Two beats of the SAME video are 4 seconds apart — a loose resemblance
+    is a real defect."""
+    h = 0
+    near = 0b1111                      # 4 bits away, inside DUP_THRESHOLD (6)
+    assert c._is_duplicate(h, [near], n_prior=0)
+
+
+def test_a_cross_run_lookalike_is_allowed_through():
+    """The live failure. 4 bits from something rendered last week is not a
+    reason to burn two more renders."""
+    h = 0
+    near = 0b1111                      # 4 bits: dup in-run, fine across runs
+    assert not c._is_duplicate(h, [near], n_prior=1)
+
+
+def test_a_cross_run_near_identical_is_still_rejected():
+    """Loosening must not mean 'anything goes' — a frame 2 bits from a
+    published one really is the same picture."""
+    h = 0
+    identical = 0b11                   # 2 bits, inside FRESH_DUP_THRESHOLD (3)
+    assert c._is_duplicate(h, [identical], n_prior=1)
+
+
+def test_the_two_pools_are_judged_separately():
+    """Prior hashes must not make an in-run comparison stricter, or vice
+    versa — they answer different questions."""
+    h = 0
+    prior_far = 0b111111111            # far from everything
+    current_near = 0b1111              # 4 bits — in-run duplicate
+    assert c._is_duplicate(h, [prior_far, current_near], n_prior=1)
+    # Same distances, but now the near one came from history, not this run.
+    assert not c._is_duplicate(h, [current_near, prior_far], n_prior=1)
+
+
+def test_no_history_and_no_peers_is_never_a_duplicate():
+    """The first image of the first run has nothing to be a duplicate OF."""
+    assert not c._is_duplicate(12345, [], n_prior=0)
+
+
+def test_cross_run_threshold_is_stricter_than_within_run():
+    assert c.FRESH_DUP_THRESHOLD < c.DUP_THRESHOLD
