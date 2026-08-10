@@ -658,6 +658,27 @@ def _build_sd_prompts(script: str, niche: str, max_scenes: int = 10) -> list[str
                 "Add 'openai' key to config/keys.json or use RUFUS_VIDEO_SOURCE=pexels."
             )
         period = _script_period(script)
+
+        # STORYBOARD FIRST. The per-beat writer below has never seen the story
+        # — it gets ten sentences and illustrates each alone, which is how a
+        # line about the denarius's silver content became "a family gathered
+        # around a modest dinner table". One pass over the WHOLE script plans
+        # the shots as a sequence instead, so they can carry something forward
+        # from each other. Falls through to the per-beat path on any failure.
+        try:
+            import storyboard
+            shots = storyboard.plan(
+                script, beats,
+                era_tags=[_beat_era_tag(b, period) for b in beats],
+                character_clause=char_clause)
+            if shots:
+                shots = [_defuse_readable_text(s) for s in shots]
+                for i, s in enumerate(shots):
+                    print(f"             {i+1}. {s}")
+                return shots[:n]
+        except Exception as e:
+            print(f"           ⚠ storyboard skipped (non-fatal): {e}")
+
         beat_lines = "\n".join(
             f"  Beat {i+1} [ERA={_beat_era_tag(b, period)}] "
             f"(CAMERA={_anchor_for_beat(i)['camera'].split(',')[0]}): "

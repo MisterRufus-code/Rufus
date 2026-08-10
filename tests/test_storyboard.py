@@ -1,0 +1,213 @@
+"""Planning the pictures WITH the script, as one continuous sequence.
+
+Why: the two halves were strangers. script_writer finishes a script,
+_split_beats chops it into sentences, and a separate model reads those
+sentences COLD and illustrates each one alone. It has never seen the story, so
+it decorates each line independently and ten unrelated pictures come back.
+
+The live proof, from the denarius run. The script's beat 2 was about the coin
+holding 4.5 grams of silver. The image planned for it:
+
+    "A medium portrait of a family gathered around a modest dinner table,
+     sharing a simple meal of bread and vegetables..."
+
+Not wrong. Not connected. Beat 8 became "a concerned modern-day person at a
+kitchen table with financial documents" — the stock photo of an idea rather
+than a moment in this story.
+
+A storyboard fixes it by construction: one pass over the WHOLE script, shots
+planned as a sequence that can carry something forward.
+"""
+
+import json
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
+
+import storyboard  # noqa: E402
+
+_LONG = "A worn silver coin lies alone on a bare wooden counter, its face rubbed smooth."
+
+
+def _reply(n=3, visual=_LONG, **overrides):
+    plan = {"through_line": "one coin, thinning",
+            "shots": [{"n": i + 1, "visual": f"{visual} Shot {i + 1}.",
+                       "carries_over": None} for i in range(n)]}
+    plan.update(overrides)
+    return plan
+
+
+# ── Validation: shot i must be beat i ────────────────────────────────────────
+
+def test_a_good_plan_returns_one_visual_per_beat():
+    out = storyboard._clean(_reply(4), 4)
+    assert out is not None and len(out) == 4
+    assert all(_LONG.split(",")[0] in v for v in out)
+
+
+def test_the_wrong_shot_count_is_rejected():
+    """The renderer cuts on clip[i] belonging to beat[i]. A short list would
+    narrate every later picture against the wrong sentence."""
+    assert storyboard._clean(_reply(3), 5) is None
+    assert storyboard._clean(_reply(7), 5) is None
+
+
+def test_a_stub_visual_is_rejected():
+    """"a coin" is not a shot — it would render as anything at all."""
+    assert storyboard._clean(_reply(2, visual="a coin"), 2) is None
+
+
+def test_carried_continuity_reaches_the_image_model():
+    """The thread has to be IN the prompt, not only in the storyboard's notes
+    — the renderer never sees the JSON."""
+    plan = _reply(2)
+    plan["shots"][1]["carries_over"] = "the same coin from shot 1, now thinner"
+    out = storyboard._clean(plan, 2)
+    assert "Continuing from the previous shot: the same coin from shot 1" in out[1]
+    assert "Continuing from" not in out[0], "shot 1 has nothing to continue from"
+
+
+def test_junk_is_rejected():
+    for junk in (None, [], "", {}, {"shots": "nope"}, {"shots": [1, 2]}):
+        assert storyboard._clean(junk, 2) is None
+
+
+# ── The instruction ──────────────────────────────────────────────────────────
+
+def _prompt(beats=("The coin held four and a half grams of silver.",
+                   "By the end it was mostly bronze.")):
+    return storyboard._prompt("full script here", list(beats),
+                              ["211 BC", "present day"])
+
+
+def test_prompt_shows_the_whole_script_not_just_the_beats():
+    """Seeing only the sentences is what produced ten unrelated pictures."""
+    p = storyboard._prompt("THE ENTIRE NARRATION", ["a", "b"], [])
+    assert "THE ENTIRE NARRATION" in p
+    assert "read it all before you draw anything" in p
+
+
+def test_prompt_demands_the_literal_subject_of_the_line():
+    """The exact live failure, named as the worked example."""
+    p = _prompt()
+    assert "four and a half grams of silver, the shot is THAT COIN" in p
+    assert "not a family at dinner" in p
+
+
+def test_prompt_asks_for_continuity_between_shots():
+    p = _prompt()
+    assert "CARRY SOMETHING FORWARD" in p
+    assert "carries_over" in p
+    assert "a sequence where NOTHING does is the failure" in p
+
+
+def test_prompt_puts_feeling_in_the_frame_not_in_an_adjective():
+    """"his expression one of despair" and "revealing the anguish of misplaced
+    trust" both shipped in the last run."""
+    p = _prompt()
+    assert "his expression one of despair" in p
+    assert "What is IN the frame, never what someone feels" in p
+
+
+def test_prompt_carries_the_per_beat_era_tag():
+    p = _prompt()
+    assert "[211 BC]" in p and "[present day]" in p
+    assert "OBEY THE ERA TAG" in p
+
+
+def test_prompt_forbids_naming_printed_words():
+    p = _prompt()
+    assert "NEVER NAME WORDS THAT WOULD BE PRINTED" in p
+
+
+def test_prompt_leaves_style_to_the_renderer():
+    """A style described here would collide with the house suffix
+    comfy_client appends — the mixed-look failure, by another route."""
+    p = _prompt()
+    assert "no camera bodies, no lens specs, no style words" in p.lower()
+
+
+def test_character_clause_is_carried_when_there_is_one():
+    p = storyboard._prompt("s", ["a"], [], character_clause="- THE CHRONICLER: hooded.\n")
+    assert "THE CHRONICLER: hooded." in p
+
+
+# ── Fail-open ────────────────────────────────────────────────────────────────
+
+def test_disabled_by_env(monkeypatch):
+    monkeypatch.setenv("RUFUS_STORYBOARD", "0")
+    assert storyboard.plan("s", ["a", "b"]) is None
+
+
+def test_no_beats_means_no_plan():
+    assert storyboard.plan("s", []) is None
+
+
+def test_a_missing_key_is_survivable(monkeypatch, tmp_path):
+    monkeypatch.setattr(storyboard, "CONFIG_DIR", tmp_path)
+    monkeypatch.delenv("RUFUS_STORYBOARD", raising=False)
+    assert storyboard.plan("s", ["a", "b"]) is None
+
+
+def test_an_api_failure_is_survivable(monkeypatch, tmp_path):
+    (tmp_path / "keys.json").write_text(json.dumps({"openai": "sk-real"}))
+    monkeypatch.setattr(storyboard, "CONFIG_DIR", tmp_path)
+    monkeypatch.delenv("RUFUS_STORYBOARD", raising=False)
+    import openai
+    monkeypatch.setattr(openai, "OpenAI",
+                        lambda **kw: (_ for _ in ()).throw(RuntimeError("down")))
+    assert storyboard.plan("s", ["a", "b"]) is None
+
+
+def test_a_valid_reply_comes_back_in_beat_order(monkeypatch, tmp_path):
+    (tmp_path / "keys.json").write_text(json.dumps({"openai": "sk-real"}))
+    monkeypatch.setattr(storyboard, "CONFIG_DIR", tmp_path)
+    monkeypatch.delenv("RUFUS_STORYBOARD", raising=False)
+
+    body = json.dumps({"through_line": "one coin", "shots": [
+        {"n": 1, "visual": "A bright new coin fills the frame on a stone counter.",
+         "carries_over": None},
+        {"n": 2, "visual": "The same counter, the coin now thin and grey and alone.",
+         "carries_over": "the coin from shot 1"},
+    ]})
+
+    class Resp:
+        class C:
+            class M:
+                content = body
+            message = M()
+        choices = [C()]
+
+    class Client:
+        class chat:
+            class completions:
+                @staticmethod
+                def create(**kw):
+                    return Resp()
+
+    import openai
+    monkeypatch.setattr(openai, "OpenAI", lambda **kw: Client())
+    out = storyboard.plan("script", ["one", "two"])
+    assert len(out) == 2
+    assert "bright new coin" in out[0]
+    assert "the coin from shot 1" in out[1]
+
+
+# ── main uses it, and can still live without it ──────────────────────────────
+
+def test_main_tries_the_storyboard_before_the_per_beat_writer():
+    src = (Path(__file__).parent.parent / "scripts" / "main.py").read_text()
+    body = src.split("def _build_sd_prompts")[1]
+    assert "storyboard.plan(" in body
+    assert body.index("storyboard.plan(") < body.index("beat_lines = "), \
+        "the storyboard must be tried BEFORE the per-beat prompt writer"
+
+
+def test_main_defuses_printed_text_on_storyboard_shots_too():
+    """The blank-surfaces clause is applied on the per-beat path; the
+    storyboard path must not quietly skip it."""
+    src = (Path(__file__).parent.parent / "scripts" / "main.py").read_text()
+    body = src.split("def _build_sd_prompts")[1]
+    sb = body[body.index("storyboard.plan("):]
+    assert "_defuse_readable_text(s) for s in shots" in sb

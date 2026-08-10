@@ -2314,6 +2314,16 @@ def _fact_gate(client: OpenAI, seed: dict | None, script: str) -> tuple[bool, st
         if text.upper().startswith("PASS"):
             return True, "", cost
         reason = text.split(":", 1)[1].strip() if ":" in text else text
+        # ABSENT IS A PASS, AND THAT IS DECIDED HERE, NOT BY THE MODEL. The
+        # prompt says so in as many words, and the checker still returned
+        # "FAIL: ABSENT — the script does not mention the denarius's last
+        # issuance in bronze under Aurelian" — it classified correctly and then
+        # failed on its own PASS category. Asking a model to apply a rule it
+        # just stated is not the same as enforcing the rule; the classification
+        # is what it is good at, so take that and decide in code.
+        if reason.strip().upper().startswith("ABSENT"):
+            print(f"[gpt] fact gate said ABSENT (a pass): {reason}")
+            return True, "", cost
         return False, reason, cost
     except Exception as e:
         print(f"[gpt] fact gate skipped ({e})")
