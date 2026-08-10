@@ -114,9 +114,30 @@ def _pause_seconds(chunk_text: str) -> float:
     return 0.15
 
 
+KOKORO_REQUIREMENTS = ("numpy", "soundfile", "kokoro")
+
+
+def _missing_kokoro_deps() -> list[str]:
+    """Which of Kokoro's imports are absent, ALL of them, in one pass.
+
+    Python reports only the first missing import, and _kokoro's imports happen
+    to run soundfile before kokoro — so a box missing both was told "No module
+    named 'soundfile'", the owner installed exactly that, reran a whole
+    pipeline, and got "No module named 'kokoro'" for their trouble. One round
+    trip per missing package is a bad trade when listing them costs nothing."""
+    import importlib.util
+    return [m for m in KOKORO_REQUIREMENTS
+            if importlib.util.find_spec(m) is None]
+
+
 def _kokoro(script: str, out_path: Path) -> None:
     """Synthesize with Kokoro-82M (Apache 2.0, runs on CPU). Outputs mp3."""
     global _kokoro_pipe
+    missing = _missing_kokoro_deps()
+    if missing:
+        raise RuntimeError(
+            f"missing {', '.join(missing)} — install with: "
+            f"pip install {' '.join(missing)}")
     import numpy as np
     import soundfile as sf
     from kokoro import KPipeline
