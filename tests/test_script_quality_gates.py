@@ -613,3 +613,101 @@ def test_architect_is_told_the_turn_cannot_be_a_state_of_mind():
     src = inspect.getsource(script_writer)
     assert "THE TURN must therefore be an EVENT or an" in src
     assert "#1 REJECTION CAUSE" in src
+
+
+# ── The fact gate must separate "false" from "not in the excerpt" ────────────
+# Every wrong rejection said some version of "unsupported by the source
+# material". Rule 1 offered two escape routes — "neither supported by the
+# source NOR well-established mainstream history" — and only the first was ever
+# used. So true claims were failed for being outside a Wikipedia excerpt: the
+# Gold Standard Act of 1900 is real, the Latin Monetary Union really was undone
+# by swings in metal value, panic really did hit Paris in 1720.
+#
+# Rejecting those teaches the writer to quote the excerpt back, which is
+# exactly the dry-fact-list failure the channel is trying to avoid.
+
+def _fact_gate_prompt(script="Some script.", seed_content="Some source."):
+    import re
+    import script_writer
+
+    captured = {}
+
+    class Resp:
+        class C:
+            class M:
+                content = "PASS"
+            message = M()
+        choices = [C()]
+
+        class U:
+            prompt_tokens = completion_tokens = 10
+        usage = U()
+
+    class Client:
+        class Chat:
+            class Completions:
+                @staticmethod
+                def create(**kw):
+                    captured["prompt"] = kw["messages"][0]["content"]
+                    return Resp()
+            completions = Completions()
+        chat = Chat()
+
+    script_writer._fact_gate(Client(),
+                             {"type": "wikipedia", "content": seed_content,
+                              "title": "T", "source": "Wikipedia"}, script)
+    return re.sub(r"\s+", " ", captured["prompt"])
+
+
+def test_gate_states_the_excerpt_is_not_all_of_history():
+    p = _fact_gate_prompt()
+    assert "NOT THE SUM OF HISTORY" in p
+    assert "ABSENT is a PASS" in p
+
+
+def test_gate_requires_a_category_not_just_a_complaint():
+    """"unsupported by the source material" is the phrasing that hid the bug —
+    naming the category forces the checker to decide which finding it has."""
+    p = _fact_gate_prompt()
+    for category in ("CONTRADICTED", "INVENTED", "MIND-READ", "CONSPIRACY", "ABSENT"):
+        assert category in p, category
+    assert "FAIL: <CATEGORY>" in p
+
+
+def test_gate_carves_out_cause_and_effect_narration():
+    """The exact live rejection: "could not survive the swings" is how history
+    is explained, not a factual violation."""
+    p = _fact_gate_prompt()
+    assert "could not survive the swings" in p
+    assert "how history is explained" in p
+
+
+def test_gate_explicitly_permits_emotional_but_factual_writing():
+    p = _fact_gate_prompt()
+    assert "still went home hungry" in p
+    assert "vivid AND factual" in p
+
+
+def test_gate_still_fails_the_things_it_should():
+    """Loosening must not cost coverage — the real hallucinations are now named
+    individually rather than lumped under "unsupported"."""
+    p = _fact_gate_prompt()
+    assert "70,000 tons of SILVER" in p          # contradicted by the source
+    assert "1327" in p                            # invented date
+    assert "policymakers were scared to act" in p  # mind-read
+
+
+# ── Emotion has to come from consequence, not adjectives ─────────────────────
+
+def test_system_prompt_teaches_where_feeling_comes_from():
+    p = _system_prompt()
+    assert "WHERE THE FEELING ACTUALLY COMES FROM" in p
+    low = p.lower()
+    assert "still went home hungry" in low
+    assert "physical consequence landing on one person" in low
+
+
+def test_system_prompt_warns_against_reaching_for_adjectives():
+    low = _system_prompt().lower()
+    assert "devastating" in low and "shocking" in low
+    assert "understatement outperforms emphasis" in low

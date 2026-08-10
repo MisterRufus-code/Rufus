@@ -68,12 +68,19 @@ def test_fact_gate_prompt_carves_out_ordinary_editorializing():
     'simpler for trade', 'redefined modern finance' — as an unsupported-motive
     violation. Rule 3 must be narrowed to actual secret/covert motive claims,
     with an explicit carve-out for normal editorial explanation, or this keeps
-    capping good scripts for no real accuracy problem."""
+    capping good scripts for no real accuracy problem.
+
+    The carve-out survives a later rewrite of this prompt into named
+    categories; only its wording moved (to "ordinary cause-and-effect
+    narration"), so this asserts the intent rather than the old phrasing."""
     client = _client_answering("PASS")
     _fact_gate(client, _SEED, "some script")
     prompt = client.chat.completions.create.call_args.kwargs["messages"][0]["content"]
-    assert "secret" in prompt.lower() or "covert" in prompt.lower()
-    assert "ordinary editorial" in prompt.lower() or "normal explanatory" in prompt.lower()
+    low = prompt.lower()
+    assert "secret" in low or "covert" in low
+    assert "cause-and-effect" in low or "ordinary editorial" in low \
+        or "normal explanatory" in low
+    assert "simpler for trade" in low, "the worked example must survive"
 
 
 def test_write_script_wires_the_gate_and_caps_score():

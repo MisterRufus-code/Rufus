@@ -1278,6 +1278,31 @@ MOTIVE — THE ONE THING THAT KILLS A FINISHED VIDEO:
 - This does NOT mean writing blandly. Indignation about what HAPPENED is
   wanted. Certainty about what someone was thinking is what gets rejected.
 
+WHERE THE FEELING ACTUALLY COMES FROM:
+- The instinct, when a script feels dry, is to reach for adjectives
+  ("devastating", "shocking") or for someone's state of mind ("they were
+  terrified"). Both are weak, and the second one gets the video held.
+- Feeling comes from a PHYSICAL CONSEQUENCE LANDING ON ONE PERSON. Compare
+  two lines from real scripts of this channel:
+      "Policymakers were scared to act."
+        — a claim about invisible minds. Rejected, video held.
+      "People carted wheelbarrows of worthless notes to the shops — and
+       still went home hungry."
+        — nothing but observable fact, and it hits ten times harder.
+  Same intent. One is guessing, the other is showing.
+- So when you want the viewer to FEEL the collapse: what did it cost someone
+  to carry, to queue for, to hand over, to go without? Money that stops
+  working is a person walking home with nothing. Write that.
+- Three levers, all of them factual:
+    SCALE made physical — not "hyperinflation was extreme" but "a loaf cost
+      more than a house had the year before".
+    THE SMALL DETAIL — the wheelbarrow, the wall the coins were hidden in,
+      the queue going round the block. One concrete object beats a paragraph.
+    THE REVERSAL STATED FLATLY — "Same coin. Same face. Same name." Rhythm
+      and restraint carry more weight than an adjective ever will.
+- Understatement outperforms emphasis here. The facts of this niche are
+  already extreme; your job is to place them, not to sell them.
+
 SOUND — THIS IS HEARD, NOT READ:
 - Every line gets spoken aloud by a voice engine. Write what a person SAYS, not
   what an encyclopedia prints. "Rome ran out of silver" is speech. "The
@@ -2129,23 +2154,42 @@ def _fact_gate(client: OpenAI, seed: dict | None, script: str) -> tuple[bool, st
         "You are a strict fact-checker for a history-education YouTube channel.\n\n"
         f"{seed_blk}\n"
         f"SCRIPT TO VERIFY:\n{script}\n\n"
-        "FAIL this script if ANY of these hold:\n"
-        "1. A specific claim (number, date, name, event, quote) is neither supported "
-        "by the source material above nor well-established mainstream history.\n"
-        "2. It presents conspiracy-theory claims or framing as fact (hidden cabals, "
-        "'what they don't want you to know', claims from known misinformation sources).\n"
-        "3. It asserts a SPECIFIC secret/covert motive or hidden deal that mainstream "
-        "historiography does not support (e.g. 'they secretly conspired to...', "
-        "'the real reason, hidden from the public, was...').\n\n"
-        "Do NOT fail for ordinary editorial narration explaining why something happened "
-        "or why it matters (e.g. 'it was simpler for trade', 'this reflected a shift in "
-        "strategy', 'it reshaped the industry') — that is normal explanatory writing, not "
-        "a factual violation, UNLESS it also invents a specific unsupported fact already "
-        "covered by rule 1. Only fail rule 3 for an actual SECRET/COVERT motive claim.\n\n"
+        "THE SOURCE IS ONE ENCYCLOPEDIA EXCERPT, NOT THE SUM OF HISTORY.\n"
+        "\"Not in the excerpt\" and \"false\" are different findings, and treating "
+        "them as one is the single most common way this check goes wrong. Every "
+        "recent wrong rejection said some version of \"unsupported by the source "
+        "material\" about a claim that was perfectly true: the Gold Standard Act "
+        "of 1900 is real, the Latin Monetary Union really was undone by swings in "
+        "metal value, panic really did hit Paris in 1720. Rejecting those teaches "
+        "the writer to produce a dry list of excerpt quotations, which is not the "
+        "job.\n\n"
+        "For each questionable claim, decide WHICH of these it is:\n"
+        "  CONTRADICTED — the source says otherwise. (Source: \"70,000 tons of "
+        "ORE\"; script: \"70,000 tons of SILVER\".)\n"
+        "  INVENTED     — a specific number, date, name or quote that is in "
+        "neither the source nor mainstream history. (\"hawala dates back to "
+        "1327\" — that year exists nowhere.)\n"
+        "  MIND-READ    — asserts what someone FELT, FEARED, INTENDED or secretly "
+        "planned. Sources record what people DID. (\"policymakers were scared to "
+        "act\", \"Comstock merely took credit\", \"silenced by those who feared "
+        "inflation\".)\n"
+        "  CONSPIRACY   — hidden cabals, 'what they don't want you to know', or "
+        "framing drawn from a known misinformation source.\n"
+        "  ABSENT       — true, or ordinary mainstream history, simply not in "
+        "this excerpt.\n\n"
+        "FAIL only for CONTRADICTED, INVENTED, MIND-READ or CONSPIRACY.\n"
+        "ABSENT is a PASS. So is ordinary cause-and-effect narration — \"it was "
+        "simpler for trade\", \"this reflected a shift in strategy\", \"the union "
+        "could not survive the swings\" — that is how history is explained, not a "
+        "factual violation.\n"
+        "Emotional writing about what HAPPENED is also a PASS: \"people carted "
+        "wheelbarrows of worthless notes to the shops and still went home "
+        "hungry\" is vivid AND factual. Only certainty about what someone was "
+        "THINKING is a violation.\n\n"
         "Reply with EXACTLY one line:\n"
         "PASS\n"
         "or\n"
-        "FAIL: <one short sentence naming the worst violation>"
+        "FAIL: <CATEGORY> — <one short sentence naming the worst violation>"
     )
     model = _standards()["models"].get("fact_check", "gpt-4o-mini")
     try:
