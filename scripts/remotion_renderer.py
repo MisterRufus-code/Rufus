@@ -124,6 +124,21 @@ def render(script: str, bg_paths: "Path | list[Path]", out_dir: Path,
             music_name = f"music{Path(music_path).suffix or '.mp3'}"
             shutil.copy2(music_path, job_dir / music_name)
 
+        # How each beat MOVES, decided from the script rather than by the
+        # index%6 cycle Short.tsx falls back to. One beat per clip, because a
+        # clip IS a beat here. None on any failure — see edit_director's
+        # contract; the renderer's default cycle is a working edit, just not a
+        # directed one.
+        edit = None
+        try:
+            import edit_director
+            import main as _main
+            beats = _main._split_beats(script, max_scenes=len(clip_names))
+            if len(beats) == len(clip_names):
+                edit = edit_director.direct(beats)
+        except Exception as e:
+            print(f"[director] unavailable ({e}) — default motion cycle")
+
         props = {
             "job":               job,
             "clips":             clip_names,
@@ -132,6 +147,7 @@ def render(script: str, bg_paths: "Path | list[Path]", out_dir: Path,
             "music":             music_name,
             "words":             words,
             "durationInSeconds": round(audio_dur, 3),
+            "edit":              edit,
         }
         props_file = job_dir / "props.json"
         props_file.write_text(json.dumps(props))

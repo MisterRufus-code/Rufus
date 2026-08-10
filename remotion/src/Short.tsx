@@ -39,6 +39,20 @@ const MUSIC_VOL = 0.14;
 
 export type Word = {text: string; start: number; end: number};
 
+// What the edit director decided for one beat. Optional throughout: a run
+// without a plan renders exactly as it always did.
+export type BeatDirection = {
+  n: number;
+  motion: 'push_in' | 'pull_back' | 'hold_still' | 'drift_left' | 'drift_right' | 'rise';
+  intensity: 'subtle' | 'normal' | 'strong';
+  emphasis: string[];
+};
+
+export type EditPlan = {
+  peak_beat: number;
+  beats: BeatDirection[];
+};
+
 export type ShortProps = {
   job: string;
   clips: string[]; // filenames inside public/<job>/
@@ -47,22 +61,49 @@ export type ShortProps = {
   music: string | null; // optional music filename inside public/<job>/
   words: Word[];
   durationInSeconds: number;
+  edit?: EditPlan | null; // per-beat direction; null = use the default cycle
 };
 
 const HIGHLIGHT = /[\d$%]/;
 
 // ── One background clip with Ken Burns motion ────────────────────────────────
+// The director's vocabulary, expressed as the motion this component already
+// speaks. Kept beside the fallback cycle on purpose: both must stay in the
+// same units, or a directed beat would move at a different scale from an
+// undirected one in the same video.
+const MOTION_PATTERNS: Record<string, {zoomIn: boolean; dx: number; dy: number}> = {
+  push_in:     {zoomIn: true,  dx: 0,   dy: 0},
+  pull_back:   {zoomIn: false, dx: 0,   dy: 0},
+  drift_left:  {zoomIn: true,  dx: -26, dy: 0},
+  drift_right: {zoomIn: true,  dx: 26,  dy: 0},
+  rise:        {zoomIn: true,  dx: 0,   dy: -24},
+  // hold_still is handled separately: it is the ABSENCE of motion, and the
+  // director's most valuable instruction. A number or a reveal lands hardest
+  // on a frame that does not move, and a video where every beat drifts has no
+  // emphasis anywhere. A hair of scale keeps it from reading as a freeze.
+  hold_still:  {zoomIn: true,  dx: 0,   dy: 0},
+};
+
+const INTENSITY_SCALE: Record<string, number> = {
+  subtle: 0.5,
+  normal: 1,
+  strong: 1.6,
+};
+
 const KenBurnsClip: React.FC<{
   src: string;
   index: number;
   clipFrames: number;
   sourceDurationSec?: number | null;
-}> = ({src, index, clipFrames, sourceDurationSec}) => {
+  direction?: BeatDirection | null;
+}> = ({src, index, clipFrames, sourceDurationSec, direction}) => {
   const frame = useCurrentFrame();
   const {fps} = useVideoConfig();
   const t = Math.min(1, frame / Math.max(1, clipFrames));
   // 6 zoom+drift patterns (vs the old %2/%3 combo that repeated every 6 clips
   // with only 3 distinct drifts) — consecutive clips always move differently.
+  // This is now the FALLBACK: the same cycle, in the same order, for every
+  // video ever rendered, which is what the director exists to replace.
   const KB_PATTERNS = [
     {zoomIn: true,  dx: -22, dy: 12},  // push in, drift left-down
     {zoomIn: false, dx: 22,  dy: -16}, // pull back, drift right-up
@@ -71,10 +112,18 @@ const KenBurnsClip: React.FC<{
     {zoomIn: true,  dx: 0,   dy: -24}, // push in, rise
     {zoomIn: false, dx: -26, dy: 0},   // pull back, slide left
   ];
-  const p = KB_PATTERNS[index % KB_PATTERNS.length];
+  const directed = direction ? MOTION_PATTERNS[direction.motion] : undefined;
+  const base = directed ?? KB_PATTERNS[index % KB_PATTERNS.length];
+  const still = direction?.motion === 'hold_still';
+  const k = still ? 0.12 : INTENSITY_SCALE[direction?.intensity ?? 'normal'] ?? 1;
+  const p = {zoomIn: base.zoomIn, dx: base.dx * k, dy: base.dy * k};
+  // 0.12 of the usual travel on a hold_still, 1.6x on a strong push. The base
+  // 1.04 -> 1.16 stays the reference so a directed beat and an undirected one
+  // in the same video move at comparable scale.
+  const zoomTravel = 0.12 * k;
   const scale = p.zoomIn
-    ? interpolate(t, [0, 1], [1.04, 1.16])
-    : interpolate(t, [0, 1], [1.16, 1.04]);
+    ? interpolate(t, [0, 1], [1.04, 1.04 + zoomTravel])
+    : interpolate(t, [0, 1], [1.04 + zoomTravel, 1.04]);
   const driftX = interpolate(t, [0, 1], [0, p.dx]);
   const driftY = interpolate(t, [0, 1], [0, p.dy]);
 
@@ -204,6 +253,7 @@ export const Short: React.FC<ShortProps> = ({
   voice,
   music,
   words,
+  edit,
 }) => {
   const frame = useCurrentFrame();
   const {fps, durationInFrames} = useVideoConfig();
@@ -232,6 +282,7 @@ export const Short: React.FC<ShortProps> = ({
           index={0}
           clipFrames={durationInFrames}
           sourceDurationSec={clipDurations?.[0]}
+          direction={edit?.beats?.[0]}
         />
       ) : (
         <TransitionSeries>
@@ -243,6 +294,7 @@ export const Short: React.FC<ShortProps> = ({
                   index={i}
                   clipFrames={seqFrames}
                   sourceDurationSec={clipDurations?.[i]}
+                  direction={edit?.beats?.[i]}
                 />
               </TransitionSeries.Sequence>,
             ];
