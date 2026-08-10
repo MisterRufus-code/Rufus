@@ -1349,3 +1349,15 @@ def test_no_history_and_no_peers_is_never_a_duplicate():
 
 def test_cross_run_threshold_is_stricter_than_within_run():
     assert c.FRESH_DUP_THRESHOLD < c.DUP_THRESHOLD
+
+
+def test_cli_defaults_to_stills_only():
+    """RUFUS_STILLS_ONLY=1 is set by run.bat, not by this module, so a
+    one-prompt check from the CLI fell through to the motion chain. On a
+    16GB-RAM box that turned "does this prompt look right?" into a four-minute
+    sample plus a VAE decode that ran for over an hour."""
+    src = Path(c.__file__).read_text()
+    main_block = src.split('if __name__ == "__main__":')[1]
+    assert 'os.environ.setdefault("RUFUS_STILLS_ONLY", "1")' in main_block
+    assert main_block.index('setdefault("RUFUS_STILLS_ONLY"') < \
+           main_block.index("generate_clips("), "must be set BEFORE generating"

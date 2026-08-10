@@ -1306,6 +1306,13 @@ def generate_clips(queries: list[str], n: int = 4,
 
 if __name__ == "__main__":
     import sys
+    # STILLS-ONLY BY DEFAULT when run by hand. RUFUS_STILLS_ONLY=1 is set by
+    # run.bat, not by this module, so a one-prompt check from the CLI used to
+    # fall straight through to the motion chain — on a 16GB-RAM box that turned
+    # "does this prompt look right?" into a four-minute sample plus a VAE decode
+    # that can run for over an hour. Nobody testing a prompt wants a video.
+    # Ask for one explicitly with RUFUS_STILLS_ONLY=0.
+    os.environ.setdefault("RUFUS_STILLS_ONLY", "1")
     qs = sys.argv[1:] or ["modern luxury kitchen interior, golden hour light, wide angle",
                           "sunlit living room, floor to ceiling windows, city view"]
     for p in generate_clips(qs, n=len(qs)):
