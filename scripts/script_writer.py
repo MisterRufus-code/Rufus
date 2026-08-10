@@ -1115,7 +1115,18 @@ def _story_architect(client: OpenAI, seed: dict, analysis: str, hook: str,
         "SOURCE/PRE-ANALYSIS above. Do NOT invent motives, secret deals, dollar "
         "figures, or sweeping claims ('reshaped history', 'changed everything') the "
         "source does not actually state — the fact-check will reject the script and "
-        "hold the whole video if you do."
+        "hold the whole video if you do.\n"
+        "WHY PEOPLE ACTED IS THE #1 REJECTION CAUSE. Measured across recent runs, "
+        "five of eight fact-check failures were an invented MOTIVE, not a wrong "
+        "date or figure: 'merely took credit', 'policymakers were scared to act', "
+        "'a secret motive for the disbandment', 'silenced by those who feared "
+        "inflation'. Sources record what people DID; they almost never record what "
+        "people FELT or INTENDED. THE TURN must therefore be an EVENT or an "
+        "OUTCOME, never a state of mind. Write 'traders swapped the cheap coin for "
+        "the good one until the good one vanished' (observable), not 'traders "
+        "schemed to drain the treasury' (mind-reading). If the drama you want "
+        "needs a motive the source does not give, you have the wrong turn — find "
+        "a real one."
     )
     # 2 attempts, not 3+: this is a cheap pre-check, not the main quality gate
     # (the body still goes through the full fact gate regardless). Two shots
@@ -1246,6 +1257,26 @@ VOICE:
 - Specific always beats vague. A name beats "someone". A number beats "many". A year beats "recently".
 - Short sentences ({body['min_avg_sentence_words']}-{body['max_avg_sentence_words']} words avg). Vary rhythm deliberately.
 - Never moralize. Never summarize. Trust the audience.
+
+MOTIVE — THE ONE THING THAT KILLS A FINISHED VIDEO:
+- The fact-check runs AFTER this script is written. When it rejects, the score
+  is capped and the whole video is held — the images, the voiceover and the
+  render are already paid for. Measured across recent runs, FIVE OF EIGHT
+  rejections were an invented motive, not a wrong date or figure:
+  "Comstock merely took credit", "policymakers were scared to act", "a secret
+  motive for the disbandment", "silenced by those who feared inflation more
+  than inequality", "implies a conspiracy or intentional suppression".
+- The reason is simple: sources record what people DID. They almost never
+  record what people FELT, FEARED, or INTENDED. Any sentence explaining WHY
+  someone acted is a guess unless the source says so in as many words.
+- So: attribute to the OUTCOME, never to the mind.
+    ✗ "Traders schemed to drain the treasury."   (mind-reading)
+    ✓ "Traders swapped the cheap coin for the good one until the good one
+       was gone."                                 (observable, and better TV)
+    ✗ "The government hid the collapse."          (motive)
+    ✓ "The announcement came after the banks had already closed."  (event)
+- This does NOT mean writing blandly. Indignation about what HAPPENED is
+  wanted. Certainty about what someone was thinking is what gets rejected.
 
 SOUND — THIS IS HEARD, NOT READ:
 - Every line gets spoken aloud by a voice engine. Write what a person SAYS, not

@@ -563,3 +563,53 @@ def test_scorer_still_rewards_a_genuine_contradiction(monkeypatch):
     p = _scorer_prompt(monkeypatch)
     assert "OPPOSITE of common belief" in p
     assert "SURPRISE INTENSITY" in p
+
+
+# ── Invented motive is the dominant fact-gate failure ────────────────────────
+# Counted across runs #59-#63, five of eight fact-check rejections were an
+# attributed MOTIVE rather than a wrong date or figure:
+#
+#   #59  "Comstock merely took credit"
+#   #60  "policymakers were scared to act"
+#   #61  "asserts a specific secret motive for the disbandment"
+#   #63  "silenced by those who feared inflation more than inequality"
+#   #63  "implies a conspiracy or intentional suppression"
+#
+# It is a structural collision, like the "you"/present-day one: the HUMAN
+# criterion pays for opinionated language, the architect is asked for a TURN,
+# and the fact gate kills invented intent. The rejection lands AFTER the images
+# and the render are paid for, so it is also the most expensive failure in the
+# pipeline.
+
+def test_system_prompt_names_motive_as_the_top_rejection_cause():
+    p = _system_prompt()
+    assert "MOTIVE" in p
+    low = p.lower()
+    assert "policymakers were scared to act" in low
+    assert "sources record what people did" in low
+
+
+def test_system_prompt_shows_the_outcome_rewrite():
+    """A ban with no replacement just produces bland writing — the fix has to
+    show the substitution."""
+    low = _system_prompt().lower()
+    assert "attribute to the outcome" in low
+    assert "mind-reading" in low
+
+
+def test_system_prompt_does_not_ask_for_blandness():
+    """The HUMAN criterion still pays for indignation. Only certainty about
+    someone's state of mind is out."""
+    low = _system_prompt().lower()
+    assert "does not mean writing blandly" in low
+    assert "indignation about what happened is" in low
+
+
+def test_architect_is_told_the_turn_cannot_be_a_state_of_mind():
+    """THE TURN is where the invented motive originates — the body writer only
+    dramatizes what the plan hands it."""
+    import inspect
+    import script_writer
+    src = inspect.getsource(script_writer)
+    assert "THE TURN must therefore be an EVENT or an" in src
+    assert "#1 REJECTION CAUSE" in src
