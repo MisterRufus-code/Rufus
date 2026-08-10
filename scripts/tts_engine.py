@@ -151,10 +151,24 @@ def _kokoro(script: str, out_path: Path) -> None:
     except ValueError:
         speed = 1.0
 
+    def _as_numpy(audio):
+        """Kokoro yields torch Tensors; everything below here is numpy.
+
+        Without this, `np.zeros(gap, dtype=seg_audio.dtype)` is handed
+        torch.float32 and raises "Cannot interpret 'torch.float32' as a data
+        type" — which reads exactly like a numpy-2 incompatibility and was
+        misdiagnosed as one for a long time. It is not: it reproduces on
+        numpy 1.26.4, and it fires ONLY when the script splits into more than
+        one chunk, because a single chunk never reaches the inter-chunk gap.
+        That is why every one-sentence smoke test passed while every real
+        script silently fell back to the flat Edge voice."""
+        detach = getattr(audio, "detach", None)
+        return detach().cpu().numpy() if detach is not None else np.asarray(audio)
+
     # Generator yields (graphemes, phonemes, audio_array) per chunk (split on
     # blank lines by default). Keep the source text alongside each chunk so we
     # can size the gap that follows it from its own punctuation.
-    chunks = [(g, audio) for g, _, audio in
+    chunks = [(g, _as_numpy(audio)) for g, _, audio in
               _kokoro_pipe(script, voice=KOKORO_VOICE, speed=speed)]
     if not chunks:
         raise RuntimeError("Kokoro returned no audio segments")
@@ -397,10 +411,13 @@ def synthesize(script: str, out_path: Path) -> None:
         except Exception as e:
             print(f"[tts] Kokoro failed ({e}) — falling back to Edge TTS")
             if "cannot interpret" in str(e).lower() and "data type" in str(e).lower():
-                # Kokoro's deps predate numpy 2 — the classic symptom is numpy
-                # refusing torch dtypes. One pip command fixes it permanently.
-                print("[tts]   this is the numpy-2 incompatibility — fix with: "
-                      "pip install \"numpy<2\"  (then rerun)")
+                # This USED to print "install numpy<2". It was wrong, and the
+                # wrong hint cost two rounds of chasing the environment: the
+                # real cause was Kokoro handing back torch Tensors where the
+                # gap-padding expected numpy (fixed in _kokoro). If it shows up
+                # again it is a NEW dtype leak, not a numpy version.
+                print("[tts]   a torch dtype reached numpy — this is a code "
+                      "bug in _kokoro, not a package version")
 
     if backend == "xtts":
         try:
@@ -416,10 +433,13 @@ def synthesize(script: str, out_path: Path) -> None:
         except Exception as e:
             print(f"[tts] Kokoro failed ({e}) — falling back to Edge TTS")
             if "cannot interpret" in str(e).lower() and "data type" in str(e).lower():
-                # Kokoro's deps predate numpy 2 — the classic symptom is numpy
-                # refusing torch dtypes. One pip command fixes it permanently.
-                print("[tts]   this is the numpy-2 incompatibility — fix with: "
-                      "pip install \"numpy<2\"  (then rerun)")
+                # This USED to print "install numpy<2". It was wrong, and the
+                # wrong hint cost two rounds of chasing the environment: the
+                # real cause was Kokoro handing back torch Tensors where the
+                # gap-padding expected numpy (fixed in _kokoro). If it shows up
+                # again it is a NEW dtype leak, not a numpy version.
+                print("[tts]   a torch dtype reached numpy — this is a code "
+                      "bug in _kokoro, not a package version")
 
     if backend not in ("elevenlabs", "kokoro", "xtts"):
         print(f"[tts] backend: Edge TTS ({EDGE_VOICE})")

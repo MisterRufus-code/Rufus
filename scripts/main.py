@@ -659,6 +659,27 @@ def _build_sd_prompts(script: str, niche: str, max_scenes: int = 10) -> list[str
             )
         period = _script_period(script)
 
+        try:
+            import character_engine
+            # Not is_flux-gated — character_engine.py is generic per-niche
+            # (money_history's timeless Chronicler is comfy/FLUX, but the SD
+            # niches — finance/motivation/mindset/business/personal_development
+            # — each ship their own starter character too, disabled by
+            # default). character_clause() itself returns "" for any niche
+            # without an enabled character block, so this is a no-op today
+            # for every SD niche until the owner opts one in.
+            # n_beats lets "anchor" mode name the exact beat numbers the
+            # character appears in; "all" mode ignores it.
+            char_clause = character_engine.character_clause(niche, len(beats))
+        except Exception as e:
+            # Fail-open like every other optional step, but SAY SO. This used to
+            # swallow the error silently, which meant a broken character config
+            # was indistinguishable from a working one that the model ignored —
+            # exactly the ambiguity that made the live "character never appears"
+            # report expensive to diagnose.
+            print(f"           ⚠ character clause skipped (non-fatal): {e}")
+            char_clause = ""
+
         # STORYBOARD FIRST. The per-beat writer below has never seen the story
         # — it gets ten sentences and illustrates each alone, which is how a
         # line about the denarius's silver content became "a family gathered
@@ -705,27 +726,6 @@ def _build_sd_prompts(script: str, niche: str, max_scenes: int = 10) -> list[str
                 is_flux = False
 
         fresh_block = _freshness_block()
-
-        try:
-            import character_engine
-            # Not is_flux-gated — character_engine.py is generic per-niche
-            # (money_history's timeless Chronicler is comfy/FLUX, but the SD
-            # niches — finance/motivation/mindset/business/personal_development
-            # — each ship their own starter character too, disabled by
-            # default). character_clause() itself returns "" for any niche
-            # without an enabled character block, so this is a no-op today
-            # for every SD niche until the owner opts one in.
-            # n_beats lets "anchor" mode name the exact beat numbers the
-            # character appears in; "all" mode ignores it.
-            char_clause = character_engine.character_clause(niche, len(beats))
-        except Exception as e:
-            # Fail-open like every other optional step, but SAY SO. This used to
-            # swallow the error silently, which meant a broken character config
-            # was indistinguishable from a working one that the model ignored —
-            # exactly the ambiguity that made the live "character never appears"
-            # report expensive to diagnose.
-            print(f"           ⚠ character clause skipped (non-fatal): {e}")
-            char_clause = ""
 
         _FLUX_INSTRUCTION = (
             "You write prompts for FLUX.1-dev, which understands full "

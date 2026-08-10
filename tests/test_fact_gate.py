@@ -92,3 +92,41 @@ def test_write_script_wires_the_gate_and_caps_score():
     src = inspect.getsource(script_writer.write_script)
     assert "_fact_gate" in src
     assert "score_min - 3" in src   # cap lands below the auto-upload threshold
+
+
+# ── The Gresham's-law run: three cycles burned, 8/10 capped to 4/10 ─────────
+# Every cycle failed on MIND-READ for "people noticed and stashed the good ones
+# away" — which is not an inference about anyone's inner life, it is what
+# Gresham's law SAYS. The gate was failing the excerpt for restating the
+# excerpt. CLAUDE.md's warning about the "wasted-generation rejection ladder"
+# names this exact shape, so the fix narrows the category rather than adding one.
+
+def _prompt_text():
+    client = _client_answering("PASS")
+    _fact_gate(client, _SEED, "some script")
+    return client.chat.completions.create.call_args.kwargs["messages"][0]["content"]
+
+
+def test_an_unnamed_aggregate_is_not_a_named_actor():
+    """"People", "traders", "the public" claim nobody's private mind, because
+    nobody in particular is being described."""
+    p = _prompt_text()
+    assert "UNNAMED aggregate" in p
+    assert "not named actors" in p
+
+
+def test_restating_the_sources_own_mechanism_passes():
+    """The worked example must survive — it is the one that actually fired."""
+    p = _prompt_text()
+    assert "RESTATING THE SOURCE'S OWN MECHANISM" in p
+    assert "Gresham's law" in p
+    assert "people keep the good coin and spend the bad" in p
+
+
+def test_contradicted_requires_an_actual_disagreement():
+    """The same run's third cycle called it CONTRADICTED that the script said
+    bad money circulates while the source said good money is retained and bad
+    money circulates. Those agree."""
+    p = _prompt_text()
+    assert "side by side and check they actually DISAGREE" in p
+    assert "Agreement restated in different words is a PASS" in p

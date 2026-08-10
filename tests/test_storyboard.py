@@ -211,3 +211,15 @@ def test_main_defuses_printed_text_on_storyboard_shots_too():
     body = src.split("def _build_sd_prompts")[1]
     sb = body[body.index("storyboard.plan("):]
     assert "_defuse_readable_text(s) for s in shots" in sb
+
+
+def test_the_character_clause_exists_before_the_storyboard_reads_it():
+    """Live: "storyboard skipped (non-fatal): cannot access local variable
+    'char_clause' where it is not associated with a value" — the storyboard was
+    moved ahead of the per-beat writer but the clause it passes was still built
+    below it. Fail-open hid it as a one-line warning while the whole feature
+    never ran once."""
+    src = (Path(__file__).parent.parent / "scripts" / "main.py").read_text()
+    body = src.split("def _build_sd_prompts")[1]
+    assert body.index("char_clause = character_engine.character_clause") \
+        < body.index("storyboard.plan(")
