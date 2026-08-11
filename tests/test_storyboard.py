@@ -97,9 +97,9 @@ def test_prompt_demands_the_literal_subject_of_the_line():
 
 def test_prompt_asks_for_continuity_between_shots():
     p = _prompt()
-    assert "CARRY SOMETHING FORWARD" in p
+    assert "CARRY A PHYSICAL OBJECT FORWARD" in p
     assert "carries_over" in p
-    assert "a sequence where NOTHING does is the failure" in p
+    assert "Use null when nothing physical genuinely carries over" in p
 
 
 def test_prompt_puts_feeling_in_the_frame_not_in_an_adjective():
@@ -223,3 +223,65 @@ def test_the_character_clause_exists_before_the_storyboard_reads_it():
     body = src.split("def _build_sd_prompts")[1]
     assert body.index("char_clause = character_engine.character_clause") \
         < body.index("storyboard.plan(")
+
+
+# ── A thread has to be a THING ───────────────────────────────────────────────
+# The Great Depression run planned ten shots and every carries_over was a mood:
+# "emptiness and desolation", "emptiness and chaos", "sense of despair and
+# loss", "unresolved financial burden", "ongoing neglect", "threat of repeating
+# past mistakes". Handing an image model "carry emptiness forward" four beats
+# running renders four empty rooms — the instruction to CONNECT the shots
+# became the instruction to REPEAT them.
+
+def test_a_mood_is_not_a_thread():
+    for mood in ("emptiness and desolation", "emptiness and chaos",
+                 "sense of despair and loss", "unresolved financial burden",
+                 "ongoing neglect", "threat of repeating past mistakes",
+                 "disregard of issues"):
+        assert not storyboard._is_a_thing(mood), mood
+
+
+def test_an_object_is_a_thread():
+    for thing in ("the same coin from shot 1, now thinner",
+                  "the bronze lantern", "the same wooden table, emptier",
+                  "his coat", "the queue outside the same door"):
+        assert storyboard._is_a_thing(thing), thing
+
+
+def test_a_mood_thread_is_dropped_and_the_shot_survives():
+    """Dropping the clause is the right failure: a shot with no stated thread
+    still renders fine, while a mood thread actively causes the repetition."""
+    plan = _reply(2)
+    plan["shots"][1]["carries_over"] = "emptiness and desolation"
+    out = storyboard._clean(plan, 2)
+    assert out is not None and len(out) == 2
+    assert "Continuing from" not in out[1]
+    assert _LONG.split(",")[0] in out[1], "the shot itself is kept"
+
+
+def test_an_object_thread_still_reaches_the_prompt():
+    plan = _reply(2)
+    plan["shots"][1]["carries_over"] = "the same bronze lantern"
+    assert "Continuing from the previous shot: the same bronze lantern" \
+        in storyboard._clean(plan, 2)[1]
+
+
+def test_the_prompt_names_the_mood_failure_with_its_real_answers():
+    p = _prompt()
+    assert "NEVER A MOOD" in p
+    assert "emptiness and desolation" in p
+    assert "Emptiness\" four beats running renders four empty rooms" in p
+
+
+def test_the_prompt_demands_people_in_at_least_half_the_shots():
+    """Eight of ten shots had nobody in them, for a script about one in four
+    people losing their job."""
+    p = _prompt()
+    assert "PUT PEOPLE IN IT" in p
+    assert "At least half the shots must show a person DOING something" in p
+
+
+def test_the_through_line_must_be_an_object_too():
+    p = _prompt()
+    assert "one coin, thinning" in p
+    assert "is an essay title and is" in p

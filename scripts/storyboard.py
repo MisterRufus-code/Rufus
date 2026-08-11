@@ -31,6 +31,7 @@ getting them.
 
 import json
 import os
+import re
 from pathlib import Path
 
 CONFIG_DIR = Path(__file__).parent.parent / "config"
@@ -67,14 +68,31 @@ def _prompt(script: str, beats: list[str], era_tags: list[str],
         "family at dinner, not a person looking thoughtful. A picture of the "
         "general topic instead of the specific sentence is the single most "
         "common way this goes wrong.\n"
-        "2. CARRY SOMETHING FORWARD. Wherever it is true to the script, a shot "
-        "should continue the one before it: the same coin now thinner, the "
-        "same market now empty, the same hand now closing on nothing. Name "
-        "what carries over in `carries_over`. Not every shot can — but a "
-        "sequence where NOTHING does is the failure this exists to prevent.\n"
+        "2. CARRY A PHYSICAL OBJECT FORWARD — NEVER A MOOD. `carries_over` "
+        "must name a THING you could point a camera at: the same coin now "
+        "thinner, the same lantern, the same wooden table, the same coat. "
+        "It must NOT be a feeling or an idea. These are all real answers a "
+        "previous run gave, and every one of them is WRONG: \"emptiness and "
+        "desolation\", \"emptiness and chaos\", \"sense of despair and loss\", "
+        "\"unresolved financial burden\", \"ongoing neglect\", \"threat of "
+        "repeating past mistakes\". Carrying a mood forward does not connect "
+        "the shots — it REPEATS them. \"Emptiness\" four beats running renders "
+        "four empty rooms, and the sequence looks like the same picture over "
+        "and over. Objects can travel through a story; feelings can only be "
+        "restated. Use null when nothing physical genuinely carries over — "
+        "that is far better than naming a mood.\n"
         "3. ONE SUBJECT PER SHOT. A frame with a coin AND a merchant AND a "
         "market AND a ledger has no subject. Choose the one thing the line is "
         "actually about and fill the frame with it.\n"
+        "3b. PUT PEOPLE IN IT. At least half the shots must show a person "
+        "DOING something — hands counting coins, a man locking a door, a woman "
+        "carrying a crate, a queue that does not move. The same previous run "
+        "returned eight shots out of ten with no one in them (\"devoid of "
+        "people\", \"absence of workers\", \"abandoned\", \"unused\", "
+        "\"barren\") for a script about one in four people losing their job. "
+        "Empty rooms are the cheapest way to say a thing is bad, and they make "
+        "a viewer feel nothing. A face or a pair of hands is what makes a "
+        "number land.\n"
         "4. LET THE FRAME CARRY THE FEELING, not a described emotion. Not 'his "
         "expression one of despair' — a stall with nothing left on it. Not "
         "'revealing the anguish of misplaced trust' — a fist of coins held out "
@@ -91,10 +109,63 @@ def _prompt(script: str, beats: list[str], era_tags: list[str],
         "No camera bodies, no lens specs, no style words — the renderer adds "
         "the house style itself.\n\n"
         "Reply with ONLY this JSON:\n"
-        '{"through_line": "<the one visual idea the sequence returns to>",\n'
+        '{"through_line": "<the ONE physical object the sequence returns to — '
+        'a thing, not a topic. \\"one coin, thinning\\" is right; \\"rising '
+        'unemployment and its impact on society\\" is an essay title and is '
+        'wrong>",\n'
         ' "shots": [{"n": 1, "visual": "...", "carries_over": null}, ...]}\n'
         f"Exactly {len(beats)} shots, n from 1 to {len(beats)}."
     )
+
+
+# Words that name a FEELING or an IDEA rather than a thing you could point a
+# camera at. A carries_over made only of these is the failure this list exists
+# to catch — see _is_a_thing.
+_ABSTRACT = {
+    "emptiness", "empty", "desolation", "desolate", "despair", "hope",
+    "hopelessness", "chaos", "silence", "loss", "neglect", "burden", "threat",
+    "disregard", "fear", "anxiety", "anguish", "grief", "sorrow", "tension",
+    "uncertainty", "instability", "collapse", "decline", "crisis", "ruin",
+    "poverty", "wealth", "struggle", "suffering", "hardship", "mood",
+    "atmosphere", "sense", "feeling", "tone", "theme", "idea", "impact",
+    "consequence", "aftermath", "legacy", "history", "past", "future",
+    "unresolved", "ongoing", "looming", "foreboding", "repeating", "mistakes",
+    "issues", "problems", "lessons", "change", "shift", "power", "greed",
+    "value", "trust", "belief", "doubt", "time", "society", "economy",
+    # Domain adjectives: they qualify a thing but never name one, so
+    # "unresolved financial burden" must not read as concrete.
+    "financial", "economic", "monetary", "social", "political",
+    "historical", "personal", "public", "general", "widespread",
+}
+_STOPWORDS = {
+    "a", "an", "the", "of", "and", "or", "in", "on", "at", "to", "from",
+    "with", "for", "same", "previous", "shot", "still", "now", "its", "his",
+    "her", "their", "this", "that", "these", "those", "is", "are", "was",
+    "were", "be", "been", "it", "as", "by", "more", "less", "one",
+}
+
+
+def _is_a_thing(carries: str) -> bool:
+    """Whether `carries_over` names something a camera could point at.
+
+    THE LIVE FAILURE, in full. Every carries_over in the Great Depression run
+    was a mood: "emptiness and desolation", "emptiness and chaos", "sense of
+    despair and loss", "unresolved financial burden", "ongoing neglect",
+    "threat of repeating past mistakes". Not one named a physical object.
+
+    That is worse than no continuity at all. An image model handed "carry
+    emptiness forward" four beats running renders four empty rooms — the
+    instruction to connect the shots becomes the instruction to repeat them,
+    which is exactly the repetitiveness the owner reported. A thread has to be
+    a THING: the same coin, the same table, the same lantern. Objects can move
+    through a story; feelings can only be restated.
+
+    Fail-open in spirit: a carries_over that fails this is dropped, and the
+    shot itself is kept. A shot with no stated thread still renders fine."""
+    words = [w for w in re.findall(r"[a-z]+", carries.lower())
+             if w not in _STOPWORDS]
+    concrete = [w for w in words if w not in _ABSTRACT]
+    return bool(concrete)
 
 
 def _clean(plan: dict, n_beats: int) -> list[str] | None:
@@ -117,9 +188,14 @@ def _clean(plan: dict, n_beats: int) -> list[str] | None:
             return None
         carries = entry.get("carries_over")
         if isinstance(carries, str) and carries.strip():
-            # Stated as continuity so the image model has the thread too, not
-            # only the storyboard's own notes.
-            visual = f"{visual.rstrip('.')}. Continuing from the previous shot: {carries.strip()}."
+            carries = carries.strip()
+            if _is_a_thing(carries):
+                # Stated as continuity so the image model has the thread too,
+                # not only the storyboard's own notes.
+                visual = (f"{visual.rstrip('.')}. Continuing from the previous "
+                          f"shot: {carries}.")
+            else:
+                print(f"[storyboard] dropped mood-only thread: {carries!r}")
         out.append(visual)
     return out
 
