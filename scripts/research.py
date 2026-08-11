@@ -150,6 +150,21 @@ TITLE_STORY_RE = re.compile(
 
 SE_TIMEOUT      = 10.0
 SE_MIN_SCORE    = 40     # SE scores run lower than Reddit — 40+ is a strong question
+
+# The threshold above was calibrated against `/questions?sort=votes`, which
+# returns a site's ALL-TIME TOP list — where 40+ is ordinary. Rotating to a
+# topical `search/advanced` query fixed the frozen-input bug and immediately
+# exposed a second one: a topical search returns the best questions ABOUT
+# banking, not the best questions on the site, and those score 5-30. The first
+# live run after the rotation landed shows it exactly:
+#
+#     SE history ["banking", page 1]: 46 items, none usable (45 score, 1 length)
+#
+# 45 of 46 thrown away on a number that no longer describes the population it
+# filters. Fixing a frozen query while leaving its threshold alone just moves
+# where the source dies. A topical hit is already evidence of relevance, which
+# the top-list has no way to provide, so it can afford a much lower bar.
+SE_MIN_SCORE_TOPICAL = 8
 SE_MIN_BODY_LEN = 300
 SE_MAX_BODY_LEN = 3000
 
@@ -671,6 +686,17 @@ def _se_url(site: str, niche_name: str) -> tuple[str, str]:
            f"top questions, page {page}"
 
 
+def _se_min_score(niche_name: str) -> int:
+    """The score bar for whichever query shape _se_url built.
+
+    A topical search and an all-time-top list are different populations, and
+    one threshold cannot serve both — see SE_MIN_SCORE_TOPICAL for the run that
+    proved it.
+    """
+    return (SE_MIN_SCORE_TOPICAL if SE_TOPIC_QUERIES.get(niche_name)
+            else SE_MIN_SCORE)
+
+
 def fetch_stackexchange_story(niche_name: str, used_ids: set | None = None) -> dict | None:
     """Fetch a high-voted story-shaped question from the niche's SE site.
 
@@ -695,10 +721,11 @@ def fetch_stackexchange_story(niche_name: str, used_ids: set | None = None) -> d
         print(f"[research] StackExchange unreachable for {site} ({e})")
         return None
 
+    min_score = _se_min_score(niche_name)
     rejected = {"score": 0, "length": 0, "title": 0, "offtopic": 0, "seen": 0}
     quality = []
     for q in items:
-        if q.get("score", 0) < SE_MIN_SCORE:
+        if q.get("score", 0) < min_score:
             rejected["score"] += 1
             continue
         body = _strip_html(q.get("body", ""))

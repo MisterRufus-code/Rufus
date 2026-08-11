@@ -192,6 +192,24 @@ def render(script: str, bg_paths: "Path | list[Path]", out_dir: Path,
         if not out.exists() or out.stat().st_size < 100_000:
             raise RuntimeError("Remotion render produced no/empty output file")
 
+        # Lock loudness to the same -14 LUFS the FFmpeg path masters to.
+        #
+        # This was missing for as long as this renderer has existed, and nobody
+        # could see it, because the renderer never actually ran — the npx spawn
+        # failed on Windows and every render fell through to audio_gen, which
+        # does normalise. The first successful Remotion render exposed it in one
+        # line of QC: -25.4 dB mean, against -17.5 dB from the FFmpeg path on
+        # the same pipeline. YouTube turns loud audio DOWN but never turns quiet
+        # audio up, so an un-normalised Short just sounds weak beside every
+        # other video in the feed.
+        #
+        # Fail-open like every other post-step: a skipped pass leaves the
+        # quieter mix, which is still a finished video.
+        try:
+            audio_gen._normalize_loudness(out)
+        except Exception as e:
+            print(f"[remotion] loudness pass skipped ({e})")
+
     finally:
         shutil.rmtree(job_dir, ignore_errors=True)
 

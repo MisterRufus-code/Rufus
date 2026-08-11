@@ -130,3 +130,43 @@ def test_the_log_no_longer_calls_a_permanent_block_unreachable():
         encoding="utf-8")
     assert "reddit unreachable for" not in src
     assert "reddit blocked r/" in src
+
+
+# ── The threshold has to match the population it filters ─────────────────────
+
+def test_a_topical_query_gets_a_lower_bar_than_the_top_list():
+    """Rotating to a topical search fixed the frozen input and immediately
+    exposed the threshold: 'SE history ["banking", page 1]: 46 items, none
+    usable (45 score, 1 length)'. 40+ is ordinary on an all-time-top list and
+    unreachable in a topical search."""
+    import research
+
+    assert research._se_min_score("money_history") == research.SE_MIN_SCORE_TOPICAL
+    assert research.SE_MIN_SCORE_TOPICAL < research.SE_MIN_SCORE
+
+
+def test_sites_without_a_topical_query_keep_the_original_bar():
+    """money.SE / workplace.SE still ask for the top list, where 40+ is the
+    right bar — lowering it there would let weak questions through."""
+    import research
+
+    assert research._se_min_score("finance") == research.SE_MIN_SCORE
+    assert research._se_min_score("business") == research.SE_MIN_SCORE
+
+
+def test_an_unknown_niche_gets_the_conservative_bar():
+    import research
+
+    assert research._se_min_score("does_not_exist") == research.SE_MIN_SCORE
+
+
+def test_the_threshold_choice_follows_the_query_shape():
+    """One function decides both, so they cannot drift apart — the bug was
+    exactly a query and a threshold that no longer described each other."""
+    import research
+
+    for niche in research.SE_NICHE_SITES:
+        topical = bool(research.SE_TOPIC_QUERIES.get(niche))
+        expected = (research.SE_MIN_SCORE_TOPICAL if topical
+                    else research.SE_MIN_SCORE)
+        assert research._se_min_score(niche) == expected
