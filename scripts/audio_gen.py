@@ -187,25 +187,65 @@ def _video_encoder_args() -> list[str]:
 
 # ── Whisper singleton ────────────────────────────────────────────────────────────
 
-def _add_nvidia_dll_dirs() -> None:
+def _is_windows() -> bool:
+    """Platform check behind a function so tests can flip it without touching
+    the stdlib `os` module — patching os.name globally also changes what
+    pathlib.Path() constructs, which breaks pytest's own tmp-dir cleanup."""
+    return os.name == "nt"
+
+
+def _register_dll_dir(path: str) -> None:
+    """os.add_dll_directory, isolated so it can be observed in a test without
+    monkeypatching an attribute onto the real `os` on non-Windows boxes."""
+    os.add_dll_directory(path)
+
+
+def _add_nvidia_dll_dirs() -> list[str]:
     """Windows: make pip-installed CUDA runtime DLLs visible to ctranslate2.
 
     GPU Whisper needs cuBLAS/cuDNN. Instead of the multi-GB CUDA Toolkit, the
     runtime DLLs install via `pip install nvidia-cublas-cu12 nvidia-cudnn-cu12`
     into site-packages/nvidia/<lib>/bin — but Windows won't find them there
-    unless we register the directories. No-op on Linux and when not installed.
+    unless we register the directories. torch registers its own bundled copies
+    on import; ctranslate2 does not. No-op on Linux and when not installed.
+
+    WHY THIS SILENTLY DID NOTHING. `nvidia` is a NAMESPACE package, so
+    nvidia.__file__ is None and Path(None) raises TypeError — which the old
+    bare `except Exception: pass` swallowed whole. The live result: pip
+    reported nvidia-cublas-cu12 12.9.2.10 and nvidia-cudnn-cu12 9.24.0.43
+    "already satisfied" while whisper kept printing "Library cublas64_12.dll
+    is not found or cannot be loaded" and transcribed on CPU for weeks, and
+    the advice that followed was to install what was already installed.
+    Namespace packages expose __path__, never __file__.
+
+    Returns the directories registered, so a caller (and a test) can tell
+    "nothing to do" apart from "tried and failed".
     """
-    if os.name != "nt":
-        return
+    if not _is_windows():
+        return []
     try:
         import nvidia
-        base = Path(nvidia.__file__).parent
-        for sub in ("cublas", "cudnn"):
-            d = base / sub / "bin"
-            if d.is_dir():
-                os.add_dll_directory(str(d))
-    except Exception:
-        pass
+    except ImportError:
+        print("[whisper] no pip CUDA runtime installed — "
+              "pip install nvidia-cublas-cu12 nvidia-cudnn-cu12 for GPU transcribe")
+        return []
+
+    added: list[str] = []
+    for root in (Path(p) for p in getattr(nvidia, "__path__", [])):
+        # Layout varies by wheel: <lib>/bin on most, <lib>/bin/<arch> on some
+        # Windows builds. Register any bin directory that actually holds DLLs.
+        for d in sorted(root.glob("*/bin")) + sorted(root.glob("*/bin/*")):
+            if not d.is_dir() or not any(d.glob("*.dll")):
+                continue
+            try:
+                _register_dll_dir(str(d))
+                added.append(str(d))
+            except OSError as e:
+                print(f"[whisper] could not register {d} ({e})")
+    if not added:
+        print("[whisper] nvidia package present but no CUDA DLL directory "
+              "found — GPU transcribe will fall back to CPU")
+    return added
 
 
 _whisper_model  = None
