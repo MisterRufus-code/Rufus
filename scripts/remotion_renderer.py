@@ -156,7 +156,7 @@ def render(script: str, bg_paths: "Path | list[Path]", out_dir: Path,
             "edit":              edit,
         }
         props_file = job_dir / "props.json"
-        props_file.write_text(json.dumps(props))
+        props_file.write_text(json.dumps(props), encoding="utf-8")
 
         print(f"[4/4] Remotion render: {len(clip_names)} clip(s) → {audio_dur:.1f}s"
               f"{' + music' if music_name else ''}…")

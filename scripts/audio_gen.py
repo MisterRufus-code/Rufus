@@ -317,13 +317,13 @@ def _transcribe(mp3: Path):
 # ── Config ───────────────────────────────────────────────────────────────────────
 
 def _load_niche() -> dict:
-    data   = json.loads((CONFIG_DIR / "niches.json").read_text())
+    data   = json.loads((CONFIG_DIR / "niches.json").read_text(encoding="utf-8"))
     active = os.environ.get("RUFUS_NICHE_OVERRIDE") or data["active"]
     return data["niches"][active]
 
 
 def _active_niche_name() -> str:
-    data   = json.loads((CONFIG_DIR / "niches.json").read_text())
+    data   = json.loads((CONFIG_DIR / "niches.json").read_text(encoding="utf-8"))
     return os.environ.get("RUFUS_NICHE_OVERRIDE") or data["active"]
 
 
@@ -340,7 +340,7 @@ def _hex_to_ass(hex_color: str) -> str:
 def _opinion_words() -> frozenset:
     """Opinion words from script_standards.json, uppercased for caption matching."""
     try:
-        std = json.loads((CONFIG_DIR / "script_standards.json").read_text())
+        std = json.loads((CONFIG_DIR / "script_standards.json").read_text(encoding="utf-8"))
         return frozenset(w.upper() for w in std.get("opinion_pool", []))
     except Exception:
         return frozenset()

@@ -61,7 +61,7 @@ def _find_font() -> str:
 def _load_niche_accent() -> str:
     """Read active niche's accent_color from niches.json. Returns hex string."""
     try:
-        data   = json.loads((CONFIG_DIR / "niches.json").read_text())
+        data   = json.loads((CONFIG_DIR / "niches.json").read_text(encoding="utf-8"))
         active = os.environ.get("RUFUS_NICHE_OVERRIDE") or data.get("active", "finance")
         return data["niches"][active].get("accent_color", "#FFC53D")
     except Exception:

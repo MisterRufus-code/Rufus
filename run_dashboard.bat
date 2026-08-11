@@ -10,6 +10,9 @@ REM Same pattern as run_scheduled.bat.
 
 chcp 65001 >nul
 set PYTHONIOENCODING=utf-8
+REM PYTHONUTF8: open()/read_text() default to the ANSI code page (cp1255 on a
+REM Hebrew-locale box) — see run.bat for the em-dash corruption this prevents.
+set PYTHONUTF8=1
 
 cd /d "%~dp0"
 

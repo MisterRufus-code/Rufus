@@ -24,6 +24,7 @@ import os
 import random
 import re
 import sys
+from urllib.parse import quote
 from pathlib import Path
 
 import httpx
@@ -170,6 +171,24 @@ SE_NICHE_SITES = {
 # for a niche that's specifically about monetary/economic history. Niches whose
 # SE site needs this extra check go here; sites that are inherently on-topic
 # are simply absent (no filter applied).
+# Free-text queries used to ASK StackExchange for on-topic questions, instead
+# of asking for the site's all-time top 60 and hoping some of them are about
+# money. See _se_url for why that distinction decided whether this source
+# worked at all.
+SE_TOPIC_QUERIES = {
+    "money_history": (
+        "currency debasement", "coinage", "hyperinflation", "taxation",
+        "trade route", "banking", "wages", "mint", "silver", "debt",
+        "tribute", "price of grain", "merchant", "treasury",
+    ),
+}
+
+# How many pages deep to rotate. Page 1 alone is a fixed set; rotating gives a
+# different pool run to run, which is what keeps a daily channel from
+# re-reading the same questions forever.
+SE_MAX_PAGE = 4
+
+
 SE_TOPIC_FILTER_RE = {
     "money_history": re.compile(
         r"\b(money|coin|currency|gold|silver|mint(?:ed|ing)?|"
@@ -346,7 +365,7 @@ def get_trending_context(niche_name: str) -> str | None:
 
 
 def _load_niche():
-    data   = json.loads(NICHES_FILE.read_text())
+    data   = json.loads(NICHES_FILE.read_text(encoding="utf-8"))
     active = os.environ.get("RUFUS_NICHE_OVERRIDE") or data["active"]
     return data["niches"][active], active
 
@@ -378,7 +397,7 @@ def _load_used_seeds() -> list:
     if not USED_SEEDS_FILE.exists():
         return []
     try:
-        return json.loads(USED_SEEDS_FILE.read_text())
+        return json.loads(USED_SEEDS_FILE.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, OSError, UnicodeDecodeError, ValueError):
         print("[research] ⚠ recovered from corrupted used_seeds.json — history reset")
         return []
@@ -397,7 +416,7 @@ def _mark_seed_used(seed: dict) -> None:
             used.remove(sid)
         used.append(sid)
         used = used[-MAX_USED_HISTORY:]
-        USED_SEEDS_FILE.write_text(json.dumps(used, indent=2))
+        USED_SEEDS_FILE.write_text(json.dumps(used, indent=2), encoding="utf-8")
 
 
 def _post_seed_id(post_data: dict) -> str:
@@ -468,7 +487,7 @@ def _load_keys() -> dict:
     if not keys_file.exists():
         return {}
     try:
-        return json.loads(keys_file.read_text())
+        return json.loads(keys_file.read_text(encoding="utf-8"))
     except Exception:
         return {}
 
@@ -514,6 +533,7 @@ def _fetch_reddit_praw(subreddit: str, limit: int = 50, used_ids: set | None = N
             if TITLE_OFFTOPIC_RE.search(title):
                 continue
             if not TITLE_STORY_RE.search(title):
+                rejected["offtopic"] += 1
                 continue
             sid = "reddit:" + f"https://reddit.com{post.permalink}"
             if sid in used_ids:
@@ -590,6 +610,37 @@ def fetch_reddit_story(subreddit: str, limit: int = 50, used_ids: set | None = N
     }
 
 
+def _se_url(site: str, niche_name: str) -> tuple[str, str]:
+    """The StackExchange request, and a human description of it.
+
+    WHY THIS IS NOT `/questions?sort=votes` ANY MORE. That call takes no query
+    and no page, so it returns the SAME all-time top 60 questions on every
+    single run, forever. For history.SE those 60 are the site's famous
+    questions — wars, empires, daily life — and almost none are about money.
+    The consequence is not "sometimes no seed": it is that this source could
+    never succeed, deterministically, while still costing an HTTP call every
+    run. Every log the owner has ever sent shows the same line,
+    "SE history: 60 items, none passed quality filter", which is exactly the
+    signature of a fixed input meeting a fixed filter.
+
+    So ask the site for what this channel is actually about, and move the pool
+    between runs: a topical free-text query where one is defined, and a rotated
+    page either way. money.SE / workplace.SE need no query — every question
+    there is already on topic — but they still get the page rotation, because
+    re-reading the same top 60 for a year is its own dead end.
+    """
+    page = random.randint(1, SE_MAX_PAGE)
+    base = (f"&site={site}&filter=withbody&pagesize=60&page={page}"
+            f"&order=desc&sort=votes")
+    queries = SE_TOPIC_QUERIES.get(niche_name)
+    if queries:
+        q = random.choice(queries)
+        return (f"https://api.stackexchange.com/2.3/search/advanced?q={quote(q)}"
+                + base), f'"{q}", page {page}'
+    return f"https://api.stackexchange.com/2.3/questions?{base.lstrip('&')}", \
+           f"top questions, page {page}"
+
+
 def fetch_stackexchange_story(niche_name: str, used_ids: set | None = None) -> dict | None:
     """Fetch a high-voted story-shaped question from the niche's SE site.
 
@@ -605,10 +656,7 @@ def fetch_stackexchange_story(niche_name: str, used_ids: set | None = None) -> d
         return None
     topic_re = SE_TOPIC_FILTER_RE.get(niche_name)
 
-    url = (
-        "https://api.stackexchange.com/2.3/questions"
-        f"?order=desc&sort=votes&site={site}&filter=withbody&pagesize=60"
-    )
+    url, described = _se_url(site, niche_name)
     try:
         r = httpx.get(url, headers=REDDIT_HEADERS, timeout=SE_TIMEOUT, follow_redirects=True)
         r.raise_for_status()
@@ -617,15 +665,19 @@ def fetch_stackexchange_story(niche_name: str, used_ids: set | None = None) -> d
         print(f"[research] StackExchange unreachable for {site} ({e})")
         return None
 
+    rejected = {"score": 0, "length": 0, "title": 0, "offtopic": 0, "seen": 0}
     quality = []
     for q in items:
         if q.get("score", 0) < SE_MIN_SCORE:
+            rejected["score"] += 1
             continue
         body = _strip_html(q.get("body", ""))
         if not (SE_MIN_BODY_LEN <= len(body) <= SE_MAX_BODY_LEN):
+            rejected["length"] += 1
             continue
         title = _strip_html(q.get("title", ""))
         if TITLE_BAD_RE.search(title) or TITLE_OFFTOPIC_RE.search(title):
+            rejected["title"] += 1
             continue
         if topic_re:
             # A general-purpose SE site (history.SE covers Vikings, wars,
@@ -642,6 +694,7 @@ def fetch_stackexchange_story(niche_name: str, used_ids: set | None = None) -> d
             # one, blocking a source that already costs nothing and is
             # never IP-blocked.
             if not (topic_re.search(title) or topic_re.search(body)):
+                rejected["offtopic"] += 1
                 continue
         else:
             # money.SE / workplace.SE are inherently on-topic (every
@@ -652,12 +705,19 @@ def fetch_stackexchange_story(niche_name: str, used_ids: set | None = None) -> d
                 continue
         link = q.get("link", "")
         if "se:" + link in used_ids:
+            rejected["seen"] += 1
             continue
         quality.append((title, body, link))
 
     if not quality:
-        print(f"[research] SE {site}: {len(items)} items, none passed quality filter")
+        # Name the reason, not just the outcome. "none passed quality filter"
+        # looks like bad luck; "60 items, 58 off-topic" is a dead source, and
+        # the difference between those two readings cost months of runs.
+        why = ", ".join(f"{n} {k}" for k, n in rejected.items() if n)
+        print(f"[research] SE {site} [{described}]: {len(items)} items, "
+              f"none usable ({why or 'no items'})")
         return None
+    print(f"[research] SE {site} [{described}]: {len(quality)} of {len(items)} usable")
 
     title, body, link = random.choice(quality[:SAMPLE_POOL])
     return {
@@ -733,7 +793,7 @@ WIKI_REPLENISH_COUNT     = 60
 
 def _unused_wiki_topic_count(niche_name: str, used_ids: set) -> int:
     try:
-        topics = json.loads(WIKI_TOPICS_FILE.read_text()).get(niche_name, [])
+        topics = json.loads(WIKI_TOPICS_FILE.read_text(encoding="utf-8")).get(niche_name, [])
     except (OSError, json.JSONDecodeError):
         return 0
     n = 0
@@ -763,7 +823,7 @@ def replenish_wiki_topics(niche_name: str, count: int = WIKI_REPLENISH_COUNT) ->
             return 0
 
         try:
-            data = json.loads(WIKI_TOPICS_FILE.read_text())
+            data = json.loads(WIKI_TOPICS_FILE.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
             data = {}
         existing = list(data.get(niche_name, []))
@@ -825,7 +885,7 @@ def replenish_wiki_topics(niche_name: str, count: int = WIKI_REPLENISH_COUNT) ->
     try:
         data.setdefault(niche_name, [])
         data[niche_name].extend(validated)
-        WIKI_TOPICS_FILE.write_text(json.dumps(data, indent=2))
+        WIKI_TOPICS_FILE.write_text(json.dumps(data, indent=2), encoding="utf-8")
         print(f"[research] topic pool: added {len(validated)} validated "
               f"topic(s) to '{niche_name}' ({len(proposed) - len(validated)} "
               f"proposed titles didn't resolve to real articles)")
@@ -852,7 +912,7 @@ def fetch_wikipedia_story(niche_name: str, used_ids: set | None = None) -> dict 
         replenish_wiki_topics(niche_name)   # non-fatal no-op on any failure
 
     try:
-        topics = json.loads(WIKI_TOPICS_FILE.read_text()).get(niche_name, [])
+        topics = json.loads(WIKI_TOPICS_FILE.read_text(encoding="utf-8")).get(niche_name, [])
     except (OSError, json.JSONDecodeError):
         topics = []
     if not topics:
@@ -1218,7 +1278,7 @@ def pick_wisdom_quote(niche_name: str, used_ids: set | None = None) -> dict | No
     if not f.exists():
         return None
     try:
-        data = json.loads(f.read_text())
+        data = json.loads(f.read_text(encoding="utf-8"))
     except Exception as e:
         print(f"[research] WARNING: could not parse {f.name}: {e}")
         return None

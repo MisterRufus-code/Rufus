@@ -37,7 +37,7 @@ def enabled() -> bool:
 
 def _load_key() -> str:
     try:
-        key = json.loads(KEYS_FILE.read_text()).get("openai", "")
+        key = json.loads(KEYS_FILE.read_text(encoding="utf-8")).get("openai", "")
         if key and not key.startswith("YOUR_") and not key.startswith("FILL_"):
             return key
     except Exception:

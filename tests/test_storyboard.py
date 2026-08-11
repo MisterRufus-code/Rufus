@@ -285,3 +285,62 @@ def test_the_through_line_must_be_an_object_too():
     p = _prompt()
     assert "one coin, thinning" in p
     assert "is an essay title and is" in p
+
+
+# ── The Chronicler's cloak changed colour between shots ─────────────────────
+# From the Great Depression run's own images: beat 1 rendered a tan-gold cloak,
+# beat 5 a BLACK one, beat 10 brown. The prompts explain it exactly — beats 1
+# and 10 described the cloak, beat 5 said only "The hooded figure, the
+# Chronicler, appears again". The image model renders each beat from noise with
+# no memory of the others, so naming him is not describing him.
+
+_SHORT = ("a hooded figure in a weathered sepia-and-antique-gold cloak, "
+          "calm face beneath the hood, carrying a small bronze lantern")
+
+_SHOT_1 = ("A hooded figure in a weathered sepia-and-antique-gold cloak stands "
+           "calmly. In one hand, he holds a small bronze lantern, casting a warm "
+           "glow. The background is blurred, suggesting a historical setting.")
+_SHOT_5 = ("The hooded figure, the Chronicler, appears again, standing amidst "
+           "the desolation of a ruined town. His calm demeanor contrasts with "
+           "the devastation around him, his bronze lantern glowing softly.")
+_SHOT_10 = ("The hooded figure, the Chronicler, stands on a busy modern-day "
+            "street. His bronze lantern glows subtly in daylight, serving as a "
+            "reminder of history amidst the hustle and bustle.")
+
+
+def test_the_shot_that_described_him_is_left_alone():
+    """Beat 1 carried the full look and rendered correctly — don't pad it."""
+    assert storyboard._pin_character(_SHOT_1, "the Chronicler", _SHORT) == _SHOT_1
+
+
+def test_the_shots_that_only_named_him_get_his_look_back():
+    for shot in (_SHOT_5, _SHOT_10):
+        out = storyboard._pin_character(shot, "the Chronicler", _SHORT)
+        assert out != shot
+        assert "sepia-and-antique-gold" in out
+        assert "identical in every appearance" in out
+
+
+def test_a_shot_without_the_character_is_untouched():
+    other = "An abandoned factory with rusting machinery and broken windows."
+    assert storyboard._pin_character(other, "the Chronicler", _SHORT) == other
+
+
+def test_no_character_configured_is_a_no_op():
+    assert storyboard._pin_character(_SHOT_5, "", "") == _SHOT_5
+
+
+def test_the_threshold_separates_the_real_shots():
+    """0.67 for the one that worked, 0.33 and 0.27 for the two that didn't —
+    the calibration is the live data, not a guess."""
+    assert storyboard._restates_the_look(_SHOT_1, _SHORT)
+    assert not storyboard._restates_the_look(_SHOT_5, _SHORT)
+    assert not storyboard._restates_the_look(_SHOT_10, _SHORT)
+
+
+def test_main_passes_the_niche_so_the_character_can_be_looked_up():
+    src = (Path(__file__).parent.parent / "scripts" / "main.py").read_text(
+        encoding="utf-8")
+    body = src.split("def _build_sd_prompts")[1]
+    call = body[body.index("storyboard.plan("):body.index("storyboard.plan(") + 260]
+    assert "niche=niche" in call

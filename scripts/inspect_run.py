@@ -30,7 +30,7 @@ CONFIG    = ROOT / "config"
 
 
 def _client() -> OpenAI:
-    keys = json.loads((CONFIG / "keys.json").read_text())
+    keys = json.loads((CONFIG / "keys.json").read_text(encoding="utf-8"))
     key  = keys.get("openai", "")
     if not key or key.startswith("YOUR_"):
         raise SystemExit("OpenAI key not set in config/keys.json")

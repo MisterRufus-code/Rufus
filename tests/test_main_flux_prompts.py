@@ -423,3 +423,43 @@ def test_split_merged_noop_for_single_beat():
 
 def test_split_merged_rejects_chunks_that_would_be_too_short():
     assert main._split_merged_prompts("a. b. c. d. e. f. g. h. i. j.", 10) == []
+
+
+# ── Scenes made of lettering, not just objects that bear it ─────────────────
+# Live: shot 7 of the Great Depression run was "A group of well-dressed
+# individuals ignoring a nearby protest of unemployed workers". It named no
+# text-bearing OBJECT, so the blank-surfaces clause never fired — and the
+# rendered image came back with protest signs reading "ISSUES" in garbled type,
+# the single clearest tell that a machine made the picture.
+
+import importlib, sys as _sys
+from pathlib import Path as _Path
+_sys.path.insert(0, str(_Path(__file__).parent.parent / "scripts"))
+_main = importlib.import_module("main")
+
+
+def test_a_protest_triggers_the_blank_surfaces_clause():
+    shot = ("A group of well-dressed individuals ignoring a nearby protest of "
+            "unemployed workers.")
+    assert _main._DETEXT_SENTINEL in _main._defuse_readable_text(shot)
+
+
+def test_other_lettering_scenes_trigger_it_too():
+    for scene in ("A busy storefront on a wet morning.",
+                  "The trading floor after closing.",
+                  "A classroom of empty chairs.",
+                  "A quiet memorial at the edge of the square.",
+                  "A rally filling the street.",
+                  "A digital display above the desks."):
+        assert _main._DETEXT_SENTINEL in _main._defuse_readable_text(scene), scene
+
+
+def test_a_scene_with_no_lettering_is_still_left_alone():
+    """The clause costs tokens — a clean prompt must stay clean."""
+    plain = "A worn silver coin lies alone on a bare wooden counter."
+    assert _main._defuse_readable_text(plain) == plain
+
+
+def test_the_clause_is_never_applied_twice():
+    once = _main._defuse_readable_text("A protest in the square.")
+    assert _main._defuse_readable_text(once) == once

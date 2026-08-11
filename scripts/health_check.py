@@ -64,7 +64,7 @@ def run() -> None:
     else:
         ok("config/keys.json exists")
         try:
-            keys = json.loads(KEYS_FILE.read_text())
+            keys = json.loads(KEYS_FILE.read_text(encoding="utf-8"))
             oai  = keys.get("openai", "")
             if oai.startswith("sk-") and len(oai) > 20 and not oai.startswith("YOUR_"):
                 ok("OpenAI key set")
@@ -94,7 +94,7 @@ def run() -> None:
         err("config/niches.json", "file not found")
     else:
         try:
-            data   = json.loads(NICHES_FILE.read_text())
+            data   = json.loads(NICHES_FILE.read_text(encoding="utf-8"))
             active = data["active"]
             if active in data["niches"]:
                 ok(f"config/niches.json valid  (active: {active})")
@@ -127,7 +127,7 @@ def run() -> None:
     # ── Voice backends (informational) ─────────────────────────────────────────────
     tts_backend = os.environ.get("RUFUS_TTS", "edge").strip().lower()
     try:
-        keys = json.loads(KEYS_FILE.read_text()) if KEYS_FILE.exists() else {}
+        keys = json.loads(KEYS_FILE.read_text(encoding="utf-8")) if KEYS_FILE.exists() else {}
     except Exception:
         keys = {}
     eleven = keys.get("elevenlabs", "")
@@ -183,7 +183,7 @@ def run() -> None:
 
     # ── ComfyUI stills (only relevant if a niche uses it or it's selected) ───────
     try:
-        _niches = json.loads(NICHES_FILE.read_text()).get("niches", {})
+        _niches = json.loads(NICHES_FILE.read_text(encoding="utf-8")).get("niches", {})
         uses_comfy = (video_src == "comfy"
                       or any(n.get("video_source") == "comfy" for n in _niches.values()))
         if uses_comfy:
@@ -275,7 +275,7 @@ def run() -> None:
     # ── HyperFrames (only relevant if a niche uses it) ────────────────────────────
     try:
         import json as _json
-        niches = _json.loads((CONFIG_DIR / "niches.json").read_text()).get("niches", {})
+        niches = _json.loads((CONFIG_DIR / "niches.json").read_text(encoding="utf-8")).get("niches", {})
         uses_hf = any(n.get("video_source") == "hyperframes" for n in niches.values())
         if uses_hf:
             import subprocess as _sp

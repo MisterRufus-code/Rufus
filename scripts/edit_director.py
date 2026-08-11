@@ -139,7 +139,7 @@ def direct(beats: list[str]) -> dict | None:
         keys_file = CONFIG_DIR / "keys.json"
         key = ""
         if keys_file.exists():
-            key = json.loads(keys_file.read_text()).get("openai", "")
+            key = json.loads(keys_file.read_text(encoding="utf-8")).get("openai", "")
         if not key or key.startswith("YOUR_") or key.startswith("FILL_"):
             return None
         resp = OpenAI(api_key=key).chat.completions.create(

@@ -67,7 +67,7 @@ def _check_audio_duration(path: Path, min_secs: float = MIN_TRACK_SECS) -> bool:
 
 def _load_jamendo_key() -> str:
     try:
-        return json.loads(KEYS_FILE.read_text()).get("jamendo_client_id", "")
+        return json.loads(KEYS_FILE.read_text(encoding="utf-8")).get("jamendo_client_id", "")
     except (json.JSONDecodeError, OSError):
         return ""
 

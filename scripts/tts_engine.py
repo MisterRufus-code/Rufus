@@ -296,7 +296,7 @@ def _xtts(script: str, out_path: Path) -> None:
 def _eleven_key() -> str:
     """Read the ElevenLabs key from config/keys.json. '' if unset/placeholder."""
     try:
-        key = json.loads(KEYS_FILE.read_text()).get("elevenlabs", "")
+        key = json.loads(KEYS_FILE.read_text(encoding="utf-8")).get("elevenlabs", "")
     except Exception:
         return ""
     if not key or key.startswith("YOUR_") or key.startswith("FILL_"):

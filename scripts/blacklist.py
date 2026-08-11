@@ -18,13 +18,13 @@ BLACKLIST_FILE = Path(__file__).parent.parent / "config" / "blacklist.json"
 
 def _load() -> list[str]:
     if BLACKLIST_FILE.exists():
-        return json.loads(BLACKLIST_FILE.read_text())
+        return json.loads(BLACKLIST_FILE.read_text(encoding="utf-8"))
     return []
 
 
 def _save(items: list[str]) -> None:
     BLACKLIST_FILE.parent.mkdir(parents=True, exist_ok=True)
-    BLACKLIST_FILE.write_text(json.dumps(items, indent=2, ensure_ascii=False))
+    BLACKLIST_FILE.write_text(json.dumps(items, indent=2, ensure_ascii=False), encoding="utf-8")
 
 
 def check(topic: str) -> bool:

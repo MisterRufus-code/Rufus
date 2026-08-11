@@ -96,7 +96,7 @@ class Channel:
     # ── Niche composition ────────────────────────────────────────────────────────
 
     def niche_cfg(self, niche_name: str) -> dict:
-        data = json.loads(NICHES_FILE.read_text())
+        data = json.loads(NICHES_FILE.read_text(encoding="utf-8"))
         base = dict(data["niches"].get(niche_name, {}))
         base.update(self.niche_overrides.get(niche_name, {}))
         return base
@@ -107,7 +107,7 @@ class Channel:
 
 def _synthesize_legacy() -> Channel:
     """Pre-channels.json install → behave exactly like the original single channel."""
-    data = json.loads(NICHES_FILE.read_text())
+    data = json.loads(NICHES_FILE.read_text(encoding="utf-8"))
     return Channel(
         id=LEGACY_ID,
         display_name="Main (legacy single-channel)",
@@ -120,7 +120,7 @@ def _synthesize_legacy() -> Channel:
 def list_channels() -> list[str]:
     if not CHANNELS_FILE.exists():
         return [LEGACY_ID]
-    return list(json.loads(CHANNELS_FILE.read_text()).get("channels", {}).keys())
+    return list(json.loads(CHANNELS_FILE.read_text(encoding="utf-8")).get("channels", {}).keys())
 
 
 def load_channel(channel_id: str | None = None) -> Channel:
@@ -128,7 +128,7 @@ def load_channel(channel_id: str | None = None) -> Channel:
     if not CHANNELS_FILE.exists():
         return _synthesize_legacy()
 
-    data     = json.loads(CHANNELS_FILE.read_text())
+    data     = json.loads(CHANNELS_FILE.read_text(encoding="utf-8"))
     channels = data.get("channels", {})
     cid      = (channel_id
                 or os.environ.get("RUFUS_CHANNEL", "").strip()

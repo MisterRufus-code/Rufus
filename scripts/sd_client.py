@@ -207,7 +207,7 @@ def _niche_style_suffix() -> str:
     """Per-niche cinematic style from niches.json — keeps all images on-brand."""
     import os
     try:
-        data   = json.loads((CONFIG_DIR / "niches.json").read_text())
+        data   = json.loads((CONFIG_DIR / "niches.json").read_text(encoding="utf-8"))
         active = os.environ.get("RUFUS_NICHE_OVERRIDE") or data["active"]
         return data["niches"][active].get("style_suffix", "") or QUALITY_SUFFIX
     except Exception:

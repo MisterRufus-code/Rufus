@@ -428,7 +428,7 @@ def _is_duplicate(h: int, accepted: list[int], n_prior: int) -> bool:
 
 def _load_prior_hashes() -> list[int]:
     try:
-        data = json.loads(FRESH_HASH_FILE.read_text())
+        data = json.loads(FRESH_HASH_FILE.read_text(encoding="utf-8"))
         return [int(h) for h in data.get("hashes", [])][-FRESH_HASH_CAP:]
     except (OSError, json.JSONDecodeError, ValueError):
         return []
@@ -438,7 +438,7 @@ def _save_hashes(hashes: list[int]) -> None:
     try:
         FRESH_HASH_FILE.parent.mkdir(parents=True, exist_ok=True)
         FRESH_HASH_FILE.write_text(
-            json.dumps({"hashes": hashes[-FRESH_HASH_CAP:]}))
+            json.dumps({"hashes": hashes[-FRESH_HASH_CAP:]}), encoding="utf-8")
     except OSError as e:
         print(f"[comfy] couldn't save image-hash history: {e}")
 

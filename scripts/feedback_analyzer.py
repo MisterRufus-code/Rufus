@@ -108,7 +108,7 @@ def _analyze_channel(channel):
 
     path = channel.learnings_path
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(learnings, indent=2))
+    path.write_text(json.dumps(learnings, indent=2), encoding="utf-8")
 
     print(f"[feedback] {channel.id}: learnings updated → {path} ({n} videos)")
     print(f"[feedback] best niches:  {best_niches}")

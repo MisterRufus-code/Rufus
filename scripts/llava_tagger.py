@@ -23,7 +23,7 @@ def _active_niche(data: dict) -> str:
 
 
 def _load_client() -> OpenAI:
-    keys = json.loads((CONFIG_DIR / "keys.json").read_text())
+    keys = json.loads((CONFIG_DIR / "keys.json").read_text(encoding="utf-8"))
     key  = keys.get("openai", "")
     if not key or key.startswith("YOUR_"):
         raise ValueError("OpenAI key not set in config/keys.json")
@@ -157,7 +157,7 @@ def pick_best_video(candidates: list[Path], llava_context: str,
     """
     client = _load_client()
 
-    niches     = json.loads((CONFIG_DIR / "niches.json").read_text())
+    niches     = json.loads((CONFIG_DIR / "niches.json").read_text(encoding="utf-8"))
     active     = _active_niche(niches)
     niche_name = niches["niches"][active]["display_name"]
 
@@ -245,7 +245,7 @@ def pick_best_video(candidates: list[Path], llava_context: str,
 
 
 def load_niche_context() -> str:
-    niches = json.loads((CONFIG_DIR / "niches.json").read_text())
+    niches = json.loads((CONFIG_DIR / "niches.json").read_text(encoding="utf-8"))
     active = _active_niche(niches)
     return niches["niches"][active]["llava_context"]
 

@@ -36,7 +36,7 @@ def _iter_records(days: int | None = None):
         if cutoff and path.stem < cutoff:
             continue
         try:
-            with open(path) as f:
+            with open(path, encoding="utf-8") as f:
                 for line in f:
                     line = line.strip()
                     if not line:
@@ -139,7 +139,7 @@ def cmd_winners(args):
     out_path.write_text(json.dumps(
         [{"hook": h, "score": s, "niche": n, "seed_type": st}
          for h, s, n, st in top],
-        indent=2))
+        indent=2), encoding="utf-8")
     print(f"\n  wrote {out_path}")
 
 
@@ -155,7 +155,7 @@ def cmd_losers(args):
     out_path.write_text(json.dumps(
         [{"hook": h, "score": s, "niche": n, "seed_type": st}
          for h, s, n, st in bottom],
-        indent=2))
+        indent=2), encoding="utf-8")
     print(f"\n  wrote {out_path}")
 
 

@@ -15,7 +15,7 @@ NICHES_FILE = Path(__file__).parent.parent / "config" / "niches.json"
 
 
 def main():
-    data = json.loads(NICHES_FILE.read_text())
+    data = json.loads(NICHES_FILE.read_text(encoding="utf-8"))
 
     if len(sys.argv) < 2 or sys.argv[1] == "list":
         print(f"Active niche: {data['active']}\n")
@@ -32,7 +32,7 @@ def main():
         sys.exit(1)
 
     data["active"] = target
-    NICHES_FILE.write_text(json.dumps(data, indent=2, ensure_ascii=False))
+    NICHES_FILE.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
     print(f"Switched to: {target}  ({data['niches'][target]['display_name']})")
 
 

@@ -2,11 +2,20 @@
 REM run.bat — daily Rufus run on Windows 11 + RTX 3090.
 REM Defaults to ComfyUI/FLUX images + GPU Whisper/NVENC. Edit the env lines to taste.
 
-REM UTF-8 console: without this, em-dashes and quotes print as mojibake
-REM (e.g. "ג€”") on Hebrew-locale Windows. Cosmetic in the console but the
-REM same misreads can corrupt the tee'd log file.
+REM UTF-8, in BOTH places it matters — they are different bugs.
+REM   chcp + PYTHONIOENCODING : the CONSOLE and the tee'd log.
+REM   PYTHONUTF8              : open() and Path.read_text(), which otherwise
+REM                             use the ANSI code page. On this Hebrew-locale
+REM                             box that is cp1255, and every config file here
+REM                             is UTF-8, so an em-dash read out of
+REM                             niches.json came back as "ג€”" — which is
+REM                             exactly what a live run printed for a CTA that
+REM                             then goes into the YouTube description. That
+REM                             one is NOT cosmetic and chcp does not fix it;
+REM                             the text is corrupt before it reaches stdout.
 chcp 65001 >nul
 set PYTHONIOENCODING=utf-8
+set PYTHONUTF8=1
 
 cd /d "%~dp0"
 

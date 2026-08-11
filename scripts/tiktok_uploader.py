@@ -60,18 +60,18 @@ def _load_keys() -> dict:
             f"Missing {KEYS_FILE}. Create it with "
             '{"client_key": "...", "client_secret": "..."}'
         )
-    return json.loads(KEYS_FILE.read_text())
+    return json.loads(KEYS_FILE.read_text(encoding="utf-8"))
 
 
 def _save_token(data: dict) -> None:
     data["_saved_at"] = int(time.time())
-    TOKEN_FILE.write_text(json.dumps(data, indent=2))
+    TOKEN_FILE.write_text(json.dumps(data, indent=2), encoding="utf-8")
 
 
 def _load_token() -> dict | None:
     if not TOKEN_FILE.exists():
         return None
-    return json.loads(TOKEN_FILE.read_text())
+    return json.loads(TOKEN_FILE.read_text(encoding="utf-8"))
 
 
 def _refresh_if_needed(token: dict, keys: dict) -> dict:
@@ -157,7 +157,7 @@ def _access_token() -> str:
 # ── Niche / metadata ────────────────────────────────────────────────────────────
 
 def _active_niche() -> tuple[dict, str]:
-    data   = json.loads(NICHES_FILE.read_text())
+    data   = json.loads(NICHES_FILE.read_text(encoding="utf-8"))
     active = os.environ.get("RUFUS_NICHE_OVERRIDE") or data["active"]
     return data["niches"][active], active
 

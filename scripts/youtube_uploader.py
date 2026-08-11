@@ -137,13 +137,13 @@ def get_authenticated_service(channel=None):
                 ) from e
 
         token_file.parent.mkdir(parents=True, exist_ok=True)
-        token_file.write_text(creds.to_json())
+        token_file.write_text(creds.to_json(), encoding="utf-8")
 
     return build("youtube", "v3", credentials=creds)
 
 
 def load_niche():
-    niches = json.loads(NICHES_FILE.read_text())
+    niches = json.loads(NICHES_FILE.read_text(encoding="utf-8"))
     active = os.environ.get("RUFUS_NICHE_OVERRIDE") or niches["active"]
     return niches["niches"][active], active
 

@@ -45,18 +45,18 @@ _standards_cache: dict | None = None
 def _standards() -> dict:
     global _standards_cache
     if _standards_cache is None:
-        _standards_cache = json.loads(STANDARDS_FILE.read_text())
+        _standards_cache = json.loads(STANDARDS_FILE.read_text(encoding="utf-8"))
     return _standards_cache
 
 
 def _load_niche():
-    data   = json.loads(NICHES_FILE.read_text())
+    data   = json.loads(NICHES_FILE.read_text(encoding="utf-8"))
     active = os.environ.get("RUFUS_NICHE_OVERRIDE") or data["active"]
     return data["niches"][active], active
 
 
 def _load_key() -> str:
-    keys = json.loads(KEYS_FILE.read_text())
+    keys = json.loads(KEYS_FILE.read_text(encoding="utf-8"))
     key  = keys.get("openai", "")
     if not key or key.startswith("YOUR_") or key.startswith("FILL_"):
         raise ValueError("OpenAI key not set in config/keys.json")
@@ -73,7 +73,7 @@ def _load_learnings() -> dict:
         path = LEARNINGS_FILE
     if path.exists():
         try:
-            return json.loads(path.read_text())
+            return json.loads(path.read_text(encoding="utf-8"))
         except (json.JSONDecodeError, OSError):
             return {}
     return {}
@@ -218,7 +218,7 @@ def _dedupe_similar_hooks(hooks: list[str]) -> list[str]:
 def _load_gold_examples(niche_name: str) -> list[dict]:
     if not GOLD_EXAMPLES_FILE.exists():
         return []
-    data = json.loads(GOLD_EXAMPLES_FILE.read_text())
+    data = json.loads(GOLD_EXAMPLES_FILE.read_text(encoding="utf-8"))
     return data.get(niche_name, [])
 
 
@@ -2394,7 +2394,7 @@ def _load_embeddings() -> list[dict]:
     if not EMBEDDINGS_FILE.exists():
         return []
     try:
-        return json.loads(EMBEDDINGS_FILE.read_text())
+        return json.loads(EMBEDDINGS_FILE.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, OSError, UnicodeDecodeError, ValueError):
         return []
 
@@ -2430,7 +2430,7 @@ def add_embedding(vec: list | None, channel: str = "main_en") -> None:
             kept.append(e)
             by_channel[ch] = by_channel.get(ch, 0) + 1
     kept.reverse()
-    EMBEDDINGS_FILE.write_text(json.dumps(kept))
+    EMBEDDINGS_FILE.write_text(json.dumps(kept), encoding="utf-8")
 
 
 # ── Topic clustering (beyond wording-level dedup) ─────────────────────────────
@@ -2470,7 +2470,7 @@ def _load_topic_embeddings() -> list[dict]:
     if not TOPIC_EMBEDDINGS_FILE.exists():
         return []
     try:
-        return json.loads(TOPIC_EMBEDDINGS_FILE.read_text())
+        return json.loads(TOPIC_EMBEDDINGS_FILE.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, OSError, UnicodeDecodeError, ValueError):
         return []
 
@@ -2522,14 +2522,14 @@ def add_topic_embedding(vec: list | None, channel: str = "main_en",
             kept.append(e)
             by_channel[ch] = by_channel.get(ch, 0) + 1
     kept.reverse()
-    TOPIC_EMBEDDINGS_FILE.write_text(json.dumps(kept))
+    TOPIC_EMBEDDINGS_FILE.write_text(json.dumps(kept), encoding="utf-8")
 
 
 def check_blacklist(script: str) -> bool:
     if not BLACKLIST_FILE.exists():
         return False
     try:
-        items = json.loads(BLACKLIST_FILE.read_text())
+        items = json.loads(BLACKLIST_FILE.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, OSError, UnicodeDecodeError, ValueError):
         return False
     return _blacklist_key(script) in items
@@ -2538,13 +2538,13 @@ def check_blacklist(script: str) -> bool:
 def add_to_blacklist(script: str) -> None:
     BLACKLIST_FILE.parent.mkdir(parents=True, exist_ok=True)
     try:
-        items = json.loads(BLACKLIST_FILE.read_text()) if BLACKLIST_FILE.exists() else []
+        items = json.loads(BLACKLIST_FILE.read_text(encoding="utf-8")) if BLACKLIST_FILE.exists() else []
     except (json.JSONDecodeError, OSError, UnicodeDecodeError, ValueError):
         items = []
     key   = _blacklist_key(script)
     if key not in items:
         items.append(key)
-    BLACKLIST_FILE.write_text(json.dumps(items[-500:], indent=2))
+    BLACKLIST_FILE.write_text(json.dumps(items[-500:], indent=2), encoding="utf-8")
 
 
 if __name__ == "__main__":

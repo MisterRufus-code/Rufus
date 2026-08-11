@@ -62,7 +62,7 @@ def _auth(channel):
                     f"once interactively to regenerate {token_file}."
                 ) from e
         token_file.parent.mkdir(parents=True, exist_ok=True)
-        token_file.write_text(creds.to_json())
+        token_file.write_text(creds.to_json(), encoding="utf-8")
     return creds
 
 

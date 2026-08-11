@@ -168,6 +168,51 @@ def _is_a_thing(carries: str) -> bool:
     return bool(concrete)
 
 
+# How much of the character's look a shot must already restate before we accept
+# it as self-sufficient. Calibrated on the Great Depression run's three
+# Chronicler shots: 0.67 for the one that described him, 0.33 and 0.27 for the
+# two that only named him — and those two are the ones that came back wrong.
+_CHARACTER_ECHO_MIN = 0.5
+
+
+def _restates_the_look(visual: str, short_ref: str) -> bool:
+    """Whether this shot repeats enough of the character's appearance."""
+    words = {w for w in re.findall(r"[a-z]+", short_ref.lower())
+             if w not in _STOPWORDS and len(w) > 2}
+    if not words:
+        return True
+    seen = set(re.findall(r"[a-z]+", visual.lower()))
+    return len(words & seen) / len(words) >= _CHARACTER_ECHO_MIN
+
+
+def _pin_character(visual: str, name: str, short_ref: str) -> str:
+    """Restate the character's LOOK in any shot that only names them.
+
+    The image model renders each beat from noise with no memory of the others,
+    so "The hooded figure, the Chronicler, appears again" gives it nothing to
+    match and it invents an appearance.
+
+    Live proof, from the Great Depression run's own images. Beat 1 said
+    "weathered sepia-and-antique-gold cloak" and rendered a tan-gold cloak.
+    Beat 10 said "sepia-and-gold cloak" and rendered brown. Beat 5 said only
+    "The hooded figure, the Chronicler, appears again" — and rendered him in a
+    BLACK cloak. One character, named three times, three different colours on
+    screen, in a channel whose whole point is a recurring figure.
+
+    The storyboard is the right place to fix it: it is the only stage that
+    knows a later shot is the SAME person as an earlier one.
+    """
+    if not name or not short_ref:
+        return visual
+    bare = re.sub(r"(?i)^the\s+", "", name).strip()
+    if not bare or bare.lower() not in visual.lower():
+        return visual
+    if _restates_the_look(visual, short_ref):
+        return visual
+    return (f"{visual.rstrip().rstrip('.')}. {name} is {short_ref} — the same "
+            f"figure, identical in every appearance.")
+
+
 def _clean(plan: dict, n_beats: int) -> list[str] | None:
     """The visuals in beat order, or None if the reply can't be trusted.
 
@@ -200,8 +245,23 @@ def _clean(plan: dict, n_beats: int) -> list[str] | None:
     return out
 
 
+def _character(niche: str | None) -> tuple[str, str]:
+    """(name, short_ref) for the niche's recurring character, or ("", "")."""
+    if not niche:
+        return "", ""
+    try:
+        import character_engine
+        if not character_engine.enabled(niche):
+            return "", ""
+        cfg = character_engine.niche_character(niche) or {}
+        return str(cfg.get("name", "")).strip(), character_engine.short_ref(niche)
+    except Exception as e:
+        print(f"[storyboard] character look-up skipped (non-fatal): {e}")
+        return "", ""
+
+
 def plan(script: str, beats: list[str], era_tags: list[str] | None = None,
-         character_clause: str = "") -> list[str] | None:
+         character_clause: str = "", niche: str | None = None) -> list[str] | None:
     """One visual per beat, planned as a sequence. None to use the old path."""
     if not enabled() or not beats:
         return None
@@ -211,7 +271,7 @@ def plan(script: str, beats: list[str], era_tags: list[str] | None = None,
         keys_file = CONFIG_DIR / "keys.json"
         key = ""
         if keys_file.exists():
-            key = json.loads(keys_file.read_text()).get("openai", "")
+            key = json.loads(keys_file.read_text(encoding="utf-8")).get("openai", "")
         if not key or key.startswith("YOUR_") or key.startswith("FILL_"):
             return None
         resp = OpenAI(api_key=key).chat.completions.create(
@@ -223,6 +283,14 @@ def plan(script: str, beats: list[str], era_tags: list[str] | None = None,
         )
         raw = json.loads(resp.choices[0].message.content or "{}")
         visuals = _clean(raw, len(beats))
+        if visuals:
+            name, short = _character(niche)
+            pinned = [_pin_character(v, name, short) for v in visuals]
+            n_fixed = sum(1 for a, b in zip(visuals, pinned) if a != b)
+            if n_fixed:
+                print(f"[storyboard] restated {name}'s look in {n_fixed} shot(s) "
+                      f"that only named him")
+            visuals = pinned
     except Exception as e:
         print(f"[storyboard] skipped (non-fatal): {e}")
         return None

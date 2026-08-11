@@ -399,14 +399,14 @@ SETTINGS_SCHEMA = [
 
 def _load_settings() -> dict:
     try:
-        return json.loads(SETTINGS_FILE.read_text())
+        return json.loads(SETTINGS_FILE.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError, ValueError):
         return {}
 
 
 def _save_settings(values: dict) -> None:
     SETTINGS_FILE.parent.mkdir(parents=True, exist_ok=True)
-    SETTINGS_FILE.write_text(json.dumps(values, indent=2))
+    SETTINGS_FILE.write_text(json.dumps(values, indent=2), encoding="utf-8")
 
 
 # Processes THIS dashboard launched, keyed by channel id — the only ones it

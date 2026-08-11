@@ -379,11 +379,26 @@ def _split_beats(script: str, max_scenes: int = 10, min_words: int = 3) -> list[
 # the crisis", "'Follow' button with Bitcoin graphics". This deterministic
 # net catches every prompt that mentions one and appends a defusing clause,
 # regardless of whether the instruction was obeyed.
+#
+# TWO KINDS OF TRIGGER, and the second was missing. An OBJECT that bears text
+# (newspaper, ledger, screen) is easy to name. A SCENE that implies text is
+# not: nobody writes "sign" when they write "a protest of unemployed workers",
+# but a protest is placards, and placards are lettering. Live proof from the
+# Great Depression run — shot 7 was "A group of well-dressed individuals
+# ignoring a nearby protest of unemployed workers", it matched nothing here, so
+# the blank-surfaces clause never fired, and the rendered image came back with
+# signs reading "ISSUES" in garbled type. Same gap for a storefront, a trading
+# floor, a classroom, a memorial.
 _TEXT_PROP_RE = re.compile(
-    r"(?i)\b(newspaper|headline|calendar|screen|smartphone|phone|laptop|monitor|"
-    r"button|sign|signage|label|poster|banner|document|ledger|letter|scroll|"
-    r"parchment|statement|contract|certificate|chart|graph|ticker|keyboard|"
-    r"billboard|menu|book|page|note)\b")
+    r"(?i)\b(newspaper|headline|calendar|screen|display|smartphone|phone|laptop|"
+    r"monitor|button|sign|signage|label|poster|banner|placard|document|ledger|"
+    r"letter|scroll|parchment|statement|contract|certificate|chart|graph|"
+    r"ticker|keyboard|billboard|menu|book|page|note|"
+    # scenes that are made of lettering even when no object is named
+    r"protest|protesters|demonstration|rally|march|picket|strike|"
+    r"storefront|shopfront|shop front|store front|marquee|"
+    r"stock exchange|trading floor|newsstand|classroom|blackboard|whiteboard|"
+    r"memorial|gravestone|headstone|plaque|map)\b")
 
 # PHRASED AFFIRMATIVELY, ON PURPOSE. The previous version of this clause read
 # "…absolutely no readable text, numbers, or interface elements anywhere in the
@@ -535,7 +550,7 @@ RECENT_PROMPTS_FILE = CONFIG_DIR / "recent_image_prompts.json"
 def _recent_image_prompts(limit_runs: int = 8, max_lines: int = 25) -> list[str]:
     """Last few runs' image prompts for the active channel, oldest first."""
     try:
-        data = json.loads(RECENT_PROMPTS_FILE.read_text())
+        data = json.loads(RECENT_PROMPTS_FILE.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return []
     ch = os.environ.get("RUFUS_CHANNEL", "main_en")
@@ -553,7 +568,7 @@ def _remember_image_prompts(prompts: list[str], cap_runs: int = 24) -> None:
     data: dict = {}
     if RECENT_PROMPTS_FILE.exists():
         try:
-            data = json.loads(RECENT_PROMPTS_FILE.read_text())
+            data = json.loads(RECENT_PROMPTS_FILE.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
             data = {}
     runs = data.get("runs", [])
@@ -565,7 +580,7 @@ def _remember_image_prompts(prompts: list[str], cap_runs: int = 24) -> None:
     data["runs"] = runs[-cap_runs:]
     try:
         RECENT_PROMPTS_FILE.parent.mkdir(parents=True, exist_ok=True)
-        RECENT_PROMPTS_FILE.write_text(json.dumps(data, indent=2))
+        RECENT_PROMPTS_FILE.write_text(json.dumps(data, indent=2), encoding="utf-8")
     except OSError as e:
         print(f"[fresh] couldn't save image-prompt history: {e}")
 
@@ -631,7 +646,7 @@ def _build_sd_prompts(script: str, niche: str, max_scenes: int = 10) -> list[str
     n = len(beats)
 
     try:
-        niche_data  = json.loads(NICHES_FILE.read_text())
+        niche_data  = json.loads(NICHES_FILE.read_text(encoding="utf-8"))
         niche_style = niche_data["niches"].get(niche, {}).get("style_suffix", "")
     except Exception:
         niche_style = ""
@@ -651,7 +666,7 @@ def _build_sd_prompts(script: str, niche: str, max_scenes: int = 10) -> list[str
         keys_file = CONFIG_DIR / "keys.json"
         key = ""
         if keys_file.exists():
-            key = json.loads(keys_file.read_text()).get("openai", "")
+            key = json.loads(keys_file.read_text(encoding="utf-8")).get("openai", "")
         if not key or key.startswith("YOUR_") or key.startswith("FILL_"):
             raise RuntimeError(
                 "OpenAI key missing — SD prompt generation requires GPT-4o-mini.\n"
@@ -691,7 +706,7 @@ def _build_sd_prompts(script: str, niche: str, max_scenes: int = 10) -> list[str
             shots = storyboard.plan(
                 script, beats,
                 era_tags=[_beat_era_tag(b, period) for b in beats],
-                character_clause=char_clause)
+                character_clause=char_clause, niche=niche)
             if shots:
                 shots = [_defuse_readable_text(s) for s in shots]
                 for i, s in enumerate(shots):
@@ -720,7 +735,7 @@ def _build_sd_prompts(script: str, niche: str, max_scenes: int = 10) -> list[str
         is_flux = _vs == "comfy"
         if not _vs:
             try:
-                _nd = json.loads(NICHES_FILE.read_text())
+                _nd = json.loads(NICHES_FILE.read_text(encoding="utf-8"))
                 is_flux = _nd["niches"].get(niche, {}).get("video_source") == "comfy"
             except Exception:
                 is_flux = False
@@ -973,7 +988,7 @@ def _build_sd_prompts(script: str, niche: str, max_scenes: int = 10) -> list[str
 
 
 def load_niche_cfg(override: str = None):
-    data = json.loads(NICHES_FILE.read_text())
+    data = json.loads(NICHES_FILE.read_text(encoding="utf-8"))
     if override:
         if override not in data["niches"]:
             print(f"Unknown niche '{override}'. Available: {list(data['niches'])}")
@@ -987,7 +1002,7 @@ def load_niche_cfg(override: str = None):
 def _todays_niche() -> str:
     """Pick today's niche from config schedule. Day-of-year mod schedule length."""
     from datetime import datetime
-    data     = json.loads(NICHES_FILE.read_text())
+    data     = json.loads(NICHES_FILE.read_text(encoding="utf-8"))
     schedule = data.get("schedule") or [data.get("active", "finance")]
     doy      = datetime.now().timetuple().tm_yday   # 1-366
     return schedule[(doy - 1) % len(schedule)]
@@ -995,7 +1010,7 @@ def _todays_niche() -> str:
 
 def _all_scheduled_niches() -> list[str]:
     """Return unique niches present in schedule, preserving order."""
-    data     = json.loads(NICHES_FILE.read_text())
+    data     = json.loads(NICHES_FILE.read_text(encoding="utf-8"))
     schedule = data.get("schedule") or [data.get("active", "finance")]
     seen     = []
     for n in schedule:
@@ -1421,7 +1436,7 @@ def run(skip_upload: bool = False, niche_override: str = None, output_dir: Path 
         qc = run_qc(output_path)
         print_report(qc)
         try:
-            Path(str(output_path) + ".qc.json").write_text(json.dumps(qc, indent=2))
+            Path(str(output_path) + ".qc.json").write_text(json.dumps(qc, indent=2), encoding="utf-8")
         except OSError:
             pass
     except Exception as e:
@@ -1656,7 +1671,7 @@ if __name__ == "__main__":
                 return ch.schedule
         except Exception:
             pass
-        data = json.loads(NICHES_FILE.read_text())
+        data = json.loads(NICHES_FILE.read_text(encoding="utf-8"))
         return data.get("schedule") or [data.get("active", "finance")]
 
     if args.rotate:
