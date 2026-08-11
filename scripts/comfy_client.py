@@ -1024,6 +1024,22 @@ def generate_clips(queries: list[str], n: int = 4,
                   f"({_stills_only_reason or 'RUFUS_LTX=0'})")
     except Exception as e:
         print(f"[comfy] ltx unavailable ({e})")
+    # Text-to-video is reported but NOT added to the motion chain: every entry
+    # in that chain is contracted to receive a still, and this engine takes
+    # only words. Reporting it here keeps an opted-in engine from being
+    # invisibly absent, which is the failure mode this pipeline keeps hitting.
+    try:
+        import wan_t2v_client
+        if wan_t2v_client.enabled():
+            t2v_ok, t2v_why = wan_t2v_client.ready()
+            print(f"[comfy] text-to-video wan 2.2: "
+                  f"{'ON' if t2v_ok else 'off'} — {t2v_why}")
+            if t2v_ok:
+                print(f"[comfy]   seed lineage {wan_t2v_client.run_seed()}, "
+                      f"chaining {'on' if wan_t2v_client.chaining() else 'off'} "
+                      f"(RUFUS_T2V_CHAIN=1 carries objects between beats)")
+    except Exception as e:
+        print(f"[comfy] text-to-video unavailable ({e})")
     try:
         import svd_client
         if frames_per_beat == 1 and svd_client.img2vid_enabled():
