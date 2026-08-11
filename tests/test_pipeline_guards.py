@@ -998,3 +998,32 @@ def test_run_or_notify_passes_through_on_success(monkeypatch):
     monkeypatch.setattr(main, "run", lambda **kwargs: calls.append(kwargs))
     main._run_or_notify("finance", channel_id="main_en")   # must not raise
     assert calls == [{"niche_override": "finance", "channel_id": "main_en"}]
+
+
+# ── Both renderers must survive a missing CUDA DLL ──────────────────────────
+# audio_gen._transcribe wraps transcribe() with a GPU→CPU fallback, and its own
+# docstring says why: ctranslate2 lazy-loads cuBLAS, so a missing
+# cublas64_12.dll only surfaces on the FIRST transcribe() call, never at model
+# construction. remotion_renderer called the model directly and skipped that
+# wrapper — so the same DLL the FFmpeg path had been shrugging off for weeks
+# aborted the entire Remotion render, fell back to FFmpeg, and re-ran the voice
+# from scratch.
+
+def test_every_transcribe_call_goes_through_the_cpu_fallback():
+    from pathlib import Path as _P
+    scripts = _P(__file__).parent.parent / "scripts"
+    offenders = []
+    for py in scripts.glob("*.py"):
+        if py.name == "audio_gen.py":
+            continue            # the wrapper itself is where the raw call lives
+        if "_whisper().transcribe" in py.read_text():
+            offenders.append(py.name)
+    assert not offenders, (
+        f"{offenders} call the whisper model directly — use "
+        f"audio_gen._transcribe(mp3), which falls back to CPU")
+
+
+def test_the_remotion_path_transcribes_through_the_wrapper():
+    from pathlib import Path as _P
+    src = (_P(__file__).parent.parent / "scripts" / "remotion_renderer.py").read_text()
+    assert "audio_gen._transcribe(mp3)" in src

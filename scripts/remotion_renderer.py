@@ -84,7 +84,13 @@ def render(script: str, bg_paths: "Path | list[Path]", out_dir: Path,
         audio_gen._tts(script, mp3)
 
         print("[2/4] Transcribing…")
-        segs, _ = audio_gen._whisper().transcribe(str(mp3), word_timestamps=True)
+        # Go through _transcribe, never the model object directly — the
+        # CUDA→CPU fallback lives in that wrapper. Live cost of
+        # skipping it: a box without cublas64_12.dll raised here, which aborted
+        # the WHOLE Remotion render, fell back to FFmpeg, and re-ran the voice
+        # from scratch — paying for a Kokoro load twice over a missing DLL the
+        # FFmpeg path had already been shrugging off for weeks.
+        segs, _ = audio_gen._transcribe(mp3)
         segments = list(segs)
         if not segments:
             raise RuntimeError("Whisper produced no segments")
