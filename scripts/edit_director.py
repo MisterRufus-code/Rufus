@@ -26,7 +26,10 @@ prerequisite for one.
 
 import json
 import os
+import sys
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parent))
 
 CONFIG_DIR = Path(__file__).parent.parent / "config"
 
@@ -38,6 +41,14 @@ MOTIONS = ("push_in", "pull_back", "hold_still", "drift_left",
 
 # How hard the move is. "hold_still" ignores it; everything else scales by it.
 INTENSITIES = ("subtle", "normal", "strong")
+
+# The emotional map rides along in this same reply rather than costing a second
+# model call — the director is already the one stage that reads the finished
+# script end to end, so it is the cheapest place to ask what each beat FEELS
+# like on top of how it moves. Consumed by emotional_map for per-beat grading
+# and SFX weight; see that module for why this is not a gate.
+import emotional_map  # noqa: E402
+from emotional_map import TONES  # noqa: E402  (vocabulary, not behaviour)
 
 MODEL_DEFAULT = "gpt-4o-mini"
 MAX_EMPHASIS_WORDS = 4
@@ -79,6 +90,14 @@ def _prompt(beats: list[str]) -> str:
         "hold_stills around the turn) is real editing.\n"
         "- The opening beat has one job: stop the scroll. The closing beat has "
         "one job: let the question sit.\n\n"
+        f"TONE — how the beat FEELS, one of exactly: {', '.join(TONES)}\n"
+        "- tension: something is wrong, or about to be.\n"
+        "- curiosity: the question is open and the answer is withheld.\n"
+        "- revelation: the turn, the number, the thing the video was built for.\n"
+        "- weight: the consequence, the cost, the aftermath.\n"
+        "- resolution: the line that lets it sit.\n"
+        "- neutral: narration carrying information. Most beats are this one, "
+        "and a video where every beat is a revelation has none.\n\n"
         "EMPHASIS: 0-3 words per beat that the caption should hit hardest — "
         "the figure, the name, the reversal. Copy them EXACTLY as they appear "
         "in the beat, including case. Most beats need none; a beat where every "
@@ -86,7 +105,7 @@ def _prompt(beats: list[str]) -> str:
         "Reply with ONLY this JSON, no prose:\n"
         '{"peak_beat": <the beat number where the story turns>,\n'
         ' "beats": [{"n": 1, "motion": "...", "intensity": "...", '
-        '"emphasis": ["..."]}, ...]}\n'
+        '"tone": "...", "emphasis": ["..."]}, ...]}\n'
         f"Exactly {len(beats)} entries, n from 1 to {len(beats)}."
     )
 
@@ -121,8 +140,13 @@ def _clean(plan: dict, n_beats: int) -> dict | None:
         # the four slots, silently dropping a word the director meant to hit.
         emphasis = [s for s in (str(w).strip() for w in emphasis) if s
                     ][:MAX_EMPHASIS_WORDS]
-        beats.append({"n": i + 1, "motion": motion,
-                      "intensity": intensity, "emphasis": emphasis})
+        # Tone degrades where motion rejects. An unknown motion name is a plan
+        # the renderer cannot execute, so the whole plan is refused; an unknown
+        # tone just grades that beat neutral. Refusing a good edit plan over a
+        # cosmetic field would trade a working feature for a new one.
+        tone = emotional_map.normalise(entry.get("tone"))
+        beats.append({"n": i + 1, "motion": motion, "intensity": intensity,
+                      "tone": tone, "emphasis": emphasis})
 
     peak = plan.get("peak_beat")
     if not isinstance(peak, int) or not 1 <= peak <= n_beats:
@@ -130,10 +154,27 @@ def _clean(plan: dict, n_beats: int) -> dict | None:
     return {"peak_beat": peak, "beats": beats}
 
 
+# Memo for one process, keyed on the exact beats. Both renderers now ask for a
+# plan, and the Remotion→FFmpeg fallback asks twice for the same script inside
+# a single run — without this that is two model calls and, worse, two DIFFERENT
+# plans for one video (temperature 0.7), so the grade would not match the edit
+# the director actually chose.
+_plan_cache: dict[tuple[str, ...], dict | None] = {}
+
+
 def direct(beats: list[str]) -> dict | None:
     """An edit plan for these beats, or None to use the renderer's default."""
     if not enabled() or not beats:
         return None
+    cache_key = tuple(beats)
+    if cache_key in _plan_cache:
+        return _plan_cache[cache_key]
+    plan = _direct_uncached(beats)
+    _plan_cache[cache_key] = plan
+    return plan
+
+
+def _direct_uncached(beats: list[str]) -> dict | None:
     try:
         from openai import OpenAI
         keys_file = CONFIG_DIR / "keys.json"
@@ -158,4 +199,6 @@ def direct(beats: list[str]) -> dict | None:
         return None
     moves = ", ".join(b["motion"] for b in plan["beats"])
     print(f"[director] peak at beat {plan['peak_beat']} — {moves}")
+    print(f"[director] tones: "
+          f"{emotional_map.describe([b['tone'] for b in plan['beats']])}")
     return plan

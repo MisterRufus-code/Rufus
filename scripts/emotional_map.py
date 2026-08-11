@@ -1,0 +1,162 @@
+#!/usr/bin/env python3
+"""
+emotional_map.py — one per-beat tone that the whole render reads from.
+
+THE PROBLEM THIS SOLVES. Three systems already decide how a beat should feel,
+and none of them can see the other two:
+
+    storyboard.py     picks the shot
+    edit_director.py  picks the camera move  ("peak at beat 7 → push_in, rise…")
+    audio_gen.py      places the SFX and grades the picture
+
+Each is reasonable alone. Together they are three separate opinions about the
+same video that never compare notes — the grade is one global `ffmpeg_eq` from
+niches.json applied identically to every beat, the SFX are placed by position
+rather than by meaning, and the camera move is chosen by a model that no other
+stage can hear. That is what reads as flat: not a missing agent, a missing
+shared artifact.
+
+WHAT THIS IS. A tone per beat, and the pure translation from a tone into the
+concrete numbers the renderer already accepts. No model call, no network, no
+new pipeline stage — edit_director already asks a model to read the script, so
+the tone rides along in that same reply at no extra cost, and everything here
+is a lookup on the result.
+
+DELIBERATELY NOT A GATE. This codebase has been bitten by stacked deterministic
+gates rejecting work for stylistic reasons (see CLAUDE.md on the wasted-
+generation rejection ladder). Nothing here can reject anything. An unknown tone
+degrades to NEUTRAL, a missing plan degrades to the niche's own grade, and the
+render is identical to today's. The worst case is no effect.
+
+WHY THE GRADES ARE SMALL. These are ±0.12 nudges around the niche's base look,
+not a filter. A grade you notice is a grade that is too strong — the eye should
+read "this beat feels colder" without being able to say why. Beat-to-beat
+contrast is what carries feeling; absolute values are what break a channel's
+consistent look.
+"""
+
+from __future__ import annotations
+
+# The vocabulary. Small on purpose: every tone here must map to a render
+# difference a viewer can actually perceive. A longer list would produce tones
+# that grade identically, which is vocabulary without meaning.
+TONES = (
+    "tension",      # something is wrong / about to go wrong — cold, hard, drained
+    "curiosity",    # the question is open — cool and clean, slightly lifted
+    "revelation",   # the turn, the number, the reveal — warm and saturated
+    "weight",       # consequence, aftermath, cost — dark and desaturated
+    "resolution",   # the line that lets it sit — warm, soft, low contrast
+    "neutral",      # narration carrying information; the base look
+)
+
+NEUTRAL = "neutral"
+
+# tone → (contrast, saturation, brightness, gamma, red shift, blue shift)
+#
+# Contrast/saturation/brightness/gamma feed ffmpeg's `eq`; the two shifts feed
+# `colorbalance` midtones and are what actually carry warm-vs-cold, which is
+# the axis a viewer feels most and names least.
+_GRADE: dict[str, tuple[float, float, float, float, float, float]] = {
+    "tension":    (1.12, 0.88, -0.02, 0.98, -0.04,  0.06),
+    "curiosity":  (1.04, 0.97,  0.01, 1.00, -0.02,  0.03),
+    "revelation": (1.08, 1.12,  0.02, 1.02,  0.05, -0.04),
+    "weight":     (1.06, 0.82, -0.04, 0.96, -0.01,  0.02),
+    "resolution": (0.98, 1.04,  0.01, 1.02,  0.04, -0.02),
+    "neutral":    (1.00, 1.00,  0.00, 1.00,  0.00,  0.00),
+}
+
+# tone → how loud this beat's SFX should sit, relative to the mix's own level.
+# The riser into a revelation should be audible; a resolution beat should not
+# have a whoosh competing with the closing line.
+_SFX_WEIGHT: dict[str, float] = {
+    "tension":    1.15,
+    "curiosity":  0.95,
+    "revelation": 1.25,
+    "weight":     1.05,
+    "resolution": 0.70,
+    "neutral":    1.00,
+}
+
+# Clamps. A model that returns a tone is trusted; arithmetic on top of a
+# niche's own base grade is not — a niche could ship ffmpeg_eq=contrast=1.4 and
+# a tension beat on top of it would crush the picture.
+_CONTRAST_RANGE   = (0.70, 1.60)
+_SATURATION_RANGE = (0.30, 1.80)
+_BRIGHTNESS_RANGE = (-0.20, 0.20)
+_GAMMA_RANGE      = (0.70, 1.40)
+
+
+def normalise(tone: object) -> str:
+    """Any input → a tone this module knows. Never raises, never rejects."""
+    if not isinstance(tone, str):
+        return NEUTRAL
+    t = tone.strip().lower()
+    return t if t in TONES else NEUTRAL
+
+
+def _clamp(value: float, bounds: tuple[float, float]) -> float:
+    lo, hi = bounds
+    return max(lo, min(hi, value))
+
+
+def sfx_weight(tone: object) -> float:
+    """Relative SFX gain for a beat of this tone. 1.0 is today's behaviour."""
+    return _SFX_WEIGHT[normalise(tone)]
+
+
+def grade_filter(tone: object, base_contrast: float = 1.1,
+                 base_saturation: float = 1.0) -> str:
+    """An ffmpeg filter fragment grading one clip for `tone`.
+
+    Multiplies onto the niche's own base look rather than replacing it, so a
+    channel keeps its identity and the tone only bends it. Returns an `eq`
+    alone when the tone is neutral — no colorbalance node for zero shift, since
+    a no-op filter still costs a pass over every frame of every clip.
+    """
+    contrast, saturation, brightness, gamma, r_shift, b_shift = _GRADE[normalise(tone)]
+
+    c = _clamp(base_contrast * contrast, _CONTRAST_RANGE)
+    s = _clamp(base_saturation * saturation, _SATURATION_RANGE)
+    b = _clamp(brightness, _BRIGHTNESS_RANGE)
+    g = _clamp(gamma, _GAMMA_RANGE)
+
+    eq = f"eq=contrast={c:.3f}:saturation={s:.3f}:brightness={b:.3f}:gamma={g:.3f}"
+    if r_shift == 0.0 and b_shift == 0.0:
+        return eq
+    return f"{eq},colorbalance=rm={r_shift:.3f}:bm={b_shift:.3f}"
+
+
+def tones_from_plan(plan: dict | None, n_beats: int) -> list[str]:
+    """The per-beat tone list from an edit_director plan.
+
+    Fail-open at every step: no plan, a short plan, a plan with junk in it —
+    all produce a full-length list of NEUTRAL, which grades exactly as the
+    pipeline does today.
+    """
+    tones = [NEUTRAL] * max(0, n_beats)
+    if not isinstance(plan, dict):
+        return tones
+
+    beats = plan.get("beats")
+    if not isinstance(beats, list):
+        return tones
+
+    for i, entry in enumerate(beats):
+        if i >= n_beats:
+            break
+        if isinstance(entry, dict):
+            tones[i] = normalise(entry.get("tone"))
+    return tones
+
+
+def describe(tones: list[str]) -> str:
+    """One log line. The map is invisible in the output by design, so the log
+    is the only place its work is legible — and a run where every beat came
+    back NEUTRAL should be obvious at a glance, not something to infer from a
+    video that looks unchanged."""
+    if not tones:
+        return "no beats"
+    shown = ", ".join(tones)
+    if all(t == NEUTRAL for t in tones):
+        return f"{shown}  (no tones in the edit plan — grading unchanged)"
+    return shown

@@ -525,8 +525,16 @@ def _concat_input_lengths(boundaries: list[float], total: float) -> list[float]:
 
 # ── FFmpeg filter_complex builders ───────────────────────────────────────────────
 
-def _ken_burns_part(i: int, dur: float, over_w: int, over_h: int, pad_y: int) -> str:
-    """Scale-up + animated crop = Ken Burns pan for clip i over its own duration."""
+def _ken_burns_part(i: int, dur: float, over_w: int, over_h: int, pad_y: int,
+                    grade: str = "") -> str:
+    """Scale-up + animated crop = Ken Burns pan for clip i over its own duration.
+
+    `grade` is this beat's tone grade from emotional_map, applied per clip
+    instead of the single global `ffmpeg_eq` the whole video used to share.
+    Empty string keeps the old behaviour exactly — the global grade still runs
+    later in _finish_video either way, so this only ever bends the niche's look,
+    never replaces it.
+    """
     x_exprs = [
         f"({over_w}-{W})*t/{dur:.3f}",
         f"({over_w}-{W})*(1-t/{dur:.3f})",
@@ -538,11 +546,28 @@ def _ken_burns_part(i: int, dur: float, over_w: int, over_h: int, pad_y: int) ->
     ]
     pan_x = x_exprs[i % len(x_exprs)]
     pan_y = y_exprs[i % len(y_exprs)]
+    grade_str = f"{grade}," if grade else ""
     return (
         f"[{i}:v]setpts=PTS-STARTPTS,scale={over_w}:{over_h}:force_original_aspect_ratio=increase,"
         f"crop={W}:{H}:{pan_x}:{pan_y},"
+        f"{grade_str}"
         f"setsar=1,fps={FPS},format=yuv420p,settb=AVTB[v{i}]"
     )
+
+
+def _parse_base_eq(eq_filter: str) -> tuple[float, float]:
+    """(contrast, saturation) out of a niche's `ffmpeg_eq` string.
+
+    The per-beat grade multiplies onto these so a channel keeps its own look
+    and the tone only bends it. A niche that ships an eq this can't read — or
+    ships something other than eq= entirely — falls back to neutral 1.0/1.0,
+    which grades relative to nothing and is still a valid picture.
+    """
+    def _field(name: str) -> float:
+        m = re.search(rf"\b{name}=(-?\d+(?:\.\d+)?)", eq_filter or "")
+        return float(m.group(1)) if m else 1.0
+
+    return _field("contrast"), _field("saturation")
 
 
 def _ffmpeg_filter_path_escape(path) -> str:
@@ -588,10 +613,13 @@ def _finish_video(parts: list[str], total: float, eq_filter: str,
 def _video_filter_complex(input_lengths: list[float], boundaries: list[float],
                           total: float, over_w: int, over_h: int, pad_y: int,
                           eq_filter: str, ass_esc: str, fonts_dir_esc: str,
-                          accent_hex: str) -> str:
+                          accent_hex: str, grades: list[str] | None = None) -> str:
     """Ken Burns per clip → sentence-aligned xfades → grade/bar/captions."""
     n = len(input_lengths)
-    parts = [_ken_burns_part(i, input_lengths[i], over_w, over_h, pad_y) for i in range(n)]
+    grades = grades or []
+    parts = [_ken_burns_part(i, input_lengths[i], over_w, over_h, pad_y,
+                             grades[i] if i < len(grades) else "")
+             for i in range(n)]
 
     if n == 1:
         parts.append("[v0]null[vcat]")
@@ -613,10 +641,13 @@ def _video_filter_complex(input_lengths: list[float], boundaries: list[float],
 def _video_filter_complex_concat(input_lengths: list[float], total: float,
                                  over_w: int, over_h: int, pad_y: int,
                                  eq_filter: str, ass_esc: str, fonts_dir_esc: str,
-                                 accent_hex: str) -> str:
+                                 accent_hex: str, grades: list[str] | None = None) -> str:
     """Hard-concat fallback (no transitions). Used when xfade errors."""
     n = len(input_lengths)
-    parts = [_ken_burns_part(i, input_lengths[i], over_w, over_h, pad_y) for i in range(n)]
+    grades = grades or []
+    parts = [_ken_burns_part(i, input_lengths[i], over_w, over_h, pad_y,
+                             grades[i] if i < len(grades) else "")
+             for i in range(n)]
     if n == 1:
         parts.append("[v0]null[vcat]")
     else:
@@ -932,6 +963,32 @@ def render(script: str, bg_paths: "Path | list[Path]", out_dir: Path,
         over_w      = int(W * 1.10)
         over_h      = int(H * 1.10)
         pad_y       = (over_h - H) // 2
+
+        # Per-beat grading. The FFmpeg path is the one that actually renders
+        # today (Remotion has its own fallback into here), so the emotional map
+        # has to land in BOTH or it repeats the mistake that left the edit plan
+        # computed-and-discarded on every run. edit_director memoises per
+        # process, so asking here after Remotion already asked costs nothing
+        # and — more importantly — returns the SAME plan rather than a second
+        # one at temperature 0.7.
+        grades: list[str] = []
+        tones:  list[str] = []
+        try:
+            import emotional_map
+            import edit_director
+            import main as _main
+            beats = _main._split_beats(script, max_scenes=n)
+            plan  = edit_director.direct(beats) if len(beats) == n else None
+            tones = emotional_map.tones_from_plan(plan, n)
+            base_c, base_s = _parse_base_eq(eq_filter)
+            grades = [emotional_map.grade_filter(t, base_c, base_s) for t in tones]
+            if plan is not None:
+                print(f"      grade: {emotional_map.describe(tones)}")
+        except Exception as e:
+            # Never a prerequisite for a render — an ungraded video is the
+            # video this pipeline shipped yesterday.
+            print(f"[grade] skipped (non-fatal): {e}")
+            grades, tones = [], []
         ass_esc     = _ffmpeg_filter_path_escape(ass).replace("'", "\\'")
         fonts_esc   = _ffmpeg_filter_path_escape(FONTS_DIR).replace("'", "\\'")
         has_music   = music_path is not None and Path(music_path).exists()
@@ -947,14 +1004,26 @@ def render(script: str, bg_paths: "Path | list[Path]", out_dir: Path,
                 sfx = {}
         sfx_files:  list[Path] = []
         sfx_events: list[tuple[float, float]] = []
+        # Each effect is weighted by the tone of the beat it introduces, so the
+        # riser into a revelation is audible and a whoosh does not compete with
+        # a resolution beat's closing line. Without tones every weight is 1.0
+        # and these are the exact gains the mix used before.
+        def _w(beat_index: int) -> float:
+            if not tones:
+                return 1.0
+            import emotional_map
+            return emotional_map.sfx_weight(tones[min(beat_index, len(tones) - 1)])
+
         if sfx:
-            sfx_files.append(sfx["hit"]);  sfx_events.append((0.03, SFX_HIT_GAIN))
-            for b in boundaries:
+            sfx_files.append(sfx["hit"])
+            sfx_events.append((0.03, SFX_HIT_GAIN * _w(0)))
+            for k, b in enumerate(boundaries):
                 sfx_files.append(sfx["whoosh"])
-                sfx_events.append((max(0.0, b - 0.18), SFX_WHOOSH_GAIN))
+                sfx_events.append((max(0.0, b - 0.18), SFX_WHOOSH_GAIN * _w(k + 1)))
             if boundaries:
                 riser_at = max(0.5, boundaries[-1] - 1.25)
-                sfx_files.append(sfx["riser"]); sfx_events.append((riser_at, SFX_RISER_GAIN))
+                sfx_files.append(sfx["riser"])
+                sfx_events.append((riser_at, SFX_RISER_GAIN * _w(len(boundaries))))
 
         use_xfade = n > 1 and _ffmpeg_has_xfade()
         print(f"[4/4] Rendering {n} clip{'s' if n > 1 else ''} → {audio_dur:.1f}s"
@@ -986,7 +1055,8 @@ def render(script: str, bg_paths: "Path | list[Path]", out_dir: Path,
         if use_xfade:
             fc = (
                 _video_filter_complex(lens_xfade, boundaries, audio_dur, over_w, over_h,
-                                      pad_y, eq_filter, ass_esc, fonts_esc, accent_hex)
+                                      pad_y, eq_filter, ass_esc, fonts_esc, accent_hex,
+                                      grades)
                 + ";\n"
                 + _audio_filter_complex(n, audio_dur, has_music, sfx_events,
                                         with_deesser=_ffmpeg_has_filter("deesser"))
@@ -1008,7 +1078,8 @@ def render(script: str, bg_paths: "Path | list[Path]", out_dir: Path,
         if not rendered:
             fc = (
                 _video_filter_complex_concat(lens_concat, audio_dur, over_w, over_h,
-                                             pad_y, eq_filter, ass_esc, fonts_esc, accent_hex)
+                                             pad_y, eq_filter, ass_esc, fonts_esc,
+                                             accent_hex, grades)
                 + ";\n"
                 + _audio_filter_simple(n, audio_dur, has_music,
                                        with_loudnorm=_ffmpeg_has_filter("loudnorm"))
