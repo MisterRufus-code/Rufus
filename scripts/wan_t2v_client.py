@@ -248,6 +248,13 @@ def last_frame(mp4_path: Path, png_path: Path) -> bool:
     except subprocess.TimeoutExpired:
         print("[t2v] last-frame extraction timed out")
         return False
+    except OSError as e:
+        # ffmpeg absent from PATH raises FileNotFoundError here, not a non-zero
+        # return code. Letting it propagate would break the fail-open contract
+        # this whole file is built on — chaining must degrade to plain t2v, not
+        # take the run down with it.
+        print(f"[t2v] ffmpeg unavailable ({e}) — cannot chain from the last frame")
+        return False
     if r.returncode != 0:
         print(f"[t2v] last-frame extraction failed: {r.stderr[-200:]}")
         return False
@@ -301,6 +308,9 @@ def _finish(src_mp4: Path, out_path: Path, duration: float) -> bool:
         r = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
     except subprocess.TimeoutExpired:
         print("[t2v] ffmpeg post-process timed out")
+        return False
+    except OSError as e:
+        print(f"[t2v] ffmpeg unavailable ({e}) — clip cannot be finished")
         return False
     if r.returncode != 0:
         print(f"[t2v] ffmpeg failed: {r.stderr[-300:]}")

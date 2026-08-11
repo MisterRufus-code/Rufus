@@ -209,3 +209,21 @@ def test_settings_report_what_the_run_will_actually_do(monkeypatch):
 def test_portrait_by_default():
     cfg = t2v.settings()
     assert cfg["height"] > cfg["width"], "Shorts are vertical"
+
+
+def test_no_ffmpeg_on_path_degrades_instead_of_raising(monkeypatch, tmp_path):
+    """Caught by CI, which has no ffmpeg: subprocess raises FileNotFoundError
+    rather than returning non-zero, so a bare `except TimeoutExpired` let it
+    propagate. Chaining must degrade to plain t2v, never take the run down."""
+    import subprocess as sp
+
+    def boom(*a, **k):
+        raise FileNotFoundError(2, "No such file or directory", "ffmpeg")
+
+    monkeypatch.setattr(sp, "run", boom)
+    monkeypatch.setattr(t2v.subprocess, "run", boom)
+
+    clip = tmp_path / "clip.mp4"
+    clip.write_bytes(b"not really a video")
+    assert t2v.last_frame(clip, tmp_path / "out.png") is False
+    assert t2v._finish(clip, tmp_path / "out.mp4", 5.0) is False
