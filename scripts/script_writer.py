@@ -756,6 +756,108 @@ def _body_pre_check(script: str) -> str | None:
     return violations[0] if violations else None
 
 
+def _protected_lines(script: str) -> tuple[list[str], list[str], list[str]]:
+    """Split a script into (head, middle, tail) where head and tail must not be
+    edited by any repair.
+
+    Line 1 is the hook — the one line the whole video is scored on. The last
+    line is the CTA, which is dictated verbatim by the niche. The second-to-last
+    is the loop line, which must keep sharing a content word with the hook. Every
+    repair below works only on what is left.
+    """
+    lines = [l.strip() for l in script.split("\n") if l.strip()]
+    if len(lines) < 4:
+        return lines, [], []
+    return lines[:1], lines[1:-2], lines[-2:]
+
+
+def _repair_length(script: str, cap: int) -> str:
+    """Drop trailing body sentences until the script is under `cap` words.
+
+    A 120-word script against a 115-word cap used to cost a whole generation —
+    the live log shows attempt 1 of 3 burned on a five-word overage. That is the
+    banned-phrase lesson again: if the fix is mechanical and we would accept it
+    anyway, spending an LLM round-trip to arrive at it is pure waste.
+
+    Trims from the END of the middle block because a beat's closing sentence is
+    the most expendable — the setup and the turn carry the structure. The caller
+    re-validates everything afterwards, so a trim that breaks specificity or the
+    loop is discarded exactly like a banned-phrase repair that guts a sentence.
+    """
+    head, middle, tail = _protected_lines(script)
+    if not middle:
+        return script
+
+    def _words(hd, md, tl) -> int:
+        return len(" ".join(hd + md + tl).split())
+
+    middle = list(middle)
+    # Sentence-level first: finer-grained than dropping whole lines, so the
+    # script loses the least it can while still getting under the cap.
+    while _words(head, middle, tail) > cap:
+        for i in range(len(middle) - 1, -1, -1):
+            sentences = [s.strip() for s in _SENTENCE_RE.findall(middle[i]) if s.strip()]
+            if len(sentences) > 1:
+                middle[i] = " ".join(sentences[:-1])
+                break
+        else:
+            if len(middle) <= 1:
+                break
+            middle.pop()
+    return "\n".join(head + middle + tail)
+
+
+def _repair_cadence(script: str) -> str:
+    """Join two adjacent short body sentences into one longer, flowing one.
+
+    The observed failure is "missing a longer, flowing sentence (≥15 words)",
+    and it is the prompt's own fault: DELIVERY tells the model to "split it into
+    short sentences instead", then this gate rejects the result for having only
+    short sentences. The prompt now states the rhythm requirement too, but a
+    model that still lands short should not cost a generation to fix — joining
+    two sentences with a comma is exactly the edit a human editor would make.
+    """
+    head, middle, tail = _protected_lines(script)
+    if not middle:
+        return script
+
+    def _join(a: str, b: str) -> str | None:
+        n = len(a.split()) + len(b.split())
+        # Below 15 it does not satisfy the gate; above 26 the "fix" is a run-on
+        # worse than the violation, and DELIVERY explicitly forbids those.
+        if n < 15 or n > 26 or not b:
+            return None
+        return f"{a.rstrip('.!?')}, {b[0].lower()}{b[1:]}"
+
+    # Within a single line first — the least disruptive edit available.
+    for i, line in enumerate(middle):
+        sentences = [s.strip() for s in _SENTENCE_RE.findall(line) if s.strip()]
+        for j in range(len(sentences) - 1):
+            merged = _join(sentences[j], sentences[j + 1])
+            if merged is None:
+                continue
+            new_middle = list(middle)
+            new_middle[i] = " ".join(sentences[:j] + [merged] + sentences[j + 2:])
+            return "\n".join(head + new_middle + tail)
+
+    # Then across two adjacent body lines. These scripts are usually written one
+    # beat per line, so the two short sentences that need joining are far more
+    # often neighbours across a line break than inside one line.
+    for i in range(len(middle) - 1):
+        first = [s.strip() for s in _SENTENCE_RE.findall(middle[i]) if s.strip()]
+        second = [s.strip() for s in _SENTENCE_RE.findall(middle[i + 1]) if s.strip()]
+        if not first or not second:
+            continue
+        merged = _join(first[-1], second[0])
+        if merged is None:
+            continue
+        new_middle = list(middle)
+        new_middle[i] = " ".join(first[:-1] + [merged] + second[1:])
+        new_middle.pop(i + 1)
+        return "\n".join(head + new_middle + tail)
+    return script
+
+
 def _cadence_violation(script: str) -> str | None:
     """Pattern-interrupt check: a script whose sentences are all a similar
     length reads as monotone/algorithmic even with perfect content and a
@@ -1440,7 +1542,8 @@ BEAT 2 — TURN (lines 4-5): The gut-punch reversal that changes everything the 
 
 BEAT 3 — PAYOFF (lines 6-7): Reveal the mechanism — WHY the turn happened, what pattern it proves. Give the viewer the "click" moment where they understand something they've been living without knowing. No advice. Show the truth, then step back.
 
-BODY ({body['min_words']}-{body['max_words']} words total including hook and CTA):
+BODY — TARGET {body['min_words'] + (body['max_words'] - body['min_words']) * 2 // 3} WORDS total including hook and CTA.
+{body['max_words']} is a HARD CAP that fails the script; do not write up to it, write to the target.
 - Every sentence either adds evidence or builds tension. No filler.
 - Use specific names, numbers, dates, dollar amounts. At least one specific per 25 words.
 - OPINION WORD (required): body must contain at least one of these exact words: {opinion_all}
@@ -1456,6 +1559,13 @@ DELIVERY (this is read aloud by TTS, not just read on screen):
   breath before the punch — not mid-sentence filler.
 - Never write a long comma-chained run-on when the moment deserves a hard stop.
   Split it into short sentences instead.
+
+RHYTHM (required — a script of same-length sentences reads as machine-written):
+- At least ONE short, punchy sentence of 6 words or fewer. The hook usually is one.
+- At least ONE longer, flowing sentence of 15 words or more, somewhere in the body.
+- These two coexist with the rule above: hard stops at the MOMENTS, one sustained
+  sentence where the explanation genuinely needs room to breathe. Contrast between
+  sentence lengths is the point; every sentence being short is its own monotony.
 
 SECOND-TO-LAST LINE (LOOP):
 A question or restatement that SHARES AT LEAST ONE CONTENT WORD with the hook. This drives replays.
@@ -1972,6 +2082,35 @@ def write_script(scene_description: str, seed: dict | None = None,
                     accumulated_fixes.append(fix)
             else:
                 violations.append(f"banned phrase: '{_banned}'")
+
+        # Same trade for the two mechanical violations that dominate the live
+        # ladders. A five-word overage and a missing long sentence are edits we
+        # would make by hand and accept; buying them with a whole generation is
+        # the "wasted-generation rejection ladder" AGENTS.md warns about. The
+        # model is still TOLD via accumulated_fixes, so later attempts stop
+        # producing them — only the round-trip goes away.
+        #
+        # A repair is accepted ONLY if it strictly reduces the violation list.
+        # That is what keeps a trim from silently trading "too long" for
+        # "low specificity" or a broken loop.
+        for _label, _repair in (
+            ("too long", lambda s: _repair_length(s, _standards()["body"]["max_words"])),
+            ("cadence",  _repair_cadence),
+        ):
+            _before = _body_violations(script)
+            if not any(v.startswith(_label) for v in _before):
+                continue
+            _candidate = _repair(script)
+            if _candidate == script:
+                continue
+            _after = _body_violations(_candidate)
+            if len(_after) < len(_before) and not any(
+                    v.startswith(_label) for v in _after):
+                print(f"[gpt] repaired '{_label}' in place (no retry spent)")
+                script = _candidate
+                fix = _fix_for(next(v for v in _before if v.startswith(_label)))
+                if fix and fix not in accumulated_fixes:
+                    accumulated_fixes.append(fix)
 
         violations += _body_violations(script)
         rejection = violations[0] if violations else None

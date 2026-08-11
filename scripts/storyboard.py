@@ -103,18 +103,41 @@ def _prompt(script: str, beats: list[str], era_tags: list[str],
         "no inscriptions, no dates on objects — the image model garbles "
         "lettering and it is the clearest sign a machine made this. Write the "
         "object as a blank physical thing instead.\n"
+        "7. DECIDE THE PLACE BEFORE YOU DRAW ANY SHOT. `setting` names the ONE "
+        "location this sequence lives in, described by its physical anchors — "
+        "the surface, the walls, the light and where it comes from. \"A low "
+        "stone counting-house: oak counter, lime-washed walls, one high window "
+        "throwing hard light from the left\" is right. \"Renaissance Europe\" "
+        "and \"a place of financial power\" are wrong: they are labels, not "
+        "rooms, and every shot invents its own building from them. The point "
+        "of naming the anchors is that they RECUR — the same counter, the same "
+        "wall, the same light direction — so consecutive shots read as one "
+        "place seen from different angles rather than ten unrelated buildings. "
+        "Shots that leave it (a street, the present day) are fine and expected; "
+        "they just have to be a deliberate departure from somewhere, and the "
+        "sequence should come back.\n"
+        "8. THE LIGHT IS PART OF THE PLACE. Whatever direction and quality you "
+        "give the setting, keep it in every shot set there. Light that jumps "
+        "from window-left to firelit-right between two shots of the same room "
+        "is the fastest way to make one location look like two.\n"
         f"{character_clause}"
         "\nEach `visual` is 2-3 plain sentences describing only what the camera "
         "sees: the subject, what it is doing or how it sits, and the setting. "
         "No camera bodies, no lens specs, no style words — the renderer adds "
         "the house style itself.\n\n"
         "Reply with ONLY this JSON:\n"
-        '{"through_line": "<the ONE physical object the sequence returns to — '
+        '{"setting": "<the one place, named by its physical anchors: surface, '
+        'walls, light source and direction. A room a camera could stand in, '
+        'not a period or a theme>",\n'
+        ' "through_line": "<the ONE physical object the sequence returns to — '
         'a thing, not a topic. \\"one coin, thinning\\" is right; \\"rising '
         'unemployment and its impact on society\\" is an essay title and is '
         'wrong>",\n'
-        ' "shots": [{"n": 1, "visual": "...", "carries_over": null}, ...]}\n'
-        f"Exactly {len(beats)} shots, n from 1 to {len(beats)}."
+        ' "shots": [{"n": 1, "visual": "...", "carries_over": null, '
+        '"in_setting": true}, ...]}\n'
+        f"Exactly {len(beats)} shots, n from 1 to {len(beats)}. Set "
+        f"`in_setting` false only for a shot that deliberately leaves the "
+        f"place."
     )
 
 
@@ -166,6 +189,84 @@ def _is_a_thing(carries: str) -> bool:
              if w not in _STOPWORDS]
     concrete = [w for w in words if w not in _ABSTRACT]
     return bool(concrete)
+
+
+# A setting has to be a room, not a label. "Renaissance Europe" and "a place of
+# financial power" are the failure this guards: they name a period or a theme,
+# so every shot invents its own building and the sequence looks like ten
+# unrelated locations — the same mistake _is_a_thing catches for the object
+# thread, one level up at the level of place.
+_SETTING_MIN_WORDS = 6
+
+# Physical anchors. A usable setting names at least one surface or structure and
+# at least one light source, because those are what actually recur between
+# shots — a room described only as "grand" gives the model nothing to repeat.
+_SETTING_STRUCTURE = {
+    "wall", "walls", "floor", "ceiling", "counter", "table", "desk", "bench",
+    "door", "doorway", "window", "windows", "arch", "column", "beam", "stair",
+    "stairs", "shelf", "shelves", "crate", "crates", "stall", "roof", "vault",
+    "corridor", "hall", "room", "chamber", "yard", "courtyard", "quay", "dock",
+    "street", "workshop", "foundry", "office", "warehouse", "cellar", "kitchen",
+    "stone", "oak", "timber", "brick", "plaster", "tile", "marble",
+}
+_SETTING_LIGHT = {
+    "light", "lit", "sunlight", "daylight", "lamplight", "candlelight",
+    "firelight", "lantern", "candle", "lamp", "window", "windows", "shadow",
+    "shadows", "glow", "dim", "bright", "overcast", "dusk", "dawn", "gloom",
+}
+
+
+def _in_setting_flags(raw: dict, n: int) -> list[bool]:
+    """Per-shot `in_setting`, defaulting to True.
+
+    Missing or malformed means "yes, this shot is in the room" — the common
+    case by a wide margin, and the safe one: restating a place the shot was
+    already in costs nothing, while omitting it is the failure this exists to
+    stop.
+    """
+    shots = raw.get("shots")
+    flags = [True] * n
+    if not isinstance(shots, list):
+        return flags
+    for i, entry in enumerate(shots[:n]):
+        if isinstance(entry, dict) and entry.get("in_setting") is False:
+            flags[i] = False
+    return flags
+
+
+def _is_a_place(setting: str) -> bool:
+    """Whether `setting` describes a room a camera could stand in.
+
+    Two requirements, both learned from what goes wrong without them: a
+    structure word, so there is a surface to return to, and a light word, so
+    consecutive shots of the same place are lit the same way. A period name
+    passes neither.
+
+    Fail-open in spirit, exactly like _is_a_thing: a setting that fails this is
+    dropped and the shots are kept. Shots with no shared place still render.
+    """
+    words = set(re.findall(r"[a-z]+", (setting or "").lower()))
+    if len(re.findall(r"[a-z]+", (setting or "").lower())) < _SETTING_MIN_WORDS:
+        return False
+    return bool(words & _SETTING_STRUCTURE) and bool(words & _SETTING_LIGHT)
+
+
+def _pin_setting(visual: str, setting: str) -> str:
+    """Append the place to a shot that is meant to be set in it.
+
+    Same reasoning as _pin_character: an image model renders each beat from
+    noise with no memory of the others, so a shot that assumes the room without
+    describing it gets a different room. Naming the place is not describing it.
+    """
+    if not setting:
+        return visual
+    anchors = [w for w in re.findall(r"[a-z]+", setting.lower())
+               if w in _SETTING_STRUCTURE]
+    text = visual.lower()
+    # Already self-sufficient: the shot names enough of the room itself.
+    if anchors and sum(1 for a in anchors if a in text) >= max(1, len(anchors) // 2):
+        return visual
+    return f"{visual.rstrip()} The location is {setting.rstrip('.')}."
 
 
 # How much of the character's look a shot must already restate before we accept
@@ -291,6 +392,26 @@ def plan(script: str, beats: list[str], era_tags: list[str] | None = None,
                 print(f"[storyboard] restated {name}'s look in {n_fixed} shot(s) "
                       f"that only named him")
             visuals = pinned
+
+            # The place, restated into the shots that belong to it. A shot the
+            # model marked as leaving the setting is left alone — a deliberate
+            # departure is part of the sequence, and forcing the room back into
+            # a present-day street would just make that shot wrong.
+            setting = str(raw.get("setting", "")).strip()
+            if setting and not _is_a_place(setting):
+                print(f"[storyboard] setting \"{setting}\" is a label, not a "
+                      f"room — dropping it (shots keep their own places)")
+                setting = ""
+            if setting:
+                flags = _in_setting_flags(raw, len(visuals))
+                placed = [_pin_setting(v, setting) if keep else v
+                          for v, keep in zip(visuals, flags)]
+                n_placed = sum(1 for a, b in zip(visuals, placed) if a != b)
+                print(f"[storyboard] setting: {setting}")
+                if n_placed:
+                    print(f"[storyboard] restated the location in {n_placed} "
+                          f"shot(s) that assumed it")
+                visuals = placed
     except Exception as e:
         print(f"[storyboard] skipped (non-fatal): {e}")
         return None

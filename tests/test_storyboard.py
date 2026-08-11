@@ -344,3 +344,105 @@ def test_main_passes_the_niche_so_the_character_can_be_looked_up():
     body = src.split("def _build_sd_prompts")[1]
     call = body[body.index("storyboard.plan("):body.index("storyboard.plan(") + 260]
     assert "niche=niche" in call
+
+
+# ── The setting: one place, decided before any image is generated ────────────
+
+def _sb():
+    import storyboard
+    return storyboard
+
+
+def test_a_room_with_surface_and_light_is_a_place():
+    sb = _sb()
+    assert sb._is_a_place(
+        "A low stone counting-house: oak counter, lime-washed walls, one high "
+        "window throwing hard light from the left")
+
+
+def test_a_period_name_is_not_a_place():
+    """'Renaissance Europe' makes every shot invent its own building — the same
+    mistake _is_a_thing catches for the object thread, one level up."""
+    sb = _sb()
+    assert not sb._is_a_place("Renaissance Europe")
+    assert not sb._is_a_place("a place of financial power")
+    assert not sb._is_a_place("16th century Germany")
+
+
+def test_a_room_with_no_light_is_rejected():
+    """Light direction is what keeps two shots of one room looking like one
+    room, so a setting without it has nothing to keep consistent."""
+    sb = _sb()
+    assert not sb._is_a_place("an oak counter against plaster walls with shelves")
+
+
+def test_a_light_with_no_structure_is_rejected():
+    sb = _sb()
+    assert not sb._is_a_place("dim golden light falling softly from somewhere")
+
+
+def test_empty_and_junk_settings_are_rejected():
+    sb = _sb()
+    for junk in ("", "   ", None):
+        assert not sb._is_a_place(junk)
+
+
+def test_a_shot_that_assumes_the_room_gets_it_restated():
+    sb = _sb()
+    setting = ("a low stone counting-house with an oak counter and one high "
+               "window throwing hard light")
+    out = sb._pin_setting("A merchant counts coins into a pile.", setting)
+    assert "The location is" in out
+    assert "counting-house" in out
+
+
+def test_a_shot_that_already_describes_the_room_is_left_alone():
+    """Restating a place the shot already built would just double the text the
+    image model has to reconcile."""
+    sb = _sb()
+    setting = ("a low stone counting-house with an oak counter and one high "
+               "window throwing hard light")
+    already = ("A merchant leans on the oak counter of a stone counting-house, "
+               "hard light from the high window across his hands.")
+    assert sb._pin_setting(already, setting) == already
+
+
+def test_no_setting_leaves_every_shot_untouched():
+    sb = _sb()
+    assert sb._pin_setting("A coin on a table.", "") == "A coin on a table."
+
+
+def test_in_setting_defaults_to_true():
+    """Missing or malformed means 'yes' — restating a place the shot was in
+    costs nothing, omitting it is the failure this exists to stop."""
+    sb = _sb()
+    assert sb._in_setting_flags({}, 3) == [True, True, True]
+    assert sb._in_setting_flags({"shots": "nope"}, 2) == [True, True]
+    assert sb._in_setting_flags({"shots": [{"n": 1}]}, 2) == [True, True]
+
+
+def test_a_deliberate_departure_is_honoured():
+    """A present-day shot should not have a 16th-century room forced back into
+    it — leaving the place is part of the sequence."""
+    sb = _sb()
+    raw = {"shots": [{"in_setting": True}, {"in_setting": False},
+                     {"in_setting": True}]}
+    assert sb._in_setting_flags(raw, 3) == [True, False, True]
+
+
+def test_the_prompt_asks_for_the_place_before_the_shots():
+    sb = _sb()
+    p = sb._prompt("script", ["b1", "b2"], [], "")
+    assert '"setting"' in p
+    assert "DECIDE THE PLACE BEFORE YOU DRAW ANY SHOT" in p
+    assert "in_setting" in p
+    # the negative examples that name the failure
+    assert "Renaissance Europe" in p
+
+
+def test_the_character_clause_appears_once():
+    """It is interpolated in one place; a second copy would double every
+    instruction the image model has to reconcile."""
+    sb = _sb()
+    p = sb._prompt("script", ["b1"], [], "CHARACTER_CLAUSE_MARKER")
+    assert p.count("CHARACTER_CLAUSE_MARKER") == 1
