@@ -88,8 +88,41 @@ def _extract_info(probe: dict) -> dict:
     return info
 
 
+# The longest a Short may sit on one unchanging picture before it reads as a
+# slideshow. Chosen from the retention failure it describes rather than from a
+# round number: a viewer who has seen everything in the frame and is given no
+# new information is a viewer deciding whether to swipe.
+MAX_STATIC_RUN = 5.0
+
+
+def _pacing_warnings(cuts: list[float] | None, duration: float) -> list[str]:
+    """Stretches longer than MAX_STATIC_RUN with no cut. Warning, never critical.
+
+    A gate here would be the wrong tool. The picture may be genuinely moving
+    inside a long beat (Wan/Hunyuan motion, a strong Ken Burns push), which
+    this cannot see, so a hard failure would reject good videos for a
+    heuristic's benefit — the rejection-ladder mistake CLAUDE.md warns about.
+    What it can do is make a slideshow impossible to ship unnoticed.
+    """
+    if not cuts or duration <= 0:
+        return []
+
+    marks = [0.0] + sorted(c for c in cuts if 0 < c < duration) + [duration]
+    gaps = []
+    for start, end in zip(marks, marks[1:]):
+        run = end - start
+        if run > MAX_STATIC_RUN:
+            gaps.append(f"{start:.1f}-{end:.1f}s ({run:.1f}s)")
+
+    if not gaps:
+        return []
+    return [f"{len(gaps)} stretch(es) over {MAX_STATIC_RUN:.0f}s without a cut: "
+            + ", ".join(gaps)]
+
+
 def _evaluate(info: dict, size_bytes: int,
-              mean_vol: float | None = None) -> tuple[list[str], list[str]]:
+              mean_vol: float | None = None,
+              cuts: list[float] | None = None) -> tuple[list[str], list[str]]:
     """Turn extracted facts into (critical, warnings). Pure function."""
     critical: list[str] = []
     warnings: list[str] = []
@@ -117,11 +150,18 @@ def _evaluate(info: dict, size_bytes: int,
         warnings.append(f"mean volume {mean_vol:.1f} dB looks {which} (sane band "
                         f"{MEAN_VOL_MIN:.0f}..{MEAN_VOL_MAX:.0f})")
 
+    warnings.extend(_pacing_warnings(cuts, d))
+
     return critical, warnings
 
 
-def run_qc(video_path: Path, check_loudness: bool = True) -> dict:
+def run_qc(video_path: Path, check_loudness: bool = True,
+           cuts: list[float] | None = None) -> dict:
     """Full QC pass on a rendered Short.
+
+    `cuts` are the render's own cut timestamps, when the caller has them — the
+    pacing check cannot be recovered from the finished file, so a caller that
+    omits them simply gets no pacing warning.
 
     Returns {"ok": bool, "critical": [...], "warnings": [...], "info": {...}}.
     If ffprobe is unavailable the result is ok=True with a warning — QC must
@@ -141,7 +181,7 @@ def run_qc(video_path: Path, check_loudness: bool = True) -> dict:
 
     info = _extract_info(probe)
     mean_vol = _mean_volume_db(video_path) if (check_loudness and info["has_audio"]) else None
-    critical, warnings = _evaluate(info, size, mean_vol)
+    critical, warnings = _evaluate(info, size, mean_vol, cuts)
 
     info["size_bytes"] = size
     if mean_vol is not None:

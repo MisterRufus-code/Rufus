@@ -1433,7 +1433,12 @@ def run(skip_upload: bool = False, niche_override: str = None, output_dir: Path 
     qc = None
     try:
         from qc_check import run_qc, print_report
-        qc = run_qc(output_path)
+        try:
+            import audio_gen as _ag
+            _cuts = list(getattr(_ag, "LAST_CUTS", []) or [])
+        except Exception:
+            _cuts = []
+        qc = run_qc(output_path, cuts=_cuts)
         print_report(qc)
         try:
             Path(str(output_path) + ".qc.json").write_text(json.dumps(qc, indent=2), encoding="utf-8")

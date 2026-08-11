@@ -281,3 +281,122 @@ def test_no_tones_reproduces_the_original_gains():
     """Every weight is 1.0 without an edit plan, so the mix is byte-identical
     to the one that shipped before the map existed."""
     assert em.sfx_weight("neutral") == 1.0
+
+
+# --------------------------------------------------------------- film grain
+
+def test_grain_is_temporal_not_static():
+    """Static grain looks like a dirty lens; grain that changes per frame looks
+    like film. allf=t is the whole difference."""
+    assert "allf=t" in em.grain_filter("tension")
+
+
+def test_grain_rides_along_in_the_grade():
+    assert "noise=" in em.grade_filter("tension")
+
+
+def test_grain_can_be_turned_off(monkeypatch):
+    monkeypatch.setenv("RUFUS_FILM_GRAIN", "0")
+    assert em.grain_filter("tension") == ""
+    assert "noise=" not in em.grade_filter("tension")
+
+
+def test_grain_scale_tunes_every_tone(monkeypatch):
+    monkeypatch.setenv("RUFUS_FILM_GRAIN_SCALE", "2.0")
+    heavy = em.grain_filter("tension")
+    monkeypatch.setenv("RUFUS_FILM_GRAIN_SCALE", "1.0")
+    normal = em.grain_filter("tension")
+    assert int(re.search(r"alls=(\d+)", heavy).group(1)) > \
+           int(re.search(r"alls=(\d+)", normal).group(1))
+
+
+def test_a_junk_grain_scale_does_not_crash_the_render(monkeypatch):
+    monkeypatch.setenv("RUFUS_FILM_GRAIN_SCALE", "loud")
+    assert "noise=" in em.grain_filter("neutral")
+
+
+def test_grain_scale_zero_removes_the_filter(monkeypatch):
+    monkeypatch.setenv("RUFUS_FILM_GRAIN_SCALE", "0")
+    assert em.grain_filter("tension") == ""
+
+
+# ------------------------------------------------------------ micro-pauses
+
+def test_the_turn_gets_the_longest_hold():
+    assert em.pause_after("revelation") == max(
+        em.pause_after(t) for t in em.TONES)
+
+
+def test_neutral_and_resolution_add_no_silence():
+    assert em.pause_after("neutral") == 0.0
+    assert em.pause_after("resolution") == 0.0
+
+
+def test_no_pause_is_long_enough_to_read_as_a_broken_file():
+    assert all(0.0 <= em.pause_after(t) <= 0.5 for t in em.TONES)
+
+
+def test_tts_adds_the_tone_pause_on_top_of_punctuation():
+    import tts_engine
+
+    assert tts_engine._tone_pause("revelation") > 0
+    assert tts_engine._tone_pause("neutral") == 0.0
+    assert tts_engine._tone_pause("not a tone") == 0.0
+
+
+def test_synthesize_accepts_tones_without_requiring_them():
+    import inspect
+
+    import tts_engine
+
+    sig = inspect.signature(tts_engine.synthesize)
+    assert sig.parameters["tones"].default is None
+
+
+# ------------------------------------------------------- the pacing QC check
+
+def test_a_long_static_stretch_is_flagged():
+    import qc_check
+
+    warns = qc_check._pacing_warnings([3.0, 6.0], 20.0)
+    assert warns and "14.0s" in warns[0]
+
+
+def test_normal_pacing_is_silent():
+    import qc_check
+
+    assert qc_check._pacing_warnings([3.0, 7.0, 11.0, 15.0], 19.0) == []
+
+
+def test_pacing_is_a_warning_never_a_critical():
+    """A long beat may be genuinely moving (Wan motion, a strong push-in) —
+    this check cannot see that, so it must never hold an upload."""
+    import qc_check
+
+    info = {"width": 1080, "height": 1920, "fps": 30.0, "duration": 40.0,
+            "has_video": True, "has_audio": True, "vcodec": "h264", "acodec": "aac"}
+    critical, warnings = qc_check._evaluate(info, 20_000_000, -14.0, [2.0])
+    assert critical == []
+    assert any("without a cut" in w for w in warnings)
+
+
+def test_no_cuts_means_no_pacing_opinion():
+    """A caller that cannot supply cuts gets no warning, not a false one."""
+    import qc_check
+
+    assert qc_check._pacing_warnings(None, 40.0) == []
+    assert qc_check._pacing_warnings([], 40.0) == []
+
+
+def test_cuts_outside_the_duration_are_ignored():
+    import qc_check
+
+    assert qc_check._pacing_warnings([3.0, 999.0], 6.0) == []
+
+
+def test_run_qc_still_works_without_cuts():
+    import inspect
+
+    import qc_check
+
+    assert inspect.signature(qc_check.run_qc).parameters["cuts"].default is None

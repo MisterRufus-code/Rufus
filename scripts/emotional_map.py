@@ -77,6 +77,42 @@ _SFX_WEIGHT: dict[str, float] = {
     "neutral":    1.00,
 }
 
+# tone → extra silence AFTER the beat, in seconds, on top of whatever the
+# trailing punctuation already earns.
+#
+# This is the only prosody control a free local voice has. Kokoro has no SSML
+# — tts_engine._pause_seconds sizes a gap from punctuation because that is
+# literally the only delivery cue it reads. A held beat before the turn is
+# what makes the turn land, and it costs nothing but silence.
+#
+# Small numbers on purpose: this is added to a gap that already exists, and a
+# Short cannot afford dead air. 0.30s reads as a held breath; 1s reads as a
+# broken file.
+_PAUSE_AFTER: dict[str, float] = {
+    "tension":    0.30,   # let the wrongness sit before resolving it
+    "curiosity":  0.16,
+    "revelation": 0.34,   # the longest hold in the video, right after the turn
+    "weight":     0.22,
+    "resolution": 0.00,   # the closing line is followed by the CTA, not a gap
+    "neutral":    0.00,
+}
+
+# tone → film-grain strength for ffmpeg's `noise` filter (alls value).
+#
+# Grain is what stops an AI still from reading as plastic — the "warm, not
+# sterile" lever. It must be TEMPORAL (allf=t): static grain looks like a dirty
+# lens, grain that changes per frame looks like film. Values are low; grain you
+# can consciously see is grain that is too strong, and it also costs bitrate on
+# a platform that re-encodes everything.
+_GRAIN: dict[str, int] = {
+    "tension":    10,
+    "curiosity":   6,
+    "revelation":  5,   # least grain on the clearest moment
+    "weight":     11,
+    "resolution":  6,
+    "neutral":     7,
+}
+
 # Clamps. A model that returns a tone is trusted; arithmetic on top of a
 # niche's own base grade is not — a niche could ship ffmpeg_eq=contrast=1.4 and
 # a tension beat on top of it would crush the picture.
@@ -104,6 +140,42 @@ def sfx_weight(tone: object) -> float:
     return _SFX_WEIGHT[normalise(tone)]
 
 
+def pause_after(tone: object) -> float:
+    """Extra silence after a beat of this tone, in seconds. 0.0 for neutral."""
+    return _PAUSE_AFTER[normalise(tone)]
+
+
+def grain_enabled() -> bool:
+    """RUFUS_FILM_GRAIN=0 turns the texture layer off. On by default."""
+    import os
+    return os.environ.get("RUFUS_FILM_GRAIN", "1").strip().lower() \
+        not in ("0", "false", "no", "off")
+
+
+def grain_filter(tone: object) -> str:
+    """ffmpeg `noise` fragment for this tone, or "" when grain is off.
+
+    Temporal and uniform: allf=t makes the pattern change every frame, which is
+    the entire difference between film grain and a smudged lens.
+    """
+    if not grain_enabled():
+        return ""
+    strength = _GRAIN[normalise(tone)]
+    scale = _grain_scale()
+    value = max(0, min(40, round(strength * scale)))
+    return f"noise=alls={value}:allf=t+u" if value > 0 else ""
+
+
+def _grain_scale() -> float:
+    """RUFUS_FILM_GRAIN_SCALE multiplies every grain value (default 1.0), so the
+    look is tunable in one place without editing the table."""
+    import os
+    try:
+        return max(0.0, min(3.0, float(os.environ.get("RUFUS_FILM_GRAIN_SCALE", "1.0"))))
+    except ValueError:
+        return 1.0
+
+
 def grade_filter(tone: object, base_contrast: float = 1.1,
                  base_saturation: float = 1.0) -> str:
     """An ffmpeg filter fragment grading one clip for `tone`.
@@ -121,9 +193,11 @@ def grade_filter(tone: object, base_contrast: float = 1.1,
     g = _clamp(gamma, _GAMMA_RANGE)
 
     eq = f"eq=contrast={c:.3f}:saturation={s:.3f}:brightness={b:.3f}:gamma={g:.3f}"
-    if r_shift == 0.0 and b_shift == 0.0:
-        return eq
-    return f"{eq},colorbalance=rm={r_shift:.3f}:bm={b_shift:.3f}"
+    if r_shift != 0.0 or b_shift != 0.0:
+        eq = f"{eq},colorbalance=rm={r_shift:.3f}:bm={b_shift:.3f}"
+
+    grain = grain_filter(tone)
+    return f"{eq},{grain}" if grain else eq
 
 
 def tones_from_plan(plan: dict | None, n_beats: int) -> list[str]:

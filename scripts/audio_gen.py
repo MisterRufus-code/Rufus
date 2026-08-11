@@ -115,6 +115,12 @@ RENDER_TIMEOUT = int(os.environ.get("RENDER_TIMEOUT", "600"))
 
 DEFAULT_ACCENT = "#FFD23F"   # warm gold — used when a niche has no accent_color
 
+# Cut timestamps of the most recent render, for QC's pacing check. A module
+# global rather than a return value because render()'s signature is shared with
+# the Remotion path and every caller in the tree; this is diagnostic output,
+# not a result anyone renders from.
+LAST_CUTS: list[float] = []
+
 
 # ── Font bootstrap ───────────────────────────────────────────────────────────────
 
@@ -436,10 +442,15 @@ def build_ass(segments, ass_path: Path, audio_dur: float,
 
 # ── TTS ──────────────────────────────────────────────────────────────────────────
 
-def _tts(script: str, mp3_path: Path) -> None:
-    """Generate voice via tts_engine (Edge TTS default, XTTS v2 if RUFUS_TTS=xtts)."""
+def _tts(script: str, mp3_path: Path, tones: list[str] | None = None) -> None:
+    """Generate voice via tts_engine (Edge TTS default, XTTS v2 if RUFUS_TTS=xtts).
+
+    `tones` lets the local Kokoro backend size the silence after each beat by
+    what that beat is doing, not only by its trailing punctuation. Optional
+    everywhere — without it the voice is exactly today's.
+    """
     import tts_engine
-    tts_engine.synthesize(script, mp3_path)
+    tts_engine.synthesize(script, mp3_path, tones)
 
 
 # ── Cut planning (sentence-aligned, editor-grade pacing) ─────────────────────────
@@ -912,6 +923,24 @@ def render(script: str, bg_paths: "Path | list[Path]", out_dir: Path,
     if music_path is None:
         print("[audio] no music track — rendering voice-only")
 
+    # The emotional map is built ONCE here, before the voice, because the
+    # tone-sized pauses have to be baked into the audio and everything
+    # downstream (cut count, grade, SFX weight) is derived from the same plan.
+    # Computing it later would mean re-splitting beats against a different
+    # clip count, missing edit_director's memo, and grading the video against a
+    # second plan the narration never heard.
+    plan_tones: list[str] = []
+    try:
+        import emotional_map
+        import edit_director
+        import main as _main
+        _beats = _main._split_beats(script, max_scenes=n)
+        _plan  = edit_director.direct(_beats) if _beats else None
+        if _plan is not None:
+            plan_tones = emotional_map.tones_from_plan(_plan, len(_beats))
+    except Exception as e:
+        print(f"[grade] emotional map unavailable (non-fatal): {e}")
+
     font_name = _ensure_font()
 
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -925,7 +954,7 @@ def render(script: str, bg_paths: "Path | list[Path]", out_dir: Path,
 
     try:
         print("[1/4] Generating voice…")
-        _tts(script, mp3)
+        _tts(script, mp3, plan_tones)
         # Strip leading/trailing TTS silence BEFORE transcription — Whisper's
         # word timestamps then describe the trimmed audio, so cuts, the 0.03s
         # SFX hit, and the first caption all land on the actual first word.
@@ -957,6 +986,10 @@ def render(script: str, bg_paths: "Path | list[Path]", out_dir: Path,
             print(f"      ⚠ using {n} of {n_supplied} clips (not enough room for more cuts)")
         if boundaries:
             print(f"      cuts at: {', '.join(f'{b:.1f}s' for b in boundaries)}")
+        # Published for QC's pacing check: cut timestamps cannot be recovered
+        # from the finished mp4, and a run that quietly held one picture for
+        # nine seconds is exactly what nobody notices until a viewer swipes.
+        globals()["LAST_CUTS"] = list(boundaries)
 
         lens_xfade  = _xfade_input_lengths(boundaries, audio_dur)
         lens_concat = _concat_input_lengths(boundaries, audio_dur)

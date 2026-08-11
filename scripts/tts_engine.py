@@ -118,6 +118,19 @@ def _pause_seconds(chunk_text: str) -> float:
     return 0.15
 
 
+def _tone_pause(tone: str) -> float:
+    """Extra silence this beat's tone earns, on top of its punctuation.
+
+    Imported lazily so tts_engine keeps working standalone if emotional_map is
+    ever absent — the voice is not allowed to depend on the creative layer.
+    """
+    try:
+        import emotional_map
+        return emotional_map.pause_after(tone)
+    except Exception:
+        return 0.0
+
+
 KOKORO_REQUIREMENTS = ("numpy", "soundfile", "kokoro")
 
 
@@ -134,7 +147,8 @@ def _missing_kokoro_deps() -> list[str]:
             if importlib.util.find_spec(m) is None]
 
 
-def _kokoro(script: str, out_path: Path) -> None:
+def _kokoro(script: str, out_path: Path,
+            tones: list[str] | None = None) -> None:
     """Synthesize with Kokoro-82M (Apache 2.0, runs on CPU). Outputs mp3."""
     global _kokoro_pipe
     missing = _missing_kokoro_deps()
@@ -182,7 +196,15 @@ def _kokoro(script: str, out_path: Path) -> None:
     for i, (graphemes, seg_audio) in enumerate(chunks):
         pieces.append(seg_audio)
         if i < len(chunks) - 1:
-            gap = int(_pause_seconds(graphemes) * sample_rate)
+            # Punctuation earns the base gap; the beat's tone adds to it. A
+            # held beat before the turn is the only prosody a voice with no
+            # SSML can be given, and it is free. Tones are positional against
+            # Kokoro's own chunking, so a mismatch just means no bonus rather
+            # than a pause landing in the wrong place.
+            seconds = _pause_seconds(graphemes)
+            if tones and i < len(tones):
+                seconds += _tone_pause(tones[i])
+            gap = int(seconds * sample_rate)
             if gap > 0:
                 pieces.append(np.zeros(gap, dtype=seg_audio.dtype))
 
@@ -386,7 +408,8 @@ def _sanitize_for_speech(script: str) -> str:
     return s.strip()
 
 
-def synthesize(script: str, out_path: Path) -> None:
+def synthesize(script: str, out_path: Path,
+               tones: list[str] | None = None) -> None:
     """Generate speech for `script` at `out_path` (mp3). Backend per RUFUS_TTS.
 
     Every backend falls back to Edge TTS on any failure so a render never breaks
@@ -417,7 +440,7 @@ def synthesize(script: str, out_path: Path) -> None:
     if backend in ("elevenlabs", "kokoro"):
         try:
             print(f"[tts] backend: Kokoro ({KOKORO_VOICE})")
-            _kokoro(script, out_path)
+            _kokoro(script, out_path, tones)
             return
         except Exception as e:
             print(f"[tts] Kokoro failed ({e}) — falling back to Edge TTS")
@@ -439,7 +462,7 @@ def synthesize(script: str, out_path: Path) -> None:
             print(f"[tts] XTTS failed ({e}) — falling back to Kokoro")
         try:
             print(f"[tts] backend: Kokoro ({KOKORO_VOICE})  [XTTS fallback]")
-            _kokoro(script, out_path)
+            _kokoro(script, out_path, tones)
             return
         except Exception as e:
             print(f"[tts] Kokoro failed ({e}) — falling back to Edge TTS")
