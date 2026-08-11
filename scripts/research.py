@@ -492,6 +492,28 @@ def _load_keys() -> dict:
         return {}
 
 
+_reddit_warned = False
+
+
+def _warn_reddit_unauthenticated() -> None:
+    """Say the fix once per run, not once per subreddit, and not never.
+
+    Reddit stopped serving its .json endpoints to unauthenticated clients. The
+    pipeline degrades correctly — it falls through to Wikipedia — but it
+    degraded SILENTLY into a one-source funnel, and the log line it printed
+    ("reddit unreachable") read like a network blip rather than a permanent
+    configuration gap. Five subreddits x every run x months.
+    """
+    global _reddit_warned
+    if _reddit_warned:
+        return
+    _reddit_warned = True
+    print("[research]   Reddit needs OAuth now. Create a free 'script' app at "
+          "https://www.reddit.com/prefs/apps and add reddit_client_id + "
+          "reddit_client_secret to config/keys.json — that restores 5 seed "
+          "sources; without it Wikipedia is the only one left.")
+
+
 def _fetch_reddit_praw(subreddit: str, limit: int = 50, used_ids: set | None = None) -> dict | None:
     """Fetch via Reddit OAuth (PRAW) — works from cloud/server IPs unlike the public JSON API.
 
@@ -507,6 +529,7 @@ def _fetch_reddit_praw(subreddit: str, limit: int = 50, used_ids: set | None = N
     cid  = keys.get("reddit_client_id", "")
     csec = keys.get("reddit_client_secret", "")
     if not cid or cid.startswith("YOUR_"):
+        _warn_reddit_unauthenticated()
         return None
 
     if used_ids is None:
@@ -587,7 +610,14 @@ def fetch_reddit_story(subreddit: str, limit: int = 50, used_ids: set | None = N
             continue
 
     if data is None:
-        print(f"[research] reddit unreachable for r/{subreddit} ({last_err})")
+        # "unreachable" was the wrong word and it hid the fix for months.
+        # Reddit is up; it refuses unauthenticated JSON and returns an HTML
+        # block page, which is why the error is always a JSON parse error at
+        # "line 2 column 5" and never a timeout. Five subreddits printed five
+        # copies of that per run, none of them saying what to do about it.
+        print(f"[research] reddit blocked r/{subreddit} — no OAuth credentials "
+              f"({last_err})")
+        _warn_reddit_unauthenticated()
         return None
 
     posts = data.get("data", {}).get("children", [])

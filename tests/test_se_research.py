@@ -105,3 +105,28 @@ def test_a_usable_batch_says_how_many_survived(monkeypatch, capsys):
     seed = _run(monkeypatch, _items(4))
     assert seed and seed["type"] == "stackexchange"
     assert "usable" in capsys.readouterr().out
+
+
+# ── Reddit was not "unreachable" — it was unauthenticated ───────────────────
+
+def test_the_reddit_advice_is_printed_once_per_run_not_per_subreddit(capsys):
+    research._reddit_warned = False
+    for _ in range(5):                      # five subreddits, as in every log
+        research._warn_reddit_unauthenticated()
+    out = capsys.readouterr().out
+    assert out.count("prefs/apps") == 1
+
+
+def test_the_advice_names_the_two_keys_and_the_stake(capsys):
+    research._reddit_warned = False
+    research._warn_reddit_unauthenticated()
+    out = capsys.readouterr().out
+    assert "reddit_client_id" in out and "reddit_client_secret" in out
+    assert "Wikipedia is the only one left" in out
+
+
+def test_the_log_no_longer_calls_a_permanent_block_unreachable():
+    src = (Path(__file__).parent.parent / "scripts" / "research.py").read_text(
+        encoding="utf-8")
+    assert "reddit unreachable for" not in src
+    assert "reddit blocked r/" in src
