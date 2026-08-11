@@ -23,6 +23,7 @@ import argparse
 import json
 import os
 import re
+import shutil
 import sys
 import time
 from pathlib import Path
@@ -181,6 +182,118 @@ def _housekeeping(max_log_days: int = 90, max_cache_days: int = 14,
 
     if removed:
         print(f"[maint] cleaned {removed} stale file(s)")
+
+    _housekeep_debug()
+    _report_debug_usage()
+
+
+def _debug_usage() -> tuple[int, int]:
+    """(bytes, run-folder count) under the debug root. (0, 0) if absent."""
+    root = paths.debug_root()
+    if not root.exists():
+        return 0, 0
+    total = 0
+    runs = 0
+    for d in root.iterdir():
+        if not d.is_dir():
+            continue
+        runs += 1
+        for f in d.rglob("*"):
+            try:
+                if f.is_file():
+                    total += f.stat().st_size
+            except OSError:
+                continue
+    return total, runs
+
+
+def _report_debug_usage() -> None:
+    """Say what the permanent review record costs, and how much room is left.
+
+    The debug tree is exempt from the sweep BY DESIGN — it is the quality
+    record, not a cache. That decision is right, and it was made without a
+    number attached, which is the problem: "prune it by hand if it grows too
+    large" is only actionable if you can see that it has. Three things make it
+    urgent on this machine specifically — the system drive has single-digit GB
+    free, RUFUS_BEAT_MOTION=cut writes three stills per beat instead of one,
+    and a full disk fails a render at the very end, after the GPU time is
+    already spent.
+
+    Reporting only. Set RUFUS_DEBUG_MAX_GB to actually bound it.
+    """
+    total, runs = _debug_usage()
+    if not runs:
+        return
+    gb = total / 1024 ** 3
+    free_gb = 0.0
+    try:
+        free_gb = shutil.disk_usage(paths.debug_root()).free / 1024 ** 3
+    except OSError:
+        pass
+
+    line = f"[maint] debug record: {gb:.1f} GB across {runs} run(s)"
+    if free_gb:
+        line += f" — {free_gb:.1f} GB free on that drive"
+    print(line)
+
+    if free_gb and free_gb < 15.0:
+        print(f"[maint] ⚠ only {free_gb:.1f} GB free. A render that fills the "
+              f"disk fails AFTER the GPU time is spent. Prune "
+              f"{paths.debug_root()}, or set RUFUS_DEBUG_MAX_GB to cap it.")
+
+
+def _housekeep_debug() -> int:
+    """Prune oldest debug runs down to RUFUS_DEBUG_MAX_GB. Off unless set.
+
+    Opt-in because the tree is deliberately a permanent record; this exists so
+    that decision can be bounded on a small disk without being reversed. A run
+    belonging to a video still awaiting review is never pruned, for the same
+    reason _housekeep_output protects its mp4 — the reviewer needs the
+    keyframes and the report to judge it.
+    """
+    raw = os.environ.get("RUFUS_DEBUG_MAX_GB", "").strip()
+    if not raw:
+        return 0
+    try:
+        cap_bytes = float(raw) * 1024 ** 3
+    except ValueError:
+        print(f"[maint] RUFUS_DEBUG_MAX_GB={raw!r} is not a number — ignoring")
+        return 0
+
+    root = paths.debug_root()
+    if not root.exists():
+        return 0
+
+    try:
+        from db_manager import _conn
+        with _conn() as c:
+            protected = {r[0] for r in c.execute(
+                "SELECT run_id FROM videos WHERE upload_status='pending' "
+                "AND run_id IS NOT NULL").fetchall()}
+    except Exception as e:
+        print(f"[maint] debug prune skipped (DB unavailable: {e})")
+        return 0
+
+    dirs = []
+    for d in root.iterdir():
+        if not d.is_dir() or d.name in protected:
+            continue
+        size = sum(f.stat().st_size for f in d.rglob("*")
+                   if f.is_file()) if d.exists() else 0
+        dirs.append((d.stat().st_mtime, size, d))
+
+    total = _debug_usage()[0]
+    removed = 0
+    for _mtime, size, d in sorted(dirs):
+        if total <= cap_bytes:
+            break
+        shutil.rmtree(d, ignore_errors=True)
+        total -= size
+        removed += 1
+    if removed:
+        print(f"[maint] pruned {removed} debug run(s) to stay under "
+              f"{raw} GB (runs awaiting review were kept)")
+    return removed
 
 
 def _housekeep_output(max_output_days: int) -> int:

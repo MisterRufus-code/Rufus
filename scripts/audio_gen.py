@@ -193,6 +193,12 @@ def _video_encoder_args() -> list[str]:
 
 # ── Whisper singleton ────────────────────────────────────────────────────────────
 
+# The DLLs ctranslate2 needs for GPU transcribe, by the exact names it asks for.
+# Checked by name because "the directory registered" and "the file is there" are
+# different facts, and only the second one predicts whether CUDA will work.
+_REQUIRED_CUDA_DLLS = ("cublas64_12.dll", "cudnn64_9.dll")
+
+
 def _is_windows() -> bool:
     """Platform check behind a function so tests can flip it without touching
     the stdlib `os` module — patching os.name globally also changes what
@@ -201,9 +207,29 @@ def _is_windows() -> bool:
 
 
 def _register_dll_dir(path: str) -> None:
-    """os.add_dll_directory, isolated so it can be observed in a test without
-    monkeypatching an attribute onto the real `os` on non-Windows boxes."""
+    """Make `path` searchable for DLLs, by BOTH mechanisms Windows uses.
+
+    os.add_dll_directory alone is not enough here, and that is why the previous
+    fix looked correct and changed nothing. It only affects DLLs loaded through
+    LoadLibraryEx with the LOAD_LIBRARY_SEARCH_* flags. cublas64_12.dll is not
+    loaded that way — it is an IMPLICIT dependency of ctranslate2's own DLL, and
+    Windows resolves those through the standard search order, which consults
+    PATH and never consults the add_dll_directory list.
+
+    The live signature of exactly that: every diagnostic in _add_nvidia_dll_dirs
+    stayed silent (so the directories registered fine), WhisperModel(device=
+    "cuda") constructed fine and printed "CUDA / float16 (GPU mode)", and then
+    the first transcribe failed with "Library cublas64_12.dll is not found or
+    cannot be loaded". Registration succeeded; the loader was never going to
+    look there.
+
+    So do both: add_dll_directory for anything loaded explicitly, and prepend to
+    PATH for the implicit dependency resolution that actually matters here.
+    """
     os.add_dll_directory(path)
+    current = os.environ.get("PATH", "")
+    if path not in current.split(os.pathsep):
+        os.environ["PATH"] = path + os.pathsep + current
 
 
 def _add_nvidia_dll_dirs() -> list[str]:
@@ -229,28 +255,62 @@ def _add_nvidia_dll_dirs() -> list[str]:
     """
     if not _is_windows():
         return []
+
+    roots: list[Path] = []
     try:
         import nvidia
+        roots += [Path(p) for p in getattr(nvidia, "__path__", [])]
     except ImportError:
+        pass
+
+    # torch ships its OWN copy of the same CUDA runtime in torch/lib, and torch
+    # is already installed here for Kokoro. When the nvidia wheels are absent,
+    # misnamed, or a version ctranslate2 does not want, this is a second real
+    # source of cublas64_12.dll rather than a suggestion to install something.
+    try:
+        import torch
+        roots += [Path(p) / "lib" for p in getattr(torch, "__path__", [])]
+    except ImportError:
+        pass
+
+    if not roots:
         print("[whisper] no pip CUDA runtime installed — "
               "pip install nvidia-cublas-cu12 nvidia-cudnn-cu12 for GPU transcribe")
         return []
 
     added: list[str] = []
-    for root in (Path(p) for p in getattr(nvidia, "__path__", [])):
+    for root in roots:
         # Layout varies by wheel: <lib>/bin on most, <lib>/bin/<arch> on some
-        # Windows builds. Register any bin directory that actually holds DLLs.
-        for d in sorted(root.glob("*/bin")) + sorted(root.glob("*/bin/*")):
+        # Windows builds, and torch/lib is flat. Register any directory that
+        # actually holds DLLs.
+        candidates = [root] + sorted(root.glob("*/bin")) + sorted(root.glob("*/bin/*"))
+        for d in candidates:
             if not d.is_dir() or not any(d.glob("*.dll")):
+                continue
+            if str(d) in added:
                 continue
             try:
                 _register_dll_dir(str(d))
                 added.append(str(d))
             except OSError as e:
                 print(f"[whisper] could not register {d} ({e})")
+
     if not added:
-        print("[whisper] nvidia package present but no CUDA DLL directory "
-              "found — GPU transcribe will fall back to CPU")
+        print("[whisper] CUDA packages present but no DLL directory found — "
+              "GPU transcribe will fall back to CPU")
+        return []
+
+    # Say whether the ONE DLL that keeps failing is actually reachable now.
+    # Registering directories and then failing anyway is what wasted weeks
+    # here: the fix reported success while the loader still could not find the
+    # file, and nothing in the log distinguished "registered the wrong place"
+    # from "the file is not installed at all".
+    missing = [dll for dll in _REQUIRED_CUDA_DLLS
+               if not any((Path(d) / dll).exists() for d in added)]
+    if missing:
+        print(f"[whisper] {', '.join(missing)} not present in any registered "
+              f"directory — GPU transcribe will fail. Searched: "
+              f"{'; '.join(added[:4])}")
     return added
 
 
