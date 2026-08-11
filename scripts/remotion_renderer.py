@@ -32,9 +32,28 @@ PUBLIC_DIR   = REMOTION_DIR / "public"
 RENDER_TIMEOUT = 1800  # 30 min ceiling — CPU renders of 60s shorts stay well under
 
 
+def _npx() -> str:
+    """The npx executable to spawn, as an absolute path.
+
+    On Windows npx is `npx.cmd`. `shutil.which` finds it — it consults PATHEXT —
+    but CreateProcess does not, so passing the bare string "npx" to
+    subprocess.run raises `[WinError 2] The system cannot find the file
+    specified` even though the readiness check just passed. That is exactly how
+    every render on the owner's box failed straight into the FFmpeg fallback:
+    Remotion was installed and working the whole time, and the log line
+    ("Remotion failed … falling back to FFmpeg") read like a Remotion problem.
+
+    Spawning the resolved absolute path avoids the lookup entirely, on every OS.
+    """
+    found = shutil.which("npx")
+    if found is None:
+        raise RuntimeError("Node.js not installed (npx not found) — install Node.js "
+                           "(Windows: https://nodejs.org, Linux: apt install nodejs npm)")
+    return found
+
+
 def _check_ready() -> None:
-    if shutil.which("npx") is None:
-        raise RuntimeError("Node.js not installed (npx not found) — run: sudo apt install nodejs npm")
+    _npx()
     if not (REMOTION_DIR / "node_modules").exists():
         raise RuntimeError(f"Remotion deps missing — run: cd {REMOTION_DIR} && npm install")
 
@@ -161,7 +180,7 @@ def render(script: str, bg_paths: "Path | list[Path]", out_dir: Path,
         print(f"[4/4] Remotion render: {len(clip_names)} clip(s) → {audio_dur:.1f}s"
               f"{' + music' if music_name else ''}…")
         cmd = [
-            "npx", "remotion", "render", "src/index.ts", "RufusShort", str(out),
+            _npx(), "remotion", "render", "src/index.ts", "RufusShort", str(out),
             f"--props={props_file}",
         ]
         result = subprocess.run(cmd, cwd=REMOTION_DIR, capture_output=True,

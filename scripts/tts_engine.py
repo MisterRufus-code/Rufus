@@ -45,8 +45,12 @@ import json
 import os
 import re
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parent))
+import text_repair
 
 CONFIG_DIR = Path(__file__).parent.parent / "config"
 KEYS_FILE  = CONFIG_DIR / "keys.json"
@@ -365,8 +369,15 @@ def _sanitize_for_speech(script: str) -> str:
     leaks markdown emphasis (**word**), stray asterisks, or bracketed stage
     directions into a script — every backend received the text verbatim, so
     the voice would literally say 'asterisk' or read '[pause]'. Cheap, safe,
-    and idempotent on clean scripts."""
-    s = script
+    and idempotent on clean scripts.
+
+    Mis-decoded text is handled first and separately. A CTA read out of a UTF-8
+    config under the wrong code page arrives here as Hebrew letters glued to
+    punctuation debris, and a TTS backend pronounces exactly what it is given —
+    that shipped in the audio of a finished English short while every gate
+    downstream reported pass. text_repair reverses the decode where it can and
+    drops what it cannot, saying so either way."""
+    s = text_repair.clean_for_speech(script, label="script")
     s = re.sub(r"\*{1,3}([^*]*)\*{1,3}", r"\1", s)   # **bold** / *italic* → bare text
     s = re.sub(r"[\[\(]\s*(pause|beat|sfx|music|silence)[^\]\)]*[\]\)]", "", s,
                flags=re.IGNORECASE)                    # [pause], (beat) stage directions

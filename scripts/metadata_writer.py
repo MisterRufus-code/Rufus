@@ -14,7 +14,11 @@ never depend on this call succeeding.
 
 import json
 import re
+import sys
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parent))
+import text_repair
 
 CONFIG_DIR = Path(__file__).parent.parent / "config"
 KEYS_FILE  = CONFIG_DIR / "keys.json"
@@ -77,6 +81,11 @@ def generate_metadata(script: str, niche_name: str, niche_cfg: dict,
                       language: str = "en") -> dict:
     """Return {"title", "description", "tags"} — GPT-optimized, legacy on failure."""
     hashtags = hashtags or ["#Shorts"]
+    # The CTA and script reach the YouTube description and the pinned comment.
+    # Repair only — no stripping — because `language` may legitimately be a
+    # non-Latin one, and a description is not read aloud.
+    script    = text_repair.repair_mojibake(script)
+    niche_cfg = {**niche_cfg, "cta": text_repair.repair_mojibake(str(niche_cfg.get("cta", "")))}
     legacy   = _legacy_metadata(script, niche_name, niche_cfg, hashtags)
     hook     = script.strip().split("\n")[0]
 

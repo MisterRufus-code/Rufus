@@ -44,7 +44,19 @@ MIN_BYTES    = 50_000
 
 
 def _launcher() -> list[str]:
-    return os.environ.get("HYPERFRAMES_CMD", "npx --yes hyperframes").split()
+    """The launcher argv, with the executable resolved to an absolute path.
+
+    Same Windows trap as remotion_renderer._npx: npx is `npx.cmd` there, and
+    CreateProcess does not apply PATHEXT, so a bare "npx" raises WinError 2 and
+    `is_available()` reports False. HyperFrames then looks uninstalled on a box
+    where it is installed and working.
+    """
+    argv = os.environ.get("HYPERFRAMES_CMD", "npx --yes hyperframes").split()
+    if argv:
+        resolved = shutil.which(argv[0])
+        if resolved:
+            argv[0] = resolved
+    return argv
 
 
 @lru_cache(maxsize=1)
