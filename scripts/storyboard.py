@@ -286,13 +286,33 @@ def _pin_setting(visual: str, setting: str) -> str:
     """
     if not setting:
         return visual
-    anchors = [w for w in re.findall(r"[a-z]+", setting.lower())
-               if w in _SETTING_STRUCTURE]
+
+    # DEDUPED. The list form counted "street" twice in "A cobblestone street…
+    # across the street", which raised the half-of-anchors bar to three and made
+    # shots that clearly established the place fail it.
+    anchors = {w for w in re.findall(r"[a-z]+", setting.lower())
+               if w in _SETTING_STRUCTURE}
+    light = {w for w in re.findall(r"[a-z]+", setting.lower())
+             if w in _SETTING_LIGHT}
     text = visual.lower()
-    # Already self-sufficient: the shot names enough of the room itself.
-    if anchors and sum(1 for a in anchors if a in text) >= max(1, len(anchors) // 2):
+
+    # ANY structural anchor means the shot has already built the room. The
+    # earlier rule wanted half of them and got the arithmetic wrong on top, so a
+    # shot opening "workers huddle outside the Philadelphia and Reading Railroad
+    # office… the closed wooden doors" still had the entire 40-word setting
+    # appended — five times across one sequence, competing with each beat's own
+    # description and the style suffix for the model's attention.
+    if any(a in text for a in anchors):
         return visual
-    return f"{visual.rstrip()} The location is {setting.rstrip('.')}."
+
+    # Otherwise pin it, compactly: two structural anchors and the light. That is
+    # enough to put the shot in the same room, and short enough not to drown the
+    # sentence it belongs to.
+    parts = sorted(anchors)[:2] + sorted(light)[:1]
+    if not parts:
+        return visual
+    return (f"{visual.rstrip().rstrip('.')}. Same place as the rest of the "
+            f"sequence: {', '.join(parts)}.")
 
 
 # How much of the character's look a shot must already restate before we accept
@@ -353,10 +373,16 @@ def _pin_character(visual: str, name: str, short_ref: str) -> str:
 # The castle is what the model drew from the last one. The script it belonged to
 # never mentions a castle.
 _ABSTRACTION_TAIL = re.compile(
-    r",\s*(?:embodying|symbolizing|symbolising|signifying|representing|"
+    r",\s*(?:"
+    # participial: "..., embodying the control and power within Europe."
+    r"embodying|symbolizing|symbolising|signifying|representing|"
     r"suggesting|indicating|reflecting|evoking|illustrating|highlighting|"
-    r"underscoring|conveying|hinting at|showing the|emphasizing|emphasising)"
-    r"\b[^.]*",
+    r"underscoring|conveying|hinting at|showing the|emphasizing|emphasising"
+    # noun-appositive: "..., a symbol of forgotten prosperity." Same defect,
+    # different grammar, and the participial list alone missed it live.
+    r"|an?\s+(?:symbol|emblem|reminder|testament|metaphor|image|picture|"
+    r"sign|marker|echo|monument)\s+(?:of|to|for)"
+    r")\b[^.]*",
     re.IGNORECASE,
 )
 
@@ -371,26 +397,79 @@ def _strip_abstraction(visual: str) -> str:
     return _ABSTRACTION_TAIL.sub("", visual).rstrip(" ,;") or visual
 
 
-def _shares_a_noun(visual: str, beat: str) -> bool:
-    """Whether a shot and its own beat name any content word in common.
+# Endings that mark a word as an action, a quality or a concept rather than an
+# object a camera can point at. Without this the check reported "shocked",
+# "vanished", "failed", "overnight" and "then" as things the pictures failed to
+# show, which is the same noise problem it was written to remove.
+_UNFILMABLE_SUFFIXES = ("ed", "ing", "ly", "tion", "sion", "ness", "ment",
+                        "ity", "ance", "ence", "ism", "hood", "ship")
 
-    The storyboard analogue of script_writer's loop-echo check. A shot that
-    shares nothing with the sentence it illustrates is drawing the topic rather
-    than the line — which is how a script that says the Fuggers "controlled
-    Europe's copper" produced nine shots, not one of them containing copper.
+# Connectives and time words long enough to clear the 4-letter floor.
+_NON_OBJECT_WORDS = {
+    "then", "over", "under", "after", "before", "again", "still", "also",
+    "once", "when", "while", "since", "until", "about", "into", "onto",
+    "every", "each", "most", "many", "much", "some", "such", "than", "them",
+    "they", "their", "there", "here", "what", "which", "would", "could",
+    "night", "overnight", "today", "yesterday", "tomorrow", "year", "years",
+}
 
-    Deliberately generous: one shared word is enough, and stopwords and the
-    abstract vocabulary are excluded so "power" or "history" cannot count as
-    agreement.
+
+def _content_words(text: str) -> set[str]:
+    """Words in `text` naming something a camera could point at.
+
+    A heuristic, not a parser — this repo has no POS tagger and does not need
+    one for a warning. Filters stopwords, the abstract vocabulary _is_a_thing
+    already uses, obvious verb and concept endings, and the connectives that
+    survive the length floor.
     """
-    def _words(text: str) -> set[str]:
-        return {w for w in re.findall(r"[a-z]{4,}", (text or "").lower())
-                if w not in _STOPWORDS and w not in _ABSTRACT}
+    out = set()
+    # Only words that appear LOWERCASE in the source. A proper noun — Europe,
+    # America, the Habsburgs, Philadelphia — is not a thing a camera can be
+    # pointed at, and reporting "Europe is shown in no shot" is noise. This
+    # loses sentence-initial words too, which are stopwords often enough that
+    # the trade is worth it for a warning.
+    for w in re.findall(r"\b[a-z]{4,}\b", text or ""):
+        if w in _STOPWORDS or w in _ABSTRACT or w in _NON_OBJECT_WORDS:
+            continue
+        if w.endswith(_UNFILMABLE_SUFFIXES):
+            continue
+        out.add(w)
+    return out
 
-    beat_words = _words(beat)
-    if not beat_words:
-        return True          # nothing to agree with; not the shot's fault
-    return bool(beat_words & _words(visual))
+
+def _unshown_nouns(visuals: list[str], beats: list[str]) -> list[str]:
+    """Concrete things the script names that NO shot in the sequence shows.
+
+    THE LEVEL THIS WORKS AT, AND WHY. The first version of this compared each
+    shot to its own beat and reported a mismatch. Live, it fired on 7 of 10
+    shots and was wrong about most of them:
+
+        beat 3: Their jobs vanished overnight. Then, panic spread.
+        shot 3: The same single bronze coin is held tightly in a worker's
+                hand, their knuckles white with tension.
+
+    That is an excellent shot for that line. It shares no word with it because
+    "jobs vanished" and "a worker's hand" are one idea in two vocabularies.
+    Word overlap at the SENTENCE level is the wrong instrument, and a warning
+    that fires seven times out of ten is not a signal — it is something people
+    learn to scroll past, which is worse than no warning at all.
+
+    The failure it was built for is rarer and lives one level up: the Fugger
+    script said the family "controlled Europe's copper" and not one of nine
+    shots contained copper. So ask the sequence question instead — which
+    concrete nouns does the narration name that the pictures never show — and
+    a beat answered by a neighbouring shot no longer counts as a miss.
+    """
+    shown = set()
+    for v in visuals:
+        shown |= _content_words(v)
+
+    named: list[str] = []
+    for beat in beats:
+        for w in sorted(_content_words(beat)):
+            if w not in shown and w not in named:
+                named.append(w)
+    return named
 
 
 def _clean(plan: dict, n_beats: int,
@@ -425,20 +504,18 @@ def _clean(plan: dict, n_beats: int,
                 print(f"[storyboard] dropped mood-only thread: {carries!r}")
         out.append(visual)
 
-    # Say which shots are illustrating the topic instead of their own line.
-    # WARNING, never rejection: a deliberate modern-day cutaway legitimately
-    # shares no vocabulary with a 16th-century beat, and this repo has real
-    # wasted-generation bugs from stacking hard gates (AGENTS.md). What this
-    # can do is make the mismatch impossible to ship unnoticed.
+    # Name the concrete things the script mentions that no picture shows.
+    # WARNING, never rejection: not every noun deserves a frame, and this repo
+    # has real wasted-generation bugs from stacking hard gates (AGENTS.md).
+    # Capped at a handful — a long list is the same noise problem the per-beat
+    # version had, in a different shape.
     if beats:
-        drifted = [i for i, v in enumerate(out)
-                   if i < len(beats) and not _shares_a_noun(v, beats[i])]
-        if drifted:
-            print(f"[storyboard] ⚠ {len(drifted)} shot(s) share no word with "
-                  f"their own line — illustrating the topic, not the sentence:")
-            for i in drifted[:3]:
-                print(f"[storyboard]   beat {i+1}: {beats[i][:70]}")
-                print(f"[storyboard]   shot {i+1}: {out[i][:70]}")
+        missing = _unshown_nouns(out, beats)
+        if missing:
+            shown = ", ".join(missing[:6])
+            more = f" (+{len(missing) - 6} more)" if len(missing) > 6 else ""
+            print(f"[storyboard] ⚠ named in the script, shown in no shot: "
+                  f"{shown}{more}")
     return out
 
 

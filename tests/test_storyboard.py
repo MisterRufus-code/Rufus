@@ -23,6 +23,8 @@ import json
 import sys
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
 
 import storyboard  # noqa: E402
@@ -387,156 +389,108 @@ def test_empty_and_junk_settings_are_rejected():
         assert not sb._is_a_place(junk)
 
 
-def test_a_shot_that_assumes_the_room_gets_it_restated():
+def test_a_shot_that_already_names_the_room_is_left_alone():
+    """Verbatim from the 1893 run: this shot builds the place in its own words
+    and still had the entire 40-word setting appended — five of ten shots did.
+    Any structural anchor means the shot is already placed."""
     sb = _sb()
-    setting = ("a low stone counting-house with an oak counter and one high "
-               "window throwing hard light")
-    out = sb._pin_setting("A merchant counts coins into a pile.", setting)
-    assert "The location is" in out
-    assert "counting-house" in out
+    setting = ("A cobblestone street in Philadelphia, flanked by brick buildings. "
+               "The Philadelphia and Reading Railroad office is prominent, with "
+               "tall windows and wooden doors. Afternoon light casts long shadows "
+               "across the street.")
+    shot = ("Groups of workers huddle outside the Philadelphia and Reading "
+            "Railroad office, anxiously looking at the closed wooden doors.")
+    assert sb._pin_setting(shot, setting) == shot
 
 
-def test_a_shot_that_already_describes_the_room_is_left_alone():
-    """Restating a place the shot already built would just double the text the
-    image model has to reconcile."""
+def test_a_shot_with_no_room_gets_a_COMPACT_pin():
+    """Pinned, but in a few words — not the whole paragraph. ~40 words x 5
+    shots competed with each beat's own description and the style suffix."""
     sb = _sb()
-    setting = ("a low stone counting-house with an oak counter and one high "
-               "window throwing hard light")
-    already = ("A merchant leans on the oak counter of a stone counting-house, "
-               "hard light from the high window across his hands.")
-    assert sb._pin_setting(already, setting) == already
+    setting = ("A cobblestone street in Philadelphia, flanked by brick buildings. "
+               "The Philadelphia and Reading Railroad office is prominent, with "
+               "tall windows and wooden doors. Afternoon light casts long shadows "
+               "across the street.")
+    shot = "A family is seen leaving a modest home, carrying their belongings."
+    out = sb._pin_setting(shot, setting)
+    assert out != shot
+    assert len(out.split()) - len(shot.split()) <= 12
+    assert "Philadelphia and Reading" not in out
 
 
-def test_no_setting_leaves_every_shot_untouched():
+def test_the_pin_does_not_splice_a_capital_mid_sentence():
     sb = _sb()
-    assert sb._pin_setting("A coin on a table.", "") == "A coin on a table."
+    out = sb._pin_setting(
+        "A close-up of a coin.",
+        "A stone counting-house with an oak counter and one high window, hard light.")
+    assert " is A " not in out
 
 
-def test_in_setting_defaults_to_true():
-    """Missing or malformed means 'yes' — restating a place the shot was in
-    costs nothing, omitting it is the failure this exists to stop."""
+# ── which nouns the pictures never showed ────────────────────────────────────
+
+def test_the_case_this_check_exists_for():
+    """The Fugger script said the family "controlled Europe's copper" and not
+    one of nine shots contained copper."""
     sb = _sb()
-    assert sb._in_setting_flags({}, 3) == [True, True, True]
-    assert sb._in_setting_flags({"shots": "nope"}, 2) == [True, True]
-    assert sb._in_setting_flags({"shots": [{"n": 1}]}, 2) == [True, True]
+    assert sb._unshown_nouns(
+        ["A large medieval castle on a hill.", "A stained glass window.",
+         "An old map of the continent."],
+        ["He financed the Habsburgs, controlled Europe's copper, and "
+         "overshadowed the Medicis."]) == ["copper"]
 
 
-def test_a_deliberate_departure_is_honoured():
-    """A present-day shot should not have a 16th-century room forced back into
-    it — leaving the place is part of the sequence."""
+def test_a_sequence_that_shows_what_it_names_is_silent():
     sb = _sb()
-    raw = {"shots": [{"in_setting": True}, {"in_setting": False},
-                     {"in_setting": True}]}
-    assert sb._in_setting_flags(raw, 3) == [True, False, True]
+    assert sb._unshown_nouns(
+        ["A merchant's hands stack copper ingots on an oak counter."],
+        ["He controlled Europe's copper."]) == []
 
 
-def test_the_prompt_asks_for_the_place_before_the_shots():
+def test_a_neighbouring_shot_counts():
+    """The per-beat version fired on 7 of 10 shots and was wrong about most:
+
+        beat 3: Their jobs vanished overnight. Then, panic spread.
+        shot 3: The same single bronze coin is held tightly in a worker's hand.
+
+    That is an excellent shot for that line. The sequence is planned as a
+    whole, so a noun answered anywhere in it is answered."""
     sb = _sb()
-    p = sb._prompt("script", ["b1", "b2"], [], "")
-    assert '"setting"' in p
-    assert "DECIDE THE PLACE BEFORE YOU DRAW ANY SHOT" in p
-    assert "in_setting" in p
-    # the negative examples that name the failure
-    assert "Renaissance Europe" in p
+    assert "coin" not in sb._unshown_nouns(
+        ["A wide street at dawn.", "A bronze coin in a worker's hand."],
+        ["The coin was worthless.", "Nobody would take it."])
 
 
-def test_the_character_clause_appears_once():
-    """It is interpolated in one place; a second copy would double every
-    instruction the image model has to reconcile."""
+def test_verbs_and_qualities_are_not_reported():
+    """"shocked", "vanished", "failed", "overnight" and "then" were all
+    reported as things the pictures failed to show — the same noise problem in
+    a new shape."""
     sb = _sb()
-    p = sb._prompt("script", ["b1"], [], "CHARACTER_CLAUSE_MARKER")
-    assert p.count("CHARACTER_CLAUSE_MARKER") == 1
+    out = sb._unshown_nouns(
+        ["A quiet street."],
+        ["Unemployment shocked America. Their jobs vanished overnight. "
+         "Then 500 banks failed."])
+    for w in ("shocked", "vanished", "overnight", "then", "unemployment", "failed"):
+        assert w not in out
 
 
-# ── The filmable moment, and shots that illustrate the topic instead ─────────
-
-def test_the_abstraction_tail_is_cut():
-    """All four verbatim from one run — four of nine shots. The last one is
-    what produced a castle in a script that never mentions a castle."""
+def test_proper_nouns_are_not_reported():
+    """You cannot point a camera at Europe."""
     sb = _sb()
-    cases = [
-        ("A grand old church with towering spires silhouetted against a stormy "
-         "sky, suggesting the onset of the Reformation.",
-         "suggesting"),
-        ("A scene of merchants exchanging handfuls of coins and goods, "
-         "indicating shrewd trade practices.", "indicating"),
-        ("A close-up of an old map of Europe, showing the extent of economic "
-         "influence.", "showing the extent"),
-        ("A large medieval castle on a hill overlooking a vast landscape, "
-         "embodying the control and power within Europe.", "embodying"),
-    ]
-    for text, marker in cases:
-        out = sb._strip_abstraction(text)
-        assert marker not in out
-        assert out.strip()
+    out = sb._unshown_nouns(
+        ["A quiet street."],
+        ["The Habsburgs ruled Europe from Philadelphia to America."])
+    for w in ("europe", "america", "habsburgs", "philadelphia"):
+        assert w not in out
 
 
-def test_stripping_keeps_the_filmable_half():
-    sb = _sb()
-    out = sb._strip_abstraction(
-        "A large medieval castle on a hill overlooking a vast landscape, "
-        "embodying the control and power within Europe.")
-    assert "castle on a hill" in out
-
-
-def test_a_clean_visual_is_untouched():
-    sb = _sb()
-    good = "A merchant's hands stack copper ingots on an oak counter."
-    assert sb._strip_abstraction(good) == good
-
-
-def test_a_comma_that_is_not_an_abstraction_survives():
-    sb = _sb()
-    text = "A coin on a table, worn smooth at the edges."
-    assert sb._strip_abstraction(text) == text
-
-
-def test_a_shot_sharing_a_noun_with_its_beat_passes():
-    sb = _sb()
-    assert sb._shares_a_noun(
-        "A merchant's hands stack copper ingots on an oak counter.",
-        "He financed the Habsburgs and controlled Europe's copper.")
-
-
-def test_a_shot_sharing_nothing_is_caught():
-    """The real failure: a script that says 'copper' produced nine shots and
-    not one of them contained copper."""
-    sb = _sb()
-    assert not sb._shares_a_noun(
-        "A large medieval castle on a hill overlooking a vast landscape.",
-        "He financed the Habsburgs and controlled Europe's copper.")
-
-
-def test_abstract_words_cannot_count_as_agreement():
-    """'power' and 'history' appearing in both is not the shot showing the
-    line — that is exactly the drift being measured."""
-    sb = _sb()
-    assert not sb._shares_a_noun(
-        "A wide landscape suggesting power and history.",
-        "Who controls the economy holds its power through history.")
-
-
-def test_an_empty_beat_never_blames_the_shot():
-    sb = _sb()
-    assert sb._shares_a_noun("A coin on a table.", "")
-
-
-def test_drift_warns_but_never_rejects(capsys):
-    """Owner's call: a deliberate modern-day cutaway legitimately shares
-    nothing with a 16th-century beat, and this repo has real wasted-generation
-    bugs from stacking hard gates."""
+def test_it_warns_and_never_rejects(capsys):
     sb = _sb()
     plan = {"shots": [
-        {"n": 1, "visual": "A large medieval castle on a hill overlooking a "
-                           "vast empty landscape at dusk.", "carries_over": None},
-        {"n": 2, "visual": "A merchant's hands stack copper ingots on an oak "
-                           "counter in hard window light.", "carries_over": None},
-    ]}
-    beats = ["He controlled Europe's copper.", "He controlled Europe's copper."]
-    out = sb._clean(plan, 2, beats)
-    assert out is not None and len(out) == 2      # nothing rejected
-    printed = capsys.readouterr().out
-    assert "share no word with their own line" in printed
+        {"n": 1, "visual": "A large medieval castle on a hill at dusk, doors "
+                           "shut.", "carries_over": None}]}
+    out = sb._clean(plan, 1, ["He controlled Europe's copper."])
+    assert out is not None and len(out) == 1        # nothing rejected
+    assert "copper" in capsys.readouterr().out
 
 
 def test_clean_still_works_without_beats():
@@ -559,3 +513,33 @@ def test_no_scene_leaves_the_prompt_as_it_was():
     sb = _sb()
     assert "THE MOMENT THIS SCRIPT WAS BUILT ON" not in sb._prompt(
         "script", ["b1"], [], "", "")
+
+
+def test_the_noun_appositive_abstraction_tail_is_cut():
+    """From the 1893 run — the participial list missed this grammar:
+    "The bronze coin is half-buried in the dirt, a symbol of forgotten
+    prosperity." """
+    sb = _sb()
+    out = sb._strip_abstraction(
+        "The bronze coin is half-buried in the dirt, a symbol of forgotten "
+        "prosperity.")
+    assert "symbol" not in out
+    assert "half-buried in the dirt" in out
+
+
+@pytest.mark.parametrize("tail", [
+    ", a reminder of what was lost", ", an emblem of the old order",
+    ", a testament to their power", ", a metaphor for the collapse",
+])
+def test_other_appositive_forms_are_cut(tail):
+    sb = _sb()
+    base = "A single bronze coin rests on the cobblestones"
+    assert sb._strip_abstraction(base + tail + ".") .startswith(base)
+
+
+def test_a_real_apposition_that_describes_a_thing_survives():
+    """"a coin worn smooth" is a description, not an interpretation — cutting
+    it would lose the only detail in the shot."""
+    sb = _sb()
+    text = "A bronze coin on the counter, worn smooth at the edges."
+    assert sb._strip_abstraction(text) == text
