@@ -237,6 +237,118 @@ def _pick_cta(niche_cfg: dict, niche_name: str = "") -> str:
     return random.choice(pool)
 
 
+# ── Owner-written creative direction ─────────────────────────────────────────
+#
+# AGENTS.md instructs the coding agents; nothing instructed the CONTENT agents.
+# The channel owner's direction only ever reached this pipeline when somebody
+# read it and hand-translated it into prompt text, which means it was never
+# theirs to change. These two files are.
+#
+# Layered, not replaced — the same shape channel_config.py already uses to put
+# a channel's niche_overrides on top of the base rather than substituting for
+# it, so a second channel costs one new file and changes nothing existing.
+ROOT_DIR       = Path(__file__).parent.parent
+DIRECTION_FILE = ROOT_DIR / "DIRECTION.md"
+DIRECTION_DIR  = CONFIG_DIR / "direction"
+
+# The system prompt is already ~2,000 tokens, and this repo has shipped two
+# instructions that contradicted each other (DELIVERY said "split it into short
+# sentences" while the cadence gate demanded a 15+ word sentence — the model was
+# penalised for obeying one). An unbounded free-text file is how that happens
+# again, so it is bounded and the truncation is announced rather than silent.
+DIRECTION_MAX_WORDS = 400
+
+# Prose that tries to set something the numeric gates already enforce. Whatever
+# DIRECTION.md says, script_standards.json wins — so say so once, loudly, at
+# the point of conflict, rather than letting "keep it to 60 words" produce a
+# run of scripts all rejected for being under min_words.
+_DIRECTION_CONFLICT_RE = re.compile(
+    r"\b\d+\s*(?:-|to|–)?\s*\d*\s*(?:words?|sentences?|seconds?|secs?)\b",
+    re.IGNORECASE,
+)
+
+
+# Everything from this heading onward is what the model sees. Anything above it
+# is for the human editing the file — how the layering works, why numbers here
+# lose to script_standards.json, the cap. Sending that to the model would spend
+# prompt budget teaching it to use a file it cannot edit, and the examples in
+# those notes ("keep it to 60 words") would trip the very conflict check they
+# exist to explain. A file with no marker is sent whole, so a plain one still
+# works.
+DIRECTION_MARKER = "## The direction"
+
+
+def _channel() -> str:
+    return os.environ.get("RUFUS_CHANNEL", "main_en").strip() or "main_en"
+
+
+def _direction_body(text: str) -> str:
+    """The part of a direction file addressed to the model, not to the owner."""
+    idx = text.find(DIRECTION_MARKER)
+    return text if idx < 0 else text[idx + len(DIRECTION_MARKER):].strip()
+
+
+def load_direction() -> tuple[str, str]:
+    """(direction text, one-line description of where it came from).
+
+    Fail-open like every other optional input here: no files, unreadable files,
+    anything — returns ("", ...) and the prompts are byte-identical to a run
+    without this feature.
+    """
+    parts: list[str] = []
+    found: list[str] = []
+    missing_channel = ""
+
+    for path, label in ((DIRECTION_FILE, "DIRECTION.md"),
+                        (DIRECTION_DIR / f"{_channel()}.md",
+                         f"config/direction/{_channel()}.md")):
+        try:
+            if path.exists():
+                text = _direction_body(path.read_text(encoding="utf-8").strip())
+                if text:
+                    parts.append(text)
+                    found.append(label)
+                    continue
+        except OSError:
+            pass
+        if path is not DIRECTION_FILE:
+            missing_channel = label
+
+    if not parts:
+        return "", "none (no DIRECTION.md — prompts unchanged)"
+
+    text = "\n\n".join(parts)
+    words = text.split()
+    note = " + ".join(found)
+    if missing_channel:
+        # Named explicitly: "I edited the file and nothing changed" is otherwise
+        # indistinguishable from having edited the wrong one.
+        note += f" only (no {missing_channel})"
+    if len(words) > DIRECTION_MAX_WORDS:
+        over = len(words) - DIRECTION_MAX_WORDS
+        text = " ".join(words[:DIRECTION_MAX_WORDS])
+        note += (f", {len(words)} words — TRUNCATED to {DIRECTION_MAX_WORDS} "
+                 f"({over} dropped; the system prompt is already long and "
+                 f"competing instructions are what make a model ignore both)")
+    else:
+        note += f", {len(words)} words"
+
+    if (hit := _DIRECTION_CONFLICT_RE.search(text)):
+        note += (f"\n[gpt] direction: ⚠ mentions '{hit.group(0)}' — lengths are "
+                 f"enforced numerically by config/script_standards.json, which "
+                 f"WINS. Prose here cannot loosen a gate, only lose to it.")
+    return text, note
+
+
+def _direction_block() -> str:
+    """The direction as a prompt block, printed once so it is never invisible."""
+    text, note = load_direction()
+    print(f"[gpt] direction: {note}")
+    if not text:
+        return ""
+    return f"CHANNEL DIRECTION (the owner's standing instructions):\n{text}\n\n"
+
+
 def _seed_block(seed: dict) -> str:
     if not seed:
         return ""
@@ -1460,12 +1572,18 @@ def _build_system(niche_cfg: dict, niche_name: str, cta: str, hook: str) -> str:
     hedging_all   = ", ".join(std["hedging_words"])
     tension_hint  = ", ".join(_TENSION_WORDS & set(std["opinion_pool"])) or opinion_all
 
+    # Niche first, channel direction second: the niche says WHAT this channel is
+    # about, the direction says HOW the owner wants it made, and the second only
+    # makes sense on top of the first.
+    direction_blk = _direction_block()
+
     return f"""You are the most exacting short-form script writer working today.
 Your standard: if a line does not earn its place, cut it. If a word is vague, replace it with something specific.
 
 NICHE:
 {niche_context}
 
+{direction_blk}
 YOUR JOB:
 You are given REAL source material and a HOOK that has already been chosen. Write the body of a 35-50 second YouTube Short that delivers on the hook.
 

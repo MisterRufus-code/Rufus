@@ -79,3 +79,27 @@ def test_the_approve_boundary_is_documented_as_immovable():
 def test_the_test_command_is_the_one_that_actually_runs():
     text = AGENTS.read_text(encoding="utf-8")
     assert "python -m pytest -q" in text
+
+
+def test_the_instruction_surfaces_are_documented():
+    """"How do I instruct this thing" had no answer in the repo. All four
+    places must be named, in leverage order, with the one that overrides the
+    others called out."""
+    text = re.sub(r"\s+", " ", AGENTS.read_text(encoding="utf-8"))
+    for surface in ("config/gold_examples.json", "DIRECTION.md",
+                    "config/direction/<channel>.md", "gpt_system",
+                    "config/script_standards.json"):
+        assert surface in text, surface
+    assert "the model mimics these more than any instruction" in text
+    assert "overrides all prose" in text
+
+
+def test_direction_md_exists_and_carries_its_marker():
+    dm = ROOT / "DIRECTION.md"
+    assert dm.exists()
+    assert "## The direction" in dm.read_text(encoding="utf-8")
+
+
+def test_adding_another_llm_stage_is_documented_as_the_wrong_reflex():
+    text = re.sub(r"\s+", " ", AGENTS.read_text(encoding="utf-8"))
+    assert "Adding another LLM stage is almost never the answer" in text

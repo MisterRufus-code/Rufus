@@ -50,6 +50,26 @@ def _model() -> str:
         or MODEL_DEFAULT
 
 
+def _direction_clause() -> str:
+    """The owner's standing direction, for the pictures.
+
+    Half of what the owner writes as direction is about images — smooth, related
+    to the line, one shot that moves — so limiting it to the script writer would
+    silently drop that half. Loaded from script_writer so there is exactly one
+    reader of those files and one place the layering rules live; any failure
+    yields "" and this prompt is what it was.
+    """
+    try:
+        import script_writer
+        text, _note = script_writer.load_direction()
+    except Exception:
+        return ""
+    return (f"\nCHANNEL DIRECTION (the owner's standing instructions — they "
+            f"outrank the numbered rules above where they disagree, except on "
+            f"anything the rules call a previous run's mistake):\n{text}\n"
+            if text else "")
+
+
 def _prompt(script: str, beats: list[str], era_tags: list[str],
             character_clause: str = "", scene: str = "") -> str:
     numbered = "\n".join(
@@ -126,7 +146,8 @@ def _prompt(script: str, beats: list[str], era_tags: list[str],
         "from window-left to firelit-right between two shots of the same room "
         "is the fastest way to make one location look like two.\n"
         f"{character_clause}"
-        "\nEach `visual` is 2-3 plain sentences describing only what the camera "
+        + _direction_clause()
+        + "\nEach `visual` is 2-3 plain sentences describing only what the camera "
         "sees: the subject, what it is doing or how it sits, and the setting. "
         "No camera bodies, no lens specs, no style words — the renderer adds "
         "the house style itself.\n\n"

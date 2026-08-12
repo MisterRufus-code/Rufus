@@ -123,6 +123,37 @@ swappable (`RUFUS_STILLS_ONLY`, `RUFUS_BEAT_MOTION`, `RUFUS_CHARACTER_MODE`,
 `RUFUS_RENDERER`, `RUFUS_FILM_GRAIN`, …). See the README's "Modes" table before
 inventing a new on/off mechanism.
 
+## Where the channel owner instructs the content
+
+Four surfaces, in order of leverage. Reach for the strongest one that fits
+before adding prose to a prompt in code — and note that **nothing written in
+1-3 can beat 4**, because 4 is enforced by deterministic checks.
+
+1. **`config/gold_examples.json`** — two full example scripts per niche,
+   injected as few-shot. The strongest by a wide margin, and the file says so
+   itself: *"the model mimics these more than any instruction, so they define
+   the voice."* If a rule can be replaced by an example, replace it.
+2. **`DIRECTION.md`** + **`config/direction/<channel>.md`** — the owner's
+   standing creative direction in plain English, layered shared-then-channel
+   (the same shape `channel_config.py` uses for `niche_overrides`). Reaches the
+   script writer's system prompt and the storyboard prompt.
+   `script_writer.load_direction()` is the single reader. Everything above the
+   `## The direction` heading is for the human and is never sent.
+3. **`config/niches.json`** → `gpt_system` (prose, per niche) and
+   `style_suffix` (the visual look).
+4. **`config/script_standards.json`** — word counts, sentence lengths,
+   banned phrases, the opinion pool. Enforced in code by
+   `script_writer._body_violations`, so it overrides all prose. Direction that
+   states a length is warned about at load time for exactly this reason: "keep
+   it to 60 words" does not shorten anything, it produces scripts rejected for
+   being under `min_words`.
+
+Adding another LLM stage is almost never the answer. The pipeline already runs
+six with structured handoffs (hook factory → story architect → body writer →
+fact gate → storyboard → edit director). Every quality gain in recent work came
+from **enforcing instructions that already existed**, not from new roles — see
+the storyboard's relevance check and the cadence/DELIVERY contradiction below.
+
 ## Conventions that have already cost a real bug
 
 **Always state `encoding="utf-8"` on `read_text`, `write_text` and `open`.**
