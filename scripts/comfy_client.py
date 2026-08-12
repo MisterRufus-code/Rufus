@@ -129,17 +129,97 @@ def _frames_per_beat() -> int:
 #   i2i      each frame img2img'd from the previous one at low denoise, so the
 #            frames genuinely continue each other, then crossfaded. ~1-2s a
 #            frame. Needs config/stills_i2i_api.json.
+#   hero     ONE beat gets a real motion clip; every other beat is a cut still.
+#            The beat chosen is the one carrying the story architect's THE
+#            SCENE — the single line in the script that is already a motion
+#            prompt, because it names a date, a place and a person doing
+#            something. Every other beat is evidence (a total, a share, a
+#            consequence), and a video model handed an abstraction produces a
+#            slow drift over generic scenery. i2v costs 600-1800s PER CLIP on
+#            this hardware, so nine of them is hours; one of them is minutes,
+#            and one moving shot among stills reads as a deliberate accent
+#            rather than wallpaper the viewer stops noticing by beat three.
 #   cut      several independent stills on one seed, hard cut. No extra setup.
 #   kenburns one still, zoom only.
 # Unset keeps the historical behaviour exactly: RUFUS_FRAMES_PER_BEAT>1 means
 # `cut`, otherwise the motion chain.
-BEAT_MOTION_MODES = ("i2v", "i2i", "cut", "kenburns")
+BEAT_MOTION_MODES = ("i2v", "i2i", "cut", "hero", "kenburns")
 I2I_DEFAULT_FRAMES = 5
+# How many stills a non-hero beat gets in hero mode. Same as `cut`'s default —
+# the point of hero mode is that the OTHER beats stay cheap.
+HERO_OTHER_FRAMES = 3
 
 
 def _beat_motion() -> str:
     mode = os.environ.get("RUFUS_BEAT_MOTION", "").strip().lower()
     return mode if mode in BEAT_MOTION_MODES else ""
+
+
+def _say_if_ready_but_switched_off(label: str, client) -> None:
+    """Report an engine that is fully installed and only turned off by a flag.
+
+    "off — disabled (RUFUS_STILLS_ONLY=1 forces images-only)" reads the same
+    whether the engine has no template and no models, or is one environment
+    variable away from producing motion. On this box the Hunyuan template is
+    exported and committed and the models are installed, and that line has been
+    printed on every run for weeks while the owner believed motion required a
+    35GB download. Checking readiness costs one HTTP call to a server that is
+    already up.
+    """
+    try:
+        ok, _why = client.ready()
+    except Exception:
+        return
+    if ok:
+        print(f"[comfy]   ...but {label}'s template IS exported and its models "
+              f"ARE loadable. Set RUFUS_STILLS_ONLY=0 to use it.")
+
+
+def _hero_beat(prompts: list[str], scene: str) -> int | None:
+    """Which beat carries THE SCENE, or None if nothing matches.
+
+    Scored by content-word overlap between the architect's filmable moment and
+    each beat's image prompt — both describe pictures, so they share vocabulary
+    when they are about the same moment. Reuses storyboard's stopword and
+    abstract-word filtering rather than adding a third tokenizer: "power" and
+    "history" appearing in both is not a match, it is two abstractions.
+
+    None on no scene, no overlap, or any import failure. The caller then
+    animates nothing, which is exactly the run the pipeline produces today —
+    a hero shot is a better way to spend motion time, never a prerequisite.
+    """
+    if not scene or not prompts:
+        return None
+    try:
+        import storyboard
+        stop = storyboard._STOPWORDS
+        abstract = storyboard._ABSTRACT
+    except Exception:
+        return None
+
+    def _words(text: str) -> set:
+        return {w for w in re.findall(r"[a-z]{4,}", (text or "").lower())
+                if w not in stop and w not in abstract}
+
+    scene_words = _words(scene)
+    if not scene_words:
+        return None
+
+    overlaps = [len(scene_words & _words(p)) for p in prompts]
+    best_n = max(overlaps)
+    if best_n < 1:
+        return None
+
+    # A CLEAR winner, not a fixed threshold. A scene and the shot built on it
+    # describe one moment in different words — "sent Charles V a letter" against
+    # "seals a letter with wax, then slides it across" shares exactly one word.
+    # Demanding two would decline the correct beat. What separates signal from
+    # coincidence is not the count but whether one beat leads: a word that
+    # appears in every shot is not discriminating, and a word that appears in
+    # exactly one is the beat about that moment.
+    if overlaps.count(best_n) > 1:
+        return None
+    return overlaps.index(best_n)
 
 
 I2I_TEMPLATE = Path(__file__).parent.parent / "config" / "stills_i2i_api.json"
@@ -956,6 +1036,22 @@ def generate_clips(queries: list[str], n: int = 4,
         frames_per_beat = 1
     elif beat_mode == "cut" and frames_per_beat == 1:
         frames_per_beat = 3
+    elif beat_mode == "hero":
+        # The hero beat needs ONE still to animate; the rest stay cheap cuts.
+        # Resolved per beat further down — this only sets the default for the
+        # non-hero majority.
+        if frames_per_beat == 1:
+            frames_per_beat = HERO_OTHER_FRAMES
+        # Halve the generated clip length unless the owner asked otherwise.
+        # The one measured figure for this hardware is ~21-23 min per 480p clip
+        # at 30 steps / 121 frames; the exported template is already 12 steps
+        # (x0.40) and 61 frames halves the rest (x0.50), which is what puts one
+        # clip near the 5-minute target instead of 20. Not a quality cut: every
+        # engine freeze-extends its clip to fill the beat's slot
+        # (tpad=stop_mode=clone), so 2.5s of real motion then holds, rather
+        # than the beat becoming shorter. 61 is a valid 4n+1 count, which
+        # Hunyuan's 3D causal VAE requires.
+        os.environ.setdefault("RUFUS_HUNYUAN_FRAMES", "61")
 
     # Image-to-video: animate each still into real motion instead of the
     # Ken Burns zoom, via an ORDERED engine chain resolved once per run —
@@ -967,6 +1063,11 @@ def generate_clips(queries: list[str], n: int = 4,
         # Explicitly asked for the motion chain — a stale RUFUS_FRAMES_PER_BEAT
         # must not quietly bypass it.
         frames_per_beat = 1
+    elif beat_mode == "hero":
+        # Hero mode wants the chain resolved (one beat will use it) while every
+        # other beat still cuts between stills, so it must not take the
+        # "frames_per_beat > 1 bypasses motion" branch below.
+        pass
     elif frames_per_beat > 1 and beat_mode != "i2i":
         # Mutually exclusive with the motion chain by design — both answer
         # "how does this beat move", and running both would animate each
@@ -979,7 +1080,11 @@ def generate_clips(queries: list[str], n: int = 4,
                                if svd_client._stills_only() else None)
     except Exception:
         _stills_only_reason = None
-    if frames_per_beat > 1:
+    # Hero mode uses >1 frame on the NON-hero beats while still needing the
+    # motion chain resolved for the one beat that gets it, so it is the one
+    # mode where frames_per_beat > 1 does not mean "motion off".
+    want_motion = frames_per_beat == 1 or beat_mode == "hero"
+    if frames_per_beat > 1 and not want_motion:
         # Reuse the existing "why is motion off" plumbing so each engine
         # reports the real reason instead of silently vanishing from the log.
         _stills_only_reason = (
@@ -987,7 +1092,7 @@ def generate_clips(queries: list[str], n: int = 4,
             else f"RUFUS_FRAMES_PER_BEAT={frames_per_beat} cuts between stills instead")
     try:
         import wan_client
-        if frames_per_beat == 1 and wan_client.enabled():
+        if want_motion and wan_client.enabled():
             wan_ok, wan_why = wan_client.ready()
             print(f"[comfy] motion wan 2.2: {'ON' if wan_ok else 'off'} — {wan_why}")
             if wan_ok:
@@ -999,7 +1104,7 @@ def generate_clips(queries: list[str], n: int = 4,
         print(f"[comfy] wan unavailable ({e})")
     try:
         import hunyuan_client
-        if frames_per_beat == 1 and hunyuan_client.enabled():
+        if want_motion and hunyuan_client.enabled():
             hy_ok, hy_why = hunyuan_client.ready()
             print(f"[comfy] motion hunyuan 1.5: {'ON' if hy_ok else 'off'} — {hy_why}")
             if hy_ok:
@@ -1010,11 +1115,16 @@ def generate_clips(queries: list[str], n: int = 4,
         else:
             print(f"[comfy] motion hunyuan 1.5: off — disabled "
                   f"({_stills_only_reason or 'RUFUS_HUNYUAN=0'})")
+            # An engine whose template IS exported and whose models ARE loadable,
+            # switched off by a flag, is the fail-silent shape this pipeline
+            # keeps hitting: "off — disabled" reads identically whether the
+            # engine is unusable or one env var away from working. Say which.
+            _say_if_ready_but_switched_off("hunyuan 1.5", hunyuan_client)
     except Exception as e:
         print(f"[comfy] hunyuan unavailable ({e})")
     try:
         import ltx_client
-        if frames_per_beat == 1 and ltx_client.enabled():
+        if want_motion and ltx_client.enabled():
             lx_ok, lx_why = ltx_client.ready()
             print(f"[comfy] motion ltx 2.3: {'ON' if lx_ok else 'off'} — {lx_why}")
             if lx_ok:
@@ -1042,7 +1152,7 @@ def generate_clips(queries: list[str], n: int = 4,
         print(f"[comfy] text-to-video unavailable ({e})")
     try:
         import svd_client
-        if frames_per_beat == 1 and svd_client.img2vid_enabled():
+        if want_motion and svd_client.img2vid_enabled():
             svd_engine, svd_why = svd_client.resolve_engine()
             print(f"[comfy] motion svd: "
                   f"{'ON via ' + svd_engine if svd_engine else 'off'} — {svd_why}")
@@ -1263,6 +1373,26 @@ def generate_clips(queries: list[str], n: int = 4,
     # fell through to Ken Burns. Batching stills first means exactly ONE
     # switch, with an explicit /free between so the motion model loads into
     # a clean card.
+    # Hero mode: resolve WHICH beat gets the motion clip, once, before the loop.
+    # None means no beat does — the architect found no filmable moment, or none
+    # of the shots is about it — and the run is then exactly the stills run the
+    # pipeline produces today.
+    hero_i: int | None = None
+    hero_scene = ""
+    if beat_mode == "hero" and motion_engines:
+        try:
+            import script_writer
+            hero_scene = getattr(script_writer, "LAST_SCENE", "") or ""
+        except Exception:
+            hero_scene = ""
+        hero_i = _hero_beat([p for _, _, p in stills], hero_scene)
+        if hero_i is None:
+            print("[comfy] hero: no beat matches the scene — all beats stay "
+                  "stills (no filmable moment in this source)")
+        else:
+            print(f"[comfy] hero: beat {hero_i + 1} gets the motion clip")
+            print(f"[comfy]   scene: {hero_scene[:100]}")
+
     if motion_engines and stills:
         _free_comfy_memory()
 
@@ -1322,12 +1452,24 @@ def generate_clips(queries: list[str], n: int = 4,
                 frame.unlink(missing_ok=True)
             continue
 
+        # Hero mode animates exactly one beat. Skipping the chain here rather
+        # than earlier keeps every other beat on the identical stills path it
+        # already takes, so nothing about the other eight changes.
+        beat_engines = motion_engines
+        if beat_mode == "hero":
+            beat_engines = motion_engines if i == hero_i else []
+
         made_via = None
+        motion_secs = 0.0
         tried: list[str] = []
-        for eng_name, animate in motion_engines:
+        for eng_name, animate in beat_engines:
+            # THE SCENE names the ACTION; the image prompt names the
+            # composition. For the one beat built on that moment the action is
+            # the better motion prompt — it is why this beat was chosen.
+            motion_text = hero_scene if (beat_mode == "hero" and hero_scene) else prompt
             t0 = time.time()
             okd = animate(png_path, clip_path, duration=clip_duration, idx=i,
-                          prompt=prompt)
+                          prompt=motion_text)
             secs = time.time() - t0
             # Record what the engine ACTUALLY used, not what we assume it did:
             # the motion prompt is derived inside the engine and the settings
@@ -1346,17 +1488,24 @@ def generate_clips(queries: list[str], n: int = 4,
             tried.append(f"{eng_name} {'ok' if okd else 'failed'} in {secs:.0f}s")
             if okd:
                 made_via = eng_name
+                motion_secs = secs
                 break
             print(f"[comfy] {eng_name} failed for clip {i+1} — trying next engine")
         made = made_via is not None or _animate_to_clip(png_path, clip_path,
                                                         duration=clip_duration, idx=i)
-        if made_via is None and motion_engines:
+        if made_via is None and beat_engines:
             motion_log.append({"beat": i + 1, "engine": "kenburns", "ok": bool(made),
                                "note": "all motion engines declined/failed"})
         if made:
             clips.append(clip_path)
+            # The seconds were always measured into motion_log but never shown,
+            # so nobody could tell a 5-minute clip from a 20-minute one without
+            # opening the run report. That number is the one that decides the
+            # next tuning move (frames, steps, or accepting the fixed
+            # weight-streaming cost on a 16GB box).
+            took = f", {motion_secs:.0f}s" if made_via and motion_secs else ""
             print(f"[comfy] clip {i+1} ready"
-                  + (f" ({made_via} motion)" if made_via else " (Ken Burns)"))
+                  + (f" ({made_via} motion{took})" if made_via else " (Ken Burns)"))
         else:
             print(f"[comfy] animation failed for clip {i+1} — later images may "
                   f"drift ahead of narration")
