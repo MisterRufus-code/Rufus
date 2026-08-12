@@ -258,6 +258,47 @@ def _speed_notes(tpl: dict) -> list[str]:
     return notes
 
 
+def _substitution_gaps(tpl: dict) -> list[str]:
+    """Rufus values this export will silently ignore.
+
+    prepare() writes prompt, image, seed and dims into inputs THAT EXIST. When
+    an input is absent the write is skipped and nothing anywhere reports it —
+    the substitution "succeeds", the run proceeds, and the setting the owner
+    typed did nothing. That is this repo's oldest failure shape.
+
+    It matters most for packaged all-in-one nodes like ComfyUI's "Text to
+    Video (Wan2.2)", which collapse a whole graph into one node and expose only
+    some of its knobs. Without a seed input, wan_t2v_client's entire seed
+    lineage — the mechanism that keeps neighbouring beats sharing noise
+    structure, and that makes a run reproducible from one number — is inert.
+    """
+    gaps: list[str] = []
+    has_seed = has_dims = False
+    for node in tpl.values():
+        ins = node.get("inputs")
+        if not isinstance(ins, dict):
+            continue
+        if any(k in ins for k in ("seed", "noise_seed")):
+            has_seed = True
+        if "width" in ins and "height" in ins and (
+                "length" in ins or "duration" in ins):
+            has_dims = True
+
+    if not has_seed:
+        gaps.append(
+            "no seed input — RUFUS_T2V_SEED and the per-beat seed lineage will "
+            "do nothing, so the run is not reproducible and neighbouring beats "
+            "no longer share noise structure. Not fatal, but silent: expose a "
+            "seed on the node if the workflow has one.")
+    if not has_dims:
+        gaps.append(
+            "no width/height + length-or-duration on any node — "
+            "RUFUS_T2V_W/H/FRAMES will do nothing and the export's own "
+            "resolution wins every run. A landscape export feeding a 1080x1920 "
+            "pipeline still 'succeeds', pillarboxed.")
+    return gaps
+
+
 def _report_engine(name: str, host: str, seen: dict[str, set[str]]) -> bool:
     """Print the report; return whether this engine could run right now.
 
@@ -325,6 +366,8 @@ def _report_engine(name: str, host: str, seen: dict[str, set[str]]) -> bool:
                     print(f"  ✓ {tpl_rel} valid — nodes and model files all resolve")
                     for note in _speed_notes(tpl):
                         print(f"  ⏱ {note}")
+                    for gap in _substitution_gaps(tpl):
+                        print(f"  ⚠ {gap}")
 
     # 3. What the engine itself says, which is the line a run will print.
     if mod_name:

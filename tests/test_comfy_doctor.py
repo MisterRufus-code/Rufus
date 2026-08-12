@@ -303,3 +303,67 @@ def test_a_fast_step_count_is_silent():
 
 def test_speed_notes_tolerate_a_junk_graph():
     assert comfy_doctor._speed_notes({"1": {"inputs": None}, "2": {}}) == []
+
+
+# ── values the export will silently ignore ───────────────────────────────────
+#
+# prepare() writes prompt, image, seed and dims into inputs THAT EXIST. A
+# missing input means the write is skipped and nothing reports it: the env var
+# the owner typed did nothing, the run succeeded, and there is no line anywhere
+# to read. Packaged all-in-one nodes collapse a graph into one node and expose
+# only some knobs, which is exactly where this bites.
+
+def test_a_graph_with_seed_and_dims_is_silent():
+    tpl = {"1": {"class_type": "K", "inputs": {
+        "seed": 1, "width": 480, "height": 832, "length": 49}}}
+    assert comfy_doctor._substitution_gaps(tpl) == []
+
+
+def test_a_node_with_no_seed_input_is_flagged():
+    """wan_t2v_client's whole seed-lineage mechanism is inert without one, and
+    nothing in a run would ever say so."""
+    tpl = {"1": {"class_type": "WanT2V", "inputs": {
+        "width": 480, "height": 832, "duration": 3}}}
+    gaps = " ".join(comfy_doctor._substitution_gaps(tpl))
+    assert "no seed input" in gaps
+    assert "seed lineage" in gaps
+
+
+def test_a_node_with_no_dimension_inputs_is_flagged():
+    """RUFUS_T2V_W/H/FRAMES silently doing nothing means the export's own
+    resolution wins — a landscape export into a vertical pipeline still
+    'succeeds', pillarboxed."""
+    tpl = {"1": {"class_type": "X", "inputs": {"seed": 1}}}
+    gaps = " ".join(comfy_doctor._substitution_gaps(tpl))
+    assert "RUFUS_T2V_W/H/FRAMES will do nothing" in gaps
+
+
+def test_duration_counts_as_a_dimension_input():
+    """Seconds-based nodes are sized by prepare()'s duration branch, so they
+    are NOT a gap."""
+    tpl = {"1": {"class_type": "X", "inputs": {
+        "noise_seed": 7, "width": 1, "height": 1, "duration": 5.0}}}
+    assert comfy_doctor._substitution_gaps(tpl) == []
+
+
+def test_width_and_height_without_a_length_is_still_a_gap():
+    """prepare() requires the trio; two out of three means the branch never
+    fires and none of the three is written."""
+    tpl = {"1": {"class_type": "X", "inputs": {
+        "seed": 1, "width": 480, "height": 832}}}
+    assert comfy_doctor._substitution_gaps(tpl)
+
+
+def test_gaps_tolerate_a_junk_graph():
+    assert len(comfy_doctor._substitution_gaps({"1": {"inputs": None}})) == 2
+
+
+def test_a_gap_is_a_warning_and_never_blocks_the_run():
+    """These degrade quality, they do not break generation — and this repo
+    reserves hard gates for correctness (AGENTS.md, the rejection ladder)."""
+    import inspect
+    src = inspect.getsource(comfy_doctor._report_engine)
+    assert "_substitution_gaps" in src
+    # usable is not touched by the gap check
+    after = src.split("_substitution_gaps")[1].split("return usable")[0]
+    assert "usable = False" not in after
