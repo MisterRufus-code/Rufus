@@ -228,17 +228,22 @@ _SETTING_MIN_WORDS = 6
 # at least one light source, because those are what actually recur between
 # shots — a room described only as "grand" gives the model nothing to repeat.
 _SETTING_STRUCTURE = {
-    "wall", "walls", "floor", "ceiling", "counter", "table", "desk", "bench",
-    "door", "doorway", "window", "windows", "arch", "column", "beam", "stair",
-    "stairs", "shelf", "shelves", "crate", "crates", "stall", "roof", "vault",
-    "corridor", "hall", "room", "chamber", "yard", "courtyard", "quay", "dock",
-    "street", "workshop", "foundry", "office", "warehouse", "cellar", "kitchen",
-    "stone", "oak", "timber", "brick", "plaster", "tile", "marble",
+    "wall", "walls", "floor", "floors", "ceiling", "counter", "counters",
+    "table", "tables", "desk", "desks", "bench", "benches",
+    "door", "doors", "doorway", "window", "windows", "arch", "column", "beam",
+    "stair", "stairs", "shelf", "shelves", "crate", "crates", "stall", "roof",
+    "vault", "corridor", "hall", "room", "chamber", "yard", "courtyard",
+    "quay", "dock", "street", "workshop", "foundry", "office", "warehouse",
+    "cellar", "kitchen", "screen", "screens", "pillar", "railing", "gate",
+    "stone", "oak", "timber", "brick", "bricks", "plaster", "tile", "marble",
+    "glass", "concrete", "cobblestone", "cobblestones",
 }
 _SETTING_LIGHT = {
-    "light", "lit", "sunlight", "daylight", "lamplight", "candlelight",
-    "firelight", "lantern", "candle", "lamp", "window", "windows", "shadow",
-    "shadows", "glow", "dim", "bright", "overcast", "dusk", "dawn", "gloom",
+    "light", "lights", "lighting", "lit", "sunlight", "daylight", "lamplight",
+    "candlelight", "firelight", "lantern", "lanterns", "candle", "candles",
+    "lamp", "lamps", "window", "windows", "shadow", "shadows", "glow",
+    "glowing", "dim", "bright", "overcast", "dusk", "dawn", "gloom", "sunlit",
+    "backlit", "reflections", "gaslight", "torchlight", "moonlight", "neon",
 }
 
 
@@ -294,7 +299,12 @@ def _pin_setting(visual: str, setting: str) -> str:
                if w in _SETTING_STRUCTURE}
     light = {w for w in re.findall(r"[a-z]+", setting.lower())
              if w in _SETTING_LIGHT}
-    text = visual.lower()
+    # WHOLE WORDS. Substring containment made "oak" match inside "cloak", and
+    # _pin_character runs first — so it injects "cloak" into exactly the
+    # recurring-character shots, and every one of them then looked like it had
+    # already established the room. Also "stone" inside "cobblestone", "arch"
+    # inside "march".
+    text = set(re.findall(r"[a-z]+", visual.lower()))
 
     # ANY structural anchor means the shot has already built the room. The
     # earlier rule wanted half of them and got the arithmetic wrong on top, so a
@@ -302,13 +312,25 @@ def _pin_setting(visual: str, setting: str) -> str:
     # office… the closed wooden doors" still had the entire 40-word setting
     # appended — five times across one sequence, competing with each beat's own
     # description and the style suffix for the model's attention.
-    if any(a in text for a in anchors):
+    if anchors & text:
         return visual
 
-    # Otherwise pin it, compactly: two structural anchors and the light. That is
-    # enough to put the shot in the same room, and short enough not to drown the
-    # sentence it belongs to.
-    parts = sorted(anchors)[:2] + sorted(light)[:1]
+    # Otherwise pin it, compactly: two structural anchors and one light word,
+    # taken in the order the SETTING names them so the phrasing tracks how the
+    # room was described rather than the alphabet ("brick, office, light" for a
+    # setting that opens on a cobblestone street reads like a different place).
+    ordered = [w for w in re.findall(r"[a-z]+", setting.lower())]
+    seen: set[str] = set()
+    picked_anchor, picked_light = [], []
+    for w in ordered:
+        if w in seen:
+            continue
+        seen.add(w)
+        if w in anchors and len(picked_anchor) < 2:
+            picked_anchor.append(w)
+        elif w in light and not picked_light:
+            picked_light.append(w)
+    parts = picked_anchor + picked_light
     if not parts:
         return visual
     return (f"{visual.rstrip().rstrip('.')}. Same place as the rest of the "
@@ -374,15 +396,27 @@ def _pin_character(visual: str, name: str, short_ref: str) -> str:
 # never mentions a castle.
 _ABSTRACTION_TAIL = re.compile(
     r",\s*(?:"
-    # participial: "..., embodying the control and power within Europe."
-    r"embodying|symbolizing|symbolising|signifying|representing|"
+    # Participial: "..., embodying the control and power within Europe."
+    # A participle after a comma is a comment on the shot, whatever follows it,
+    # so the tail may run over further commas to the end of the sentence.
+    r"(?:embodying|symbolizing|symbolising|signifying|representing|"
     r"suggesting|indicating|reflecting|evoking|illustrating|highlighting|"
-    r"underscoring|conveying|hinting at|showing the|emphasizing|emphasising"
-    # noun-appositive: "..., a symbol of forgotten prosperity." Same defect,
+    r"underscoring|conveying|hinting at|showing the|emphasizing|emphasising)"
+    r"\b[^.]*"
+    r"|"
+    # Noun-appositive: "..., a symbol of forgotten prosperity." Same defect,
     # different grammar, and the participial list alone missed it live.
-    r"|an?\s+(?:symbol|emblem|reminder|testament|metaphor|image|picture|"
-    r"sign|marker|echo|monument)\s+(?:of|to|for)"
-    r")\b[^.]*",
+    #
+    # THE TAIL STOPS AT THE NEXT COMMA, unlike the participial branch, because
+    # this form is indistinguishable from an ordinary list item until you see
+    # what follows it. "A cluttered desk holds a ledger, a picture of the
+    # founder, and a brass lamp." — the middle item is a real object in a real
+    # list, and `[^.]*` deleted the rest of the sentence with it. Requiring the
+    # phrase to END the sentence keeps the abstraction case (which always
+    # trails) and leaves lists alone.
+    r"an?\s+(?:symbol|emblem|reminder|testament|metaphor|image|picture|"
+    r"sign|marker|echo|monument)\s+(?:of|to|for)\b[^.,]*(?=\s*\.|\s*$)"
+    r")",
     re.IGNORECASE,
 )
 
@@ -403,6 +437,21 @@ def _strip_abstraction(visual: str) -> str:
 # show, which is the same noise problem it was written to remove.
 _UNFILMABLE_SUFFIXES = ("ed", "ing", "ly", "tion", "sion", "ness", "ment",
                         "ity", "ance", "ence", "ism", "hood", "ship")
+
+# Concrete nouns the suffix rule would eat. "ship" ends with "ship", "city"
+# with "ity", "building" and "ceiling" with "ing", "bread" with "ed", "fence"
+# with "ence". These are exactly the kind of thing a shot should contain, and
+# the motivating case — a script naming a thing no picture shows — would have
+# gone unreported if the noun had been "ship" instead of "copper".
+_FILMABLE_DESPITE_SUFFIX = {
+    "ship", "ships", "city", "cities", "fence", "fences", "monument",
+    "monuments", "building", "buildings", "ceiling", "ceilings", "bread",
+    "shed", "sheds", "bed", "beds", "thread", "threads", "field", "fields",
+    "shield", "road", "roads", "seed", "seeds", "wood", "child", "gold",
+    "king", "kings", "ring", "rings", "string", "strings", "spring", "wing",
+    "wings", "coffin", "engine", "engines", "machine", "machines", "mine",
+    "mines", "line", "lines", "vessel", "vessels", "parity", "charity",
+}
 
 # Connectives and time words long enough to clear the 4-letter floor.
 _NON_OBJECT_WORDS = {
@@ -430,6 +479,9 @@ def _content_words(text: str) -> set[str]:
     # the trade is worth it for a warning.
     for w in re.findall(r"\b[a-z]{4,}\b", text or ""):
         if w in _STOPWORDS or w in _ABSTRACT or w in _NON_OBJECT_WORDS:
+            continue
+        if w in _FILMABLE_DESPITE_SUFFIX:
+            out.add(w)
             continue
         if w.endswith(_UNFILMABLE_SUFFIXES):
             continue

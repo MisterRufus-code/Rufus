@@ -939,7 +939,17 @@ def _repair_cadence(script: str) -> str:
         # worse than the violation, and DELIVERY explicitly forbids those.
         if n < 15 or n > 26 or not b:
             return None
-        return f"{a.rstrip('.!?')}, {b[0].lower()}{b[1:]}"
+        # NEVER join across a question or an exclamation. Stripping that mark
+        # destroys the sentence: a live run produced
+        #   "But why does it still hold immense value, during global financial
+        #    crises, investors turned to the stability of the pound sterling."
+        # from a clean question followed by a clean statement, and that
+        # ungrammatical line went into the narration. The mark is also the
+        # pacing — DELIVERY says punctuation is how the voice is heard, and a
+        # rhetorical question is the one beat whose punctuation is the point.
+        if not a.rstrip().endswith("."):
+            return None
+        return f"{a.rstrip('.')}, {b[0].lower()}{b[1:]}"
 
     # Within a single line first — the least disruptive edit available.
     for i, line in enumerate(middle):

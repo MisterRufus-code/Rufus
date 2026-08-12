@@ -543,3 +543,69 @@ def test_a_real_apposition_that_describes_a_thing_survives():
     sb = _sb()
     text = "A bronze coin on the counter, worn smooth at the edges."
     assert sb._strip_abstraction(text) == text
+
+
+def test_a_list_of_real_objects_is_not_eaten_by_the_appositive_rule():
+    """"a picture of the founder" is a list ITEM here, not a trailing comment,
+    and `[^.]*` deleted everything after it — the shot lost its brass lamp.
+    An abstraction always trails, so the appositive branch has to end the
+    sentence to count."""
+    sb = _sb()
+    text = ("A cluttered desk holds a ledger, a picture of the founder, and a "
+            "brass lamp.")
+    assert sb._strip_abstraction(text) == text
+
+
+def test_concrete_nouns_the_suffix_filter_would_have_eaten_are_kept():
+    """The suffix rule drops verbs and concepts by their endings, and took
+    ship/city/fence/monument/building/ceiling/bread with them. Those are the
+    exact things a shot should contain, so the Fugger case — a script naming
+    something no picture shows — would have gone unreported had the noun been
+    "ship" instead of "copper"."""
+    sb = _sb()
+    words = sb._content_words(
+        "the ship reached the city past the fence and the monument into the "
+        "building under a low ceiling with bread")
+    for w in ("ship", "city", "fence", "monument", "building", "ceiling",
+              "bread"):
+        assert w in words, w
+
+
+def test_the_fugger_case_still_works_when_the_noun_ends_in_a_verb_suffix():
+    sb = _sb()
+    assert sb._unshown_nouns(
+        ["A stained glass window.", "An old map of the continent."],
+        ["His ships carried it."]) == ["ships"]
+
+
+# ── in_setting: which shots the place is pinned onto ─────────────────────────
+
+def test_a_missing_in_setting_block_places_every_shot():
+    """Defaulting to True is the safe direction: restating a place a shot was
+    already in costs a few words, omitting it is the failure the setting
+    exists to stop."""
+    sb = _sb()
+    assert sb._in_setting_flags({}, 3) == [True, True, True]
+    assert sb._in_setting_flags({"shots": "not a list"}, 2) == [True, True]
+
+
+def test_only_an_explicit_false_takes_a_shot_out_of_the_room():
+    sb = _sb()
+    raw = {"shots": [{"in_setting": False}, {"in_setting": True}, {},
+                     {"in_setting": "no"}, "junk"]}
+    assert sb._in_setting_flags(raw, 5) == [False, True, True, True, True]
+
+
+def test_a_short_shots_list_still_returns_one_flag_per_beat():
+    sb = _sb()
+    assert sb._in_setting_flags({"shots": [{"in_setting": False}]}, 4) == [
+        False, True, True, True]
+
+
+def test_the_prompt_still_asks_for_the_setting_and_the_flag():
+    """Pinning is driven entirely by these two keys. Rename or drop either and
+    every shot silently loses its room while the suite stays green."""
+    sb = _sb()
+    p = sb._prompt("script", ["b1", "b2"], [], "", "")
+    assert '"setting"' in p
+    assert '"in_setting"' in p
