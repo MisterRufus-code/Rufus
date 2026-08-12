@@ -26,6 +26,12 @@ python scripts/dashboard.py               # http://localhost:8765
 
 # Preflight — what is actually installed and reachable right now
 python scripts/health_check.py
+
+# Why is a ComfyUI engine "off"? Names which of the four causes it is:
+# server down, nodes missing, weights in a folder ComfyUI doesn't read,
+# or the API export simply not done yet. Read-only.
+python scripts/comfy_doctor.py            # every engine
+python scripts/comfy_doctor.py wan_t2v    # one
 ```
 
 There is no lint or type-check config. **`python -m pytest -q` passing is the
