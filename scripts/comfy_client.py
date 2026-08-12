@@ -1134,10 +1134,20 @@ def generate_clips(queries: list[str], n: int = 4,
                   f"({_stills_only_reason or 'RUFUS_LTX=0'})")
     except Exception as e:
         print(f"[comfy] ltx unavailable ({e})")
-    # Text-to-video is reported but NOT added to the motion chain: every entry
-    # in that chain is contracted to receive a still, and this engine takes
-    # only words. Reporting it here keeps an opted-in engine from being
-    # invisibly absent, which is the failure mode this pipeline keeps hitting.
+    # Text-to-video is never added to the motion chain: every entry in that
+    # chain is contracted to receive a still, and this engine takes only words.
+    # It is used for exactly one beat — the hero — and held here as a handle
+    # rather than a chain entry so that contract stays true.
+    #
+    # WHY ONE BEAT AND NOT ALL OF THEM. Wan 2.2 14B is a mixture-of-experts:
+    # two expert models per clip, swapped sequentially, on a 24GB card backed
+    # by 16GB of system RAM — so the weights stream from disk every time. That
+    # is minutes per clip, and ten of them is an hour of GPU for a 42-second
+    # video. The hero beat is the one the architect already identified as a
+    # filmable moment, and THE SCENE is a sentence — which is exactly the input
+    # a text-to-video model wants. One clip of real generated motion where the
+    # video actually turns, stills everywhere else.
+    t2v = None
     try:
         import wan_t2v_client
         if wan_t2v_client.enabled():
@@ -1145,9 +1155,16 @@ def generate_clips(queries: list[str], n: int = 4,
             print(f"[comfy] text-to-video wan 2.2: "
                   f"{'ON' if t2v_ok else 'off'} — {t2v_why}")
             if t2v_ok:
+                t2v = wan_t2v_client
                 print(f"[comfy]   seed lineage {wan_t2v_client.run_seed()}, "
                       f"chaining {'on' if wan_t2v_client.chaining() else 'off'} "
                       f"(RUFUS_T2V_CHAIN=1 carries objects between beats)")
+                if beat_mode != "hero":
+                    print(f"[comfy]   ⚠ RUFUS_BEAT_MOTION={beat_mode} — "
+                          f"text-to-video only renders the hero beat. Set "
+                          f"RUFUS_BEAT_MOTION=hero to use it.")
+        elif want_motion:
+            _say_if_ready_but_switched_off("text-to-video wan 2.2", wan_t2v_client)
     except Exception as e:
         print(f"[comfy] text-to-video unavailable ({e})")
     try:
@@ -1379,7 +1396,10 @@ def generate_clips(queries: list[str], n: int = 4,
     # pipeline produces today.
     hero_i: int | None = None
     hero_scene = ""
-    if beat_mode == "hero" and motion_engines:
+    t2v_world = ""
+    # `or t2v` because text-to-video needs no still to animate, so a run with a
+    # T2V template and no image-to-video engine still has a hero beat to make.
+    if beat_mode == "hero" and (motion_engines or t2v):
         try:
             import script_writer
             hero_scene = getattr(script_writer, "LAST_SCENE", "") or ""
@@ -1390,8 +1410,22 @@ def generate_clips(queries: list[str], n: int = 4,
             print("[comfy] hero: no beat matches the scene — all beats stay "
                   "stills (no filmable moment in this source)")
         else:
-            print(f"[comfy] hero: beat {hero_i + 1} gets the motion clip")
+            via = "text-to-video" if t2v else "motion"
+            print(f"[comfy] hero: beat {hero_i + 1} gets the {via} clip")
             print(f"[comfy]   scene: {hero_scene[:100]}")
+        if t2v and hero_i is not None:
+            # Built once and reused byte for byte — see build_world. The style
+            # and character text is the SAME text the stills were rendered
+            # with, so the one moving beat belongs to the same world as the
+            # nine still ones instead of being a visitor from another render.
+            try:
+                import character_engine
+                char = (character_engine.short_ref(niche)
+                        if character_engine.enabled(niche) else "")
+            except Exception:
+                char = ""
+            t2v_world = t2v.build_world([p for _, _, p in stills], char,
+                                        _detail_suffix())
 
     if motion_engines and stills:
         _free_comfy_memory()
@@ -1462,6 +1496,35 @@ def generate_clips(queries: list[str], n: int = 4,
         made_via = None
         motion_secs = 0.0
         tried: list[str] = []
+
+        # Text-to-video gets first refusal on the hero beat, ahead of the
+        # image-to-video chain. It is generating this beat from THE SCENE
+        # rather than from the still, so it can stage an action the still
+        # never contained — the still froze one instant of the moment, the
+        # sentence describes the whole of it. When it declines or fails, the
+        # beat drops into the ordinary chain below with its still intact and
+        # nothing about the run changes.
+        if t2v is not None and beat_mode == "hero" and i == hero_i:
+            t0 = time.time()
+            ok_t2v = t2v.generate_clip(hero_scene or prompt, clip_path,
+                                       duration=clip_duration, idx=i,
+                                       world=t2v_world)
+            secs = time.time() - t0
+            rec = {"beat": i + 1, "engine": "wan_t2v", "ok": bool(ok_t2v),
+                   "seconds": round(secs, 1)}
+            try:
+                rec.update(t2v.LAST_CALL)
+            except Exception:
+                pass
+            motion_log.append(rec)
+            tried.append(f"wan_t2v {'ok' if ok_t2v else 'failed'} in {secs:.0f}s")
+            if ok_t2v:
+                made_via, motion_secs = "wan_t2v", secs
+                beat_engines = []
+            else:
+                print(f"[comfy] text-to-video declined beat {i+1} after "
+                      f"{secs:.0f}s — falling back to the still")
+
         for eng_name, animate in beat_engines:
             # THE SCENE names the ACTION; the image prompt names the
             # composition. For the one beat built on that moment the action is

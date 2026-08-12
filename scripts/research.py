@@ -402,6 +402,8 @@ def _seed_id(seed: dict) -> str:
         return "rss:" + (seed.get("url") or seed.get("title", ""))
     if t == "wikipedia":
         return "wiki:" + (seed.get("url") or seed.get("title", ""))
+    if t == "newspaper":
+        return "news:" + (seed.get("url") or seed.get("title", ""))
     if t == "wisdom":
         text = (seed.get("content") or "").strip().lower()
         return "wisdom:" + hashlib.sha1(text.encode("utf-8")).hexdigest()[:16]
@@ -952,6 +954,31 @@ def replenish_wiki_topics(niche_name: str, count: int = WIKI_REPLENISH_COUNT) ->
     return len(validated)
 
 
+def _is_disambiguation(data: dict, extract: str) -> bool:
+    """A page that is a LIST of other pages, not an article.
+
+    THE RUN THIS COMES FROM. The supervisor had already rejected one seed and
+    the retry landed on:
+
+        [research] using Wikipedia article: "Potosi"
+        → Quote: "Potosí or Potosi may refer to the following topics, whose
+          names generally origin" — Wikipedia
+
+    A disambiguation page contains no facts, so there is nothing for the story
+    architect to find a moment in and nothing for the fact gate to check
+    against. The supervisor caught it and the retry logic used it anyway, which
+    is how "too generic" made it all the way into a rendered video.
+
+    Two signals, because the REST summary API is not consistent about the
+    first: an explicit type, and the sentence every one of these pages opens
+    with.
+    """
+    if (data.get("type") or "").lower() == "disambiguation":
+        return True
+    head = " ".join(extract.split())[:200].lower()
+    return "may refer to" in head or "may also refer to" in head
+
+
 def fetch_wikipedia_story(niche_name: str, used_ids: set | None = None) -> dict | None:
     """Self-directed, grounded seed source: the machine picks a topic from the
     niche's topic list (config/wiki_topics.json) and pulls the REAL facts from
@@ -999,6 +1026,10 @@ def fetch_wikipedia_story(niche_name: str, used_ids: set | None = None) -> dict 
 
         extract = _clean_text(data.get("extract") or "")
         if len(extract) < WIKI_MIN_EXTRACT:
+            continue
+        if _is_disambiguation(data, extract):
+            print(f"[research] Wikipedia: \"{title}\" is a disambiguation page "
+                  f"— skipping (no facts on it to build from)")
             continue
         # Prefer the full article body over the lead-paragraph summary — see
         # WIKI_FULLTEXT_CHARS. Falls back to the summary if the fetch fails.
@@ -1327,6 +1358,179 @@ def fetch_rss_story(niche_name: str, used_ids: set | None = None) -> dict | None
     return None
 
 
+# ── Historic newspapers (Library of Congress, "Chronicling America") ─────────
+#
+# WHY THIS SOURCE EXISTS. Reddit has needed OAuth for months and blocks five of
+# six seed sources on every run; Stack Exchange answers maybe half the time; and
+# what is left is Wikipedia, which hands back an encyclopedia OVERVIEW. An
+# overview is the exact shape the pipeline cannot use — "Sterling was the
+# fourth-most-traded currency in 2022" is a fact about a category, and a
+# category has no date, no street and nobody standing in it. That is what
+# produced "The secret? Its historical resilience and trust."
+#
+# A newspaper page is the opposite shape and it is not a matter of luck: every
+# result carries a printing date, a city, a paper, and a reporter writing about
+# something that happened THAT WEEK. THE SCENE asks for "a date or year, a
+# place, and ONE named person doing ONE specific thing" — a front page from
+# Philadelphia on February 21, 1893 supplies three of those before the model
+# reads a word.
+#
+# NO KEY, NO OAUTH, NO ACCOUNT. It is a US federal public-domain archive:
+# ~20 million pages, 1756-1963, open JSON. That is the whole reason it is
+# worth adding rather than a sixth thing to authenticate.
+#
+# THE HONEST COST: this is OCR of microfilm of 19th-century newsprint, so some
+# pages come back as soup — column bleed, broken hyphenation, a masthead
+# dissolved into punctuation. _ocr_is_legible is the filter, and it is
+# deliberately strict: a rejected page costs one HTTP call, an accepted bad one
+# costs a whole video. Expect a fair number of skips in the log; that is the
+# filter working, not the source failing.
+NEWS_TOPIC_QUERIES = {
+    "money_history": (
+        "run on the bank", "bank failure", "gold reserve", "silver dollar",
+        "counterfeit notes", "the mint", "panic in wall street",
+        "wages cut", "price of bread", "railroad receivers", "bankrupt",
+        "specie payment", "greenbacks", "treasury notes",
+    ),
+}
+
+# The window this channel is about, and the window where OCR is good enough to
+# be worth reading. Overridable per run.
+NEWS_YEAR_MIN = 1850
+NEWS_YEAR_MAX = 1922
+NEWS_TIMEOUT = 25.0
+NEWS_MIN_WORDS = 140          # below this there is no story on the page
+NEWS_WINDOW_CHARS = 1800      # what we hand the writer, centred on the hit
+
+
+def _ocr_is_legible(text: str) -> bool:
+    """Whether an OCR page is clean enough to build a script on.
+
+    Microfilm OCR fails in a recognisable way: it produces many short
+    non-words ("tlie", "ii", "0f", "rn") rather than a few long ones. Counting
+    the share of tokens that look like ordinary words separates a readable
+    column from a scanned advertisement page far more reliably than length
+    does, and costs nothing.
+    """
+    words = (text or "").split()
+    if len(words) < NEWS_MIN_WORDS:
+        return False
+    real = sum(1 for w in words
+               if w.isalpha() and 3 <= len(w) <= 14)
+    return real / len(words) >= 0.62
+
+
+def _ocr_window(text: str, query: str) -> str:
+    """The passage AROUND the search hit, not the top of the page.
+
+    A newspaper page is six unrelated columns. The top of the page is a
+    masthead and a shipping list; the story we searched for is somewhere in the
+    middle, and handing the writer the whole page means handing it five stories
+    it did not ask for.
+    """
+    flat = " ".join((text or "").split())
+    # The LONGEST word in the query, not the first. "run on the bank" starting
+    # from "run" lands on "running", "drunk" or "runaway" long before it finds
+    # the story; "bank" is the token that actually marks it.
+    key = max((query or "").split(), key=len, default="").lower()
+    at = flat.lower().find(key) if key else -1
+    if at < 0:
+        at = 0
+    start = max(0, at - NEWS_WINDOW_CHARS // 3)
+    return flat[start:start + NEWS_WINDOW_CHARS].strip()
+
+
+def _news_date_place(item: dict) -> tuple[str, str]:
+    """A readable date and place from one Chronicling America item."""
+    raw = str(item.get("date") or "")
+    date = raw
+    if len(raw) == 8 and raw.isdigit():          # 18930220
+        date = f"{raw[:4]}-{raw[4:6]}-{raw[6:]}"
+    city = (item.get("city") or [""])[0] if isinstance(item.get("city"), list) \
+        else (item.get("city") or "")
+    state = (item.get("state") or [""])[0] if isinstance(item.get("state"), list) \
+        else (item.get("state") or "")
+    place = ", ".join(p for p in (city, state) if p)
+    return date, place
+
+
+def fetch_newspaper_story(niche_name: str, used_ids: set | None = None) -> dict | None:
+    """A dated page from a named American town, via the Library of Congress.
+
+    Keyless and unauthenticated by design — see the block comment above.
+    Fail-open like every other source here: any failure returns None and the
+    chain continues to Wikipedia exactly as it does today.
+    """
+    if used_ids is None:
+        used_ids = set()
+    queries = NEWS_TOPIC_QUERIES.get(niche_name)
+    if not queries:
+        return None                       # niche has no newspaper vocabulary
+    if os.environ.get("RUFUS_NEWSPAPERS", "1").strip().lower() in (
+            "0", "false", "no", "off"):
+        return None
+
+    q = random.choice(list(queries))
+    y1 = int(os.environ.get("RUFUS_NEWS_YEAR_MIN", str(NEWS_YEAR_MIN)))
+    y2 = int(os.environ.get("RUFUS_NEWS_YEAR_MAX", str(NEWS_YEAR_MAX)))
+    page = random.randint(1, 5)           # rotate so a daily channel keeps moving
+    url = ("https://chroniclingamerica.loc.gov/search/pages/results/"
+           f"?andtext={quote(q)}&format=json&rows=12&page={page}"
+           f"&date1={y1}&date2={y2}&dateFilterType=yearRange")
+
+    try:
+        r = httpx.get(url, headers=WIKI_HEADERS, timeout=NEWS_TIMEOUT,
+                      follow_redirects=True)
+        r.raise_for_status()
+        items = r.json().get("items") or []
+    except Exception as e:
+        # Loud and specific: the Library of Congress retired the legacy host
+        # once already, and "newspapers unavailable" would read like a network
+        # blip for months if it happens again.
+        print(f"[research] newspapers unavailable for \"{q}\" ({e}) — if this "
+              f"persists the LoC endpoint moved; see fetch_newspaper_story. "
+              f"RUFUS_NEWSPAPERS=0 silences this source.")
+        return None
+
+    skipped = 0
+    for item in items:
+        page_url = "https://chroniclingamerica.loc.gov" + str(item.get("id") or "")
+        if "news:" + page_url in used_ids:
+            continue
+        text = _clean_text(item.get("ocr_eng") or "")
+        # Window FIRST, then judge. A newspaper page is six columns, and most
+        # of them are classified ads and shipping tables that read as soup to
+        # the legibility test. Judging the whole page throws away good stories
+        # for the company they keep; judging the passage we are actually going
+        # to send is both stricter about what matters and fairer to the page.
+        body = _ocr_window(text, q)
+        if not _ocr_is_legible(body):
+            skipped += 1
+            continue
+        date, place = _news_date_place(item)
+        if not date:
+            skipped += 1
+            continue
+        paper = str(item.get("title") or "an American newspaper")
+        print(f"[research] newspapers [\"{q}\", page {page}]: "
+              f"{len(items)} page(s), {skipped} unreadable")
+        return {
+            "type":    "newspaper",
+            "source":  f"{paper}, {place} ({date})" if place else f"{paper} ({date})",
+            "title":   f"{paper}, {date}",
+            # The date and place lead the content on purpose. They are the two
+            # things the story architect needs and the two things an OCR column
+            # is least likely to state in a sentence.
+            "content": (f"Printed {date} in {place or 'the United States'}, in "
+                        f"{paper}. Searched for \"{q}\".\n\n{body}"),
+            "url":     page_url,
+        }
+
+    print(f"[research] newspapers [\"{q}\", page {page}]: "
+          f"{len(items)} page(s), none usable ({skipped} unreadable)")
+    return None
+
+
 def pick_wisdom_quote(niche_name: str, used_ids: set | None = None) -> dict | None:
     """Pick one random quote from the niche's curated pool, skipping seen ones."""
     if used_ids is None:
@@ -1446,6 +1650,15 @@ def get_seed(niche_name: str | None = None, topic: str | None = None) -> dict:
         _mark_seed_used(seed)
         return _with_trending(seed)
 
+    # Historic newspapers: keyless, and the only source here that hands back a
+    # date and a town with every result. Ahead of Wikipedia deliberately —
+    # Wikipedia returns an overview of a subject, this returns a day.
+    seed = fetch_newspaper_story(name, used_ids=used_set)
+    if seed:
+        print(f"[research] using newspaper page: {seed['source']}")
+        _mark_seed_used(seed)
+        return _with_trending(seed)
+
     # Wikipedia: self-directed topic pick, real sourced facts, keyless, infinite
     seed = fetch_wikipedia_story(name, used_ids=used_set)
     if seed:
@@ -1488,6 +1701,19 @@ def get_seed(niche_name: str | None = None, topic: str | None = None) -> dict:
 
 
 if __name__ == "__main__":
+    # `--newspapers [niche]` exercises the Library of Congress source alone.
+    # It exists because that endpoint cannot be reached from every network, so
+    # "does this work here?" has to be answerable in one command instead of by
+    # reading a full run's log.
+    if "--newspapers" in sys.argv:
+        rest = [a for a in sys.argv[1:] if a != "--newspapers"]
+        got = fetch_newspaper_story(rest[0] if rest else "money_history", set())
+        if not got:
+            print("no usable page this time — re-run (the query rotates), and "
+                  "check the line above for the reason")
+            sys.exit(1)
+        print(json.dumps(got, indent=2)[:2000])
+        sys.exit(0)
     niche = sys.argv[1] if len(sys.argv) > 1 else None
     seed  = get_seed(niche)
     print(json.dumps(seed, indent=2))
