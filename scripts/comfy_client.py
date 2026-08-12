@@ -147,7 +147,27 @@ BEAT_MOTION_MODES = ("i2v", "i2i", "cut", "hero", "kenburns")
 I2I_DEFAULT_FRAMES = 5
 # How many stills a non-hero beat gets in hero mode. Same as `cut`'s default —
 # the point of hero mode is that the OTHER beats stay cheap.
+#
+# TUNABLE BECAUSE IT TURNED OUT TO BE THE BIGGER HALF. Once the hero beat is
+# the only motion clip, the stills phase is what the run is made of: the
+# owner's ComfyUI queue shows 12-14 seconds per still, so 9 beats x 3 = 27
+# stills is about six minutes before any motion starts. Dropping to 1 makes it
+# two. The cost is real and worth stating: at 3 the beat hard-cuts between
+# three related images and the shot advances inside the narration line; at 1 it
+# is a single Ken Burns move. Speed, paid for in visual interest on the eight
+# beats nobody was going to look at twice.
 HERO_OTHER_FRAMES = 3
+
+
+def _hero_other_frames() -> int:
+    """Stills per non-hero beat. RUFUS_HERO_OTHER_FRAMES overrides."""
+    raw = os.environ.get("RUFUS_HERO_OTHER_FRAMES", "").strip()
+    try:
+        return max(1, int(raw)) if raw else HERO_OTHER_FRAMES
+    except ValueError:
+        print(f"[comfy] RUFUS_HERO_OTHER_FRAMES={raw!r} is not a number — "
+              f"using {HERO_OTHER_FRAMES}")
+        return HERO_OTHER_FRAMES
 
 
 def _beat_motion() -> str:
@@ -1041,7 +1061,7 @@ def generate_clips(queries: list[str], n: int = 4,
         # Resolved per beat further down — this only sets the default for the
         # non-hero majority.
         if frames_per_beat == 1:
-            frames_per_beat = HERO_OTHER_FRAMES
+            frames_per_beat = _hero_other_frames()
         # Halve the generated clip length unless the owner asked otherwise.
         # The one measured figure for this hardware is ~21-23 min per 480p clip
         # at 30 steps / 121 frames; the exported template is already 12 steps

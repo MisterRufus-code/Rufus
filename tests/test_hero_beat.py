@@ -161,3 +161,44 @@ def test_a_raising_client_stays_quiet(capsys):
 
     cc._say_if_ready_but_switched_off("hunyuan 1.5", _Broken)
     assert capsys.readouterr().out == ""
+
+
+# ── how many stills the eight non-hero beats get ─────────────────────────────
+#
+# Once the hero beat is the only motion clip, the stills phase IS the run. The
+# owner's ComfyUI queue shows 12-14 seconds per still, so 9 beats x 3 = 27
+# stills is about six minutes before any motion starts.
+
+def test_the_default_is_unchanged(monkeypatch):
+    monkeypatch.delenv("RUFUS_HERO_OTHER_FRAMES", raising=False)
+    assert cc._hero_other_frames() == cc.HERO_OTHER_FRAMES == 3
+
+
+def test_one_still_per_beat_can_be_asked_for(monkeypatch):
+    """27 stills -> 9. Costs the hard-cut inside each narration line, which is
+    the trade the owner should get to make per run rather than per release."""
+    monkeypatch.setenv("RUFUS_HERO_OTHER_FRAMES", "1")
+    assert cc._hero_other_frames() == 1
+
+
+def test_zero_and_negative_cannot_produce_a_beat_with_no_picture(monkeypatch):
+    """A beat still needs one image to animate or hold. Clamping beats raising:
+    a silly value should cost a little quality, never a whole run."""
+    for bad in ("0", "-4"):
+        monkeypatch.setenv("RUFUS_HERO_OTHER_FRAMES", bad)
+        assert cc._hero_other_frames() == 1
+
+
+def test_junk_falls_back_loudly(monkeypatch, capsys):
+    monkeypatch.setenv("RUFUS_HERO_OTHER_FRAMES", "three")
+    assert cc._hero_other_frames() == cc.HERO_OTHER_FRAMES
+    assert "not a number" in capsys.readouterr().out
+
+
+def test_the_hero_branch_reads_the_override_not_the_constant():
+    """The constant was the value in use for as long as hero mode existed; the
+    env var only helps if the branch actually calls the resolver."""
+    import inspect
+    src = inspect.getsource(cc.generate_clips)
+    assert "_hero_other_frames()" in src
+    assert "= HERO_OTHER_FRAMES" not in src

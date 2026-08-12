@@ -62,6 +62,13 @@ REM comfy_template.prepare() substitutes prompt, image, seed and dims only, so
 REM those three are frozen into whatever you exported from ComfyUI. Export with
 REM the Lightning/lightx2v LoRA ON at 4 steps — that is the single biggest win,
 REM worth about 5x on this card.
+REM Stills are the OTHER half of the runtime once only one beat moves: the
+REM owner's ComfyUI queue shows 12-14s per still, so 9 beats x 3 = 27 stills is
+REM about six minutes before Wan even starts. 1 makes it two. The cost is the
+REM hard cut inside each narration line on the eight beats that stay still.
+REM Set to 3 for more visual interest at ~4 minutes more per run.
+set RUFUS_HERO_OTHER_FRAMES=1
+
 set RUFUS_T2V_FRAMES=49
 set RUFUS_T2V_W=480
 set RUFUS_T2V_H=832
