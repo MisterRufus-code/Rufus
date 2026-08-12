@@ -367,3 +367,46 @@ def test_a_gap_is_a_warning_and_never_blocks_the_run():
     # usable is not touched by the gap check
     after = src.split("_substitution_gaps")[1].split("return usable")[0]
     assert "usable = False" not in after
+
+
+# ── say what the export contains, not only what is wrong with it ─────────────
+
+def test_the_export_facts_report_the_numbers():
+    """Silence from _speed_notes reads identically whether the settings are
+    good or whether nothing recognisable was found, so "did the 4-step toggle
+    make it into the file?" was being answered by inferring from an absence."""
+    facts = comfy_doctor._export_facts({"1": {
+        "class_type": "KSamplerAdvanced",
+        "inputs": {"steps": 4, "cfg": 1.0, "sampler_name": "euler"}}})
+    assert facts == ["KSamplerAdvanced: steps=4, cfg=1.0, sampler_name=euler"]
+
+
+def test_size_is_reported_with_its_length_field():
+    facts = comfy_doctor._export_facts({"1": {
+        "class_type": "WanT2V",
+        "inputs": {"width": 640, "height": 640, "duration": 5.0}}})
+    assert facts == ["WanT2V: 640x640 duration=5.0"]
+
+
+def test_a_linked_input_is_not_reported_as_a_value():
+    """[node_id, slot] is a WIRE, not a setting. Printing it as one would read
+    as a nonsense step count."""
+    assert comfy_doctor._export_facts({"1": {
+        "class_type": "K", "inputs": {"steps": ["7", 0]}}}) == []
+
+
+def test_an_export_that_states_nothing_says_so(monkeypatch, capsys):
+    """An empty fact list is itself informative — it means every guess about
+    this export's speed is a guess, so say that instead of printing nothing."""
+    monkeypatch.setattr(comfy_doctor, "_reachable", lambda host: True)
+    monkeypatch.setattr(comfy_doctor, "_visible_files", lambda host: {})
+    monkeypatch.setattr(comfy_doctor.Path, "exists", lambda self: True)
+    monkeypatch.setattr(comfy_doctor.comfy_template, "load_template",
+                        lambda p: {"1": {"class_type": "X",
+                                         "inputs": {"text": "RUFUS_PROMPT"}}})
+    monkeypatch.setattr(comfy_doctor.comfy_template, "missing_nodes",
+                        lambda t, h: [])
+    monkeypatch.setattr(comfy_doctor.comfy_template, "missing_models",
+                        lambda t, h: [])
+    comfy_doctor.main(["wan_t2v"])
+    assert "judge it by the clip time" in capsys.readouterr().out

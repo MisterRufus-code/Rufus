@@ -225,6 +225,43 @@ def _visible_files(host: str) -> dict[str, set[str]]:
     return out
 
 
+def _export_facts(tpl: dict) -> list[str]:
+    """What the export actually SAYS about speed and size.
+
+    WHY POSITIVE REPORTING AND NOT JUST WARNINGS. _speed_notes only speaks when
+    something is wrong, and silence turned out to be ambiguous: it reads
+    identically whether the settings are good or whether nothing recognisable
+    was found. After exporting, the owner's real question is "did the 4-step
+    LoRA toggle actually make it into the file?" — and a quiet report cannot
+    answer that, so the answer was being inferred from an absence.
+
+    Print the numbers instead. "steps 4, cfg 1.0, 480x832" is checkable against
+    what was set in the UI; an empty list here is itself informative, because it
+    means the export exposes none of these and every guess about its speed is
+    just a guess.
+    """
+    facts: list[str] = []
+    for node in tpl.values():
+        ins = node.get("inputs")
+        if not isinstance(ins, dict):
+            continue
+        ct = node.get("class_type", "node")
+        bits = []
+        for key in ("steps", "cfg", "sampler_name", "scheduler",
+                    "enable_turbo_mode", "denoise"):
+            if key in ins and not isinstance(ins[key], list):
+                bits.append(f"{key}={ins[key]}")
+        if "width" in ins and "height" in ins:
+            size = f"{ins['width']}x{ins['height']}"
+            for k in ("length", "duration"):
+                if k in ins and not isinstance(ins[k], list):
+                    size += f" {k}={ins[k]}"
+            bits.append(size)
+        if bits:
+            facts.append(f"{ct}: " + ", ".join(bits))
+    return facts
+
+
 def _speed_notes(tpl: dict) -> list[str]:
     """Settings frozen into an export that will make every run slow.
 
@@ -364,6 +401,13 @@ def _report_engine(name: str, host: str, seen: dict[str, set[str]]) -> bool:
                     print(f"    re-export after picking a file that IS in the dropdown.")
                 else:
                     print(f"  ✓ {tpl_rel} valid — nodes and model files all resolve")
+                    facts = _export_facts(tpl)
+                    for fact in facts:
+                        print(f"  · {fact}")
+                    if not facts:
+                        print(f"  · this export exposes no steps/cfg/size "
+                              f"inputs — nothing here can confirm how it was "
+                              f"configured, so judge it by the clip time")
                     for note in _speed_notes(tpl):
                         print(f"  ⏱ {note}")
                     for gap in _substitution_gaps(tpl):
