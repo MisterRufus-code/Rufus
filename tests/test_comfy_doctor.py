@@ -410,3 +410,74 @@ def test_an_export_that_states_nothing_says_so(monkeypatch, capsys):
                         lambda t, h: [])
     comfy_doctor.main(["wan_t2v"])
     assert "judge it by the clip time" in capsys.readouterr().out
+
+
+# ── --dry-run: will MY settings land on MY export? ───────────────────────────
+#
+# Different question from "is the export loadable", and the expensive one:
+# prepare() writes into inputs that EXIST and skips the rest, so a valid export
+# can silently ignore every environment variable that was set.
+
+def test_dimensions_landing_on_the_node_are_confirmed(monkeypatch):
+    monkeypatch.setenv("RUFUS_T2V_W", "480")
+    monkeypatch.setenv("RUFUS_T2V_H", "832")
+    monkeypatch.setenv("RUFUS_T2V_FRAMES", "49")
+    tpl = {"1": {"class_type": "WanT2V", "inputs": {
+        "width": 640, "height": 640, "duration": 5.0,
+        "positive_prompt": "RUFUS_PROMPT"}}}
+    lines = comfy_doctor._dry_run("wan_t2v", tpl)
+    assert any("asking for 480x832, 49 frames" in l for l in lines)
+    assert any("received 480x832" in l for l in lines)
+    assert not any("NOTHING received" in l for l in lines)
+
+
+def test_a_frozen_export_is_called_out_on_every_axis():
+    """An export whose node exposes none of the substitutable inputs runs its
+    saved size and its saved prompt on every beat, forever, silently."""
+    tpl = {"1": {"class_type": "Frozen", "inputs": {"text": "a cat"}}}
+    lines = " | ".join(comfy_doctor._dry_run("wan_t2v", tpl))
+    assert "NOTHING received the dimensions" in lines
+    assert "nothing received a seed" in lines
+    assert "prompt placeholder did not substitute" in lines
+
+
+def test_a_missing_seed_input_is_reported_even_when_dims_land():
+    """ComfyUI's packaged Wan node takes width/height/duration but exposes no
+    seed, so the dims succeed while wan_t2v_client's whole seed lineage does
+    nothing — exactly the kind of half-success that reads as working."""
+    tpl = {"1": {"class_type": "WanT2V", "inputs": {
+        "width": 1, "height": 1, "duration": 5.0, "prompt": "RUFUS_PROMPT"}}}
+    lines = " | ".join(comfy_doctor._dry_run("wan_t2v", tpl))
+    assert "nothing received a seed" in lines
+    assert "NOTHING received the dimensions" not in lines
+
+
+def test_a_seed_bearing_graph_reports_it(monkeypatch):
+    monkeypatch.setenv("RUFUS_T2V_W", "480")
+    monkeypatch.setenv("RUFUS_T2V_H", "832")
+    tpl = {"1": {"class_type": "KSampler", "inputs": {
+        "width": 1, "height": 1, "length": 1, "seed": 0,
+        "text": "RUFUS_PROMPT"}}}
+    lines = " | ".join(comfy_doctor._dry_run("wan_t2v", tpl))
+    assert "received the seed" in lines
+
+
+def test_the_dry_run_uses_wans_framerate_for_seconds_based_nodes(monkeypatch):
+    monkeypatch.setenv("RUFUS_T2V_FRAMES", "49")
+    tpl = {"1": {"class_type": "WanT2V", "inputs": {
+        "width": 1, "height": 1, "duration": 9.0, "p": "RUFUS_PROMPT"}}}
+    lines = comfy_doctor._dry_run("wan_t2v", tpl)
+    assert any("16fps" in l for l in lines)
+    assert any("duration=3" in l for l in lines)      # 49/16, not 49/25
+
+
+def test_the_dry_run_is_off_unless_asked(monkeypatch, capsys):
+    monkeypatch.setattr(comfy_doctor, "_reachable", lambda host: True)
+    monkeypatch.setattr(comfy_doctor, "_visible_files", lambda host: {})
+    monkeypatch.setattr(comfy_doctor.Path, "exists", lambda self: False)
+    comfy_doctor.main(["wan_t2v"])
+    assert "dry run" not in capsys.readouterr().out
+
+
+def test_a_broken_engine_module_does_not_crash_the_report():
+    assert comfy_doctor._dry_run("stills_i2i", {"1": {}}) == []

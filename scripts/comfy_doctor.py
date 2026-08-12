@@ -14,8 +14,16 @@ it will accept, which is the same list the dropdown shows in the UI — if a
 downloaded file is not in it, the file is in the wrong folder, and that is the
 single most common reason a "downloaded" model does not work.
 
-    python scripts/comfy_doctor.py            # every engine
-    python scripts/comfy_doctor.py wan_t2v    # one engine
+    python scripts/comfy_doctor.py                      # every engine
+    python scripts/comfy_doctor.py wan_t2v              # one engine
+    python scripts/comfy_doctor.py wan_t2v --dry-run    # + what would be submitted
+
+--dry-run answers a different question from the checks above. They ask "is this
+export loadable". It asks "will MY settings land on MY export" — which is not
+the same, because prepare() writes into inputs that exist and skips the ones
+that do not, so a perfectly valid export can ignore every environment variable
+the owner typed. It runs prepare() and prints the result. No submit, no
+sampling, no GPU.
 
 Read-only. Makes no changes and starts nothing.
 """
@@ -60,6 +68,11 @@ ENGINES = {
 }
 
 ROOT = Path(__file__).parent.parent
+
+# --dry-run: also show what prepare() would produce against this export. Off by
+# default because it is a second, longer report and the common question is just
+# "is this thing ready".
+DRY_RUN = False
 
 
 # ── Wan: which variant is on disk, and what it costs to run ──────────────────
@@ -336,6 +349,60 @@ def _substitution_gaps(tpl: dict) -> list[str]:
     return gaps
 
 
+def _dry_run(name: str, tpl: dict) -> list[str]:
+    """What the graph would look like AFTER Rufus substitutes into it.
+
+    The structural checks above answer "is this export loadable". They cannot
+    answer the question that actually costs GPU time: will MY env vars land on
+    MY export. Those are different questions, because prepare() writes into
+    inputs that exist and skips the ones that do not — so an export can be
+    perfectly valid and still ignore every setting the owner typed.
+
+    Running prepare() against the real settings and printing the result answers
+    it for nothing: no ComfyUI submit, no sampling, no clip.
+    """
+    mod_name = ENGINES[name][0]
+    if not mod_name:
+        return []
+    try:
+        mod = __import__(mod_name)
+        cfg = mod.settings()
+        w, h = int(cfg["width"]), int(cfg["height"])
+        frames = int(cfg["frames"])
+        fps = getattr(mod, "WAN_FPS", None)
+    except Exception as e:
+        return [f"cannot resolve this engine's settings ({e})"]
+
+    before = comfy_template.load_template  # noqa: F841  (kept for symmetry)
+    out = comfy_template.prepare(tpl, prompt="RUFUS_DRY_RUN", seed=12345,
+                                 dims=(w, h, frames), keep_video_writers=True,
+                                 **({"fps": fps} if fps else {}))
+
+    lines = [f"asking for {w}x{h}, {frames} frames"
+             + (f" (= {frames / fps:.2f}s at {fps}fps)" if fps else "")]
+    landed = False
+    for node in out.values():
+        ins = node.get("inputs")
+        if not isinstance(ins, dict):
+            continue
+        ct = node.get("class_type", "node")
+        if ins.get("width") == w and ins.get("height") == h:
+            landed = True
+            length = ins.get("length", ins.get("duration"))
+            lines.append(f"{ct} received {w}x{h}, length/duration={length}")
+        if ins.get("seed") == 12345 or ins.get("noise_seed") == 12345:
+            lines.append(f"{ct} received the seed")
+    if not landed:
+        lines.append("NOTHING received the dimensions — this export will run "
+                     "at whatever size it was saved with, every time")
+    if not any("received the seed" in l for l in lines):
+        lines.append("nothing received a seed — seed lineage is inert here")
+    if not any("RUFUS_DRY_RUN" in str(n.get("inputs")) for n in out.values()):
+        lines.append("the prompt placeholder did not substitute — this export "
+                     "would render its saved prompt on every beat")
+    return lines
+
+
 def _report_engine(name: str, host: str, seen: dict[str, set[str]]) -> bool:
     """Print the report; return whether this engine could run right now.
 
@@ -412,6 +479,10 @@ def _report_engine(name: str, host: str, seen: dict[str, set[str]]) -> bool:
                         print(f"  ⏱ {note}")
                     for gap in _substitution_gaps(tpl):
                         print(f"  ⚠ {gap}")
+                    if DRY_RUN:
+                        print("  dry run — what Rufus would actually submit:")
+                        for line in _dry_run(name, tpl):
+                            print(f"    · {line}")
 
     # 3. What the engine itself says, which is the line a run will print.
     if mod_name:
@@ -429,6 +500,9 @@ def _report_engine(name: str, host: str, seen: dict[str, set[str]]) -> bool:
 
 
 def main(argv: list[str]) -> int:
+    global DRY_RUN
+    DRY_RUN = "--dry-run" in argv
+    argv = [a for a in argv if a != "--dry-run"]
     host = _host()
     print(f"ComfyUI at {host}")
     if not _reachable(host):
