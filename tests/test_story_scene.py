@@ -106,3 +106,75 @@ def test_main_passes_the_scene_through():
         encoding="utf-8")
     assert "LAST_SCENE" in src
     assert "scene=_scene" in src
+
+
+# ── is THE SCENE actually filmable? ──────────────────────────────────────────
+#
+# Both scenes below are verbatim from real runs one day apart. The first
+# produced a script that opened "February 20, 1893, Philadelphia — workers
+# huddled outside the Philadelphia and Reading Railroad office as receivers
+# took over." The second produced "The secret? Its historical resilience and
+# trust." after three full script cycles. The difference is visible in the
+# plan, before a cent is spent on prose.
+
+_STRONG = ("February 20, 1893, in Philadelphia — workers gather outside the "
+           "Philadelphia and Reading Railroad office, anxiously watching as "
+           "receivers are appointed.")
+_WEAK = ("In 2022, traders exchanged billions of pounds in currency markets, "
+         "showcasing sterling's trading activity.")
+
+
+def test_a_real_moment_is_not_flagged():
+    assert sw.scene_weakness(_STRONG) is None
+
+
+def test_the_scene_that_produced_a_topic_shaped_script_is_flagged():
+    reason = sw.scene_weakness(_WEAK)
+    assert reason
+    assert "named place or person" in reason
+    assert "MEANS" in reason
+
+
+def test_a_place_alone_is_enough_to_pass():
+    """Not every good scene names a person. "A trader at a London exchange"
+    is somewhere, and somewhere is what the storyboard needs."""
+    assert sw.scene_weakness(
+        "In 2022, a trader at a bustling London foreign exchange market "
+        "exchanges pounds for euros.") is None
+
+
+def test_a_month_is_a_date_not_a_place():
+    """"February" is capitalised and is not somewhere a camera can stand —
+    counting it would let every dated non-scene through."""
+    assert sw.scene_weakness("In February 2022, traders swapped currencies.")
+
+
+def test_an_honest_none_is_not_weak():
+    """The architect is told to write NONE when the source has no moment in
+    it. Punishing that honesty pushes it to invent one, which fails the fact
+    gate and holds the whole video."""
+    assert sw.scene_weakness("") is None
+
+
+def test_the_comment_tail_is_caught_even_with_a_place():
+    assert sw.scene_weakness(
+        "In 1893 crowds filled Wall Street, reflecting the fragility of the "
+        "economy.")
+
+
+def test_a_weak_scene_is_a_warning_and_never_a_rejection(capsys):
+    """AGENTS.md: hard gates are for factual correctness. A vague moment is a
+    quality problem — the run must still finish with the plan it has."""
+    import inspect
+    src = inspect.getsource(sw._story_architect)
+    assert "scene_weakness" in src
+    # The grounded plan is returned, never dropped, on every path out.
+    assert "best_grounded or last_plan" in src
+
+
+def test_a_grounded_but_weak_plan_outranks_an_ungrounded_retry():
+    """The re-ask can come back with an invented motive. A dull true plan
+    beats a vivid false one — the fact gate holds the video either way."""
+    import inspect
+    src = inspect.getsource(sw._story_architect)
+    assert "best_grounded = best_grounded or plan" in src

@@ -1378,6 +1378,65 @@ def scene_from_plan(plan: str) -> str:
         value = value.strip().strip("*").strip()
         return "" if value.upper().startswith("NONE") else value
     return ""
+
+
+# A scene that ends by telling you what it MEANS. Exactly the defect
+# storyboard._ABSTRACTION_TAIL strips out of shot descriptions, one stage
+# earlier and doing more damage: the storyboard can drop a tail off a picture,
+# but a scene whose last clause is a comment was never a moment to begin with.
+_SCENE_COMMENT_TAIL = re.compile(
+    r",\s*(?:showcasing|highlighting|reflecting|demonstrating|illustrating|"
+    r"underscoring|symbolizing|symbolising|signifying|representing|"
+    r"emphasizing|emphasising|revealing|marking|proving|showing)\b",
+    re.IGNORECASE,
+)
+
+# Capitalised words that are dates or grammar, not somewhere a camera can stand.
+_NOT_A_PROPER_PLACE = {
+    "January", "February", "March", "April", "May", "June", "July", "August",
+    "September", "October", "November", "December", "Monday", "Tuesday",
+    "Wednesday", "Thursday", "Friday", "Saturday", "Sunday", "The", "This",
+    "That", "These", "Those", "There", "Then", "When", "While", "During",
+    "After", "Before", "None",
+}
+
+
+def scene_weakness(scene: str) -> str | None:
+    """Why THE SCENE is not yet a filmable moment, or None if it is.
+
+    ADVISORY, NEVER A REJECTION — see AGENTS.md on the rejection ladder. The
+    architect's own prompt already asks for "a date or year, a place, and ONE
+    named person doing ONE specific thing"; nothing checked that it listened,
+    and the difference between a run that works and one that does not is
+    visible in that single line before a cent is spent on prose:
+
+        strong: "February 20, 1893, in Philadelphia — workers gather outside
+                 the Philadelphia and Reading Railroad office, anxiously
+                 watching as receivers are appointed."
+        weak:   "In 2022, traders exchanged billions of pounds in currency
+                 markets, showcasing sterling's trading activity."
+
+    The weak one produced "The secret? Its historical resilience and trust."
+    after three full script cycles. "Currency markets" is a category, not a
+    room; nothing in it is anywhere, and the trailing "showcasing…" is the
+    plan admitting it has a topic rather than an event.
+
+    An empty scene is not weak — the architect is told to write NONE when the
+    source genuinely has no moment in it, and that honesty is worth keeping.
+    """
+    if not scene:
+        return None
+
+    faults = []
+    named = [m.group(0) for m in re.finditer(r"\b[A-Z][a-z]{2,}\b", scene)
+             if m.start() > 0 and m.group(0) not in _NOT_A_PROPER_PLACE]
+    if not named:
+        faults.append("no named place or person — a category is not somewhere "
+                      "a camera can stand")
+    if _SCENE_COMMENT_TAIL.search(scene):
+        faults.append("it ends on what the moment MEANS instead of what "
+                      "happens in it")
+    return "; ".join(faults) or None
 # One cheap pass BEFORE any drafting: pins down the single most compelling,
 # source-grounded angle, the exact moment the reversal should hinge on, and
 # why THIS telling matters right now — instead of Phase C writing blind from
@@ -1476,10 +1535,23 @@ def _story_architect(client: OpenAI, seed: dict, analysis: str, hook: str,
     MAX_PLAN_ATTEMPTS = 2
     total_cost = 0.0
     last_plan, last_reason = "", ""
+    # A grounded plan is never thrown away for a weak scene. If the re-ask
+    # comes back ungrounded, this is what we fall back to — a true plan with a
+    # vague moment beats a vivid invented one every time.
+    best_grounded, weak_retry = "", ""
 
     for attempt in range(1, MAX_PLAN_ATTEMPTS + 1):
         this_prompt = prompt
-        if attempt > 1 and last_reason:
+        if attempt > 1 and weak_retry:
+            this_prompt += (
+                f"\n\nYour previous THE SCENE was not yet a filmable moment: "
+                f"{weak_retry}\nEverything else in the plan was fine. Write the "
+                f"plan again with a THE SCENE that names WHERE it happens and "
+                f"WHO is doing the one thing that happens, both taken from the "
+                f"SOURCE. If the source names no place and no person, write "
+                f"NONE — do not invent either."
+            )
+        elif attempt > 1 and last_reason:
             this_prompt += (
                 f"\n\nYour previous plan was REJECTED by the fact-checker: "
                 f"\"{last_reason}\"\nWrite a new plan that avoids this — stick "
@@ -1508,16 +1580,35 @@ def _story_architect(client: OpenAI, seed: dict, analysis: str, hook: str,
             "rejected_reason": None if passed else reason,
         })
         if passed:
+            best_grounded = best_grounded or plan
+            weak = scene_weakness(scene_from_plan(plan))
+            if not weak:
+                return plan, total_cost
+            if attempt < MAX_PLAN_ATTEMPTS:
+                print(f"[gpt] ⚠ THE SCENE is not filmable yet ({weak}) — "
+                      f"re-asking once for a place and a person")
+                weak_retry, last_reason = weak, ""
+                continue
+            # Out of attempts. Loud, because this line decides the run: a scene
+            # with nowhere and nobody in it is where a script ends up saying
+            # "The secret? Its historical resilience and trust."
+            print(f"[gpt] ⚠ THE SCENE stayed unfilmable ({weak}) — expect a "
+                  f"topic-shaped script and generic shots. The seed itself is "
+                  f"usually the cause; a source with no moment in it cannot "
+                  f"produce one.")
             return plan, total_cost
 
         print(f"[gpt] story architect attempt {attempt}/{MAX_PLAN_ATTEMPTS} "
               f"ungrounded ({reason}) — {'retrying' if attempt < MAX_PLAN_ATTEMPTS else 'using anyway'}")
         last_plan, last_reason = plan, reason
+        weak_retry = ""
 
     # Exhausted retries: use the last plan anyway rather than blocking the
     # render — the body's OWN fact gate still runs at the end regardless, so
     # this pre-check can only save cost, never be the sole line of defense.
-    return last_plan, total_cost
+    # A grounded-but-weak plan outranks an ungrounded one: the weak scene costs
+    # us a dull video, the ungrounded one costs us a wrong claim.
+    return best_grounded or last_plan, total_cost
 
 
 # ── Phase C: Body generator ─────────────────────────────────────────────────────
