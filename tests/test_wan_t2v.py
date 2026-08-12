@@ -227,3 +227,35 @@ def test_no_ffmpeg_on_path_degrades_instead_of_raising(monkeypatch, tmp_path):
     clip.write_bytes(b"not really a video")
     assert t2v.last_frame(clip, tmp_path / "out.png") is False
     assert t2v._finish(clip, tmp_path / "out.mp4", 5.0) is False
+
+
+def test_a_seconds_based_node_gets_wans_own_framerate():
+    """ComfyUI's packaged "Text to Video (Wan2.2)" node sizes its clip in
+    width/height/DURATION and exposes no fps input. The generic fallback is 25
+    (LTX's rate), so a 49-frame request silently became a 2-second clip instead
+    of a 3-second one — the substitution "succeeded", so nothing said the
+    length had changed."""
+    import comfy_template
+    import wan_t2v_client
+
+    g = {"1": {"class_type": "WanT2V",
+               "inputs": {"width": 1, "height": 1, "duration": 5.0}}}
+    out = comfy_template.prepare(g, dims=(480, 832, 49),
+                                 fps=wan_t2v_client.WAN_FPS)
+    assert out["1"]["inputs"]["duration"] == 3     # 49/16, not 49/25
+
+
+def test_a_node_that_states_its_own_fps_still_wins():
+    """The hint is a fallback, not an override — a template that knows its own
+    rate knows better than a per-engine constant."""
+    import comfy_template
+    g = {"1": {"class_type": "X",
+               "inputs": {"width": 1, "height": 1, "duration": 5.0, "fps": 8}}}
+    out = comfy_template.prepare(g, dims=(480, 832, 48), fps=16)
+    assert out["1"]["inputs"]["duration"] == 6     # 48/8
+
+
+def test_the_client_passes_its_framerate_through():
+    from pathlib import Path
+    src = Path("scripts/wan_t2v_client.py").read_text(encoding="utf-8")
+    assert "fps=WAN_FPS" in src

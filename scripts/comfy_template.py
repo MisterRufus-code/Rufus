@@ -348,7 +348,8 @@ def prepare(graph: dict, *, prompt: str | None = None,
             dims: tuple[int, int, int] | None = None,
             save_prefix: str = "rufus_tpl",
             negative: str | None = None,
-            keep_video_writers: bool = False) -> dict:
+            keep_video_writers: bool = False,
+            fps: float | None = None) -> dict:
     """Deep-copy the template and substitute Rufus' per-run values (see module
     docstring for the exact substitution contract)."""
     g = copy.deepcopy(graph)
@@ -387,10 +388,17 @@ def prepare(graph: dict, *, prompt: str | None = None,
             # 1080x1920 portrait pipeline, i.e. a pillarboxed mess that still
             # "succeeds". Convert frames -> seconds with the node's own fps.
             w, h, frames = dims
-            fps = inputs.get("fps") or 25
+            # The node's OWN fps wins; then the caller's hint; then 25.
+            # The hint matters because not every all-in-one node exposes fps —
+            # ComfyUI's packaged "Text to Video (Wan2.2)" node has width,
+            # height and duration and no fps input at all, and Wan runs at 16,
+            # not 25. Without the hint a request for 49 frames silently became
+            # a 2-second clip instead of a 3-second one: the substitution
+            # "succeeded", so nothing anywhere said the length had changed.
+            node_fps = inputs.get("fps") or fps or 25
             inputs["width"], inputs["height"] = w, h
             try:
-                inputs["duration"] = max(1, round(frames / float(fps)))
+                inputs["duration"] = max(1, round(frames / float(node_fps)))
             except (TypeError, ValueError, ZeroDivisionError):
                 pass
 

@@ -242,3 +242,64 @@ def test_a_bare_survey_never_exits_nonzero(monkeypatch, capsys):
     monkeypatch.setattr(comfy_doctor, "_visible_files", lambda host: {})
     monkeypatch.setattr(comfy_doctor.Path, "exists", lambda self: False)
     assert comfy_doctor.main([]) == 0
+
+
+# ── the false negative that sent the owner to re-download what he had ────────
+
+def test_lora_loaders_are_queried_at_all():
+    """VERBATIM: the first real run printed
+
+        ✗ 4-step LoRA (t2v)          none visible
+
+    on a box where wan2.2_t2v_lightx2v_4steps_lora_v1.1_high_noise and its
+    low_noise partner were in models/loras AND already wired into the open
+    workflow. Nothing here had ever asked ComfyUI for the LoRA enum, so the
+    answer was always "none". A doctor that reports absent for something
+    present makes every other line it prints suspect."""
+    assert "LoraLoaderModelOnly" in comfy_doctor._LOADERS
+    assert "LoraLoader" in comfy_doctor._LOADERS
+
+
+def test_a_lora_visible_only_through_its_own_loader_is_found(monkeypatch, capsys):
+    monkeypatch.setattr(comfy_doctor, "_reachable", lambda host: True)
+    monkeypatch.setattr(comfy_doctor, "_visible_files", lambda host: {
+        "UNETLoader": {"wan2.2_t2v_high_noise_14B_fp8_scaled.safetensors"},
+        "LoraLoaderModelOnly": {
+            "wan2.2_t2v_lightx2v_4steps_lora_v1.1_high_noise.safetensors",
+            "wan2.2_t2v_lightx2v_4steps_lora_v1.1_low_noise.safetensors"},
+    })
+    comfy_doctor.main(["wan_t2v"])
+    out = capsys.readouterr().out
+    assert "✗ 4-step LoRA (t2v)" not in out
+    assert "BIGGEST WIN, and it is missing" not in out
+
+
+# ── settings frozen into an export ───────────────────────────────────────────
+
+def test_turbo_mode_off_in_an_export_is_reported():
+    """ComfyUI's packaged Wan node folds the whole 4-step LoRA path behind one
+    boolean. Exported false, the LoRA files sit in the graph contributing
+    nothing, and the only symptom is that clips are slow."""
+    notes = comfy_doctor._speed_notes(
+        {"1": {"class_type": "WanT2V", "inputs": {"enable_turbo_mode": False}}})
+    assert notes and "enable_turbo_mode is FALSE" in notes[0]
+
+
+def test_turbo_mode_on_is_silent():
+    assert comfy_doctor._speed_notes(
+        {"1": {"class_type": "WanT2V", "inputs": {"enable_turbo_mode": True}}}) == []
+
+
+def test_a_high_step_count_is_reported_with_what_it_costs():
+    notes = comfy_doctor._speed_notes(
+        {"1": {"class_type": "KSamplerAdvanced", "inputs": {"steps": 20}}})
+    assert notes and "20 steps" in notes[0]
+
+
+def test_a_fast_step_count_is_silent():
+    assert comfy_doctor._speed_notes(
+        {"1": {"class_type": "KSamplerAdvanced", "inputs": {"steps": 4}}}) == []
+
+
+def test_speed_notes_tolerate_a_junk_graph():
+    assert comfy_doctor._speed_notes({"1": {"inputs": None}, "2": {}}) == []

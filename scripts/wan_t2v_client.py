@@ -72,6 +72,12 @@ Environment:
   RUFUS_T2V_TEMPLATE   path override for the API-export JSON
 """
 
+# Wan generates at 16fps. Only used when a template sizes its clip in SECONDS
+# and exposes no fps input of its own — ComfyUI's packaged "Text to Video
+# (Wan2.2)" node is exactly that shape, and the generic fallback of 25 turned a
+# 49-frame request into a 2-second clip.
+WAN_FPS = 16
+
 import hashlib
 import os
 import random
@@ -341,7 +347,8 @@ def generate_clip(prompt: str, out_path: Path, duration: float = 5.0,
 
         graph = comfy_template.prepare(tpl, prompt=text, seed=seed,
                                        dims=(w, h, frames),
-                                       keep_video_writers=True)
+                                       keep_video_writers=True,
+                                       fps=WAN_FPS)
         r = requests.post(f"{_host()}/prompt",
                           json={"prompt": graph, "client_id": uuid.uuid4().hex},
                           timeout=30)

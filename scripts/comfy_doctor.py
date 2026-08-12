@@ -33,8 +33,21 @@ from comfy_client import _host  # noqa: E402
 # The loaders worth listing, and the words that mark a file as belonging to a
 # given engine. Substring matching on purpose: the community re-names these
 # constantly (wan2.2, Wan2_2, wan22) and an exact list would rot in a week.
+#
+# LoraLoader/LoraLoaderModelOnly ARE ON THIS LIST BECAUSE LEAVING THEM OFF
+# PRODUCED A FALSE NEGATIVE. The first real run reported
+#
+#     ✗ 4-step LoRA (t2v)          none visible
+#
+# on a box that had wan2.2_t2v_lightx2v_4steps_lora_v1.1_high_noise and its
+# low_noise partner sitting in models/loras, already wired into the workflow —
+# because nothing here ever asked ComfyUI for the LoRA enum. The advice built
+# on top then sent the owner to re-download files they already had. A doctor
+# that reports "not present" for something present is worse than no doctor:
+# every other line it prints becomes suspect.
 _LOADERS = ("UNETLoader", "CheckpointLoaderSimple", "VAELoader", "CLIPLoader",
-            "DualCLIPLoader", "UnetLoaderGGUF", "CLIPVisionLoader")
+            "DualCLIPLoader", "UnetLoaderGGUF", "CLIPVisionLoader",
+            "LoraLoaderModelOnly", "LoraLoader")
 
 ENGINES = {
     "stills":    ("comfy_client",      "config/stills_api.json",      ("flux", "sd", "qwen")),
@@ -212,6 +225,39 @@ def _visible_files(host: str) -> dict[str, set[str]]:
     return out
 
 
+def _speed_notes(tpl: dict) -> list[str]:
+    """Settings frozen into an export that will make every run slow.
+
+    These are invisible once exported. prepare() substitutes prompt, image,
+    seed and dims and nothing else, so a graph exported at 20 steps is 20 steps
+    on every run forever, and the only symptom is that clips take a long time —
+    which reads as "the model is slow" rather than "the export is wrong".
+
+    Measured on this rig: ~57 seconds per sampling step. The difference between
+    an export made with the 4-step LoRA on and one made with it off is roughly
+    nineteen minutes per clip.
+    """
+    notes: list[str] = []
+    for node in tpl.values():
+        ins = node.get("inputs")
+        if not isinstance(ins, dict):
+            continue
+        # ComfyUI's packaged Wan node folds the whole 4-step LoRA path behind
+        # one boolean. Exported false, the LoRA files can be sitting right
+        # there in the graph and contribute nothing.
+        if ins.get("enable_turbo_mode") is False:
+            notes.append(
+                "enable_turbo_mode is FALSE in this export — the 4-step LoRA "
+                "path is off. Turn it on in ComfyUI and Export (API) again; "
+                "this is worth about 5x.")
+        steps = ins.get("steps")
+        if isinstance(steps, int) and steps > 10:
+            notes.append(
+                f"a sampler is exported at {steps} steps (~{steps * 57 // 60} "
+                f"min/clip at this rig's ~57s/step). 4-8 is the fast range.")
+    return notes
+
+
 def _report_engine(name: str, host: str, seen: dict[str, set[str]]) -> bool:
     """Print the report; return whether this engine could run right now.
 
@@ -277,6 +323,8 @@ def _report_engine(name: str, host: str, seen: dict[str, set[str]]) -> bool:
                     print(f"    re-export after picking a file that IS in the dropdown.")
                 else:
                     print(f"  ✓ {tpl_rel} valid — nodes and model files all resolve")
+                    for note in _speed_notes(tpl):
+                        print(f"  ⏱ {note}")
 
     # 3. What the engine itself says, which is the line a run will print.
     if mod_name:
