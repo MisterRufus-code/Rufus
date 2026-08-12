@@ -49,6 +49,141 @@ ENGINES = {
 ROOT = Path(__file__).parent.parent
 
 
+# ── Wan: which variant is on disk, and what it costs to run ──────────────────
+#
+# Wan 2.2 ships as two different things with confusingly similar names, and the
+# difference decides whether this box is usable:
+#
+#   T2V/I2V-A14B  mixture-of-experts, two ~14B experts, ~28GB of weights. A
+#                 24GB card holds ONE expert, so ComfyUI swaps them mid-clip.
+#                 The evicted expert should land in system RAM — on a 16GB box
+#                 there is no room, so it is re-read from disk every clip.
+#   TI2V-5B       one dense 5B model, ~10GB. Fits in VRAM whole. No swap, so
+#                 system RAM stops mattering at all.
+#
+# And the step count matters more than either: measured on this owner's 3090
+# (see wan_client.py) 20 steps is ~19 min per clip and 12 steps is ~11-12 min,
+# i.e. ~57s per step. The lightx2v/Lightning distillation LoRAs cut 20 steps to
+# 4. That is a 5x saving against maybe one minute from fixing the swap, which
+# is why this report leads with the LoRA and not with the RAM.
+_WAN_KINDS = {
+    # "ti2v" CONTAINS "i2v", so every i2v rule has to exclude it or the 5B
+    # model — the one variant that solves the RAM problem — gets filed as a
+    # 14B image-to-video model and the advice inverts.
+    "t2v_model":  (("wan", "t2v"), ("lora", "lightx", "lightning")),
+    "i2v_model":  (("wan", "i2v"), ("ti2v", "lora", "lightx", "lightning")),
+    "ti2v_5b":    (("ti2v",), ()),
+    "lora_t2v":   (("t2v", "lightx"), ()),
+    "lora_i2v":   (("i2v", "lightx"), ("ti2v",)),
+    "text_enc":   (("umt5",), ()),
+    "vae_21":     (("wan", "2.1", "vae"), ()),
+    "vae_22":     (("wan", "2.2", "vae"), ()),
+}
+
+
+def _classify_wan(seen: dict[str, set[str]]) -> dict[str, list[str]]:
+    """Bucket every Wan-ish filename ComfyUI can load.
+
+    Substring matching, because these files get renamed constantly (wan2.2,
+    Wan2_2, wan22) and an exact list would rot inside a week. A file may land
+    in more than one bucket; that is fine, the buckets are advisory.
+    """
+    out: dict[str, list[str]] = {k: [] for k in _WAN_KINDS}
+    for names in seen.values():
+        for f in names:
+            low = f.lower()
+            # "5b" is only meaningful next to a wan/ti2v name — plenty of
+            # unrelated checkpoints have a 5b in them.
+            if "wan" in low and "5b" in low and f not in out["ti2v_5b"]:
+                out["ti2v_5b"].append(f)
+            for kind, (need, block) in _WAN_KINDS.items():
+                if all(n in low for n in need) and not any(b in low for b in block):
+                    if f not in out[kind]:
+                        out[kind].append(f)
+    return {k: sorted(v) for k, v in out.items()}
+
+
+def _wan_advice(found: dict[str, list[str]], have_export: bool) -> list[str]:
+    """The next thing to do, in the order that saves the most time first."""
+    tips: list[str] = []
+
+    if not found["t2v_model"] and not found["ti2v_5b"]:
+        if found["i2v_model"]:
+            tips.append(
+                "You have the IMAGE-to-video models but no TEXT-to-video ones. "
+                "They are different downloads — having i2v does not give you "
+                "t2v. Fetch the T2V models, or TI2V-5B (below).")
+        else:
+            tips.append("No Wan video models are visible to ComfyUI at all.")
+
+    if found["t2v_model"] and not found["lora_t2v"]:
+        tips.append(
+            "BIGGEST WIN, and it is missing: the 4-step lightx2v/Lightning "
+            "LoRA for T2V. Without it the workflow samples ~20 steps at "
+            "roughly 57s/step on this card — about 19 minutes a clip. With it, "
+            "4 steps, about 4 minutes. You already have the i2v version of "
+            "this LoRA, so you know the family; the t2v files are separate.")
+    elif found["lora_t2v"]:
+        tips.append(
+            "The 4-step T2V LoRA is present. Turn it ON in ComfyUI BEFORE you "
+            "Export (API) — comfy_template.prepare() substitutes only prompt, "
+            "image, seed and dimensions, so the step count and the LoRA toggle "
+            "are frozen into whatever you export. There is no env var for "
+            "them.")
+
+    if found["ti2v_5b"]:
+        tips.append(
+            "TI2V-5B is on disk — this is the variant that removes the 16GB "
+            "RAM penalty entirely: one dense 5B model, ~10GB, fits in 24GB "
+            "VRAM whole, so there is no expert swap and nothing streams from "
+            "disk. Worth exporting as a second workflow to compare.")
+        if not found["vae_22"]:
+            tips.append(
+                "…but the Wan 2.2 VAE is NOT visible, and TI2V-5B needs it — "
+                "it does not use wan_2.1_vae. A workflow exported with the "
+                "wrong VAE is rejected at submit time with value_not_in_list, "
+                "after the stills phase has already run.")
+
+    if not found["text_enc"]:
+        tips.append(
+            "The umt5 text encoder is not visible. Every Wan text prompt goes "
+            "through it, so nothing will run without it.")
+
+    if not have_export and (found["t2v_model"] or found["ti2v_5b"]):
+        tips.append(
+            "Models are here, the export is not. That is the only manual step "
+            "and it is three clicks: run the workflow once in ComfyUI, set the "
+            "positive prompt to exactly RUFUS_PROMPT, Workflow → Export (API).")
+    return tips
+
+
+def _report_wan(seen: dict[str, set[str]]) -> None:
+    found = _classify_wan(seen)
+    labels = {
+        "t2v_model": "T2V models", "i2v_model": "I2V models",
+        "ti2v_5b": "TI2V-5B (no expert swap)", "lora_t2v": "4-step LoRA (t2v)",
+        "lora_i2v": "4-step LoRA (i2v)", "text_enc": "umt5 text encoder",
+        "vae_21": "Wan 2.1 VAE", "vae_22": "Wan 2.2 VAE",
+    }
+    print("\n─── Wan inventory " + "─" * 44)
+    for kind, label in labels.items():
+        files = found[kind]
+        mark = "✓" if files else "✗"
+        shown = ", ".join(f[:44] for f in files[:2]) if files else "none visible"
+        extra = f" (+{len(files) - 2})" if len(files) > 2 else ""
+        print(f"  {mark} {label:<26} {shown}{extra}")
+
+    tips = _wan_advice(found, (ROOT / "config" / "wan_t2v_api.json").exists())
+    if tips:
+        print("\n  next, in the order that saves the most time:")
+        for n, tip in enumerate(tips, 1):
+            body = tip.split(". ")
+            print(f"    {n}. {body[0]}.")
+            for rest in body[1:]:
+                if rest.strip():
+                    print(f"       {rest.rstrip('.')}.")
+
+
 def _reachable(host: str) -> bool:
     try:
         return requests.get(f"{host}/object_info/UNETLoader", timeout=8).status_code == 200
@@ -149,6 +284,12 @@ def main(argv: list[str]) -> int:
     wanted = [a for a in argv if a in ENGINES]
     for name in (wanted or list(ENGINES)):
         _report_engine(name, host, seen)
+
+    # The Wan inventory answers a question the per-engine report cannot: not
+    # "is this engine ready" but "which variant do I have, and what is it
+    # going to cost me per clip".
+    if not wanted or any(w.startswith("wan") for w in wanted):
+        _report_wan(seen)
 
     unknown = [a for a in argv if a not in ENGINES]
     if unknown:
