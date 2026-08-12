@@ -816,10 +816,18 @@ def _build_sd_prompts(script: str, niche: str, max_scenes: int = 10) -> list[str
         # from each other. Falls through to the per-beat path on any failure.
         try:
             import storyboard
+            # The architect's filmable moment, so the pictures anchor to the
+            # same thing the words turn on. "" when this source had none —
+            # the storyboard then behaves exactly as it did before.
+            try:
+                import script_writer as _sw
+                _scene = getattr(_sw, "LAST_SCENE", "") or ""
+            except Exception:
+                _scene = ""
             shots = storyboard.plan(
                 script, beats,
                 era_tags=[_beat_era_tag(b, period) for b in beats],
-                character_clause=char_clause, niche=niche)
+                character_clause=char_clause, niche=niche, scene=_scene)
             if shots:
                 shots = [_defuse_readable_text(s) for s in shots]
                 for i, s in enumerate(shots):

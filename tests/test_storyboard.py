@@ -446,3 +446,116 @@ def test_the_character_clause_appears_once():
     sb = _sb()
     p = sb._prompt("script", ["b1"], [], "CHARACTER_CLAUSE_MARKER")
     assert p.count("CHARACTER_CLAUSE_MARKER") == 1
+
+
+# ── The filmable moment, and shots that illustrate the topic instead ─────────
+
+def test_the_abstraction_tail_is_cut():
+    """All four verbatim from one run — four of nine shots. The last one is
+    what produced a castle in a script that never mentions a castle."""
+    sb = _sb()
+    cases = [
+        ("A grand old church with towering spires silhouetted against a stormy "
+         "sky, suggesting the onset of the Reformation.",
+         "suggesting"),
+        ("A scene of merchants exchanging handfuls of coins and goods, "
+         "indicating shrewd trade practices.", "indicating"),
+        ("A close-up of an old map of Europe, showing the extent of economic "
+         "influence.", "showing the extent"),
+        ("A large medieval castle on a hill overlooking a vast landscape, "
+         "embodying the control and power within Europe.", "embodying"),
+    ]
+    for text, marker in cases:
+        out = sb._strip_abstraction(text)
+        assert marker not in out
+        assert out.strip()
+
+
+def test_stripping_keeps_the_filmable_half():
+    sb = _sb()
+    out = sb._strip_abstraction(
+        "A large medieval castle on a hill overlooking a vast landscape, "
+        "embodying the control and power within Europe.")
+    assert "castle on a hill" in out
+
+
+def test_a_clean_visual_is_untouched():
+    sb = _sb()
+    good = "A merchant's hands stack copper ingots on an oak counter."
+    assert sb._strip_abstraction(good) == good
+
+
+def test_a_comma_that_is_not_an_abstraction_survives():
+    sb = _sb()
+    text = "A coin on a table, worn smooth at the edges."
+    assert sb._strip_abstraction(text) == text
+
+
+def test_a_shot_sharing_a_noun_with_its_beat_passes():
+    sb = _sb()
+    assert sb._shares_a_noun(
+        "A merchant's hands stack copper ingots on an oak counter.",
+        "He financed the Habsburgs and controlled Europe's copper.")
+
+
+def test_a_shot_sharing_nothing_is_caught():
+    """The real failure: a script that says 'copper' produced nine shots and
+    not one of them contained copper."""
+    sb = _sb()
+    assert not sb._shares_a_noun(
+        "A large medieval castle on a hill overlooking a vast landscape.",
+        "He financed the Habsburgs and controlled Europe's copper.")
+
+
+def test_abstract_words_cannot_count_as_agreement():
+    """'power' and 'history' appearing in both is not the shot showing the
+    line — that is exactly the drift being measured."""
+    sb = _sb()
+    assert not sb._shares_a_noun(
+        "A wide landscape suggesting power and history.",
+        "Who controls the economy holds its power through history.")
+
+
+def test_an_empty_beat_never_blames_the_shot():
+    sb = _sb()
+    assert sb._shares_a_noun("A coin on a table.", "")
+
+
+def test_drift_warns_but_never_rejects(capsys):
+    """Owner's call: a deliberate modern-day cutaway legitimately shares
+    nothing with a 16th-century beat, and this repo has real wasted-generation
+    bugs from stacking hard gates."""
+    sb = _sb()
+    plan = {"shots": [
+        {"n": 1, "visual": "A large medieval castle on a hill overlooking a "
+                           "vast empty landscape at dusk.", "carries_over": None},
+        {"n": 2, "visual": "A merchant's hands stack copper ingots on an oak "
+                           "counter in hard window light.", "carries_over": None},
+    ]}
+    beats = ["He controlled Europe's copper.", "He controlled Europe's copper."]
+    out = sb._clean(plan, 2, beats)
+    assert out is not None and len(out) == 2      # nothing rejected
+    printed = capsys.readouterr().out
+    assert "share no word with their own line" in printed
+
+
+def test_clean_still_works_without_beats():
+    """Every existing caller passed two arguments; the third must be optional."""
+    sb = _sb()
+    plan = {"shots": [{"n": 1, "visual": "A coin resting on a worn oak counter "
+                                         "in hard light.", "carries_over": None}]}
+    assert sb._clean(plan, 1) is not None
+
+
+def test_the_scene_anchors_the_prompt():
+    sb = _sb()
+    scene = "In 1523 Jakob Fugger sent Charles V a letter demanding repayment."
+    p = sb._prompt("script", ["b1", "b2"], [], "", scene)
+    assert scene in p
+    assert "THE MOMENT THIS SCRIPT WAS BUILT ON" in p
+
+
+def test_no_scene_leaves_the_prompt_as_it_was():
+    sb = _sb()
+    assert "THE MOMENT THIS SCRIPT WAS BUILT ON" not in sb._prompt(
+        "script", ["b1"], [], "", "")

@@ -19,7 +19,23 @@ set PYTHONUTF8=1
 
 cd /d "%~dp0"
 
+REM Resolve the interpreter EXPLICITLY. Do not rely on activate.bat having put
+REM the venv on PATH: the "if exist" guard below it is silent, so a missing or
+REM non-taking activation (a scheduled task under another profile, a venv whose
+REM pyvenv.cfg no longer resolves) left bare "python" meaning the SYSTEM
+REM interpreter — which has no Flask and no torch. That is a launcher quietly
+REM running the wrong Python, which is worse than one that refuses.
 if exist ".venv\Scripts\activate.bat" call ".venv\Scripts\activate.bat"
+set "PY=.venv\Scripts\python.exe"
+if not exist "%PY%" (
+    echo(
+    echo ERROR: %CD%\%PY% not found.
+    echo The virtualenv is missing or was moved - venvs are not relocatable on
+    echo Windows. Recreate it:  python -m venv .venv
+    echo Then:                  .venv\Scripts\pip install -r requirements.txt
+    echo Refusing to fall back to the system Python, which lacks this project packages.
+    exit /b 9009
+)
 
 REM --- engine selection -------------------------------------------------------
 set RUFUS_GPU=1
@@ -37,12 +53,12 @@ set DASH_CHECK=
 for /f %%c in ('curl -s -o nul -w "%%{http_code}" http://localhost:8765 2^>nul') do set DASH_CHECK=%%c
 if not "%DASH_CHECK%"=="200" (
     echo Starting Rufus dashboard...
-    start "Rufus Dashboard" /min python scripts\dashboard.py
+    start "Rufus Dashboard" /min "%PY%" scripts\dashboard.py
     timeout /t 2 /nobreak >nul
 )
 start "" http://localhost:8765
 
 REM --skip-upload renders without publishing. Drop it to upload (defaults private).
-python scripts\main.py %*
+"%PY%" scripts\main.py %*
 
 pause

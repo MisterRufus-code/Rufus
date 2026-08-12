@@ -20,7 +20,23 @@ REM before it runs line-by-line, so a value set mid-block isn't seen later in
 REM that same block without setlocal enabledelayedexpansion + !var! syntax).
 for /f %%d in ('powershell -NoProfile -Command "Get-Date -Format yyyyMMdd"') do set TODAY=%%d
 
+REM Resolve the interpreter EXPLICITLY. Do not rely on activate.bat having put
+REM the venv on PATH: the "if exist" guard below it is silent, so a missing or
+REM non-taking activation (a scheduled task under another profile, a venv whose
+REM pyvenv.cfg no longer resolves) left bare "python" meaning the SYSTEM
+REM interpreter — which has no Flask and no torch. That is a launcher quietly
+REM running the wrong Python, which is worse than one that refuses.
 if exist ".venv\Scripts\activate.bat" call ".venv\Scripts\activate.bat"
+set "PY=.venv\Scripts\python.exe"
+if not exist "%PY%" (
+    echo(
+    echo ERROR: %CD%\%PY% not found.
+    echo The virtualenv is missing or was moved - venvs are not relocatable on
+    echo Windows. Recreate it:  python -m venv .venv
+    echo Then:                  .venv\Scripts\pip install -r requirements.txt
+    echo Refusing to fall back to the system Python, which lacks this project packages.
+    exit /b 9009
+)
 
 set RUFUS_GPU=1
 set RUFUS_VIDEO_SOURCE=comfy
@@ -44,19 +60,19 @@ REM can actually use it (was built but never scheduled — dormant until now).
 REM Both are non-fatal: a failure here only prints a warning, never blocks the
 REM main run below.
 echo Updating analytics + feedback learnings...
-python scripts\analytics_fetcher.py
-python scripts\feedback_analyzer.py
+"%PY%" scripts\analytics_fetcher.py
+"%PY%" scripts\feedback_analyzer.py
 
 REM --scheduled: pick today's niche from the schedule (rotates when the
 REM schedule has more than one niche; identical to before with a single one).
 REM Extra args from the task can still append via %*.
-python scripts\main.py --scheduled %*
+"%PY%" scripts\main.py --scheduled %*
 set RUFUS_EXIT=%ERRORLEVEL%
 
 REM KPI digest into the same daily log (report.py is a real owner-facing
 REM tool — uploaded/held/failed, watch%% by niche — but nothing ran it
 REM automatically until now). Non-fatal like the analytics step above.
-python scripts\report.py --weeks 1
+"%PY%" scripts\report.py --weeks 1
 
 if not "%RUFUS_EXIT%"=="0" (
     echo Rufus run FAILED - exit code %RUFUS_EXIT%

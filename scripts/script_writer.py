@@ -1230,6 +1230,32 @@ def _hook_scorer(client: OpenAI, hooks: list[str], seed: dict, niche_name: str,
 
 
 # ── Story architect: plan before prose ────────────────────────────────────────
+
+# THE SCENE from the most recent architect plan — the one filmable moment the
+# script was built to land on. A module global rather than a return value
+# because _build_sd_prompts is several call sites away from here and this is
+# diagnostic/advisory context, not a result anyone writes from. Same pattern as
+# audio_gen.LAST_CUTS.
+LAST_SCENE: str = ""
+
+
+def scene_from_plan(plan: str) -> str:
+    """The THE SCENE line out of an architect plan, or "" if there isn't one.
+
+    "" covers both a plan from before this field existed and an honest NONE
+    from a source with no filmable moment in it — the storyboard simply gets no
+    anchor, which is exactly how it behaved before.
+    """
+    if not plan:
+        return ""
+    for raw in plan.splitlines():
+        line = raw.strip().lstrip("*# ").strip()
+        if not line.upper().startswith("THE SCENE"):
+            continue
+        _, _, value = line.partition(":")
+        value = value.strip().strip("*").strip()
+        return "" if value.upper().startswith("NONE") else value
+    return ""
 # One cheap pass BEFORE any drafting: pins down the single most compelling,
 # source-grounded angle, the exact moment the reversal should hinge on, and
 # why THIS telling matters right now — instead of Phase C writing blind from
@@ -1279,7 +1305,17 @@ def _story_architect(client: OpenAI, seed: dict, analysis: str, hook: str,
         f"SOURCE: \"{seed_text}\"\n"
         f"PRE-ANALYSIS:\n{analysis}\n\n"
         "You are planning a 35-50 second video BEFORE any prose is written. "
-        "In under 130 words, reply in exactly 4 short labeled lines:\n"
+        "In under 150 words, reply in exactly 5 short labeled lines:\n"
+        "THE SCENE: one moment from the SOURCE a camera could have filmed — a "
+        "date or year, a place, and ONE named person doing ONE specific thing. "
+        "Not a summary of what they were like, not what they controlled or were "
+        "worth: the smallest concrete event the source actually supports. "
+        "\"In 1523 Jakob Fugger sent Charles V a letter demanding repayment\" is "
+        "a scene. \"Jakob Fugger held two percent of Europe's GDP\" is not — "
+        "nobody is doing anything and no camera could point at it. If the source "
+        "genuinely contains no such moment, write NONE rather than inventing "
+        "one; a missing scene is recoverable, a fabricated one fails the "
+        "fact-check and holds the whole video.\n"
         "SPINE FACT: the one specific, source-grounded detail everything else "
         "must hang on — not a theme, an actual fact.\n"
         "THE TURN: the exact moment or fact the reversal should hinge on — a "
@@ -1956,6 +1992,17 @@ def write_script(scene_description: str, seed: dict | None = None,
     total_cost += architect_cost
     if story_plan:
         print(f"[gpt] story architect:\n{story_plan}")
+    # Published for the storyboard, so the pictures anchor to the same moment
+    # the words turn on. Empty when the source had no filmable moment in it —
+    # said out loud, because a run with no scene is the run that produces an
+    # encyclopedia entry, and that should be visible rather than inferred from
+    # a flat-feeling video.
+    global LAST_SCENE
+    LAST_SCENE = scene_from_plan(story_plan)
+    if story_plan:
+        _scene_note = LAST_SCENE or ("(none in this source — the script will "
+                                     "read as summary, not story)")
+        print(f"[gpt] scene: {_scene_note}")
 
     # ── Phase C: body generation ──────────────────────────────────────────────
     system = _build_system(niche, active, cta, winning_hook)
@@ -1964,6 +2011,25 @@ def write_script(scene_description: str, seed: dict | None = None,
     hook_token_str = ", ".join(sorted(hook_tokens)) or "(none)"
     opinion_all    = ", ".join(std["opinion_pool"])
     plan_blk       = f"STORY PLAN (write to this shape):\n{story_plan}\n\n" if story_plan else ""
+    # The plan's THE SCENE is the one line in it a camera could point at, and
+    # it is what this channel has been missing. Scripts built only from the
+    # aggregate lines read as encyclopedia entries with a rhythm ("held wealth
+    # equivalent to two percent of Europe's GDP" — nobody wants anything,
+    # nobody loses anything, no moment happens), and with no event to carry
+    # feeling the writer reaches for MOTIVE instead, which is the #1 fact-gate
+    # rejection. Naming the scene here routes the emotion through the event,
+    # which is exactly the register the gate passes.
+    if story_plan and "NONE" not in story_plan.upper().split("SPINE FACT")[0]:
+        plan_blk += (
+            "USE THE SCENE. Open on it, or turn on it — put the viewer in that "
+            "moment with the person doing the thing. Aggregate facts (totals, "
+            "shares, net worths) are EVIDENCE you cut to afterwards, never the "
+            "way in. A script that never lands in a place with a person in it "
+            "is an encyclopedia entry, however specific its numbers are.\n"
+            "Feeling comes from the EVENT, not from stating what anyone felt "
+            "or intended — that is both better writing and the only version "
+            "the fact-check passes.\n\n"
+        )
     base_usr = (
         f"{seed_blk}\n"
         f"Background scene: {scene_description}\n\n"

@@ -51,7 +51,7 @@ def _model() -> str:
 
 
 def _prompt(script: str, beats: list[str], era_tags: list[str],
-            character_clause: str = "") -> str:
+            character_clause: str = "", scene: str = "") -> str:
     numbered = "\n".join(
         f"{i + 1}. [{era_tags[i] if i < len(era_tags) else 'present day'}] {b}"
         for i, b in enumerate(beats))
@@ -61,7 +61,12 @@ def _prompt(script: str, beats: list[str], era_tags: list[str],
         "pictures as ONE CONTINUOUS SEQUENCE, not to illustrate each sentence "
         "on its own.\n\n"
         f"FULL SCRIPT (read it all before you draw anything):\n{script}\n\n"
-        f"THE {len(beats)} SHOTS, with the era each one is set in:\n{numbered}\n\n"
+        + (f"THE MOMENT THIS SCRIPT WAS BUILT ON:\n{scene}\n"
+           "That moment is the anchor for the whole sequence. Whichever beat "
+           "lands on it gets the strongest, most literal shot in the video, and "
+           "the `setting` below should be the place it happens in. Everything "
+           "else is that place before, during or after.\n\n" if scene else "")
+        + f"THE {len(beats)} SHOTS, with the era each one is set in:\n{numbered}\n\n"
         "WHAT MAKES THIS A STORYBOARD AND NOT A SLIDESHOW:\n"
         "1. SHOW THE LITERAL THING THE LINE NAMES. If the line says the coin "
         "held four and a half grams of silver, the shot is THAT COIN — not a "
@@ -314,7 +319,61 @@ def _pin_character(visual: str, name: str, short_ref: str) -> str:
             f"figure, identical in every appearance.")
 
 
-def _clean(plan: dict, n_beats: int) -> list[str] | None:
+# A trailing participial clause that explains what the shot MEANS. It gives an
+# image model nothing to draw and actively pulls it toward generic stock
+# imagery, because a phrase like "embodying the control and power within
+# Europe" describes no object, no person and no place.
+#
+# All four of these are verbatim from one run's storyboard — four of nine shots:
+#   "...silhouetted against a stormy sky, suggesting the onset of the Reformation."
+#   "...exchanging handfuls of coins, indicating shrewd trade practices."
+#   "...with territories marked, showing the extent of economic influence."
+#   "A large medieval castle on a hill, embodying the control and power within Europe."
+# The castle is what the model drew from the last one. The script it belonged to
+# never mentions a castle.
+_ABSTRACTION_TAIL = re.compile(
+    r",\s*(?:embodying|symbolizing|symbolising|signifying|representing|"
+    r"suggesting|indicating|reflecting|evoking|illustrating|highlighting|"
+    r"underscoring|conveying|hinting at|showing the|emphasizing|emphasising)"
+    r"\b[^.]*",
+    re.IGNORECASE,
+)
+
+
+def _strip_abstraction(visual: str) -> str:
+    """Cut the "…, embodying X" tail off a shot description.
+
+    A repair, not a rejection — same principle as script_writer._repair_banned:
+    if the fix is mechanical and we would accept it anyway, spending a whole
+    generation to arrive at it is waste.
+    """
+    return _ABSTRACTION_TAIL.sub("", visual).rstrip(" ,;") or visual
+
+
+def _shares_a_noun(visual: str, beat: str) -> bool:
+    """Whether a shot and its own beat name any content word in common.
+
+    The storyboard analogue of script_writer's loop-echo check. A shot that
+    shares nothing with the sentence it illustrates is drawing the topic rather
+    than the line — which is how a script that says the Fuggers "controlled
+    Europe's copper" produced nine shots, not one of them containing copper.
+
+    Deliberately generous: one shared word is enough, and stopwords and the
+    abstract vocabulary are excluded so "power" or "history" cannot count as
+    agreement.
+    """
+    def _words(text: str) -> set[str]:
+        return {w for w in re.findall(r"[a-z]{4,}", (text or "").lower())
+                if w not in _STOPWORDS and w not in _ABSTRACT}
+
+    beat_words = _words(beat)
+    if not beat_words:
+        return True          # nothing to agree with; not the shot's fault
+    return bool(beat_words & _words(visual))
+
+
+def _clean(plan: dict, n_beats: int,
+           beats: list[str] | None = None) -> list[str] | None:
     """The visuals in beat order, or None if the reply can't be trusted.
 
     Beat i must line up with shot i — the renderer cuts on the assumption that
@@ -332,6 +391,7 @@ def _clean(plan: dict, n_beats: int) -> list[str] | None:
         visual = str(entry.get("visual", "")).strip()
         if len(visual) < MIN_VISUAL_CHARS:
             return None
+        visual = _strip_abstraction(visual)
         carries = entry.get("carries_over")
         if isinstance(carries, str) and carries.strip():
             carries = carries.strip()
@@ -343,6 +403,21 @@ def _clean(plan: dict, n_beats: int) -> list[str] | None:
             else:
                 print(f"[storyboard] dropped mood-only thread: {carries!r}")
         out.append(visual)
+
+    # Say which shots are illustrating the topic instead of their own line.
+    # WARNING, never rejection: a deliberate modern-day cutaway legitimately
+    # shares no vocabulary with a 16th-century beat, and this repo has real
+    # wasted-generation bugs from stacking hard gates (AGENTS.md). What this
+    # can do is make the mismatch impossible to ship unnoticed.
+    if beats:
+        drifted = [i for i, v in enumerate(out)
+                   if i < len(beats) and not _shares_a_noun(v, beats[i])]
+        if drifted:
+            print(f"[storyboard] ⚠ {len(drifted)} shot(s) share no word with "
+                  f"their own line — illustrating the topic, not the sentence:")
+            for i in drifted[:3]:
+                print(f"[storyboard]   beat {i+1}: {beats[i][:70]}")
+                print(f"[storyboard]   shot {i+1}: {out[i][:70]}")
     return out
 
 
@@ -362,8 +437,15 @@ def _character(niche: str | None) -> tuple[str, str]:
 
 
 def plan(script: str, beats: list[str], era_tags: list[str] | None = None,
-         character_clause: str = "", niche: str | None = None) -> list[str] | None:
-    """One visual per beat, planned as a sequence. None to use the old path."""
+         character_clause: str = "", niche: str | None = None,
+         scene: str = "") -> list[str] | None:
+    """One visual per beat, planned as a sequence. None to use the old path.
+
+    `scene` is the story architect's THE SCENE — the one filmable moment the
+    script was built to land on. Passing it here anchors the pictures to the
+    same moment the words turn on, instead of leaving the storyboard to infer a
+    location from aggregate sentences and invent a castle.
+    """
     if not enabled() or not beats:
         return None
     era_tags = era_tags or []
@@ -378,12 +460,13 @@ def plan(script: str, beats: list[str], era_tags: list[str] | None = None,
         resp = OpenAI(api_key=key).chat.completions.create(
             model=_model(),
             messages=[{"role": "user",
-                       "content": _prompt(script, beats, era_tags, character_clause)}],
+                       "content": _prompt(script, beats, era_tags,
+                                          character_clause, scene)}],  # noqa: E501
             temperature=0.8, max_tokens=2000, timeout=120,
             response_format={"type": "json_object"},
         )
         raw = json.loads(resp.choices[0].message.content or "{}")
-        visuals = _clean(raw, len(beats))
+        visuals = _clean(raw, len(beats), beats)
         if visuals:
             name, short = _character(niche)
             pinned = [_pin_character(v, name, short) for v in visuals]
