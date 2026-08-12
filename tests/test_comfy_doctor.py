@@ -181,3 +181,64 @@ def test_an_empty_comfyui_does_not_raise():
     found = comfy_doctor._classify_wan({})
     assert all(v == [] for v in found.values())
     assert comfy_doctor._wan_advice(found, have_export=False)
+
+
+def test_the_advice_does_not_claim_a_lora_the_inventory_does_not_show():
+    """VERBATIM FROM THE FIRST REAL RUN of this report. It printed
+
+        ✗ 4-step LoRA (i2v)          none visible
+        …
+        1. BIGGEST WIN … You already have the i2v version of this LoRA
+
+    two lines apart. The claim came from wan_client.py's header, which lists
+    what the I2V template WOULD install — not what is on this disk. A doctor
+    that asserts something the reader can see is false stops being trusted for
+    the things it gets right."""
+    found = comfy_doctor._classify_wan({
+        "UNETLoader": {"wan2.2_t2v_high_noise_14B_fp8_scaled.safetensors"},
+        "CLIPLoader": {"umt5_xxl_fp8_e4m3fn_scaled.safetensors"},
+        "VAELoader": {"wan_2.1_vae.safetensors"}})
+    assert found["lora_i2v"] == []
+    tips = " ".join(comfy_doctor._wan_advice(found, have_export=False))
+    assert "already have the i2v version" not in tips
+
+
+def test_it_does_mention_the_i2v_lora_when_that_one_is_present():
+    found = comfy_doctor._classify_wan({
+        "UNETLoader": {"wan2.2_t2v_high_noise_14B_fp8_scaled.safetensors"},
+        "LoraLoaderModelOnly": {
+            "wan2.2_i2v_lightx2v_4steps_lora_v1_high_noise.safetensors"},
+        "CLIPLoader": {"umt5_xxl_fp8.safetensors"}})
+    tips = " ".join(comfy_doctor._wan_advice(found, have_export=False))
+    assert "already have the i2v version" in tips
+
+
+def test_a_no_download_fallback_is_offered_while_the_lora_is_missing():
+    """Cutting KSampler steps by hand is most of the win and needs nothing
+    fetched — someone blocked on a download should not be fully blocked."""
+    found = comfy_doctor._classify_wan({
+        "UNETLoader": {"wan2.2_t2v_high_noise_14B_fp8_scaled.safetensors"},
+        "CLIPLoader": {"umt5_xxl_fp8.safetensors"}})
+    tips = " ".join(comfy_doctor._wan_advice(found, have_export=False))
+    assert "no download" in tips
+
+
+def test_a_specific_engine_that_cannot_run_exits_nonzero(monkeypatch, capsys):
+    """A preflight that always exits 0 cannot gate a launcher, and the failure
+    it would have stopped is expensive: a bad template is rejected at SUBMIT
+    time, after the whole stills phase has run."""
+    monkeypatch.setattr(comfy_doctor, "_reachable", lambda host: True)
+    monkeypatch.setattr(comfy_doctor, "_visible_files",
+                        lambda host: {"UNETLoader": {"wan2.2_t2v.safetensors"}})
+    monkeypatch.setattr(comfy_doctor.Path, "exists", lambda self: False)
+    assert comfy_doctor.main(["wan_t2v"]) == 2
+    assert "not runnable yet" in capsys.readouterr().out
+
+
+def test_a_bare_survey_never_exits_nonzero(monkeypatch, capsys):
+    """Most engines being un-exported is this repo's normal resting state, not
+    an error — only an engine the caller ASKED about is a gate."""
+    monkeypatch.setattr(comfy_doctor, "_reachable", lambda host: True)
+    monkeypatch.setattr(comfy_doctor, "_visible_files", lambda host: {})
+    monkeypatch.setattr(comfy_doctor.Path, "exists", lambda self: False)
+    assert comfy_doctor.main([]) == 0

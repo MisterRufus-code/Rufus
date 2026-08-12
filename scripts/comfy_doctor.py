@@ -117,12 +117,23 @@ def _wan_advice(found: dict[str, list[str]], have_export: bool) -> list[str]:
             tips.append("No Wan video models are visible to ComfyUI at all.")
 
     if found["t2v_model"] and not found["lora_t2v"]:
+        # Say only what the inventory actually shows. An earlier version of
+        # this line asserted "you already have the i2v version" because
+        # wan_client.py's header lists it among the files the I2V template
+        # installs — but that is what the template WOULD install, not what is
+        # on this disk, and the first real run of this report printed the claim
+        # directly above "4-step LoRA (i2v): none visible".
+        familiar = (" You already have the i2v version of this LoRA, so you "
+                    "know the family; the t2v files are separate."
+                    if found["lora_i2v"] else "")
         tips.append(
             "BIGGEST WIN, and it is missing: the 4-step lightx2v/Lightning "
             "LoRA for T2V. Without it the workflow samples ~20 steps at "
             "roughly 57s/step on this card — about 19 minutes a clip. With it, "
-            "4 steps, about 4 minutes. You already have the i2v version of "
-            "this LoRA, so you know the family; the t2v files are separate.")
+            "4 steps, about 4 minutes." + familiar +
+            " Until you have it, cutting the KSampler steps by hand (20 → 8) "
+            "in ComfyUI before exporting is most of the win at some quality "
+            "cost, and needs no download.")
     elif found["lora_t2v"]:
         tips.append(
             "The 4-step T2V LoRA is present. Turn it ON in ComfyUI BEFORE you "
@@ -201,7 +212,15 @@ def _visible_files(host: str) -> dict[str, set[str]]:
     return out
 
 
-def _report_engine(name: str, host: str, seen: dict[str, set[str]]) -> None:
+def _report_engine(name: str, host: str, seen: dict[str, set[str]]) -> bool:
+    """Print the report; return whether this engine could run right now.
+
+    The return value is what lets a launcher GATE on this. A preflight that
+    always exits 0 cannot stop anything, and the failure it would have stopped
+    is expensive: a bad template is only rejected at submit time, which is
+    after the entire stills phase has run and the GPU time is already spent.
+    """
+    usable = True
     mod_name, tpl_rel, marks = ENGINES[name]
     print(f"\n─── {name} " + "─" * max(0, 60 - len(name)))
 
@@ -228,6 +247,7 @@ def _report_engine(name: str, host: str, seen: dict[str, set[str]]) -> None:
     if tpl_rel:
         tpl_path = ROOT / tpl_rel
         if not tpl_path.exists():
+            usable = False
             print(f"  ✗ no export at {tpl_rel}")
             print(f"    ComfyUI → Workflow → Browse Templates → run it once →")
             print(f"    set the positive prompt to exactly  RUFUS_PROMPT  →")
@@ -235,10 +255,12 @@ def _report_engine(name: str, host: str, seen: dict[str, set[str]]) -> None:
         else:
             tpl = comfy_template.load_template(tpl_path)
             if tpl is None:
+                usable = False
                 print(f"  ✗ {tpl_rel} exists but is not a valid API export")
                 print(f"    (\"Export (API)\", not \"Export\" — the plain export is")
                 print(f"    a UI workflow and has a different shape)")
             elif not comfy_template.has_placeholder(tpl):
+                usable = False
                 print(f"  ✗ {tpl_rel} has no RUFUS_PROMPT placeholder")
                 print(f"    Set the positive prompt text to exactly RUFUS_PROMPT")
                 print(f"    in ComfyUI and export again.")
@@ -246,8 +268,10 @@ def _report_engine(name: str, host: str, seen: dict[str, set[str]]) -> None:
                 bad_nodes = comfy_template.missing_nodes(tpl, host)
                 bad_files = comfy_template.missing_models(tpl, host)
                 if bad_nodes:
+                    usable = False
                     print(f"  ✗ ComfyUI is missing node(s): {', '.join(bad_nodes[:5])}")
                 elif bad_files:
+                    usable = False
                     print(f"  ✗ ComfyUI cannot load: {'; '.join(bad_files[:4])}")
                     print(f"    The export names a file this ComfyUI does not have —")
                     print(f"    re-export after picking a file that IS in the dropdown.")
@@ -266,6 +290,7 @@ def _report_engine(name: str, host: str, seen: dict[str, set[str]]) -> None:
                       f"ready is not the same as being on")
         except Exception as e:
             print(f"  engine: could not load {mod_name} ({e})")
+    return usable
 
 
 def main(argv: list[str]) -> int:
@@ -282,8 +307,8 @@ def main(argv: list[str]) -> int:
     print(f"✓ {total} model file(s) visible across {len(seen)} loader(s)")
 
     wanted = [a for a in argv if a in ENGINES]
-    for name in (wanted or list(ENGINES)):
-        _report_engine(name, host, seen)
+    unusable = [name for name in (wanted or list(ENGINES))
+                if not _report_engine(name, host, seen)]
 
     # The Wan inventory answers a question the per-engine report cannot: not
     # "is this engine ready" but "which variant do I have, and what is it
@@ -295,6 +320,13 @@ def main(argv: list[str]) -> int:
     if unknown:
         print(f"\nunknown engine(s): {', '.join(unknown)} — "
               f"known: {', '.join(ENGINES)}")
+
+    # Exit 2 only when the caller ASKED about specific engines. A bare run is a
+    # survey of everything, and most engines being un-exported is the normal
+    # resting state of this repo, not an error.
+    if wanted and unusable:
+        print(f"\nnot runnable yet: {', '.join(unusable)}")
+        return 2
     return 0
 
 

@@ -21,7 +21,8 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).parent.parent
-LAUNCHERS = ["run.bat", "run_scheduled.bat", "run_dashboard.bat"]
+LAUNCHERS = ["run.bat", "run_scheduled.bat", "run_dashboard.bat",
+             "run_wan_fast.bat"]
 
 
 def _body(name: str) -> str:
@@ -91,3 +92,58 @@ def test_utf8_mode_survived_the_edit(name):
     """PYTHONUTF8 is what stops config em-dashes decoding as cp1255 mojibake —
     see AGENTS.md. It must not be lost to an unrelated launcher change."""
     assert "PYTHONUTF8=1" in _body(name)
+
+
+# ── run_wan_fast.bat: the eight-variable path, as one file ───────────────────
+
+def _wan_fast() -> str:
+    return (ROOT / "run_wan_fast.bat").read_text(encoding="utf-8")
+
+
+def test_it_clears_the_variable_that_silently_disables_motion():
+    """RUFUS_FRAMES_PER_BEAT>1 means "cut between stills", which BYPASSES every
+    motion engine. A live run printed "motion engines bypassed" while every
+    other setting said motion was wanted — the value was a leftover from an
+    earlier shell. Setting the rest without clearing this one is a no-op."""
+    assert "set RUFUS_FRAMES_PER_BEAT=\n" in _wan_fast().replace("\r\n", "\n")
+
+
+def test_it_asks_for_the_hero_beat_and_text_to_video_together():
+    """RUFUS_T2V alone does nothing — text-to-video only renders the hero
+    beat, so both have to be set or the run silently stays on stills."""
+    body = _wan_fast()
+    assert "set RUFUS_BEAT_MOTION=hero" in body
+    assert "set RUFUS_T2V=1" in body
+    assert "set RUFUS_STILLS_ONLY=0" in body
+
+
+def test_the_frame_count_is_a_valid_wan_length():
+    """Wan wants 4n+1. 50 is not a legal frame count and fails inside ComfyUI,
+    long after the stills have been paid for."""
+    import re
+    n = int(re.search(r"set RUFUS_T2V_FRAMES=(\d+)", _wan_fast()).group(1))
+    assert (n - 1) % 4 == 0, f"{n} is not 4n+1"
+
+
+def test_it_refuses_to_start_when_the_template_is_not_exported():
+    """The whole point of the preflight. A missing export is only rejected by
+    ComfyUI at submit time — after the entire stills phase has run."""
+    body = _wan_fast()
+    assert "comfy_doctor.py wan_t2v" in body
+    assert "if errorlevel 1" in body
+    assert "exit /b 2" in body
+
+
+def test_the_preflight_runs_before_main():
+    body = _wan_fast()
+    assert body.index("comfy_doctor.py") < body.index("scripts\\main.py")
+
+
+def test_it_says_steps_are_not_settable_here():
+    """comfy_template.prepare() substitutes prompt, image, seed and dims only.
+    Someone tuning speed will look for a steps variable in this file; it has to
+    tell them where the setting actually lives instead of leaving them to
+    invent RUFUS_T2V_STEPS."""
+    body = _wan_fast()
+    assert "steps" in body.lower()
+    assert "prepare()" in body
