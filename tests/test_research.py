@@ -14,6 +14,35 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
 import research
 
 
+@pytest.fixture(autouse=True)
+def _no_network(monkeypatch):
+    """No test in this file may reach the internet.
+
+    THE INCIDENT: adding the newspaper source to get_seed()'s chain broke
+    test_get_seed_trend_disabled_falls_to_chain — but only in CI. Locally the
+    sandbox blocks loc.gov, so fetch_newspaper_story returned None and the test
+    fell through to the mocked Wikipedia exactly as before. GitHub's runners
+    CAN reach loc.gov, so there it fetched a real 1895 newspaper page and
+    returned that instead:
+
+        AssertionError: assert 'Image 4 of Rock Island Argus …' == 'Chain topic'
+
+    A test whose result depends on the runner's firewall is worse than a broken
+    one, and every future source added to that chain would repeat this. Blocking
+    the HTTP client makes the omission fail immediately and in the same way
+    everywhere, per AGENTS.md: no network in tests.
+    """
+    def _blocked(*a, **k):
+        raise AssertionError(
+            "a test reached the network — mock the source it calls. Any new "
+            "entry in get_seed()'s chain must be mocked by every test that "
+            "calls get_seed().")
+    for name in ("get", "post", "request"):
+        if hasattr(research.httpx, name):
+            monkeypatch.setattr(research.httpx, name, _blocked)
+
+
+
 # ── SE_TOPIC_FILTER_RE itself ─────────────────────────────────────────────────────
 
 def test_money_history_topic_filter_matches_monetary_terms():
@@ -252,6 +281,7 @@ def test_get_seed_tries_reddit_when_flag_unset(monkeypatch, tmp_path):
 
     with patch.object(research, "fetch_reddit_story", return_value=None) as reddit_mock, \
          patch.object(research, "fetch_stackexchange_story", return_value=None), \
+         patch.object(research, "fetch_newspaper_story", return_value=None), \
          patch.object(research, "fetch_wikipedia_story", return_value=None), \
          patch.object(research, "fetch_rss_story", return_value=None), \
          patch.object(research, "fetch_hackernews_story", return_value=None), \
@@ -472,6 +502,7 @@ def test_get_seed_trend_disabled_falls_to_chain(monkeypatch):
         return {"type": "wikipedia", "title": "X", "content": "x" * 300, "url": "u"}
     monkeypatch.setattr(research, "fetch_trending_wikipedia", _trend)
     monkeypatch.setattr(research, "fetch_stackexchange_story", lambda *a, **k: None)
+    monkeypatch.setattr(research, "fetch_newspaper_story", lambda *a, **k: None)
     wiki_seed = {"type": "wikipedia", "source": "Wikipedia", "title": "Chain topic",
                  "content": "x" * 300, "url": "https://en.wikipedia.org/wiki/Chain"}
     monkeypatch.setattr(research, "fetch_wikipedia_story", lambda *a, **k: wiki_seed)
