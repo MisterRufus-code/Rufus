@@ -544,8 +544,27 @@ def _report_engine(name: str, host: str, seen: dict[str, set[str]]) -> bool:
 
 def main(argv: list[str]) -> int:
     global DRY_RUN
+
+    # A MISTYPED FLAG MUST NOT LOOK LIKE SUCCESS. Two commands once arrived
+    # pasted together as `--dry-rungit pull origin <branch>`; every token fell
+    # into the "unknown engine" list, the ordinary report printed in full, and
+    # the dry run the owner asked for simply did not happen. That is this
+    # repo's standing failure shape — a degraded path nobody could see — in a
+    # tool written to catch exactly that, so an unrecognised flag stops here
+    # instead of being folded in with engine names.
+    flags = [a for a in argv if a.startswith("-")]
+    bad_flags = [f for f in flags if f != "--dry-run"]
+    if bad_flags:
+        print(f"unknown option(s): {', '.join(bad_flags)}")
+        print(f"usage: comfy_doctor.py [engine ...] [--dry-run]")
+        print(f"       engines: {', '.join(ENGINES)}")
+        if any("dry" in f for f in bad_flags):
+            print("did you mean --dry-run? (check for two commands pasted "
+                  "onto one line)")
+        return 2
+
     DRY_RUN = "--dry-run" in argv
-    argv = [a for a in argv if a != "--dry-run"]
+    argv = [a for a in argv if not a.startswith("-")]
     host = _host()
     print(f"ComfyUI at {host}")
     if not _reachable(host):

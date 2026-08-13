@@ -526,3 +526,46 @@ def test_turbo_off_as_a_string_reaches_the_warning():
     notes = comfy_doctor._speed_notes(
         {"1": {"class_type": "WanT2V", "inputs": {"enable_turbo_mode": "false"}}})
     assert notes and "enable_turbo_mode is FALSE" in notes[0]
+
+
+# ── a mistyped flag must not look like success ───────────────────────────────
+
+def test_a_mistyped_dry_run_flag_stops_instead_of_reporting(monkeypatch, capsys):
+    """VERBATIM FROM A REAL SESSION: two commands arrived pasted onto one line
+    as `--dry-rungit pull origin <branch>`. Every token fell into the "unknown
+    engine" list, the ordinary report printed in full, and the dry run never
+    happened — in a tool written specifically to catch degraded paths nobody
+    can see."""
+    def _boom(*a, **k):
+        raise AssertionError("must not reach ComfyUI after a bad flag")
+    monkeypatch.setattr(comfy_doctor, "_reachable", _boom)
+    assert comfy_doctor.main(["wan_t2v", "--dry-rungit", "pull"]) == 2
+    out = capsys.readouterr().out
+    assert "unknown option(s): --dry-rungit" in out
+    assert "did you mean --dry-run?" in out
+    assert "pasted onto one line" in out
+
+
+def test_an_unrelated_bad_flag_is_also_refused(monkeypatch, capsys):
+    monkeypatch.setattr(comfy_doctor, "_reachable",
+                        lambda h: (_ for _ in ()).throw(AssertionError()))
+    assert comfy_doctor.main(["--verbose"]) == 2
+    out = capsys.readouterr().out
+    assert "unknown option(s): --verbose" in out
+    assert "did you mean" not in out          # only suggested when plausible
+
+
+def test_the_real_flag_still_works(monkeypatch, capsys):
+    monkeypatch.setattr(comfy_doctor, "_reachable", lambda host: True)
+    monkeypatch.setattr(comfy_doctor, "_visible_files", lambda host: {})
+    monkeypatch.setattr(comfy_doctor.Path, "exists", lambda self: False)
+    comfy_doctor.main(["wan_t2v", "--dry-run"])
+    assert comfy_doctor.DRY_RUN is True
+
+
+def test_a_bare_engine_name_is_unaffected(monkeypatch, capsys):
+    monkeypatch.setattr(comfy_doctor, "_reachable", lambda host: True)
+    monkeypatch.setattr(comfy_doctor, "_visible_files", lambda host: {})
+    monkeypatch.setattr(comfy_doctor.Path, "exists", lambda self: False)
+    assert comfy_doctor.main(["wan_t2v"]) == 2      # not runnable, not a usage error
+    assert "unknown option" not in capsys.readouterr().out
