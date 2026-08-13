@@ -569,3 +569,26 @@ def test_a_bare_engine_name_is_unaffected(monkeypatch, capsys):
     monkeypatch.setattr(comfy_doctor.Path, "exists", lambda self: False)
     assert comfy_doctor.main(["wan_t2v"]) == 2      # not runnable, not a usage error
     assert "unknown option" not in capsys.readouterr().out
+
+
+# ── shot_chain: the one export whose wiring can be right and behaviour wrong ──
+
+def test_shot_chain_runs_its_own_readiness_check():
+    """An edit workflow and an img2img workflow are wired identically and
+    behave oppositely. shot_chain.ready() measures the denoise on the path from
+    the loaded image; at 0.55 the sampler can only redraw its input, so every
+    beat comes back as the previous picture. That exact mistake already cost a
+    full run here (character_stills_api.json — ten identical hooded figures),
+    and only shot_chain can detect it."""
+    assert comfy_doctor.ENGINES["shot_chain"][0] == "shot_chain"
+
+
+def test_the_doctor_surfaces_the_img2img_refusal(monkeypatch, capsys):
+    monkeypatch.setattr(comfy_doctor, "_reachable", lambda host: True)
+    monkeypatch.setattr(comfy_doctor, "_visible_files", lambda host: {})
+    import shot_chain
+    monkeypatch.setattr(shot_chain, "ready",
+                        lambda: (False, "export samples at denoise 0.55 from "
+                                        "the loaded image — that is img2img"))
+    comfy_doctor.main(["shot_chain"])
+    assert "denoise 0.55" in capsys.readouterr().out

@@ -60,7 +60,14 @@ _LOADERS = ("UNETLoader", "CheckpointLoaderSimple", "VAELoader", "CLIPLoader",
 ENGINES = {
     "stills":    ("comfy_client",      "config/stills_api.json",      ("flux", "sd", "qwen")),
     "stills_i2i": (None,               "config/stills_i2i_api.json",  ("flux", "qwen")),
-    "shot_chain": (None,               "config/shot_chain_api.json",  ("qwen", "edit")),
+    # shot_chain carries its OWN check that nothing else here can do: it
+    # measures the denoise on the path from the loaded image, because an edit
+    # workflow and an img2img workflow are wired identically and behave
+    # oppositely. At denoise 0.55 every beat comes back as the previous
+    # picture — that mistake already cost this project a full run
+    # (config/character_stills_api.json, ten identical hooded figures). Running
+    # its ready() here means the export is judged before a run, not after.
+    "shot_chain": ("shot_chain",       "config/shot_chain_api.json",  ("qwen", "edit")),
     "hunyuan":   ("hunyuan_client",    "config/hunyuan_i2v_api.json", ("hunyuan", "hy")),
     "wan_i2v":   ("wan_client",        None,                          ("wan",)),
     "wan_t2v":   ("wan_t2v_client",    "config/wan_t2v_api.json",     ("wan", "umt5", "t2v")),
