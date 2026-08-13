@@ -34,6 +34,16 @@ if not exist "%PY%" (
 
 REM --- engine selection -------------------------------------------------------
 set RUFUS_GPU=1
+REM Kokoro directly, not via the ElevenLabs attempt that precedes it. This file
+REM did not set RUFUS_TTS, so every run opened with
+REM     [tts] backend: ElevenLabs (eleven_turbo_v2_5)
+REM     [tts] ElevenLabs failed (… is a library (premade) voice — free accounts
+REM           cannot use those via the API …) — falling back to Kokoro
+REM The fallback works and the audio is fine, but it spends a round trip and
+REM prints a failure on a run where nothing is wrong. Kokoro is the voice this
+REM channel actually ships. Delete this line once an ElevenLabs voice the
+REM account can use is set in RUFUS_ELEVEN_VOICE.
+set RUFUS_TTS=kokoro
 set RUFUS_VIDEO_SOURCE=comfy
 set RUFUS_RENDERER=remotion
 set RUFUS_EDIT_DIRECTOR=1

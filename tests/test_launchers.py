@@ -181,3 +181,15 @@ def test_the_staleness_check_cannot_stop_the_run():
     preflight = body.index("comfy_doctor.py")
     between = body[behind:preflight]
     assert "exit /b" not in between
+
+
+def test_the_fast_launcher_names_its_tts_backend():
+    """Unset, the run opens by trying ElevenLabs and failing:
+
+        [tts] ElevenLabs failed (… is a library (premade) voice — free accounts
+              cannot use those via the API …) — falling back to Kokoro
+
+    The fallback works, so this costs a round trip and prints a failure on a run
+    where nothing is wrong — the kind of noise that trains someone to ignore
+    the log."""
+    assert "set RUFUS_TTS=" in _wan_fast()
