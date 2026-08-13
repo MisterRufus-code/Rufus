@@ -592,3 +592,58 @@ def test_the_doctor_surfaces_the_img2img_refusal(monkeypatch, capsys):
                                         "the loaded image — that is img2img"))
     comfy_doctor.main(["shot_chain"])
     assert "denoise 0.55" in capsys.readouterr().out
+
+
+# ── the edit model, and the text encoder that gets mistaken for it ───────────
+
+def test_a_text_encoder_alone_is_not_an_edit_model():
+    """VERBATIM from the owner's first shot_chain check — five Qwen files, all
+    of them text encoders:
+
+        · qwen_2.5_vl_7b_fp8_scaled.safetensors  [CLIPLoader]
+        · qwen_3_4b.safetensors                  [CLIPLoader]
+
+    Read quickly that says "Qwen is installed", and the next move is building a
+    workflow out of parts that are not there."""
+    found = comfy_doctor._classify_edit({
+        "CLIPLoader": {"qwen_2.5_vl_7b_fp8_scaled.safetensors",
+                       "qwen_3_4b.safetensors"}})
+    assert found["text_enc"]
+    assert found["unet"] == []
+
+
+def test_a_loader_type_enum_is_not_counted_as_a_file():
+    """"qwen_image" is the CLIPLoader's type dropdown, not something on disk."""
+    found = comfy_doctor._classify_edit({"CLIPLoader": {"qwen_image"}})
+    assert found["text_enc"] == []
+
+
+def test_the_edit_model_is_recognised_in_both_formats():
+    for name in ("qwen_image_edit_2509_fp8.safetensors",
+                 "Qwen-Image-Edit-2509-Q4_K_M.gguf"):
+        found = comfy_doctor._classify_edit({"UNETLoader": {name}})
+        assert found["unet"] == [name], name
+
+
+def test_the_vae_is_not_filed_as_the_edit_model():
+    found = comfy_doctor._classify_edit({"VAELoader": {"qwen_image_vae.safetensors"}})
+    assert found["vae"] and found["unet"] == []
+
+
+def test_a_missing_edit_model_says_a_text_encoder_is_not_one(capsys):
+    comfy_doctor._report_edit({"CLIPLoader": {"qwen_2.5_vl_7b_fp8.safetensors"}})
+    out = capsys.readouterr().out
+    assert "EDIT MODEL itself is not installed" in out
+    assert "text encoder is not an" in out
+
+
+def test_a_complete_set_gets_the_denoise_warning(capsys):
+    """Every part present is exactly when someone builds the graph — which is
+    the moment the denoise mistake is made."""
+    comfy_doctor._report_edit({
+        "UNETLoader": {"qwen_image_edit_2509.safetensors"},
+        "CLIPLoader": {"qwen_2.5_vl_7b_fp8.safetensors"},
+        "VAELoader": {"qwen_image_vae.safetensors"}})
+    out = capsys.readouterr().out
+    assert "denoise 1.0" in out
+    assert "img2img" in out

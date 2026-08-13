@@ -201,6 +201,65 @@ def _wan_advice(found: dict[str, list[str]], have_export: bool) -> list[str]:
     return tips
 
 
+# ── the edit model shot_chain needs, and the half of it that is easy to miss ──
+#
+# The first real check on the owner's box listed five Qwen files ComfyUI could
+# load and every one of them was a TEXT ENCODER:
+#
+#     · qwen_2.5_vl_7b_fp8_scaled.safetensors  [CLIPLoader]
+#     · qwen_3_4b.safetensors                  [CLIPLoader]
+#
+# No diffusion model, no VAE. Read quickly that looks like "Qwen is installed",
+# and the natural next move is to go build a workflow out of parts that are not
+# there. An edit workflow needs three separate downloads and they are easy to
+# conflate, because the text encoder is the one that ships with several other
+# Qwen workflows and so tends to arrive first.
+def _classify_edit(seen: dict[str, set[str]]) -> dict[str, list[str]]:
+    out: dict[str, list[str]] = {"unet": [], "vae": [], "text_enc": []}
+    for cls, names in seen.items():
+        for f in sorted(names):
+            low = f.lower()
+            if not (low.endswith(".safetensors") or low.endswith(".gguf")):
+                continue          # loader `type` enums are not files
+            if "vae" in low and ("qwen" in low or "edit" in low):
+                out["vae"].append(f)
+            elif cls in ("CLIPLoader", "DualCLIPLoader") and "qwen" in low:
+                out["text_enc"].append(f)
+            elif cls in ("UNETLoader", "UnetLoaderGGUF",
+                         "CheckpointLoaderSimple") and (
+                    "edit" in low or ("qwen" in low and "image" in low)):
+                out["unet"].append(f)
+    return out
+
+
+def _report_edit(seen: dict[str, set[str]]) -> None:
+    found = _classify_edit(seen)
+    print("\n─── image-edit inventory (shot_chain) " + "─" * 24)
+    for key, label in (("unet", "edit model (Qwen-Image-Edit)"),
+                       ("text_enc", "Qwen text encoder"),
+                       ("vae", "Qwen image VAE")):
+        files = found[key]
+        mark = "✓" if files else "✗"
+        shown = ", ".join(f[:44] for f in files[:2]) if files else "none visible"
+        print(f"  {mark} {label:<30} {shown}")
+
+    if not found["unet"]:
+        print("\n  The EDIT MODEL itself is not installed. A text encoder is "
+              "not an\n  edit model — it ships with several other Qwen "
+              "workflows, so it tends\n  to arrive first and make the rest "
+              "look present. Fetch\n  Qwen-Image-Edit-2509 (the Q4_K_M GGUF is "
+              "~13GB, comfortable on 24GB)\n  into models/diffusion_models, and "
+              "its VAE into models/vae.")
+    elif not found["vae"]:
+        print("\n  Edit model present, VAE missing — the graph will not decode.")
+    else:
+        print("\n  All three parts present. Build the workflow, RUN IT ONCE on "
+              "two real\n  images, set the edit instruction to exactly "
+              "RUFUS_PROMPT, then\n  Export (API) → config/shot_chain_api.json. "
+              "Sample at denoise 1.0:\n  at 0.55 it is img2img and every beat "
+              "returns the previous picture.")
+
+
 def _report_wan(seen: dict[str, set[str]]) -> None:
     found = _classify_wan(seen)
     labels = {
@@ -593,6 +652,8 @@ def main(argv: list[str]) -> int:
     # going to cost me per clip".
     if not wanted or any(w.startswith("wan") for w in wanted):
         _report_wan(seen)
+    if not wanted or "shot_chain" in wanted or "stills_i2i" in wanted:
+        _report_edit(seen)
 
     unknown = [a for a in argv if a not in ENGINES]
     if unknown:
