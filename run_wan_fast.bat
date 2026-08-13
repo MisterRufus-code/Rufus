@@ -74,6 +74,25 @@ set RUFUS_T2V_W=480
 set RUFUS_T2V_H=832
 set RUFUS_T2V_TIMEOUT=600
 
+REM --- am I running the code I think I am? -------------------------------------
+REM Observed three times in one session: a report was read, acted on, and
+REM discussed while the box was several commits behind, so the fixes being
+REM described were not the code being run. Git says so in one cheap call and
+REM nothing else does — a stale checkout produces output that looks completely
+REM normal, which is the whole problem.
+REM
+REM Warn, never pull. Pulling someone's repository out from under them mid-run
+REM is not this file's business; knowing is.
+git fetch --quiet origin 2>nul
+for /f %%b in ('git rev-list --count HEAD..@{u} 2^>nul') do set BEHIND=%%b
+if not "%BEHIND%"=="" if not "%BEHIND%"=="0" (
+    echo(
+    echo NOTE: this checkout is %BEHIND% commit^(s^) behind origin.
+    echo Anything fixed upstream since then is NOT in the code about to run.
+    echo   git pull origin claude/automation-work-ohlqyt
+    echo(
+)
+
 REM --- preflight --------------------------------------------------------------
 echo(
 echo Checking ComfyUI and the Wan text-to-video template...

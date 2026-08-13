@@ -147,3 +147,37 @@ def test_it_says_steps_are_not_settable_here():
     body = _wan_fast()
     assert "steps" in body.lower()
     assert "prepare()" in body
+
+
+def test_it_warns_when_the_checkout_is_behind_origin():
+    """Observed three times in one session: a doctor report was read, acted on
+    and discussed while the box was several commits behind, so the fixes being
+    described were not the code being run. A stale checkout produces output
+    that looks completely normal — git is the only thing that can say."""
+    body = _wan_fast()
+    assert "git fetch" in body
+    assert "rev-list --count HEAD..@{u}" in body
+    assert "behind origin" in body
+
+
+def test_it_warns_but_never_pulls():
+    """Pulling someone's repository out from under them mid-run is not a
+    launcher's business. Knowing is."""
+    # Drop comments AND echoed advice — telling the owner to pull is the whole
+    # point; what must not appear is an executed one.
+    body = "\n".join(
+        line for line in _wan_fast().splitlines()
+        if not line.strip().upper().startswith(("REM", "ECHO")))
+    assert "git pull" not in body
+    assert "git reset" not in body
+    assert "git checkout" not in body
+
+
+def test_the_staleness_check_cannot_stop_the_run():
+    """It is information, not a gate — someone deliberately testing an older
+    commit must not be blocked by it."""
+    body = _wan_fast()
+    behind = body.index("behind origin")
+    preflight = body.index("comfy_doctor.py")
+    between = body[behind:preflight]
+    assert "exit /b" not in between
