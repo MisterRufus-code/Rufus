@@ -481,3 +481,48 @@ def test_the_dry_run_is_off_unless_asked(monkeypatch, capsys):
 
 def test_a_broken_engine_module_does_not_crash_the_report():
     assert comfy_doctor._dry_run("stills_i2i", {"1": {}}) == []
+
+
+# ── a toggle is "off" in more spellings than `is False` ──────────────────────
+
+def test_every_spelling_of_off_is_caught():
+    """The owner's ComfyUI showed enable_turbo_mode false in the open workflow
+    while this check stayed silent on the export made from it. Both cannot be
+    right, and an under-reporting check is the worse failure: silence here
+    reads as "your settings are fine"."""
+    for off in (False, "false", "False", " FALSE ", 0, "0", "off", "no",
+                "disabled"):
+        assert comfy_doctor._is_off(off), repr(off)
+
+
+def test_on_and_absent_are_not_off():
+    """Absent is unknown, not off — warning about a key the export never had
+    would send someone to fix a toggle that does not exist."""
+    for on in (True, "true", 1, "yes", None, "enabled"):
+        assert not comfy_doctor._is_off(on), repr(on)
+
+
+def test_a_string_step_count_is_still_a_step_count():
+    notes = comfy_doctor._speed_notes(
+        {"1": {"class_type": "K", "inputs": {"steps": "20"}}})
+    assert notes and "20 steps" in notes[0]
+
+
+def test_a_wire_is_never_read_as_a_step_count():
+    """["7", 0] is a link to node 7 output 0. Reading it as 7 would report a
+    fast sampler on a graph that has none."""
+    assert comfy_doctor._as_int(["7", 0]) is None
+    assert comfy_doctor._speed_notes(
+        {"1": {"class_type": "K", "inputs": {"steps": ["7", 0]}}}) == []
+
+
+def test_a_bool_is_not_a_step_count():
+    """True == 1 in Python; without the guard a boolean input would read as a
+    1-step sampler."""
+    assert comfy_doctor._as_int(True) is None
+
+
+def test_turbo_off_as_a_string_reaches_the_warning():
+    notes = comfy_doctor._speed_notes(
+        {"1": {"class_type": "WanT2V", "inputs": {"enable_turbo_mode": "false"}}})
+    assert notes and "enable_turbo_mode is FALSE" in notes[0]

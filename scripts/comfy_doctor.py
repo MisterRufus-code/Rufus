@@ -238,6 +238,42 @@ def _visible_files(host: str) -> dict[str, set[str]]:
     return out
 
 
+def _is_off(value) -> bool:
+    """Whether a toggle reads as OFF, however the export spelled it.
+
+    A boolean survives a round trip through JSON, a ComfyUI widget and a
+    hand-edited graph in at least five shapes. Comparing with `is False` sees
+    exactly one of them and silently passes the rest, which turns a check into
+    a false reassurance.
+    """
+    if value is None:
+        return False                       # absent is not "off", it is unknown
+    if isinstance(value, bool):
+        return value is False
+    if isinstance(value, (int, float)):
+        return value == 0
+    if isinstance(value, str):
+        return value.strip().lower() in ("false", "0", "off", "no", "disable",
+                                         "disabled")
+    return False
+
+
+def _as_int(value) -> int | None:
+    """An integer setting, whether the export stored it as int or as text.
+
+    A wire is [node_id, slot] and must never be read as a value — "7" from
+    ["7", 0] would report as a 7-step sampler.
+    """
+    if isinstance(value, bool) or isinstance(value, (list, dict)):
+        return None
+    if isinstance(value, int):
+        return value
+    try:
+        return int(str(value).strip())
+    except (TypeError, ValueError):
+        return None
+
+
 def _export_facts(tpl: dict) -> list[str]:
     """What the export actually SAYS about speed and size.
 
@@ -295,13 +331,20 @@ def _speed_notes(tpl: dict) -> list[str]:
         # ComfyUI's packaged Wan node folds the whole 4-step LoRA path behind
         # one boolean. Exported false, the LoRA files can be sitting right
         # there in the graph and contribute nothing.
-        if ins.get("enable_turbo_mode") is False:
+        # `is False` MATCHED ONLY A PYTHON BOOL, and that is not what an export
+        # necessarily contains. The owner's ComfyUI showed enable_turbo_mode
+        # false in the open workflow while this check stayed silent on the
+        # export made from it — the two cannot both be right, and a check that
+        # under-reports is the worse of the two, because silence here reads as
+        # "your settings are fine". JSON, ComfyUI widget state and hand-edited
+        # graphs all render booleans differently: false, "false", 0, "0", "off".
+        if _is_off(ins.get("enable_turbo_mode")):
             notes.append(
                 "enable_turbo_mode is FALSE in this export — the 4-step LoRA "
                 "path is off. Turn it on in ComfyUI and Export (API) again; "
                 "this is worth about 5x.")
-        steps = ins.get("steps")
-        if isinstance(steps, int) and steps > 10:
+        steps = _as_int(ins.get("steps"))
+        if steps is not None and steps > 10:
             notes.append(
                 f"a sampler is exported at {steps} steps (~{steps * 57 // 60} "
                 f"min/clip at this rig's ~57s/step). 4-8 is the fast range.")
