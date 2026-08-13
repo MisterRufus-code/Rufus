@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""fetch_wan_lora.py — put the Wan 4-step speed LoRAs where ComfyUI reads them.
+"""fetch_wan_assets.py — put Wan weights where ComfyUI actually reads them.
 
 WHY A SCRIPT AND NOT A LINK. The 4-step lightx2v/Lightning distillation LoRAs
 are the single biggest speed lever for Wan 2.2 on a 24GB card — measured on
@@ -16,9 +16,21 @@ that reads like "the file is gone" rather than "this script is out of date".
 So it lists what each candidate repo actually contains and matches on the
 filename, then tells you exactly what it found when it cannot decide.
 
-    python scripts/fetch_wan_lora.py --dest "C:/ComfyUI/models/loras"
-    python scripts/fetch_wan_lora.py --dest ... --i2v      # image-to-video pair
-    python scripts/fetch_wan_lora.py --dest ... --dry-run  # look, don't fetch
+    # the 4-step speed LoRAs (default)
+    python scripts/fetch_wan_assets.py --dest "C:/ComfyUI/models/loras"
+    python scripts/fetch_wan_assets.py --dest ... --i2v      # image-to-video pair
+
+    # TI2V-5B: the variant with no mixture-of-experts and therefore no expert
+    # swap, which is what takes a 16GB-RAM box out of the equation entirely.
+    # Needs TWO destinations because the model and its VAE live in different
+    # ComfyUI folders, and the WRONG VAE is the classic way to lose a run:
+    # TI2V-5B does not use wan_2.1_vae, and a mismatch is only rejected at
+    # submit time, after the whole stills phase has been paid for.
+    python scripts/fetch_wan_assets.py --ti2v \
+        --dest "C:/ComfyUI/models/diffusion_models" \
+        --vae-dest "C:/ComfyUI/models/vae"
+
+    python scripts/fetch_wan_assets.py ... --dry-run         # look, don't fetch
 
 After it finishes, the LoRA still has to be TURNED ON in ComfyUI and the
 workflow re-exported: comfy_template.prepare() substitutes prompt, image, seed
@@ -38,6 +50,12 @@ CANDIDATE_REPOS = (
     "Kijai/WanVideo_comfy",
     "lightx2v/Wan2.2-Lightning",
 )
+
+# TI2V-5B and the Wan 2.2 VAE it requires. Matched the same way as everything
+# else here — by substring, because these get republished under new names and a
+# pinned path rots in a way that 404s and reads as "the file is gone".
+_TI2V_MARKERS = ("ti2v",)
+_VAE22_MARKERS = ("wan2.2_vae", "wan_2.2_vae", "wan22_vae")
 
 # A file is one of these LoRAs if it is a safetensors LoRA whose name carries a
 # distillation marker. Substring matching for the same reason comfy_doctor uses
@@ -87,6 +105,27 @@ def find_pair(files: list[str], i2v: bool) -> dict[str, str]:
     return out
 
 
+def find_ti2v(files: list[str]) -> dict[str, str]:
+    """The TI2V-5B model and the Wan 2.2 VAE, if this repo carries them.
+
+    Returned as a dict rather than a pair because these two are NOT
+    interchangeable halves — they go to different folders, and shipping the
+    model without its VAE produces a workflow that loads and then fails at
+    submit time.
+    """
+    out: dict[str, str] = {}
+    for name in sorted(files):
+        low = name.lower()
+        if not low.endswith(".safetensors"):
+            continue
+        if "model" not in out and any(m in low for m in _TI2V_MARKERS) \
+                and "vae" not in low:
+            out["model"] = name
+        if "vae" not in out and any(m in low for m in _VAE22_MARKERS):
+            out["vae"] = name
+    return out
+
+
 def _resolve_dest(explicit: str | None) -> Path | None:
     """Where ComfyUI reads LoRAs from.
 
@@ -101,24 +140,87 @@ def _resolve_dest(explicit: str | None) -> Path | None:
     return path if path.is_dir() else None
 
 
+def _fetch_ti2v(api, hf_hub_download, dest: Path | None,
+                vae_dest: Path | None, dry_run: bool) -> int:
+    """TI2V-5B plus the Wan 2.2 VAE it needs, into their two folders."""
+    for repo in CANDIDATE_REPOS:
+        try:
+            files = list(api.list_repo_files(repo))
+        except Exception as e:
+            print(f"[ti2v] {repo}: unreachable ({e})")
+            continue
+
+        found = find_ti2v(files)
+        if "model" not in found:
+            print(f"[ti2v] {repo}: no TI2V-5B model")
+            continue
+
+        print(f"[ti2v] {repo}: found TI2V-5B")
+        print(f"    model: {found['model']}")
+        print(f"    vae:   {found.get('vae', 'NOT IN THIS REPO')}")
+        if "vae" not in found:
+            # Refuse rather than half-deliver. TI2V-5B does not use
+            # wan_2.1_vae, and the mismatch is only rejected at submit time —
+            # after the entire stills phase has been paid for.
+            print("[ti2v] refusing a partial fetch: TI2V-5B needs the Wan 2.2 "
+                  "VAE, not wan_2.1_vae, and a mismatch is only caught at "
+                  "submit time. Find both or neither.")
+            continue
+        if dry_run:
+            return 0
+        if dest is None or vae_dest is None:
+            print("[ti2v] need both --dest (models/diffusion_models) and "
+                  "--vae-dest (models/vae) — they are different folders.")
+            return 2
+
+        for key, target in (("model", dest), ("vae", vae_dest)):
+            name = found[key]
+            out = target / Path(name).name
+            if out.exists():
+                print(f"[ti2v] {out.name} already present — skipping")
+                continue
+            print(f"[ti2v] downloading {Path(name).name} → {target}…")
+            hf_hub_download(repo_id=repo, filename=name,
+                            local_dir=str(target), local_dir_use_symlinks=False)
+        print(f"\nDone. Now build a SECOND workflow in ComfyUI from the\n"
+              f"TI2V-5B template, set the prompt to RUFUS_PROMPT, run it once,\n"
+              f"and Export (API) — keeping your 14B export as it is so you can\n"
+              f"compare clip times.\n"
+              f"Verify with:  python scripts/comfy_doctor.py wan_t2v --dry-run")
+        return 0
+
+    print("\nNo TI2V-5B found in any known repo. Search HuggingFace for "
+          "\"wan2.2 ti2v 5B\" and take BOTH the model and the Wan 2.2 VAE.")
+    return 1
+
+
 def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("--dest", help="ComfyUI's models/loras directory")
+    ap.add_argument("--dest", help="target folder (models/loras, or "
+                                   "models/diffusion_models with --ti2v)")
+    ap.add_argument("--vae-dest", help="ComfyUI's models/vae — --ti2v only")
     ap.add_argument("--i2v", action="store_true",
-                    help="fetch the image-to-video pair instead of text-to-video")
+                    help="fetch the image-to-video LoRA pair instead of t2v")
+    ap.add_argument("--ti2v", action="store_true",
+                    help="fetch TI2V-5B and the Wan 2.2 VAE instead of a LoRA")
     ap.add_argument("--dry-run", action="store_true",
                     help="report what would be downloaded, fetch nothing")
     args = ap.parse_args(argv)
 
+    if args.ti2v and args.i2v:
+        print("--ti2v and --i2v ask for different things; pick one.")
+        return 2
+
     dest = _resolve_dest(args.dest)
     if dest is None and not args.dry_run:
-        print("Need the ComfyUI LoRA folder. Pass --dest, e.g.\n"
-              "  python scripts/fetch_wan_lora.py --dest "
-              "\"C:/ComfyUI/models/loras\"\n"
-              "or set RUFUS_COMFY_LORAS. It must already exist — this script "
-              "will not create a folder ComfyUI has never heard of, because "
-              "a file in the wrong place looks exactly like a file that was "
-              "never downloaded.")
+        folder = ("models/diffusion_models" if args.ti2v else "models/loras")
+        print(f"Need the ComfyUI {folder} directory. Pass --dest, e.g.\n"
+              f"  python scripts/fetch_wan_assets.py --dest "
+              f"\"C:/ComfyUI/{folder}\"\n"
+              f"or set RUFUS_COMFY_LORAS. It must already exist — this script "
+              f"will not create a folder ComfyUI has never heard of, because "
+              f"a file in the wrong place looks exactly like a file that was "
+              f"never downloaded.")
         return 2
 
     try:
@@ -129,6 +231,10 @@ def main(argv: list[str]) -> int:
         return 2
 
     api = HfApi()
+    if args.ti2v:
+        return _fetch_ti2v(api, hf_hub_download, dest,
+                           _resolve_dest(args.vae_dest), args.dry_run)
+
     want = "i2v" if args.i2v else "t2v"
     for repo in CANDIDATE_REPOS:
         try:
