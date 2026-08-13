@@ -1474,22 +1474,40 @@ def fetch_newspaper_story(niche_name: str, used_ids: set | None = None) -> dict 
     y1 = int(os.environ.get("RUFUS_NEWS_YEAR_MIN", str(NEWS_YEAR_MIN)))
     y2 = int(os.environ.get("RUFUS_NEWS_YEAR_MAX", str(NEWS_YEAR_MAX)))
     page = random.randint(1, 5)           # rotate so a daily channel keeps moving
-    url = ("https://chroniclingamerica.loc.gov/search/pages/results/"
-           f"?andtext={quote(q)}&format=json&rows=12&page={page}"
-           f"&date1={y1}&date2={y2}&dateFilterType=yearRange")
+    # THE LEGACY HOST IS GONE. chroniclingamerica.loc.gov now 302s to
+    # www.loc.gov/chroniclingamerica/… and that path 404s, so the old call
+    # failed on every run with a 404 that looked like a bad query rather than a
+    # retired API. The modern collection search is tried first; the legacy URL
+    # is kept behind it because mirrors and older deployments still answer it.
+    modern = ("https://www.loc.gov/collections/chronicling-america/"
+              f"?q={quote(q)}&fo=json&c=12&sp={page}"
+              f"&start_date={y1}-01-01&end_date={y2}-12-31")
+    legacy = ("https://chroniclingamerica.loc.gov/search/pages/results/"
+              f"?andtext={quote(q)}&format=json&rows=12&page={page}"
+              f"&date1={y1}&date2={y2}&dateFilterType=yearRange")
 
-    try:
-        r = httpx.get(url, headers=WIKI_HEADERS, timeout=NEWS_TIMEOUT,
-                      follow_redirects=True)
-        r.raise_for_status()
-        items = r.json().get("items") or []
-    except Exception as e:
-        # Loud and specific: the Library of Congress retired the legacy host
-        # once already, and "newspapers unavailable" would read like a network
-        # blip for months if it happens again.
-        print(f"[research] newspapers unavailable for \"{q}\" ({e}) — if this "
-              f"persists the LoC endpoint moved; see fetch_newspaper_story. "
-              f"RUFUS_NEWSPAPERS=0 silences this source.")
+    items, failures = [], []
+    for url in (modern, legacy):
+        try:
+            r = httpx.get(url, headers=WIKI_HEADERS, timeout=NEWS_TIMEOUT,
+                          follow_redirects=True)
+            r.raise_for_status()
+            payload = r.json()
+            # The two APIs disagree on the envelope: the collection search
+            # returns "results", the page search returns "items".
+            items = payload.get("results") or payload.get("items") or []
+            if items:
+                break
+        except Exception as e:
+            failures.append(f"{url.split('/')[2]}: {type(e).__name__}")
+
+    if not items:
+        # Loud and specific. "newspapers unavailable" alone would read like a
+        # network blip for months, which is how the retired host went unnoticed.
+        print(f"[research] newspapers unavailable for \"{q}\" "
+              f"({'; '.join(failures) or 'no results'}) — both the modern and "
+              f"legacy LoC endpoints came back empty. RUFUS_NEWSPAPERS=0 "
+              f"silences this source if it stays dead.")
         return None
 
     skipped = 0
@@ -1497,7 +1515,13 @@ def fetch_newspaper_story(niche_name: str, used_ids: set | None = None) -> dict 
         page_url = "https://chroniclingamerica.loc.gov" + str(item.get("id") or "")
         if "news:" + page_url in used_ids:
             continue
-        text = _clean_text(item.get("ocr_eng") or "")
+        # "ocr_eng" is the legacy page search; the collection search puts its
+        # text in "description" (a list) or "item.
+        raw_text = item.get("ocr_eng")
+        if not raw_text:
+            desc = item.get("description")
+            raw_text = " ".join(desc) if isinstance(desc, list) else (desc or "")
+        text = _clean_text(raw_text or "")
         # Window FIRST, then judge. A newspaper page is six columns, and most
         # of them are classified ads and shipping tables that read as soup to
         # the legibility test. Judging the whole page throws away good stories

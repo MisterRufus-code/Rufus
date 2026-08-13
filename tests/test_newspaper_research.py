@@ -144,15 +144,44 @@ def test_an_already_used_page_is_skipped(monkeypatch):
 
 
 def test_a_dead_endpoint_is_loud_and_non_fatal(monkeypatch, capsys):
-    """The LoC retired one host already. "newspapers unavailable" alone would
-    read as a network blip for months — the line has to name the cause."""
+    """AND IT DID DIE. chroniclingamerica.loc.gov now 302s to
+    www.loc.gov/chroniclingamerica/… which 404s, so every run printed a 404
+    that read like a bad query rather than a retired API. The message has to
+    name both hosts it tried, or the next failure is just as opaque."""
     def _boom(*a, **k):
         raise OSError("connection refused")
     monkeypatch.setattr(research.httpx, "get", _boom)
     assert research.fetch_newspaper_story("money_history", used_ids=set()) is None
     out = capsys.readouterr().out
-    assert "LoC endpoint moved" in out
+    assert "www.loc.gov" in out and "chroniclingamerica.loc.gov" in out
     assert "RUFUS_NEWSPAPERS=0" in out
+
+
+def test_the_modern_endpoint_is_tried_first(monkeypatch):
+    """The legacy host is the one that is gone; asking it first would spend a
+    404 on every single run before getting to the live API."""
+    tried = []
+
+    def _spy(url, *a, **k):
+        tried.append(url)
+        raise OSError("nope")
+
+    monkeypatch.setattr(research.httpx, "get", _spy)
+    research.fetch_newspaper_story("money_history", used_ids=set())
+    assert "collections/chronicling-america" in tried[0]
+    assert "chroniclingamerica.loc.gov" in tried[1]
+
+
+def test_the_collection_envelope_is_understood(monkeypatch):
+    """The two APIs disagree: the page search returns "items", the collection
+    search returns "results" with its text in "description"."""
+    monkeypatch.setattr(research.httpx, "get", lambda *a, **k: _Resp({
+        "results": [{"id": "/lccn/sn1/1893-02-21/ed-1/seq-1/",
+                     "date": "18930221", "title": "The Record",
+                     "description": [_CLEAN]}]}))
+    seed = research.fetch_newspaper_story("money_history", used_ids=set())
+    assert seed and seed["type"] == "newspaper"
+    assert "1893-02-21" in seed["content"]
 
 
 def test_a_niche_with_no_newspaper_vocabulary_is_a_silent_noop(monkeypatch):
