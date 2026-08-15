@@ -235,3 +235,91 @@ def test_the_docstring_says_where_density_really_comes_from():
     expecting more pictures. The module has to say so."""
     assert "RUFUS_FRAMES_PER_BEAT" in ins.__doc__
     assert "NOT the cap" in ins.__doc__
+
+
+# ── phrase mode: a picture per clause, tiling the narration ──────────────────
+
+def _timed(text: str, step: float = 0.34) -> list[dict]:
+    """Word timings WITH punctuation, as Whisper actually produces them."""
+    import re
+    toks = re.findall(r"[A-Za-z]+[,.!?;:]?", text)
+    return [{"text": t, "start": i * step, "end": i * step + 0.3}
+            for i, t in enumerate(toks)]
+
+
+_SCRIPT = ("In a bustling Wall Street office, Merrill Lynch brokers earned "
+           "their keep. Transaction commissions made up most of their revenue. "
+           "But then the world changed.")
+
+
+def test_phrase_mode_beats_noun_mode_on_count():
+    """Noun inserts cannot get denser than the nouns present. Phrases are
+    limited only by the length of the narration, which is the whole point."""
+    words = _timed(_SCRIPT)
+    assert len(ins.plan_phrases(_SCRIPT, words)) > len(ins.plan(_SCRIPT, words))
+
+
+def test_the_pictures_tile_the_narration_without_gaps():
+    """Each holds until the next begins. Flashing and leaving gaps is what
+    makes a dense edit look broken rather than fast."""
+    plan = ins.plan_phrases(_SCRIPT, _timed(_SCRIPT))
+    for a, b in zip(plan, plan[1:]):
+        assert a["at"] + a["hold"] == pytest.approx(b["at"], abs=0.01)
+
+
+def test_phrases_break_on_clauses_not_a_counter():
+    """Fixed-size chunks cut through a thought — "In a bustling Wall" /
+    "Street office Merrill Lynch" — and a picture of half a phrase is a
+    picture of nothing. Whisper keeps the punctuation, so a comma is a free
+    clause boundary."""
+    plan = ins.plan_phrases(_SCRIPT, _timed(_SCRIPT))
+    assert any(p["phrase"].rstrip().endswith((",", ".")) for p in plan)
+
+
+def test_a_one_word_tail_is_folded_into_the_phrase_before_it():
+    """A lone trailing word reads as a flash, not a picture."""
+    plan = ins.plan_phrases(_SCRIPT, _timed(_SCRIPT))
+    assert all(len(p["phrase"].split()) >= 2 for p in plan)
+
+
+def test_every_phrase_picture_lands_on_a_real_timestamp():
+    words = _timed(_SCRIPT)
+    starts = {round(float(w["start"]), 3) for w in words}
+    assert all(p["at"] in starts for p in ins.plan_phrases(_SCRIPT, words))
+
+
+def test_the_phrase_prompt_carries_the_narration_almost_verbatim():
+    """Rewriting the line into a visual description is a second interpretation
+    of something the storyboard already interprets, and every paraphrase is a
+    chance to drift from the words being spoken at that second."""
+    p = ins.phrase_prompt("brokers earned their keep")
+    assert "brokers earned their keep" in p
+    assert "no text" in p
+
+
+def test_phrase_mode_is_selected_by_env(monkeypatch):
+    monkeypatch.setenv("RUFUS_INSERT_MODE", "phrases")
+    words = _timed(_SCRIPT)
+    assert ins.plan_for(_SCRIPT, words) == ins.plan_phrases(_SCRIPT, words)
+
+
+def test_nouns_remain_the_default(monkeypatch):
+    monkeypatch.delenv("RUFUS_INSERT_MODE", raising=False)
+    words = _timed(_SCRIPT)
+    assert ins.plan_for(_SCRIPT, words) == ins.plan(_SCRIPT, words)
+
+
+def test_an_unknown_mode_is_loud(monkeypatch, capsys):
+    monkeypatch.setenv("RUFUS_INSERT_MODE", "phrasez")
+    ins.plan_for(_SCRIPT, _timed(_SCRIPT))
+    assert "unknown" in capsys.readouterr().out
+
+
+def test_phrase_mode_respects_the_cap(monkeypatch):
+    monkeypatch.setenv("RUFUS_INSERT_MODE", "phrases")
+    monkeypatch.setenv("RUFUS_INSERT_MAX", "3")
+    assert len(ins.plan_for(_SCRIPT, _timed(_SCRIPT))) == 3
+
+
+def test_phrase_mode_is_safe_with_no_timings():
+    assert ins.plan_phrases(_SCRIPT, []) == []

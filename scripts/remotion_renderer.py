@@ -188,7 +188,7 @@ def render(script: str, bg_paths: "Path | list[Path]", out_dir: Path,
         try:
             import insert_director
             if insert_director.enabled():
-                planned = insert_director.plan(script, words, _insert_style())
+                planned = insert_director.plan_for(script, words, _insert_style())
                 if planned:
                     print(insert_director.describe(planned))
                     import comfy_client

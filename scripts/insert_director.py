@@ -30,6 +30,8 @@ Env:
   RUFUS_INSERT_GAP     0.45 minimum seconds between two inserts
   RUFUS_INSERT_HOLD    0.70 seconds an insert stays on screen
   RUFUS_INSERT_REPEAT  1    times one noun may be shown (raise for density)
+  RUFUS_INSERT_MODE    nouns | phrases  (see plan_for)
+  RUFUS_PHRASE_WORDS   4    spoken words per picture in phrase mode
 
 HOW MANY PICTURES YOU ACTUALLY GET, and what limits it. Measured on a real
 51-word script from this channel: seven drawable nouns. RUFUS_INSERT_MAX is
@@ -409,6 +411,130 @@ def _singular(noun: str) -> str:
     if low.endswith(("ches", "shes", "xes", "zes", "sses")):
         return low[:-2]                # torches -> torch
     return low[:-1]
+
+
+def plan_for(script: str, words: list[dict], style: str = "") -> list[dict]:
+    """The plan for whichever mode is selected. One entry point for callers.
+
+    nouns   (default) — a picture per drawable NOUN. Sparse, specific, and
+                        capped by the script's vocabulary: seven on a real
+                        51-word script here.
+    phrases           — a picture per CLAUSE, tiling the whole narration. Capped
+                        only by the length of the script, so the same 51 words
+                        give eleven, each holding until the next one starts.
+
+    Phrase mode is what "an image per word" actually wants: noun inserts cannot
+    get denser than the nouns present, and RUFUS_FRAMES_PER_BEAT gets denser
+    without getting more SPECIFIC — its extra frames are variations of one beat
+    prompt cut at even intervals, matched to no word at all.
+    """
+    mode = os.environ.get("RUFUS_INSERT_MODE", "nouns").strip().lower()
+    if mode in ("phrase", "phrases"):
+        return plan_phrases(script, words, style)
+    if mode not in ("noun", "nouns", ""):
+        print(f"[inserts] RUFUS_INSERT_MODE={mode!r} unknown — using 'nouns'. "
+              f"Known: nouns, phrases")
+    return plan(script, words, style)
+
+
+def phrase_prompt(text: str, style: str = "") -> str:
+    """What to draw for one PHRASE of narration.
+
+    Different job from insert_prompt. That one draws a named object on a plain
+    background; this draws the little SCENE the phrase describes, because a
+    phrase is the unit the viewer is hearing — "brokers earned their keep" is
+    not a broker, it is people at work.
+
+    The narration is handed over almost verbatim on purpose. Rewriting it into
+    a visual description is a second interpretation of something the storyboard
+    already interprets, and every paraphrase is a chance to drift away from the
+    words being spoken at that exact second — which is the one thing this whole
+    layer exists to nail.
+    """
+    clean = " ".join((text or "").split()).strip(" ,.;:!?-—")
+    base = (f"A simple scene showing: {clean}. One clear subject, "
+            f"uncluttered, bold readable silhouette, no text, no words, "
+            f"no letters")
+    return f"{base}. {style.strip()}" if style and style.strip() else base
+
+
+def plan_phrases(script: str, words: list[dict], style: str = "") -> list[dict]:
+    """One picture per PHRASE, each landing on the second that phrase begins.
+
+    WHY THIS EXISTS ALONGSIDE plan(). Noun inserts are limited by the script's
+    vocabulary — measured on a real 51-word script from this channel, seven
+    drawable nouns, and no setting raises that. Phrases are limited only by the
+    length of the narration, so a hundred-word script yields twenty-five
+    pictures at four words each, every one of them tied to a real timestamp.
+
+    And it fixes the thing RUFUS_FRAMES_PER_BEAT does not: extra beat frames
+    are generic variations of one prompt cut at even intervals, matched to no
+    word at all. These are matched to the words by construction.
+
+    Env:
+      RUFUS_PHRASE_WORDS   4  spoken words per picture
+    """
+    if not enabled():
+        return []
+    per = max(1, int(_cfg("RUFUS_PHRASE_WORDS", 4)))
+    limit = int(_cfg("RUFUS_INSERT_MAX", DEFAULT_MAX))
+    hold = _cfg("RUFUS_INSERT_HOLD", DEFAULT_HOLD)
+
+    timed = []
+    for w in words or []:
+        text = str(w.get("text", "")).strip()
+        try:
+            start = float(w.get("start", 0.0))
+        except (TypeError, ValueError):
+            continue
+        if text:
+            timed.append((start, text))
+    if not timed:
+        return []
+    timed.sort()
+
+    # BREAK ON CLAUSES, NOT ON A COUNTER. Fixed-size chunks cut straight
+    # through a thought — "In a bustling Wall" / "Street office Merrill Lynch"
+    # — and the picture for half a phrase is a picture of nothing. Whisper
+    # keeps the punctuation, so a comma or a full stop is a free clause
+    # boundary; `per` becomes the maximum length rather than the only rule.
+    groups: list[list[tuple[float, str]]] = []
+    current: list[tuple[float, str]] = []
+    for start, text in timed:
+        current.append((start, text))
+        ends_clause = text.rstrip().endswith((",", ".", "!", "?", ";", ":", "—"))
+        if len(current) >= per or (ends_clause and len(current) >= 2):
+            groups.append(current)
+            current = []
+    if current:
+        # A trailing fragment shorter than two words reads as a flash; fold it
+        # into the phrase before it rather than giving it its own picture.
+        if len(current) == 1 and groups:
+            groups[-1].extend(current)
+        else:
+            groups.append(current)
+
+    out: list[dict] = []
+    for gi, chunk in enumerate(groups):
+        at = round(chunk[0][0], 3)
+        phrase = " ".join(t for _, t in chunk)
+        # Hold until the next phrase starts, so the pictures TILE the narration
+        # instead of flashing and leaving gaps. The last one keeps the default.
+        nxt = groups[gi + 1][0][0] if gi + 1 < len(groups) else None
+        span = round(nxt - at, 3) if nxt is not None else hold
+        anchor = next((t.lower() for _, t in chunk
+                       if _is_drawable(re.sub(r"[^a-z]", "", t.lower()))),
+                      chunk[0][1].lower())
+        out.append({
+            "word": re.sub(r"[^a-z]", "", anchor) or "phrase",
+            "at": at,
+            "hold": max(0.25, span),
+            "prompt": phrase_prompt(phrase, style),
+            "phrase": phrase,
+        })
+        if len(out) >= limit:
+            break
+    return out
 
 
 def sfx_events(inserts: list[dict], gain: float) -> list[tuple[float, float]]:
