@@ -36,6 +36,7 @@ Usage:
 
 import json
 import os
+import copy
 import random
 import re
 import shutil
@@ -826,8 +827,32 @@ def _with_detail(prompt: str) -> str:
     return f"{prompt.rstrip().rstrip('.')}. {tail}"
 
 
+def _shrink(graph: dict, px: int) -> dict:
+    """Set every latent's width and height to `px`, in place on a copy.
+
+    WHY NOT comfy_template.prepare's dims. That branch needs width, height AND
+    a length-or-duration together, because it exists for VIDEO nodes. A stills
+    graph has width and height on an EmptyLatentImage and no third field, so
+    the branch never fires and a size argument would be silently ignored —
+    which is exactly the kind of substitution-that-does-nothing this codebase
+    keeps getting caught by.
+
+    Only touches nodes that carry BOTH dimensions as plain numbers; a linked
+    input ([node, slot]) is a wire and must not be overwritten with an integer.
+    """
+    out = copy.deepcopy(graph)
+    for node in out.values():
+        ins = node.get("inputs")
+        if not isinstance(ins, dict):
+            continue
+        if isinstance(ins.get("width"), (int, float)) and \
+                isinstance(ins.get("height"), (int, float)):
+            ins["width"], ins["height"] = px, px
+    return out
+
+
 def _render_image(prompt: str, seed: int, client_id: str,
-                  niche: str | None = None) -> bytes | None:
+                  niche: str | None = None, px: int | None = None) -> bytes | None:
     """Render one still → raw PNG bytes, or None.
 
     Tries the recurring-character path first when the niche has one
@@ -859,6 +884,8 @@ def _render_image(prompt: str, seed: int, client_id: str,
     g = comfy_template.prepare(tpl, prompt=prompt, seed=seed,
                                save_prefix="rufus_stills",
                                negative=_stills_negative())
+    if px:
+        g = _shrink(g, px)
     pid = _submit(g, client_id)
     if not pid:
         return None
@@ -1053,6 +1080,23 @@ def _await_image(prompt_id: str, timeout: float | None = None) -> bytes | None:
     return None
 
 
+def _insert_px() -> int:
+    """Square edge for an insert render. RUFUS_INSERT_PX overrides.
+
+    512 rather than the full still size because an insert occupies 0.42 of
+    frame width for under a second — roughly an eighth of the pixels of a beat
+    still, which is most of what makes twenty-eight of them affordable. Rounded
+    to a multiple of 64: latent dimensions that are not break most samplers.
+    """
+    raw = os.environ.get("RUFUS_INSERT_PX", "").strip()
+    try:
+        px = int(raw) if raw else 512
+    except ValueError:
+        print(f"[inserts] RUFUS_INSERT_PX={raw!r} is not a number — using 512")
+        px = 512
+    return max(256, (px // 64) * 64)
+
+
 def render_inserts(inserts: list[dict], out_dir: Path,
                    niche: str | None = None, base_seed: int | None = None
                    ) -> list[dict]:
@@ -1085,7 +1129,7 @@ def render_inserts(inserts: list[dict], out_dir: Path,
         path = out_dir / name
         try:
             raw = _render_image(prompt, base + i * 7919, uuid.uuid4().hex,
-                                niche=niche)
+                                niche=niche, px=_insert_px())
         except Exception as e:
             print(f"[inserts] {item.get('word')!r} failed ({e}) — skipping")
             continue

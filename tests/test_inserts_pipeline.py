@@ -95,7 +95,8 @@ def test_each_insert_gets_its_own_seed(monkeypatch, tmp_path):
     duplicate problem this repo already hit once on beats."""
     seeds = []
     monkeypatch.setattr(comfy_client, "_render_image",
-                        lambda p, seed, cid, niche=None: seeds.append(seed) or b"X")
+                        lambda p, seed, cid, niche=None, px=None:
+                        seeds.append(seed) or b"X")
     comfy_client.render_inserts(
         [{"word": w, "at": i, "hold": 0.7, "prompt": w}
          for i, w in enumerate(["palace", "sword", "crown"])], tmp_path)
@@ -235,3 +236,55 @@ def test_inserts_inherit_whatever_style_is_active(monkeypatch):
     monkeypatch.setenv("RUFUS_STYLE", "stickman")
     p = insert_director.insert_prompt("sword", comfy_client._detail_suffix())
     assert "stick-figure" in p
+
+
+# ── inserts are cheap only if they are actually rendered small ───────────────
+
+def test_an_insert_renders_smaller_than_a_beat_still():
+    """The docstring claimed "small and simple" before the code did it, and at
+    full still size twenty-eight inserts is six minutes of GPU — which would
+    have made this format MORE expensive than the video it replaces."""
+    assert comfy_client._insert_px() <= 768
+
+
+def test_the_shrink_only_touches_real_numbers():
+    """[node, slot] is a wire. Overwriting one with an integer severs the graph
+    and the failure appears at submit time, after the beats are paid for."""
+    g = {"1": {"class_type": "EmptyLatentImage",
+               "inputs": {"width": 1080, "height": 1920, "batch_size": 1}},
+         "2": {"class_type": "K", "inputs": {"width": ["1", 0], "height": ["1", 1]}}}
+    out = comfy_client._shrink(g, 512)
+    assert out["1"]["inputs"]["width"] == out["1"]["inputs"]["height"] == 512
+    assert out["2"]["inputs"]["width"] == ["1", 0]
+
+
+def test_the_shrink_does_not_mutate_the_cached_template():
+    """_stills_template() is loaded once and reused for every beat. Shrinking
+    it in place would render the REST of the video at insert size."""
+    g = {"1": {"class_type": "EmptyLatentImage",
+               "inputs": {"width": 1080, "height": 1920}}}
+    comfy_client._shrink(g, 512)
+    assert g["1"]["inputs"]["width"] == 1080
+
+
+def test_the_insert_size_is_a_legal_latent_dimension(monkeypatch):
+    """Dimensions that are not a multiple of 64 break most samplers."""
+    for raw in ("700", "513", "100"):
+        monkeypatch.setenv("RUFUS_INSERT_PX", raw)
+        assert comfy_client._insert_px() % 64 == 0
+        assert comfy_client._insert_px() >= 256
+
+
+def test_a_junk_insert_size_falls_back_loudly(monkeypatch, capsys):
+    monkeypatch.setenv("RUFUS_INSERT_PX", "big")
+    assert comfy_client._insert_px() == 512
+    assert "not a number" in capsys.readouterr().out
+
+
+def test_render_inserts_asks_for_the_small_size(monkeypatch, tmp_path):
+    got = {}
+    monkeypatch.setattr(comfy_client, "_render_image",
+                        lambda p, s, c, niche=None, px=None: got.update(px=px) or b"X")
+    comfy_client.render_inserts(
+        [{"word": "sword", "at": 1.0, "hold": 0.7, "prompt": "a sword"}], tmp_path)
+    assert got["px"] == comfy_client._insert_px()
