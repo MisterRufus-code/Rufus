@@ -185,3 +185,53 @@ def test_describe_names_the_words_so_a_bad_plan_is_obvious():
 
 def test_describe_handles_an_empty_plan():
     assert "none planned" in ins.describe([])
+
+
+# ── density, and what actually limits it ─────────────────────────────────────
+
+@pytest.mark.parametrize("word", ["seventy", "percent", "million", "keep",
+                                  "commercial", "universal", "financial"])
+def test_the_classes_that_leaked_on_the_investment_banking_script(word):
+    """That run planned office, brokers, keep, commissions, seventy, revenue,
+    banks, commercial, universal, lines. A number, a bare verb and two
+    adjectives — "brokers earned their keep", "seventy percent"."""
+    assert not ins._is_drawable(word)
+
+
+@pytest.mark.parametrize("word", ["metal", "signal", "canal", "medal"])
+def test_the_al_ending_is_not_treated_as_adjectival(word):
+    """"ial"/"ional" are safe to reject; bare "al" is not, and these four are
+    all things a picture can be."""
+    assert ins._is_drawable(word)
+
+
+def test_a_noun_can_be_shown_again_when_it_is_said_again(monkeypatch):
+    """One picture per noun caps a 40-second video at however many distinct
+    drawable nouns the script happens to hold — measured at seven out of
+    fifty-one words. Showing the same coin again when the narration says "coin"
+    again is the through-line, not a duplicate."""
+    script = "The coin fell. Later the coin rose. At last the coin vanished."
+    words = _words(script)
+    monkeypatch.setenv("RUFUS_INSERT_GAP", "0.1")
+
+    monkeypatch.setenv("RUFUS_INSERT_REPEAT", "1")
+    once = [p for p in ins.plan(script, words) if p["word"] == "coin"]
+    monkeypatch.setenv("RUFUS_INSERT_REPEAT", "3")
+    thrice = [p for p in ins.plan(script, words) if p["word"] == "coin"]
+
+    assert len(once) == 1
+    assert len(thrice) > len(once)
+
+
+def test_repeats_still_respect_the_spacing_rule(monkeypatch):
+    monkeypatch.setenv("RUFUS_INSERT_REPEAT", "5")
+    plan = ins.plan(_MEDIEVAL, _words(_MEDIEVAL, step=0.05))
+    times = [p["at"] for p in plan]
+    assert all(b - a >= ins.DEFAULT_GAP for a, b in zip(times, times[1:]))
+
+
+def test_the_docstring_says_where_density_really_comes_from():
+    """RUFUS_INSERT_MAX is not the cap in normal use and someone will raise it
+    expecting more pictures. The module has to say so."""
+    assert "RUFUS_FRAMES_PER_BEAT" in ins.__doc__
+    assert "NOT the cap" in ins.__doc__

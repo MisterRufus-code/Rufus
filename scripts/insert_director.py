@@ -29,6 +29,19 @@ Env:
   RUFUS_INSERT_MAX     28  most inserts in one video
   RUFUS_INSERT_GAP     0.45 minimum seconds between two inserts
   RUFUS_INSERT_HOLD    0.70 seconds an insert stays on screen
+  RUFUS_INSERT_REPEAT  1    times one noun may be shown (raise for density)
+
+HOW MANY PICTURES YOU ACTUALLY GET, and what limits it. Measured on a real
+51-word script from this channel: seven drawable nouns. RUFUS_INSERT_MAX is
+therefore NOT the cap in normal use — the vocabulary of the script is. Raising
+the max alone changes nothing.
+
+Density comes from three places, strongest first:
+  1. RUFUS_FRAMES_PER_BEAT — several stills per beat, hard-cut. Ten beats at 4
+     frames is forty pictures, and it needs nothing from this module.
+  2. RUFUS_INSERT_REPEAT   — show a noun again when it is spoken again.
+  3. RUFUS_INSERT_GAP      — how close together two inserts may land.
+A script that names concrete things is worth more than all three.
 """
 
 import os
@@ -84,6 +97,11 @@ _PLAIN_ADJECTIVES = {
     "short", "small", "large", "huge", "tiny", "rich", "poor", "young", "old",
     "real", "true", "false", "same", "other", "next", "last", "first", "final",
     "major", "minor", "total", "public", "private", "local", "global",
+    # "-al" adjectives the tail rules deliberately miss, because bare "al" is
+    # unsafe (metal, signal, canal, medal). Listing them one by one is the
+    # price of not throwing those away.
+    "universal", "general", "central", "personal", "natural", "normal",
+    "formal", "legal", "royal", "equal", "annual", "usual", "actual",
 }
 
 # AN INSERT HAS A HIGHER BAR THAN A SHOT MENTION, and the first run of this
@@ -99,8 +117,32 @@ _PLAIN_ADJECTIVES = {
 # lets through get named, by the shape that gave them away.
 
 # Adjectives. "worthless" is a quality, and a quality has no silhouette.
+# "ial"/"ional" catch commercial, financial, universal-adjacent forms that the
+# shorter tails miss. Bare "al" is NOT here on purpose: metal, signal, canal and
+# medal are all things a picture can be.
 _ADJECTIVE_TAILS = ("less", "ful", "ous", "ive", "able", "ible", "ish",
-                    "ical", "ary", "ant", "ent")
+                    "ical", "ary", "ant", "ent", "ial", "ional")
+
+# Number words. A script that opens on "seventy percent" is doing its job; a
+# picture of "seventy" is not a picture of anything.
+_NUMBER_WORDS = {
+    "zero", "one", "two", "three", "four", "five", "six", "seven", "eight",
+    "nine", "ten", "eleven", "twelve", "twenty", "thirty", "forty", "fifty",
+    "sixty", "seventy", "eighty", "ninety", "hundred", "thousand", "million",
+    "billion", "trillion", "percent", "half", "third", "quarter", "double",
+    "dozen", "score", "many", "several", "hundreds", "thousands", "millions",
+    "billions",
+}
+
+# Bare verbs whose base form is spelled like a noun and survives every suffix
+# rule. "keep" was chosen from "brokers earned their keep".
+_BARE_VERBS = {
+    "keep", "earn", "earned", "make", "made", "take", "give", "come", "know",
+    "think", "want", "need", "seem", "become", "remain", "stay", "began",
+    "merge", "merged", "blur", "blurred", "repeal", "repealed", "change",
+    "changed", "raise", "raised", "lower", "reach", "reached", "allow",
+    "allowed", "cause", "caused", "force", "forced", "hold", "carry",
+}
 
 # Positions and directions. "outside" is a relationship between things, not a
 # thing — drawing it means drawing whatever it was outside OF.
@@ -230,7 +272,7 @@ def _is_drawable(word: str) -> bool:
     """
     if word in _TOO_GENERIC or word in _POSITIONAL or word in _CALENDAR:
         return False
-    if word in _PLAIN_ADJECTIVES:
+    if word in _PLAIN_ADJECTIVES or word in _NUMBER_WORDS or word in _BARE_VERBS:
         return False
     if word in _VERB_PLURALS:
         return False
@@ -276,9 +318,15 @@ def plan(script: str, words: list[dict], style: str = "") -> list[dict]:
     hold = _cfg("RUFUS_INSERT_HOLD", DEFAULT_HOLD)
 
     spoken = _word_times(words)
+    # REPEATS ARE A DENSITY KNOB. One picture per noun caps a 40-second video
+    # at however many distinct drawable nouns the script happens to contain —
+    # measured on a real script, ten out of fifty-one words. Showing the same
+    # coin again when the narration says "coin" again is not a duplicate; it is
+    # the through-line the storyboard already tries to build in words.
+    per_word = max(1, int(_cfg("RUFUS_INSERT_REPEAT", 1)))
     candidates: list[tuple[float, str]] = []
     for noun in insert_words(script):
-        for at in spoken.get(noun, [])[:1]:   # first utterance only
+        for at in spoken.get(noun, [])[:per_word]:
             candidates.append((at, noun))
     candidates.sort()
 
