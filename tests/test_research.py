@@ -253,9 +253,53 @@ def test_skip_reddit_env_var_recognizes_truthy_values(monkeypatch):
     for val in ("1", "true", "True", "yes", "on"):
         monkeypatch.setenv("RUFUS_SKIP_REDDIT", val)
         assert research._skip_reddit() is True
+    # With the flag off, credentials decide. Reddit refuses unauthenticated
+    # JSON, so having none is the same as being switched off — and knocking
+    # five times to learn that is five round trips and five log lines.
     for val in ("0", "false", "", "off"):
         monkeypatch.setenv("RUFUS_SKIP_REDDIT", val)
-        assert research._skip_reddit() is False
+        monkeypatch.setattr(research, "_load_keys", lambda: {})
+        assert research._skip_reddit() is True
+        monkeypatch.setattr(research, "_load_keys",
+                            lambda: {"reddit_client_id": "id",
+                                     "reddit_client_secret": "secret"})
+        assert research._skip_reddit() is (not research._PRAW_AVAILABLE)
+
+
+def test_the_reddit_reason_says_which_of_the_three_causes_it_is(monkeypatch):
+    """Absent credentials is not the same as switched off, and neither is a
+    missing library. A single "Reddit off" line would send someone to the wrong
+    fix."""
+    monkeypatch.setenv("RUFUS_SKIP_REDDIT", "1")
+    assert "RUFUS_SKIP_REDDIT" in research._reddit_skip_reason()
+
+    monkeypatch.setenv("RUFUS_SKIP_REDDIT", "0")
+    monkeypatch.setattr(research, "_load_keys", lambda: {})
+    reason = research._reddit_skip_reason()
+    assert "keys.json" in reason and "prefs/apps" in reason
+
+
+def test_reddit_is_not_attempted_without_credentials(monkeypatch, tmp_path):
+    """THE WASTE THIS REMOVES, verbatim from a real run — five HTTP round trips
+    that cannot succeed, and five identical lines at the top of every log:
+
+        [research] reddit blocked r/badeconomics — no OAuth credentials
+        [research] reddit blocked r/AskHistorians — no OAuth credentials
+        ... x5, every run, for months
+    """
+    monkeypatch.delenv("RUFUS_SKIP_REDDIT", raising=False)
+    monkeypatch.setattr(research, "_load_keys", lambda: {})
+    monkeypatch.setattr(research, "NICHES_FILE", _niches_fixture(tmp_path))
+    monkeypatch.setattr(research, "USED_SEEDS_FILE", tmp_path / "used_seeds.json")
+
+    with patch.object(research, "fetch_reddit_story") as reddit_mock, \
+         patch.object(research, "fetch_stackexchange_story",
+                      return_value={"type": "stackexchange", "source": "se",
+                                    "title": "t", "content": "x" * 300,
+                                    "url": "u"}), \
+         patch.object(research, "_mark_seed_used"):
+        research.get_seed("money_history")
+    reddit_mock.assert_not_called()
 
 
 def test_get_seed_skips_reddit_when_flag_set(monkeypatch, tmp_path):
@@ -276,6 +320,11 @@ def test_get_seed_skips_reddit_when_flag_set(monkeypatch, tmp_path):
 
 def test_get_seed_tries_reddit_when_flag_unset(monkeypatch, tmp_path):
     monkeypatch.delenv("RUFUS_SKIP_REDDIT", raising=False)
+    # Credentials present, so the only reason left to skip is gone.
+    monkeypatch.setattr(research, "_load_keys",
+                        lambda: {"reddit_client_id": "id",
+                                 "reddit_client_secret": "secret"})
+    monkeypatch.setattr(research, "_PRAW_AVAILABLE", True)
     monkeypatch.setattr(research, "NICHES_FILE", _niches_fixture(tmp_path))
     monkeypatch.setattr(research, "USED_SEEDS_FILE", tmp_path / "used_seeds.json")
 

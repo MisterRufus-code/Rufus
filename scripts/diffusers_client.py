@@ -51,6 +51,58 @@ NEGATIVE_PROMPT = (
 _pipe = None   # lazy singleton — loaded once per process
 
 
+def _refuse_reason(device: str, model_id: str) -> str | None:
+    """Why this fallback should NOT run, or None if it should.
+
+    A FALLBACK THAT IS WORSE THAN STOPPING IS NOT A FALLBACK. This one is last
+    in the chain after ComfyUI and A1111, so it fires exactly when the owner's
+    GPU pipeline is down — and on a box with ComfyUI configured, that is nearly
+    always "I forgot to start ComfyUI", not "please spend the next hour doing
+    it the slow way".
+
+    Observed live, with ComfyUI simply not running: this path began pulling
+    13.9GB of SDXL-Turbo onto a disk that had filled twice that week, to run
+    ten images on the CPU. Neither cost is a degradation of quality — they are
+    a different failure, and an unattended scheduled run would have taken hours
+    and produced nothing.
+
+    So it refuses by default in the two cases that are not a graceful
+    downgrade, and each refusal names the env var that overrides it. Choosing
+    to wait is legitimate; being enrolled in it silently is not.
+    """
+    if device == "cpu" and os.environ.get(
+            "RUFUS_DIFFUSERS_CPU", "0").strip().lower() not in (
+            "1", "true", "yes", "on"):
+        return ("would run on CPU, which for ten images is hours, not a slower "
+                "render. Start ComfyUI, or set RUFUS_DIFFUSERS_CPU=1 to accept "
+                "the wait")
+    if not _model_is_cached(model_id) and os.environ.get(
+            "RUFUS_DIFFUSERS_DOWNLOAD", "0").strip().lower() not in (
+            "1", "true", "yes", "on"):
+        return (f"{model_id} is not in the local cache and downloading it "
+                f"mid-run costs several GB. Set RUFUS_DIFFUSERS_DOWNLOAD=1 to "
+                f"allow it, or pre-fetch it once outside a run")
+    return None
+
+
+def _model_is_cached(model_id: str) -> bool:
+    """Whether HuggingFace already has this model on disk.
+
+    Fail-open toward ALLOWING the run: if the cache layout cannot be read, do
+    not block on a guess. The guard exists to stop a surprise multi-GB pull,
+    not to become its own outage.
+    """
+    try:
+        from huggingface_hub import try_to_load_from_cache
+    except Exception:
+        return True
+    try:
+        hit = try_to_load_from_cache(model_id, "model_index.json")
+        return hit is not None and not isinstance(hit, str) or bool(hit)
+    except Exception:
+        return True
+
+
 def _load_pipe():
     """Load the diffusion pipeline once. GPU if RUFUS_GPU=1, else CPU."""
     global _pipe
@@ -65,6 +117,11 @@ def _load_pipe():
     gpu = os.environ.get("RUFUS_GPU", "").strip().lower() in ("1", "true", "yes", "on")
     gpu = gpu and torch.cuda.is_available()
     device = "cuda" if gpu else "cpu"
+
+    refuse = _refuse_reason(device, model_id)
+    if refuse:
+        print(f"[diffusers] declining this fallback — {refuse}")
+        return None
     dtype  = torch.float16 if gpu else torch.float32
 
     print(f"[diffusers] loading {model_key} ({model_id}) on {device.upper()}…")
@@ -96,6 +153,8 @@ def _generate_image(prompt: str, seed: int = -1) -> Path | None:
     try:
         import torch
         pipe = _load_pipe()
+        if pipe is None:          # guard declined — see _refuse_reason
+            return None
 
         gen_kwargs: dict = {"prompt": prompt, "width": W, "height": H}
         model_key = DEFAULT_MODEL_KEY

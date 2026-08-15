@@ -1589,11 +1589,47 @@ def pick_wisdom_quote(niche_name: str, used_ids: set | None = None) -> dict | No
     }
 
 
+def _reddit_skip_reason() -> str | None:
+    """Why Reddit will not be tried this run, or None if it will be.
+
+    ASK BEFORE KNOCKING FIVE TIMES. Reddit stopped serving its .json endpoints
+    to unauthenticated clients, so without credentials every run walked all
+    five subreddits, failed identically on each, and printed:
+
+        [research] reddit blocked r/EconomicHistory — no OAuth credentials
+        [research] reddit blocked r/badeconomics — no OAuth credentials
+        [research] reddit blocked r/history — no OAuth credentials
+        [research] reddit blocked r/AskHistorians — no OAuth credentials
+        [research] reddit blocked r/economics — no OAuth credentials
+
+    Five HTTP round trips that cannot succeed, and five lines at the top of
+    every log that train the reader to skim the research section — which is
+    where the lines that DO matter live. The credentials are readable before
+    the first request, so the answer is knowable before the first request.
+
+    Returns a reason rather than a bool so the caller can print WHICH of the
+    three causes it is. Absent credentials is not the same as being switched
+    off, and neither is a missing library.
+    """
+    if os.environ.get("RUFUS_SKIP_REDDIT", "0").strip().lower() in (
+            "1", "true", "yes", "on"):
+        return "RUFUS_SKIP_REDDIT=1"
+    keys = _load_keys()
+    has_creds = bool(str(keys.get("reddit_client_id", "")).strip()
+                     and str(keys.get("reddit_client_secret", "")).strip())
+    if not has_creds:
+        return ("no reddit_client_id/reddit_client_secret in config/keys.json. "
+                "Reddit refuses unauthenticated JSON now, so all five "
+                "subreddits would fail identically. Create a free 'script' app "
+                "at https://www.reddit.com/prefs/apps to restore them")
+    if not _PRAW_AVAILABLE:
+        return "praw is not installed (pip install praw) — credentials are set but unusable"
+    return None
+
+
 def _skip_reddit() -> bool:
-    """RUFUS_SKIP_REDDIT=1 bypasses Reddit entirely — useful when no OAuth app
-    is configured and the public JSON endpoints are IP-blocked anyway, so a
-    run doesn't burn time/log noise on requests that can't succeed."""
-    return os.environ.get("RUFUS_SKIP_REDDIT", "0").strip().lower() in ("1", "true", "yes", "on")
+    """Whether Reddit is bypassed this run. See _reddit_skip_reason."""
+    return _reddit_skip_reason() is not None
 
 
 def get_seed(niche_name: str | None = None, topic: str | None = None) -> dict:
@@ -1657,8 +1693,9 @@ def get_seed(niche_name: str | None = None, topic: str | None = None) -> dict:
             _mark_seed_used(seed)
             return _with_trending(seed)
 
-    if _skip_reddit():
-        print("[research] RUFUS_SKIP_REDDIT=1 — skipping Reddit, trying StackExchange next")
+    _reddit_off = _reddit_skip_reason()
+    if _reddit_off:
+        print(f"[research] Reddit off — {_reddit_off}")
     else:
         for sub in subreddits:
             seed = fetch_reddit_story(sub, used_ids=used_set)
