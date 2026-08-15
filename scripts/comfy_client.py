@@ -1190,6 +1190,34 @@ def generate_clips(queries: list[str], n: int = 4,
 
     beat_mode = _beat_motion()
     frames_per_beat = _frames_per_beat()
+
+    # STILLS-ONLY MEANS CUT, NOT HOLD. With every motion engine switched off, a
+    # beat with one still in it is a photograph held for four to six seconds —
+    # QC says so on its own ("2 stretches over 5s without a cut") and a viewer
+    # answers it by swiping. The owner ran exactly this and asked why ten
+    # prompts reached ComfyUI when they wanted twenty or thirty.
+    #
+    # `cut` is the answer that was already in this file: three stills per beat
+    # on ONE seed, prompted a moment earlier / the moment / a moment later, so
+    # the shot advances inside the narration line instead of freezing on it.
+    # Ten beats become thirty pictures, each still matched to the sentence it
+    # illustrates, and the continuity is stronger rather than weaker because
+    # the three frames are the same scene a second apart.
+    #
+    # Only when nothing else was asked for: an explicit RUFUS_BEAT_MOTION or
+    # RUFUS_FRAMES_PER_BEAT still wins, and RUFUS_BEAT_MOTION=kenburns is how
+    # to ask for the old one-still-per-beat behaviour back.
+    if not beat_mode and frames_per_beat == 1:
+        try:
+            import svd_client
+            if svd_client._stills_only():
+                beat_mode = "cut"
+                print("[comfy] stills-only: beats will HARD-CUT between "
+                      "stills rather than hold one (RUFUS_BEAT_MOTION=kenburns "
+                      "for one still per beat)")
+        except Exception:
+            pass
+
     if beat_mode == "i2i":
         if _i2i_template() is None:
             print("[comfy] RUFUS_BEAT_MOTION=i2i but no img2img workflow at "

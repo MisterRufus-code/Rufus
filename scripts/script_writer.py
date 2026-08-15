@@ -1780,6 +1780,18 @@ MOTIVE — THE ONE THING THAT KILLS A FINISHED VIDEO:
        was gone."                                 (observable, and better TV)
     ✗ "The government hid the collapse."          (motive)
     ✓ "The announcement came after the banks had already closed."  (event)
+- DREAM LANGUAGE IS MIND-READING WEARING A COAT, and it is the form that
+  actually keeps failing. Three full cycles of one run were burned on it,
+  every one rejected for the same thing: "each dreaming of riches", "their
+  dreams crushed", "chasing shiny dreams", "hopeful prospectors". Nobody
+  filmed a dream. Same for "desperate to", "convinced that", "believing",
+  "certain that", "in the hope of", "unaware that".
+    ✗ "miners flooded in, each dreaming of riches"
+    ✓ "miners flooded in — forty thousand of them in a year"
+    ✗ "Marshall left empty-handed, his dreams crushed"
+    ✓ "Marshall left with nothing; he died on a small pension"
+  The second version of each is shorter, harder, and a camera could have
+  filmed it. That is the whole test.
 - This does NOT mean writing blandly. Indignation about what HAPPENED is
   wanted. Certainty about what someone was thinking is what gets rejected.
 

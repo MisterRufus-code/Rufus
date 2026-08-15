@@ -272,3 +272,18 @@ def test_a_rejected_seed_is_not_used_anyway():
     assert "used anyway" not in seed_block
     assert "RUFUS_SEED_TRIES" in main_src
     assert "no source the supervisor would accept" in main_src
+
+
+def test_the_body_prompt_bans_dream_language():
+    """Three cycles of one run were rejected for the same thing — "each
+    dreaming of riches", "their dreams crushed" — costing three full script
+    attempts and holding the video. The gate was right; the writer kept
+    reaching for it because nothing named it."""
+    # Whitespace-normalised: the rule is a wrapped prose block, so a literal
+    # search would be asserting on where the lines happen to break.
+    src = " ".join(Path(sw.__file__).read_text(encoding="utf-8").split())
+    assert "DREAM LANGUAGE IS MIND-READING WEARING A COAT" in src
+    assert "each dreaming of riches" in src
+    assert "their dreams crushed" in src
+    assert "hopeful prospectors" in src
+    assert "Nobody filmed a dream." in src

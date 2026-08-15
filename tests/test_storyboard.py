@@ -644,3 +644,31 @@ def test_the_prompt_still_asks_for_the_setting_and_the_flag():
     p = sb._prompt("script", ["b1", "b2"], [], "", "")
     assert '"setting"' in p
     assert '"in_setting"' in p
+
+
+# ── An outdoor place is still a place ────────────────────────────────────────
+
+def test_a_riverside_is_a_room_a_camera_can_stand_in():
+    """Thrown away on a live gold-rush run for containing no wall. Ground,
+    rocks, a river, trees and dappled light is a place by every standard this
+    check exists to enforce — the vocabulary was simply indoors-only, on a
+    channel that covers gold rushes, ports, mines and fields."""
+    assert storyboard._is_a_place(
+        "A rugged riverside area with dusty ground, scattered rocks, and a "
+        "slow-moving section of the American River. Tall trees line the "
+        "background, and sunlight filters through the branches, casting "
+        "dappled light across the scene.")
+
+
+def test_a_label_is_still_rejected():
+    """The outdoor vocabulary must not open the door to a period name."""
+    for label in ("Renaissance Europe",
+                  "a place of great financial importance in the modern world",
+                  "the global economy during a time of change and upheaval"):
+        assert not storyboard._is_a_place(label), label
+
+
+def test_an_interior_still_passes():
+    assert storyboard._is_a_place(
+        "A dimly lit medieval hall with rough stone walls, a wooden table in "
+        "the centre, and a narrow high window casting a beam across the room.")

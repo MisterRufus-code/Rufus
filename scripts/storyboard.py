@@ -246,6 +246,28 @@ _SETTING_STRUCTURE = {
     "cellar", "kitchen", "screen", "screens", "pillar", "railing", "gate",
     "stone", "oak", "timber", "brick", "bricks", "plaster", "tile", "marble",
     "glass", "concrete", "cobblestone", "cobblestones",
+    # OUTDOORS. The first version of this set was entirely interiors and
+    # masonry, and it threw away a perfectly good place on a live run:
+    #
+    #   "A rugged riverside area with dusty ground, scattered rocks, and a
+    #    slow-moving section of the American River. Tall trees line the
+    #    background, and sunlight filters through the branches, casting
+    #    dappled light across the scene."
+    #
+    # Ground, rocks, river, trees, dappled light — that is a room a camera can
+    # stand in by every standard this check was written to enforce, and it was
+    # rejected for containing no wall. A money channel that covers gold
+    # rushes, ports, mines and fields cannot have an indoor-only vocabulary.
+    "ground", "earth", "dirt", "dust", "mud", "sand", "gravel", "grass",
+    "rock", "rocks", "boulder", "boulders", "riverbank", "bank", "river",
+    "stream", "creek", "water", "shore", "shoreline", "beach", "hill",
+    "hillside", "ridge", "slope", "cliff", "valley", "mountain", "field",
+    "fields", "path", "track", "tracks", "trail", "road", "bridge", "pier",
+    "jetty", "wharf", "deck", "mast", "sail", "hull", "well", "pit", "mine",
+    "shaft", "quarry", "furnace", "forge", "kiln", "market", "square",
+    "platform", "steps", "porch", "awning", "canopy", "tent", "tents",
+    "wagon", "wagons", "cart", "fence", "post", "posts", "tree", "trees",
+    "trunk", "branch", "branches", "snow", "ice", "camp",
 }
 _SETTING_LIGHT = {
     "light", "lights", "lighting", "lit", "sunlight", "daylight", "lamplight",

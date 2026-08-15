@@ -482,7 +482,80 @@ def _split_beats(script: str, max_scenes: int = 10, min_words: int = 3) -> list[
         j = min(range(len(beats) - 1), key=lambda k: widths[k] + widths[k + 1])
         beats[j] = f"{beats[j]} {beats[j + 1]}".strip()
         del beats[j + 1]
+
+    # ...and split the longest ones apart until we REACH it. Without this the
+    # sentence count was a hard ceiling nothing could raise: a ten-sentence
+    # script produced ten pictures whatever SD_CLIPS said, one held on screen
+    # for six seconds at a time — which QC flagged on its own ("2 stretches
+    # over 5s without a cut") and a viewer answers by swiping. A clause is a
+    # real visual unit: "miners flooded in" and "each dreaming of riches" are
+    # two pictures, and the storyboard still plans them as one sequence, so
+    # more shots means more continuity rather than less.
+    while len(beats) < max_scenes:
+        cut = _best_clause_split(beats, min_words + 1)
+        if cut is None:
+            break
+        i, left, right = cut
+        beats[i:i + 1] = [left, right]
     return beats
+
+
+# Where a sentence may be broken into two pictures. Strong punctuation only:
+# a semicolon, a dash or a colon separates two statements, and each side is
+# still something to draw. A PLAIN COMMA IS NOT HERE, and the first draft that
+# included it is why — it split "James Marshall knelt by the American River,"
+# from "California, sifting gravel for gold flecks", tearing a place name in
+# half and leaving one beat set nowhere. Commas do appositives and lists as
+# often as they do clauses, and nothing in a sentence tells them apart.
+# Conjunctions come second: " and " alone is absent, since "bread and butter"
+# is one image, while "and then" and "but most" genuinely start a new one.
+_CLAUSE_MARKS = (";", " — ", " – ", ":")
+_CLAUSE_WORDS = (" but ", " and then ", " so ", " yet ", " while ", " until ",
+                 " because ", " though ", " whereas ", " then ")
+
+
+def _best_clause_split(beats: list[str], min_words: int):
+    """(index, left, right) for the best beat to break in two, or None.
+
+    Picks the WIDEST beat that can be broken, and inside it the break nearest
+    the middle — an even split leaves two beats that each still carry enough
+    to draw, where breaking off three words at the end leaves a fragment no
+    image model can do anything with.
+    """
+    best = None
+    for i, beat in enumerate(beats):
+        words = len(beat.split())
+        if words < min_words * 2:
+            continue
+        if best is not None and words <= best[0]:
+            continue
+        split = _split_one(beat, min_words)
+        if split:
+            best = (words, i, split[0], split[1])
+    return (best[1], best[2], best[3]) if best else None
+
+
+def _split_one(beat: str, min_words: int):
+    """(left, right) for one beat broken at its most central clause mark."""
+    mid = len(beat) / 2
+    for marks in (_CLAUSE_MARKS, _CLAUSE_WORDS):
+        found = []
+        for mark in marks:
+            start = 0
+            while True:
+                at = beat.find(mark, start)
+                if at < 0:
+                    break
+                # Break AFTER punctuation, BEFORE a conjunction: "he paid, and
+                # the ships sailed" is "he paid," + "and the ships sailed".
+                point = at + len(mark) if marks is _CLAUSE_MARKS else at + 1
+                found.append(point)
+                start = at + 1
+        for point in sorted(found, key=lambda p: abs(p - mid)):
+            left, right = beat[:point].strip(), beat[point:].strip()
+            if len(left.split()) >= min_words and len(right.split()) >= min_words:
+                return left, right
+    return None
 
 
 # Text-bearing props that diffusion models render as instantly-recognizable
