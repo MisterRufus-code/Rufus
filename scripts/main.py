@@ -433,7 +433,8 @@ def _anchor_for_beat(i: int) -> dict:
     return _SD_ANCHORS[_ANCHOR_SEQUENCE[i % len(_ANCHOR_SEQUENCE)]]
 
 
-def _split_beats(script: str, max_scenes: int = 10, min_words: int = 3) -> list[str]:
+def _split_beats(script: str, max_scenes: int = 10, min_words: int = 3,
+                 grow: bool = False) -> list[str]:
     """Split a script into ordered visual beats (one per spoken sentence).
 
     Merges fragments shorter than ``min_words`` into the previous beat, then
@@ -491,13 +492,30 @@ def _split_beats(script: str, max_scenes: int = 10, min_words: int = 3) -> list[
     # real visual unit: "miners flooded in" and "each dreaming of riches" are
     # two pictures, and the storyboard still plans them as one sequence, so
     # more shots means more continuity rather than less.
-    while len(beats) < max_scenes:
+    # GROW is opt-in. `max_scenes` has always been a ceiling, and callers that
+    # only want "no more than ten" must keep getting exactly that — turning it
+    # into a target by default would silently split a three-sentence script
+    # into ten fragments for every one of them. Callers that need a specific
+    # number (the clip count must equal the beat count, or the renderer
+    # narrates the wrong picture) ask for it.
+    while grow and len(beats) < max_scenes:
         cut = _best_clause_split(beats, min_words + 1)
+        if cut is None:
+            cut = _best_word_split(beats, _MIN_BEAT_WORDS)
         if cut is None:
             break
         i, left, right = cut
         beats[i:i + 1] = [left, right]
     return beats
+
+
+# Below this a beat is a fragment, not a picture. Three words is a shade over
+# a second of narration at this channel's pace — the same floor audio_gen's
+# MIN_SEG puts on a cut. Four looked safer and was worse: an eight-word
+# sentence then had exactly ONE legal split point, so the phrase-start
+# preference below could never apply and "But most found the / goldfields far
+# harsher" was the only answer available.
+_MIN_BEAT_WORDS = 3
 
 
 # Where a sentence may be broken into two pictures. Strong punctuation only:
@@ -512,6 +530,33 @@ def _split_beats(script: str, max_scenes: int = 10, min_words: int = 3) -> list[
 _CLAUSE_MARKS = (";", " — ", " – ", ":")
 _CLAUSE_WORDS = (" but ", " and then ", " so ", " yet ", " while ", " until ",
                  " because ", " though ", " whereas ", " then ")
+
+
+def _target_beats(script: str) -> int:
+    """How many pictures this script should become.
+
+    THE NUMBER THE OWNER KEPT ASKING ABOUT. It was a flat 10, and 10 pictures
+    over a 40-second video is one image held for four seconds — QC's own
+    warning ("2 stretches over 5s without a cut") was the pipeline reporting
+    it. The answer is not four renders of one prompt: that is the same picture
+    four times, and the ask was for each image to match the words being spoken
+    over it. It is more BEATS, because a beat is what gets its own storyboard
+    shot, its own prompt and its own cut.
+
+    One picture per ~4 spoken words, which at this channel's narration pace is
+    a cut every 1.5 seconds or so. Floor of 10 keeps a very short script from
+    becoming a slideshow of three; ceiling of 30 is where the storyboard call
+    starts losing the thread and the GPU bill stops being worth it.
+
+    SD_CLIPS overrides, and is still the dial to reach for.
+    """
+    override = os.environ.get("SD_CLIPS", "").strip()
+    if override:
+        try:
+            return max(1, int(override))
+        except ValueError:
+            print(f"[beats] SD_CLIPS={override!r} is not a number — ignoring")
+    return max(10, min(30, round(len(script.split()) / 4.0)))
 
 
 def _best_clause_split(beats: list[str], min_words: int):
@@ -532,6 +577,62 @@ def _best_clause_split(beats: list[str], min_words: int):
         split = _split_one(beat, min_words)
         if split:
             best = (words, i, split[0], split[1])
+    return (best[1], best[2], best[3]) if best else None
+
+
+# Words that begin a phrase. Splitting immediately BEFORE one of these leaves
+# two halves that each read as a unit.
+_PHRASE_STARTERS = {
+    "the", "a", "an", "this", "that", "these", "those", "his", "her", "its",
+    "their", "our", "your", "my",
+    "in", "on", "at", "by", "for", "with", "from", "into", "onto", "over",
+    "under", "through", "across", "against", "toward", "towards", "within",
+    "without", "after", "before", "until", "during", "beside", "behind",
+    "and", "but", "or", "so", "yet", "while", "when", "as", "then", "because",
+    "though", "although", "unless", "where", "who", "which",
+    "he", "she", "they", "it", "we", "you", "nobody", "no", "every", "each",
+}
+
+
+def _best_word_split(beats: list[str], min_words: int):
+    """Last resort: break the widest beat between two words near its middle.
+
+    Only reached once every clause mark is used up, and only because the
+    alternative is refusing to make more pictures than the narration happens to
+    have commas. The beat text is not the prompt — the storyboard reads the
+    WHOLE script and writes the shot — so a beat that breaks a little
+    awkwardly still gets a sensible picture. What it must not do is break
+    inside a name, which is why a capitalised next word blocks the split
+    unless a sentence just ended there.
+    """
+    best = None
+    for i, beat in enumerate(beats):
+        words = beat.split()
+        if len(words) < min_words * 2:
+            continue
+        if best is not None and len(words) <= best[0]:
+            continue
+        mid = len(words) / 2
+        # Break where a PHRASE starts, not merely near the middle. Nearest-
+        # middle alone gave "But most found the" / "goldfields far harsher" —
+        # a beat ending on a dangling article is a pointer to nothing. Sorting
+        # phrase-starters first turns that into "But most found" / "the
+        # goldfields far harsher than promised", at no cost when the sentence
+        # offers none.
+        def _rank(k: int) -> tuple[int, float]:
+            starts = words[k].strip("\"'([").lower()
+            return (0 if starts in _PHRASE_STARTERS else 1, abs(k - mid))
+
+        for at in sorted(range(min_words, len(words) - min_words + 1),
+                         key=_rank):
+            nxt = words[at]
+            prev = words[at - 1]
+            # "the American River, | California" and "Philadelphia and |
+            # Reading Railroad" are one name in two halves.
+            if nxt[:1].isupper() and not prev.endswith((".", "!", "?", "…")):
+                continue
+            best = (len(words), i, " ".join(words[:at]), " ".join(words[at:]))
+            break
     return (best[1], best[2], best[3]) if best else None
 
 
@@ -815,7 +916,8 @@ def _split_merged_prompts(blob: str, n: int) -> list[str]:
     return out if len(out) == n else []
 
 
-def _build_sd_prompts(script: str, niche: str, max_scenes: int = 10) -> list[str]:
+def _build_sd_prompts(script: str, niche: str, max_scenes: int = 10,
+                      grow: bool = False) -> list[str]:
     """One ultra-detailed SD prompt per spoken beat, in narration order.
 
     Each prompt's SUBJECT depicts what the narrator says during that beat (a
@@ -826,7 +928,7 @@ def _build_sd_prompts(script: str, niche: str, max_scenes: int = 10) -> list[str
     """
     import re
 
-    beats = _split_beats(script, max_scenes=max_scenes)
+    beats = _split_beats(script, max_scenes=max_scenes, grow=grow)
     if not beats:
         beats = [f"{niche} concept"]
     n = len(beats)
@@ -1553,11 +1655,12 @@ def run(skip_upload: bool = False, niche_override: str = None, output_dir: Path 
         run_progress.update(2, f"generating images for each beat ({video_source})")
         print(f"[ 2.5/7 ]  Generating clips from script content ({video_source})...")
         try:
-            # One image per beat; SD_CLIPS (if set) caps the scene count.
-            # 10 scenes over ~45s ≈ 3-4.5s per image — Shorts-pace cutting.
-            # Sentence count naturally caps beats; SD_CLIPS env is the dial.
-            max_scenes = int(os.environ.get("SD_CLIPS", "10"))
-            prompts = _build_sd_prompts(script, active, max_scenes=max_scenes)
+            # One image per beat, and the beat count now comes from the
+            # LENGTH of the script rather than a flat 10 — see _target_beats.
+            # SD_CLIPS still overrides it.
+            max_scenes = _target_beats(script)
+            prompts = _build_sd_prompts(script, active, max_scenes=max_scenes,
+                                        grow=True)
             print(f"           → {len(prompts)} beat-matched prompts:")
             for i, p in enumerate(prompts):
                 print(f"             {i+1}. {p}")
@@ -1575,7 +1678,8 @@ def run(skip_upload: bool = False, niche_override: str = None, output_dir: Path 
                 ok, reason = judge_footage_prompts(prompts, active, hook, run_id=script_run_id)
                 if not ok:
                     print(f"           ⚠ supervisor rejected prompts ({reason}) — rewriting once...")
-                    retry_prompts = _build_sd_prompts(script, active, max_scenes=max_scenes)
+                    retry_prompts = _build_sd_prompts(script, active,
+                                                      max_scenes=max_scenes, grow=True)
                     ok2, reason2 = judge_footage_prompts(retry_prompts, active, hook, run_id=script_run_id)
                     prompts = retry_prompts
                     print(f"           → retry prompts {'accepted' if ok2 else 'used anyway'} ({reason2})")

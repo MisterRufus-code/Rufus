@@ -171,7 +171,7 @@ def render(script: str, bg_paths: "Path | list[Path]", out_dir: Path,
         try:
             import edit_director
             import main as _main
-            beats = _main._split_beats(script, max_scenes=len(clip_names))
+            beats = _main._split_beats(script, max_scenes=len(clip_names), grow=True)
             if len(beats) == len(clip_names):
                 edit = edit_director.direct(beats)
         except Exception as e:

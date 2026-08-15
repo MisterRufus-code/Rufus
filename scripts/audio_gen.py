@@ -535,6 +535,31 @@ def _sentence_ends(segments) -> list[float]:
     return ends
 
 
+# Punctuation that ends a clause without ending a sentence. Whisper keeps it
+# attached to the word, so these are free pause markers.
+_CLAUSE_END_RE = re.compile(r'[,;:—–]["\')\]]*$')
+
+
+def _clause_ends(segments) -> list[float]:
+    """Timestamps where a spoken CLAUSE ends — commas, semicolons, dashes.
+
+    WHY THE CUT PLANNER NEEDS THESE NOW. Cuts used to snap to sentence ends
+    only, which was right when a 40-second video had ten of them and ten
+    pictures. With a picture roughly every four spoken words there are twice
+    as many cuts as there are sentences, so most of them fell back to the even
+    grid — landing mid-phrase, which is exactly the "image doesn't match what
+    he's saying" the owner reported. A comma is a real pause in the narration
+    and a free place to change picture.
+    """
+    ends = []
+    for seg in segments:
+        for w in seg.words:
+            token = w.word.strip()
+            if _CLAUSE_END_RE.search(token):
+                ends.append(round(w.end, 3))
+    return ends
+
+
 def _plan_cuts(sentence_ends: list[float], audio_dur: float, n: int) -> list[float]:
     """Choose n-1 cut timestamps that land on sentence boundaries.
 
@@ -1057,7 +1082,7 @@ def render(script: str, bg_paths: "Path | list[Path]", out_dir: Path,
         import emotional_map
         import edit_director
         import main as _main
-        _beats = _main._split_beats(script, max_scenes=n)
+        _beats = _main._split_beats(script, max_scenes=n, grow=True)
         _plan  = edit_director.direct(_beats) if _beats else None
         if _plan is not None:
             plan_tones = emotional_map.tones_from_plan(_plan, len(_beats))
@@ -1102,7 +1127,12 @@ def render(script: str, bg_paths: "Path | list[Path]", out_dir: Path,
 
         # Sentence-aligned cut plan — scene changes land where narration breathes
         n_supplied = n
-        boundaries = _plan_cuts(_sentence_ends(segments), audio_dur, n)
+        # Sentence ends first, then clause ends — both are real pauses, and at
+        # this cut density there are not enough sentences to go round.
+        _snap_points = _sentence_ends(segments)
+        if n > len(_snap_points) + 1:
+            _snap_points = sorted(set(_snap_points) | set(_clause_ends(segments)))
+        boundaries = _plan_cuts(_snap_points, audio_dur, n)
         n = len(boundaries) + 1 if boundaries else 1
         bg_paths = bg_paths[:n]
         if n < n_supplied:
@@ -1133,7 +1163,7 @@ def render(script: str, bg_paths: "Path | list[Path]", out_dir: Path,
             import emotional_map
             import edit_director
             import main as _main
-            beats = _main._split_beats(script, max_scenes=n)
+            beats = _main._split_beats(script, max_scenes=n, grow=True)
             plan  = edit_director.direct(beats) if len(beats) == n else None
             tones = emotional_map.tones_from_plan(plan, n)
             base_c, base_s = _parse_base_eq(eq_filter)
