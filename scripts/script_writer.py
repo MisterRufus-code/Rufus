@@ -1401,7 +1401,40 @@ _NOT_A_PROPER_PLACE = {
 }
 
 
-def scene_weakness(scene: str) -> str | None:
+# A HYPOTHETICAL DRESSED AS A SCENE. The failure, verbatim, on a channel whose
+# whole promise is financial HISTORY: the seed was Wikipedia's "Social cost" —
+# a concept article with no event in it — and the architect answered
+#
+#     THE SCENE: A lemonade stand on a summer day where a child mixes lemons,
+#                sugar, and water to sell lemonade.
+#
+# which became a whole video about an imaginary child. The owner's verdict was
+# blunt and right: the clip talks about a concept with nothing historical or
+# financial attached to it. A parable is what a model reaches for when the
+# source has no moment in it, and it is worse than admitting NONE, because a
+# fabricated scene reads fluent enough to survive every downstream gate.
+_HYPOTHETICAL = re.compile(
+    r"\b(imagine|suppose|picture (?:a|an|yourself)|think of|consider a|"
+    r"for example|say you|let's say|hypothetical|thought experiment|"
+    r"a typical|an average|a simple example)\b", re.IGNORECASE)
+
+# A year. On a history channel a moment without one is not a moment — it is an
+# illustration. Matches 1893, 991, 1016 AD, 44 BC, the 1930s.
+_HAS_YEAR = re.compile(r"\b\d{3,4}s?\b|\b\d{1,4}\s*(?:BC|BCE|AD|CE)\b")
+
+
+def _wants_a_date(niche: str) -> bool:
+    """Whether this niche's scenes have to be pinned to a time.
+
+    money_history sells one thing: something that actually happened, with a
+    date on it. motivation and mindset do not — a scene there is a person at a
+    desk at 6am, and demanding a year would reject every correct answer. So
+    this asks the niche rather than applying one rule to all of them.
+    """
+    return "history" in (niche or "").lower()
+
+
+def scene_weakness(scene: str, niche: str = "") -> str | None:
     """Why THE SCENE is not yet a filmable moment, or None if it is.
 
     ADVISORY, NEVER A REJECTION — see AGENTS.md on the rejection ladder. The
@@ -1436,6 +1469,11 @@ def scene_weakness(scene: str) -> str | None:
     if _SCENE_COMMENT_TAIL.search(scene):
         faults.append("it ends on what the moment MEANS instead of what "
                       "happens in it")
+    if _HYPOTHETICAL.search(scene):
+        faults.append("it is a hypothetical, not something that happened")
+    if _wants_a_date(niche) and not _HAS_YEAR.search(scene):
+        faults.append("no year or date — on a history channel a moment "
+                      "without a time is an illustration, not an event")
     return "; ".join(faults) or None
 # One cheap pass BEFORE any drafting: pins down the single most compelling,
 # source-grounded angle, the exact moment the reversal should hinge on, and
@@ -1444,6 +1482,15 @@ def scene_weakness(scene: str) -> str | None:
 # just the first), so retries have a real plan to hew to, not just corrections.
 # RUFUS_SCRIPT_ARCHITECT=0 disables (fail-open — a plan-less run just writes
 # exactly as before).
+
+# THE LAST PLAN'S UNFIXED SCENE PROBLEM, for the caller to act on. A module
+# global rather than a return value because _story_architect is three calls
+# deep inside write_script and every caller in the tree shares that signature —
+# this is a diagnosis to hold an upload on, not a result anyone writes from.
+# Reflects the LAST plan built, which is the one the shipped script was written
+# to.
+LAST_SCENE_WEAKNESS: str = ""
+
 
 def _architect_enabled() -> bool:
     return os.environ.get("RUFUS_SCRIPT_ARCHITECT", "1").strip().lower() \
@@ -1454,6 +1501,9 @@ def _story_architect(client: OpenAI, seed: dict, analysis: str, hook: str,
                      run_id: str, niche_name: str) -> tuple[str, float]:
     """Returns (plan_text, cost_usd) — a plan already checked against the
     source, not just written with a grounding instruction and hoped for.
+
+    Also sets LAST_SCENE_WEAKNESS, cleared on entry so a stale diagnosis from
+    an earlier cycle can never hold a later, healthy run.
 
     WHY THIS CHECK EXISTS: the architect's own prompt already tells it not to
     invent motives, but nothing verified that it listened — its plan went
@@ -1471,6 +1521,7 @@ def _story_architect(client: OpenAI, seed: dict, analysis: str, hook: str,
     rather than accepting a bad plan and hoping the body writer's own
     grounding instructions save it (they didn't, three times running).
     """
+    globals()["LAST_SCENE_WEAKNESS"] = ""
     if not _architect_enabled():
         return "", 0.0
     model = _standards()["models"].get("architect", "gpt-4o-mini")
@@ -1497,6 +1548,15 @@ def _story_architect(client: OpenAI, seed: dict, analysis: str, hook: str,
         "genuinely contains no such moment, write NONE rather than inventing "
         "one; a missing scene is recoverable, a fabricated one fails the "
         "fact-check and holds the whole video.\n"
+        "NEVER ANSWER WITH A PARABLE. When the source is a concept rather than "
+        "an event, the tempting answer is an illustration — \"a lemonade stand "
+        "on a summer day where a child mixes lemons and sugar\", \"imagine a "
+        "farmer weighing his grain\", \"a typical household budget\". That is "
+        "the single worst answer available. This channel's whole promise is "
+        "that the thing HAPPENED, to real people, on a date; an invented "
+        "example delivers a lecture with no history in it and the video is "
+        "held. A real event you had to dig for beats a clean hypothetical "
+        "every time, and NONE beats both.\n"
         "SPINE FACT: the one specific, source-grounded detail everything else "
         "must hang on — not a theme, an actual fact.\n"
         "THE TURN: the exact moment or fact the reversal should hinge on — a "
@@ -1581,8 +1641,9 @@ def _story_architect(client: OpenAI, seed: dict, analysis: str, hook: str,
         })
         if passed:
             best_grounded = best_grounded or plan
-            weak = scene_weakness(scene_from_plan(plan))
+            weak = scene_weakness(scene_from_plan(plan), niche_name)
             if not weak:
+                globals()["LAST_SCENE_WEAKNESS"] = ""
                 return plan, total_cost
             if attempt < MAX_PLAN_ATTEMPTS:
                 print(f"[gpt] ⚠ THE SCENE is not filmable yet ({weak}) — "
@@ -1592,10 +1653,16 @@ def _story_architect(client: OpenAI, seed: dict, analysis: str, hook: str,
             # Out of attempts. Loud, because this line decides the run: a scene
             # with nowhere and nobody in it is where a script ends up saying
             # "The secret? Its historical resilience and trust."
-            print(f"[gpt] ⚠ THE SCENE stayed unfilmable ({weak}) — expect a "
-                  f"topic-shaped script and generic shots. The seed itself is "
-                  f"usually the cause; a source with no moment in it cannot "
-                  f"produce one.")
+            # HOLD THE UPLOAD, do not just warn. This printed twice on a
+            # money_history run and the video published-path went ahead
+            # anyway: a script about an imaginary child's lemonade stand, on a
+            # channel that exists to tell you what actually happened. The
+            # warning was right and nothing acted on it, which is this repo's
+            # oldest failure mode wearing a new hat.
+            globals()["LAST_SCENE_WEAKNESS"] = weak
+            print(f"[gpt] ⚠ THE SCENE stayed unfilmable ({weak}) — the upload "
+                  f"will be HELD. The seed itself is usually the cause; a "
+                  f"source with no moment in it cannot produce one.")
             return plan, total_cost
 
         print(f"[gpt] story architect attempt {attempt}/{MAX_PLAN_ATTEMPTS} "
@@ -2571,6 +2638,10 @@ def write_script(scene_description: str, seed: dict | None = None,
         # facts", and those need different escalations.
         "fact_ok": final_fact_ok,
         "fact_reason": final_fact_why,
+        # Set when the story plan never produced a filmable moment — a
+        # concept-shaped script with no event in it. Held, not failed: the
+        # video renders and a human decides.
+        "scene_weak": LAST_SCENE_WEAKNESS,
         "hook": winning_hook,
         "criterion_scores": best["crits"],
         "attempts_used": best["attempt_n"],

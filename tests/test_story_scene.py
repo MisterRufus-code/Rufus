@@ -178,3 +178,97 @@ def test_a_grounded_but_weak_plan_outranks_an_ungrounded_retry():
     import inspect
     src = inspect.getsource(sw._story_architect)
     assert "best_grounded = best_grounded or plan" in src
+
+
+# ── The parable failure ──────────────────────────────────────────────────────
+# A money_history run seeded on Wikipedia's "Social cost" — a concept article
+# with no event in it — produced this plan, and a whole video from it:
+#
+#     THE SCENE: A lemonade stand on a summer day where a child mixes lemons,
+#                sugar, and water to sell lemonade.
+#
+# The owner's verdict: the clip talks about a concept with nothing historical
+# or financial attached to it, on a channel whose entire promise is that the
+# thing happened. Every gate on the path saw it and none of them acted.
+
+_PARABLE = ("A lemonade stand on a summer day where a child mixes lemons, "
+            "sugar, and water to sell lemonade.")
+
+
+def test_the_lemonade_parable_is_flagged():
+    reason = sw.scene_weakness(_PARABLE, "money_history")
+    assert reason
+    assert "no year or date" in reason
+
+
+def test_an_explicit_hypothetical_is_flagged():
+    """"Imagine" is the tell. A model reaches for it exactly when the source
+    has no moment in it, which is the moment it must say NONE instead."""
+    reason = sw.scene_weakness(
+        "Imagine a farmer in a Bavarian village weighing his grain in 1840.",
+        "money_history")
+    assert reason and "hypothetical" in reason
+
+
+def test_a_history_scene_must_be_pinned_to_a_time():
+    """A moment without a time is an illustration. This is the check that
+    separates "workers gathered outside the office" from "workers gather
+    outside offices"."""
+    assert sw.scene_weakness("Workers gather outside the Philadelphia and "
+                             "Reading Railroad office.", "money_history")
+    assert sw.scene_weakness(_STRONG, "money_history") is None
+
+
+def test_old_dates_and_eras_count_as_a_time():
+    for scene in ("In 991, Aethelred pays silver to Viking forces at Maldon.",
+                  "In 44 BC, Brutus mints a coin in a Greek camp.",
+                  "In the 1930s, crowds queue outside a Berlin bank."):
+        assert sw.scene_weakness(scene, "money_history") is None, scene
+
+
+def test_niches_without_a_history_promise_do_not_need_a_date():
+    """A scene on a motivation channel is a person at a desk at 6am. Demanding
+    a year there would reject every correct answer — so the rule asks the
+    niche instead of applying one shape to all of them."""
+    scene = "A runner ties her shoes on an empty track at the Vancouver oval."
+    assert sw.scene_weakness(scene, "motivation") is None
+    assert sw.scene_weakness(scene) is None
+
+
+def test_the_architect_is_told_not_to_answer_with_a_parable():
+    import inspect
+    src = inspect.getsource(sw._story_architect)
+    assert "NEVER ANSWER WITH A PARABLE" in src
+    assert "lemonade stand" in src
+
+
+def test_an_unfilmable_scene_holds_the_upload():
+    """The warning existed and printed twice; nothing acted on it. A held
+    video is still rendered and still reviewable — this is not a rejection,
+    it is the difference between the pipeline noticing and the pipeline
+    caring."""
+    import inspect
+    src = inspect.getsource(sw._story_architect)
+    assert "LAST_SCENE_WEAKNESS" in src
+    assert "will be HELD" in src
+
+    main_src = Path(sw.__file__).parent.joinpath("main.py").read_text(encoding="utf-8")
+    assert 'result or {}).get("scene_weak")' in main_src
+    assert "no real moment in the plan" in main_src
+
+
+def test_a_rejected_seed_is_not_used_anyway():
+    """The old code allowed one retry and then printed "retry seed used
+    anyway". A rejected seed is the cheapest thing here to throw away and the
+    most expensive to keep — it is upstream of every other gate."""
+    main_src = Path(sw.__file__).parent.joinpath("main.py").read_text(encoding="utf-8")
+    # The old line, verbatim. It survives above only as a comment recording
+    # what went wrong, which is why this looks for the code and not the words.
+    # Scoped to the SEED block: a sibling footage supervisor still uses the
+    # one-retry shape, and re-rolling a picture prompt is a different bet from
+    # re-rolling the source the whole video is built on.
+    seed_block = main_src.split("from supervisor import judge_seed")[1] \
+                         .split("Pre-analysis runs here")[0]
+    assert "used anyway" not in seed_block
+    assert "RUFUS_SEED_TRIES" in main_src
+    assert "no source the supervisor would accept" in main_src

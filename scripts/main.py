@@ -1197,19 +1197,50 @@ def run(skip_upload: bool = False, niche_override: str = None, output_dir: Path 
         sys.exit(1)
 
     # Supervisor: reject a thin/generic/off-topic seed before spending a script
-    # + render on it. One retry only (fail-open, opt out with RUFUS_SUPERVISOR=0).
+    # + render on it. Fail-open, opt out with RUFUS_SUPERVISOR=0.
+    #
+    # WHY THIS KEEPS TRYING NOW. It used to allow exactly one retry and then
+    # print "retry seed used anyway". On a live run that line read:
+    #
+    #   → retry seed used anyway (The content lacks concrete facts or numbers
+    #     and does not present a counter-intuitive fact...)
+    #
+    # and the seed was Wikipedia's "Social cost" — a concept article with no
+    # event in it. Everything downstream then did its job and still could not
+    # win: the story architect twice reported an unfilmable scene, and the
+    # video that shipped was a parable about a child selling lemonade on a
+    # channel about financial history. A rejected seed is the cheapest thing
+    # in this pipeline to throw away — the sources are keyless and a fresh one
+    # costs a few seconds — and it is the most expensive thing to keep.
+    seed_rejections: list[str] = []
     try:
         from supervisor import judge_seed
-        ok, reason = judge_seed(seed, active)
-        if not ok:
-            print(f"           ⚠ supervisor rejected seed ({reason}) — trying one more...")
-            # Manual --topic runs must never silently swap to a random topic
-            # on a supervisor rejection — re-resolve the SAME requested topic.
+        tries = max(1, int(os.environ.get("RUFUS_SEED_TRIES", "4")))
+        for attempt in range(1, tries + 1):
+            ok, reason = judge_seed(seed, active)
+            if ok:
+                if attempt > 1:
+                    print(f"           → seed accepted on try {attempt} ({reason})")
+                break
+            seed_rejections.append(reason)
+            if attempt == tries:
+                print(f"           ⚠ {tries} seeds rejected in a row — using the "
+                      f"last one, and the upload will be HELD. Last reason: {reason}")
+                break
+            if topic:
+                # A manual --topic run must never silently swap to a random
+                # topic, so there is nothing to re-roll — say so once and go.
+                print(f"           ⚠ supervisor rejected the seed for your "
+                      f"topic ({reason}) — using it anyway, upload will be HELD")
+                break
+            print(f"           ⚠ supervisor rejected seed ({reason}) — "
+                  f"try {attempt + 1}/{tries}...")
             seed = get_seed(active, topic=topic)
-            ok2, reason2 = judge_seed(seed, active)
-            print(f"           → retry seed {'accepted' if ok2 else 'used anyway'} ({reason2})")
     except Exception as e:
         print(f"           ⚠ seed supervisor skipped (non-fatal): {e}")
+        seed_rejections = []
+    # A seed nothing could accept is a run that should not publish itself.
+    seed_hold = seed_rejections[-1] if seed_rejections else None
 
     # Pre-analysis runs here so the hook angle is available for video selection
     seed_analysis = ""
@@ -1394,6 +1425,16 @@ def run(skip_upload: bool = False, niche_override: str = None, output_dir: Path 
     # still flagged, render anyway but HOLD the upload for human review —
     # wrong facts must never publish themselves. RUFUS_SUPERVISOR=0 disables.
     facts_hold = None
+    # THE NICHE GATE. A story plan that never produced a filmable moment means
+    # a script about a concept rather than about something that happened —
+    # which on money_history is a channel violation, not a style preference.
+    # The architect already printed this diagnosis and nothing acted on it,
+    # and the run that exposed it shipped a parable about a child's lemonade
+    # stand as financial history.
+    scene_hold = (result or {}).get("scene_weak") or None
+    if scene_hold:
+        print(f"           ⚠ the story plan never found a real moment "
+              f"({scene_hold}) — upload will be HELD for review")
     try:
         from supervisor import judge_script_facts
         ok_f, why_f = judge_script_facts(script, seed, niche_name=active, run_id=script_run_id)
@@ -1581,6 +1622,10 @@ def run(skip_upload: bool = False, niche_override: str = None, output_dir: Path 
         hold_reason = f"QC failed: {'; '.join(qc['critical'])}"
     elif facts_hold:
         hold_reason = f"factual integrity: {facts_hold}"
+    elif scene_hold:
+        hold_reason = f"no real moment in the plan: {scene_hold}"
+    elif seed_hold:
+        hold_reason = f"no source the supervisor would accept: {seed_hold}"
     elif _hold_score < _hold_min_score:
         hold_reason = f"score {_hold_score}/10 < {_hold_min_score}/10 threshold"
     else:
@@ -1674,6 +1719,14 @@ def run(skip_upload: bool = False, niche_override: str = None, output_dir: Path 
     elif facts_hold:
         print(f"[ 7 / 7 ]  Upload held — factual integrity flag: {facts_hold}")
         print(f"           Verify against the source, then upload manually if it's fine.")
+        print(f"           Video saved for review: {output_path}\n")
+    elif scene_hold:
+        print(f"[ 7 / 7 ]  Upload held — the plan never found a real moment: {scene_hold}")
+        print(f"           The seed is usually the cause: a concept article has "
+              f"no event in it to film.")
+        print(f"           Video saved for review: {output_path}\n")
+    elif seed_hold:
+        print(f"[ 7 / 7 ]  Upload held — no source passed the supervisor: {seed_hold}")
         print(f"           Video saved for review: {output_path}\n")
     elif final_score < min_score:
         print(f"[ 7 / 7 ]  Upload held — score {final_score}/10 < {min_score}/10 threshold.")
