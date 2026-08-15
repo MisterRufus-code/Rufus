@@ -453,6 +453,26 @@ _FILMABLE_DESPITE_SUFFIX = {
     "mines", "line", "lines", "vessel", "vessels", "parity", "charity",
 }
 
+# IRREGULAR PAST TENSES. The suffix rule catches "vanished" and "collapsed"
+# because they end in -ed; it cannot catch "took", "gave" or "came", which are
+# the commonest verbs in a narration and look exactly like nouns to it. A code
+# review flagged this months ago and nothing acted on it until insert_director
+# chose "took" as a thing to draw — "as receivers took over" — which is the
+# cost of a false keep going from a warning line to a GPU render.
+_IRREGULAR_PAST = {
+    "took", "gave", "came", "went", "made", "saw", "said", "told", "found",
+    "left", "held", "brought", "began", "drew", "fell", "rose", "grew",
+    "sold", "bought", "paid", "sent", "kept", "lost", "meant", "felt",
+    "knew", "thought", "became", "chose", "broke", "spoke", "wrote", "drove",
+    "rode", "stood", "understood", "built", "sought", "taught", "caught",
+    "swept", "threw", "flew", "blew", "hung", "sank", "shook", "struck",
+    "wore", "tore", "swore", "bore", "beat", "burnt", "dealt", "dug",
+    "fought", "forgot", "froze", "hid", "lay", "lent", "meant", "rang",
+    "sang", "shot", "shut", "slept", "spent", "spread", "stole", "swam",
+    "took", "wept", "wound", "gone", "seen", "done", "given", "taken",
+    "written", "spoken", "broken", "chosen", "driven", "risen", "fallen",
+}
+
 # Connectives and time words long enough to clear the 4-letter floor.
 _NON_OBJECT_WORDS = {
     "then", "over", "under", "after", "before", "again", "still", "also",
@@ -479,6 +499,8 @@ def _content_words(text: str) -> set[str]:
     # the trade is worth it for a warning.
     for w in re.findall(r"\b[a-z]{4,}\b", text or ""):
         if w in _STOPWORDS or w in _ABSTRACT or w in _NON_OBJECT_WORDS:
+            continue
+        if w in _IRREGULAR_PAST:
             continue
         if w in _FILMABLE_DESPITE_SUFFIX:
             out.add(w)

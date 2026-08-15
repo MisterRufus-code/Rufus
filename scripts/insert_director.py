@@ -62,6 +62,13 @@ _TOO_GENERIC = {
     "lack", "capital", "value", "values", "flight", "growth", "trade", "jobs",
     "work", "wealth", "power", "control", "crisis", "panic", "risk", "risks",
     "chance", "future", "past", "history", "story", "reason", "result",
+    # Agent nouns that name a ROLE rather than a look. "receivers" chose itself
+    # on the 1893 script — in that script they are bankruptcy receivers, and
+    # the model draws a telephone handset. Note the ones that DO have a look
+    # (workers, traders, farmers, soldiers, miners) are deliberately absent.
+    "receivers", "holders", "owners", "buyers", "sellers", "makers", "users",
+    "lenders", "borrowers", "investors", "creditors", "debtors", "members",
+    "leaders", "founders", "partners", "clients", "customers",
     "change", "point", "level", "rate", "rates", "cost", "costs", "price",
     "prices", "amount", "number", "numbers", "share", "shares", "stake",
 }
@@ -309,10 +316,51 @@ def insert_prompt(noun: str, style: str = "") -> str:
     to clutter with, and the channel's own style suffix does the rest so an
     insert belongs to the same world as the beat behind it.
     """
-    base = (f"A single {noun}, centred in frame, one clear object, "
+    base = (f"A single {_singular(noun)}, centred in frame, one clear object, "
             f"plain flat background, bold readable silhouette, no text, "
             f"no words, no letters")
     return f"{base}. {style.strip()}" if style and style.strip() else base
+
+
+# Words whose singular is not the word minus an "s", or which are not plural at
+# all despite ending in one. Stripping blindly gave "pres" and "gla".
+_NOT_PLURAL = {
+    "press", "glass", "class", "grass", "cross", "dress", "brass", "mass",
+    "paper", "canvas", "compass", "harness", "witness", "business", "access",
+    "news", "series", "species", "gas", "bus", "lens", "axis", "basis",
+    "crisis", "ships",  # "ships" is plural but a fleet reads better than one
+}
+_IRREGULAR = {
+    "men": "man", "women": "woman", "children": "child", "feet": "foot",
+    "teeth": "tooth", "geese": "goose", "mice": "mouse", "people": "person",
+    "leaves": "leaf", "knives": "knife", "wolves": "wolf", "shelves": "shelf",
+    "loaves": "loaf", "thieves": "thief", "wives": "wife", "lives": "life",
+}
+
+
+def _singular(noun: str) -> str:
+    """One of the thing, because an insert should show ONE of the thing.
+
+    "A single coins" is what the first version produced, and it is wrong twice
+    over: ungrammatical to the text encoder, and visually wrong at 0.42 of
+    frame width, where one clear object reads and a pile does not.
+
+    Deliberately conservative. A word this cannot confidently singularise is
+    returned unchanged — a plural picture is a small loss, and "pres" from
+    "press" is a wrong one.
+    """
+    low = (noun or "").strip().lower()
+    if low in _IRREGULAR:
+        return _IRREGULAR[low]
+    if low in _NOT_PLURAL or len(low) < 4 or not low.endswith("s"):
+        return low
+    if low.endswith(("ss", "us", "is")):
+        return low
+    if low.endswith("ies") and len(low) > 4:
+        return low[:-3] + "y"          # cities -> city
+    if low.endswith(("ches", "shes", "xes", "zes", "sses")):
+        return low[:-2]                # torches -> torch
+    return low[:-1]
 
 
 def sfx_events(inserts: list[dict], gain: float) -> list[tuple[float, float]]:

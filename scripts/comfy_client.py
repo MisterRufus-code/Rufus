@@ -709,7 +709,52 @@ def _stills_negative() -> str:
     return "" if raw.lower() in ("0", "false", "no", "off") else raw
 
 
+STYLES_FILE = Path(__file__).parent.parent / "config" / "styles.json"
+
+
+def style_presets() -> dict:
+    """Named looks from config/styles.json, or {} if it is absent or broken.
+
+    Fail-open like every other config read here: a missing or malformed file
+    leaves the pipeline on its built-in default rather than stopping a run over
+    a look.
+    """
+    try:
+        raw = json.loads(STYLES_FILE.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return {k: v for k, v in raw.items()
+            if isinstance(v, str) and not k.startswith("_")}
+
+
 def _detail_suffix() -> str:
+    """The look every still is rendered in.
+
+    THREE SOURCES, MOST SPECIFIC FIRST. A literal RUFUS_STILLS_DETAIL wins, so a
+    one-off experiment never has to be added to a config file first. Then
+    RUFUS_STYLE names a preset from config/styles.json — the whole point being
+    that a look is ONE block of text appended byte for byte to every prompt,
+    because an image model renders each beat from noise with no memory of the
+    others and two paraphrases of one style are two styles to it. Then the
+    built-in default.
+
+    An unknown RUFUS_STYLE is loud rather than silent: a typo'd style name that
+    quietly rendered the default look would be indistinguishable from the
+    preset not working.
+    """
+    literal = os.environ.get("RUFUS_STILLS_DETAIL")
+    if literal is not None and literal.strip():
+        return literal.strip()
+
+    name = os.environ.get("RUFUS_STYLE", "").strip()
+    if name:
+        presets = style_presets()
+        if name in presets:
+            return presets[name].strip()
+        known = ", ".join(sorted(presets)) or "none loaded"
+        print(f"[comfy] RUFUS_STYLE={name!r} is not a known style — using the "
+              f"default look. Known: {known}")
+
     return os.environ.get("RUFUS_STILLS_DETAIL", DEFAULT_DETAIL_SUFFIX).strip()
 
 

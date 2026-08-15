@@ -1,0 +1,25 @@
+{
+  "_readme": [
+    "Named look presets. Pick one with RUFUS_STYLE=<name>; the text is used as",
+    "the stills detail suffix, exactly as if it had been pasted into",
+    "RUFUS_STILLS_DETAIL. A literal RUFUS_STILLS_DETAIL still wins over a",
+    "preset name, so a one-off experiment never has to be added here first.",
+    "",
+    "These are LOOKS, not subjects. The niche decides what the video is about;",
+    "a style decides how it is drawn. money_history rendered as stickman is a",
+    "different channel from money_history rendered flat-vector, and neither",
+    "needs a change to the research, the script or the storyboard.",
+    "",
+    "A style has to be describable in ONE block of text that is appended to",
+    "every prompt byte for byte. That is not a limitation of this file — it is",
+    "how look consistency works at all: an image model renders each beat from",
+    "noise with no memory of the others, so two paraphrases of one style are",
+    "two styles to it."
+  ],
+
+  "stickman": "Minimalist stick-figure cartoon illustration on a pure white background. Every figure is drawn in the same thin, clean black line art of uniform weight: a perfect oval head slightly taller than wide with a pure white fill and a thin black outline, two solid black oval dot eyes evenly spaced in the upper-middle third of the face, a single thin curved line for the mouth with a slight upturn, and nothing else — no nose, no eyebrows, no ears, no cheek lines, no hair, completely bald and smooth. A single thin vertical line for the neck. The body is stick-figure: one straight line for the torso, thin straight arms angled at the elbow, thin straight legs angled at the knee, small simple hands, no muscle lines, no filled body mass, no volume. Clothing is drawn as simple line-art garments with flat unshaded colour fills inside the outlines only. Objects and props are drawn in the same thin black line art with flat colour fills. No gradients, no shading, no ambient occlusion, no texture, no photographic lighting, no depth of field, no film grain. Everything not deliberately filled with colour is pure white. Bold, readable silhouettes; generous negative space; the whole frame reads instantly at thumbnail size.",
+
+  "flat_vector": "Flat 2D vector illustration style, not a photograph: clean confident outlines of consistent stroke weight, simplified geometric shapes rendered in flat, unshaded color fills. No gradients, no photographic lighting, no film grain, no lens blur or depth of field, no skin pores or fabric-weave texture. Figures and objects are graphic and stylized rather than anatomically photographic — bold silhouettes, minimal internal linework, an expressive pose read through shape and posture. Lighting is rendered as bold graphic contrast — a hard-edged light shape or color-block shadow — never a soft photographic gradient. Backgrounds simplify into clean shapes and generous negative space rather than photographic clutter. Reads like modern explainer-video or storybook illustration: crisp, deliberate, and stylized, never a photograph or a photo-real render.",
+
+  "ink_woodcut": "Monochrome ink woodcut engraving, the look of a 19th-century newspaper illustration. Dense parallel hatching and cross-hatching for every tone; no grey fills, no gradients, no colour. Heavy confident contour lines, fine interior hatching, deep blacks against untouched white paper. Slight plate texture and ink bleed at the line edges. Figures are solid and weighty, drawn with anatomical confidence rather than stylisation. Reads like a printed engraving lifted from an 1890s broadsheet."
+}

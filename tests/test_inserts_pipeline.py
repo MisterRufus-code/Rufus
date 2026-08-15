@@ -175,3 +175,63 @@ def test_the_image_component_is_imported():
     """Remotion's Img waits for the asset before advancing the frame; a bare
     <img> renders a blank box on the frame the pop happens."""
     assert "\n  Img," in _short_tsx()
+
+
+# ── named looks ──────────────────────────────────────────────────────────────
+
+def test_the_bundled_styles_load():
+    got = comfy_client.style_presets()
+    assert {"stickman", "flat_vector"} <= set(got)
+    assert all(isinstance(v, str) and v.strip() for v in got.values())
+
+
+def test_readme_keys_are_not_offered_as_styles():
+    """config/styles.json documents itself in a "_readme" key. Rendering a
+    video in the readme would be a memorable bug."""
+    assert not any(k.startswith("_") for k in comfy_client.style_presets())
+
+
+def test_a_named_style_becomes_the_look(monkeypatch):
+    monkeypatch.delenv("RUFUS_STILLS_DETAIL", raising=False)
+    monkeypatch.setenv("RUFUS_STYLE", "stickman")
+    assert "stick-figure" in comfy_client._detail_suffix()
+
+
+def test_a_literal_style_outranks_a_preset(monkeypatch):
+    """A one-off experiment must never require editing a config file first."""
+    monkeypatch.setenv("RUFUS_STYLE", "stickman")
+    monkeypatch.setenv("RUFUS_STILLS_DETAIL", "my own look")
+    assert comfy_client._detail_suffix() == "my own look"
+
+
+def test_an_unknown_style_is_loud(monkeypatch, capsys):
+    """A typo'd style name that quietly rendered the default look would be
+    indistinguishable from the preset not working at all."""
+    monkeypatch.delenv("RUFUS_STILLS_DETAIL", raising=False)
+    monkeypatch.setenv("RUFUS_STYLE", "stikman")
+    comfy_client._detail_suffix()
+    out = capsys.readouterr().out
+    assert "not a known style" in out
+    assert "stickman" in out          # names the ones that exist
+
+
+def test_no_style_set_keeps_the_current_look(monkeypatch):
+    monkeypatch.delenv("RUFUS_STILLS_DETAIL", raising=False)
+    monkeypatch.delenv("RUFUS_STYLE", raising=False)
+    assert comfy_client._detail_suffix() == comfy_client.DEFAULT_DETAIL_SUFFIX.strip()
+
+
+def test_a_broken_styles_file_does_not_stop_a_run(monkeypatch, tmp_path):
+    bad = tmp_path / "styles.json"
+    bad.write_text("{not json", encoding="utf-8")
+    monkeypatch.setattr(comfy_client, "STYLES_FILE", bad)
+    assert comfy_client.style_presets() == {}
+
+
+def test_inserts_inherit_whatever_style_is_active(monkeypatch):
+    """An insert drawn in a different look from the beat behind it reads as a
+    bug — the same failure text-to-video produced against flat-vector."""
+    monkeypatch.delenv("RUFUS_STILLS_DETAIL", raising=False)
+    monkeypatch.setenv("RUFUS_STYLE", "stickman")
+    p = insert_director.insert_prompt("sword", comfy_client._detail_suffix())
+    assert "stick-figure" in p
