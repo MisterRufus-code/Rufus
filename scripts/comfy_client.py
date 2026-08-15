@@ -359,18 +359,40 @@ def _build_i2i_chain(*, base_png: Path, base_raw: bytes, prompt: str, seed: int,
 # The others nudge the SAME scene a moment before/after, so the seed keeps the
 # composition and only the action advances.
 _PROGRESSION_STEPS = [
+    "Captured a moment before that: nothing has started yet, the stillness "
+    "just before.",
     "Captured a moment earlier: the action is only just beginning.",
     "",
     "Captured a moment later: the action has just completed.",
     "Captured a beat afterwards: the aftermath, everything settling.",
+    "Captured last of all: the place after everyone has gone, only what was "
+    "left behind.",
 ]
 
 
 def _progression_modifiers(n: int) -> list[str]:
-    """`n` prompt modifiers spanning one beat's micro-arc, peak included."""
+    """`n` prompt modifiers spanning one beat's micro-arc, peak included.
+
+    THE CAP IS ANNOUNCED, not silent. This list is what a beat can be split
+    into and asking for more frames than there are steps used to return the
+    steps and say nothing — RUFUS_FRAMES_PER_BEAT=6 quietly rendered four, and
+    the owner had no way to know why the picture count did not move. Every
+    other clamp in this pipeline that stayed quiet has cost a debugging
+    session (AGENTS.md), so this one talks.
+    """
     if n <= 1:
         return [""]
-    return _PROGRESSION_STEPS[:min(n, len(_PROGRESSION_STEPS))]
+    if n > len(_PROGRESSION_STEPS):
+        print(f"[comfy] RUFUS_FRAMES_PER_BEAT={n} is more than the "
+              f"{len(_PROGRESSION_STEPS)} steps a beat can be split into — "
+              f"rendering {len(_PROGRESSION_STEPS)} per beat. For more "
+              f"pictures raise SD_CLIPS (more beats) instead.")
+    # Centred on the peak: with 3 steps you want earlier/peak/later, not the
+    # two frames before the peak and no peak at all.
+    peak = _PROGRESSION_STEPS.index("")
+    take = min(n, len(_PROGRESSION_STEPS))
+    start = max(0, min(peak - (take - 1) // 2, len(_PROGRESSION_STEPS) - take))
+    return _PROGRESSION_STEPS[start:start + take]
 
 
 # Target playback fps for the interpolated i2i beat. Matches sd_client.FPS /
