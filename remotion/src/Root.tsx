@@ -9,6 +9,7 @@ const defaultProps: ShortProps = {
   music: null,
   words: [],
   durationInSeconds: 30,
+  inserts: [],
 };
 
 export const Root: React.FC = () => {

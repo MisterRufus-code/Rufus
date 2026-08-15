@@ -58,6 +58,21 @@ def _check_ready() -> None:
         raise RuntimeError(f"Remotion deps missing — run: cd {REMOTION_DIR} && npm install")
 
 
+def _insert_style() -> str:
+    """The channel's own look, so an insert belongs to the beat behind it.
+
+    Reusing comfy_client's detail suffix rather than writing a second style
+    string is the same rule the world lock follows: two descriptions of one
+    look drift, and the drift shows up as an insert that is visibly from a
+    different video.
+    """
+    try:
+        import comfy_client
+        return comfy_client._detail_suffix()
+    except Exception:
+        return ""
+
+
 def _probe_duration(path: Path) -> float | None:
     """Clip duration in seconds via ffprobe, or None if probing fails."""
     try:
@@ -164,6 +179,23 @@ def render(script: str, bg_paths: "Path | list[Path]", out_dir: Path,
         except Exception as e:
             print(f"[director] unavailable ({e}) — default motion cycle")
 
+        # WORD-SYNCED INSERTS. Planned here rather than earlier because this is
+        # the first point where the FINISHED voiceover has been transcribed —
+        # an insert is pinned to the second its word is actually spoken, and
+        # only Whisper knows that. Fail-open: any failure leaves `inserts`
+        # empty and the video renders exactly as it did before this existed.
+        inserts: list[dict] = []
+        try:
+            import insert_director
+            if insert_director.enabled():
+                planned = insert_director.plan(script, words, _insert_style())
+                if planned:
+                    print(insert_director.describe(planned))
+                    import comfy_client
+                    inserts = comfy_client.render_inserts(planned, job_dir)
+        except Exception as e:
+            print(f"[inserts] unavailable ({e}) — rendering without them")
+
         props = {
             "job":               job,
             "clips":             clip_names,
@@ -173,12 +205,14 @@ def render(script: str, bg_paths: "Path | list[Path]", out_dir: Path,
             "words":             words,
             "durationInSeconds": round(audio_dur, 3),
             "edit":              edit,
+            "inserts":           inserts or None,
         }
         props_file = job_dir / "props.json"
         props_file.write_text(json.dumps(props), encoding="utf-8")
 
         print(f"[4/4] Remotion render: {len(clip_names)} clip(s) → {audio_dur:.1f}s"
-              f"{' + music' if music_name else ''}…")
+              f"{' + music' if music_name else ''}"
+              f"{f' + {len(inserts)} insert(s)' if inserts else ''}…")
         cmd = [
             _npx(), "remotion", "render", "src/index.ts", "RufusShort", str(out),
             f"--props={props_file}",

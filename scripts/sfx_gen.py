@@ -6,6 +6,7 @@ Pro Shorts use three signature sounds the ear reads as "edited by a human":
   hit.wav    — sub-bass punch at t=0 (pattern interrupt under the hook)
   whoosh.wav — airy noise sweep on every cut (sells the transition)
   riser.wav  — tension swell into the final beat (pre-payoff lift)
+  pop.wav    — short bright blip for a word-synced insert (see insert_director)
 
 All three are synthesized once with FFmpeg lavfi (sine + shaped noise) into
 assets/sfx/ and cached. No downloads, no licenses, works offline forever.
@@ -51,6 +52,28 @@ def _sfx_cmd(name: str, out_path: Path) -> list[str] | None:
             f"volume=0.8,aresample={SAMPLE_RATE}",
             "-ac", "1", str(out_path),
         ]
+    if name == "pop":
+        # THE SOUND THE INSERT FORMAT NEEDS, and it is not the whoosh. A whoosh
+        # is a TRANSITION — it says "we are moving from here to there", which is
+        # right for a scene cut and wrong for an object appearing on top of a
+        # scene that has not changed. An insert wants a bright, short blip: a
+        # fast upward pitch bend, gone in a tenth of a second, so twenty of them
+        # across forty seconds read as punctuation instead of traffic.
+        #
+        # Short on purpose. Anything with a tail overlaps the next insert at the
+        # 0.45s minimum spacing and the two smear into mush.
+        return [
+            "ffmpeg", "-y", "-loglevel", "error",
+            "-f", "lavfi", "-i", "sine=frequency=680:duration=0.09",
+            "-f", "lavfi", "-i", "sine=frequency=1180:duration=0.05",
+            "-filter_complex",
+            "[0:a]volume=0.8,afade=t=out:st=0.02:d=0.07:curve=exp[low];"
+            "[1:a]volume=0.5,afade=t=in:st=0:d=0.01,"
+            "afade=t=out:st=0.01:d=0.04:curve=exp[high];"
+            f"[low][high]amix=inputs=2:duration=longest:normalize=0,"
+            f"aresample={SAMPLE_RATE}[a]",
+            "-map", "[a]", "-ac", "1", str(out_path),
+        ]
     if name == "riser":
         # Tension swell: filtered white noise rising over ~1.2s, hard stop.
         return [
@@ -70,7 +93,7 @@ def ensure_sfx() -> dict[str, Path]:
     """Synthesize the SFX set if missing. Returns {name: path}, or {} on failure."""
     SFX_DIR.mkdir(parents=True, exist_ok=True)
     out: dict[str, Path] = {}
-    for name in ("hit", "whoosh", "riser"):
+    for name in ("hit", "whoosh", "riser", "pop"):
         path = SFX_DIR / f"{name}.wav"
         if path.exists() and path.stat().st_size >= MIN_BYTES:
             out[name] = path
@@ -87,9 +110,13 @@ def ensure_sfx() -> dict[str, Path]:
         except Exception as e:
             print(f"[sfx] {name} synthesis error: {e}")
             path.unlink(missing_ok=True)
-    if len(out) < 3:
-        # Partial sets cause confusing half-mixed audio — all or nothing.
-        return out if len(out) == 3 else {}
+    # THE THREE ORIGINALS ARE THE ALL-OR-NOTHING SET; "pop" is not. It serves
+    # one optional layer (word-synced inserts) and a box that cannot synthesize
+    # it should still get the hit/whoosh/riser it always had, rather than
+    # losing the whole sound design to a feature it is not using.
+    core = {k: v for k, v in out.items() if k in ("hit", "whoosh", "riser")}
+    if len(core) < 3:
+        return {}
     return out
 
 

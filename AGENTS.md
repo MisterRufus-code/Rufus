@@ -203,3 +203,29 @@ When a test encodes a real incident, say so in the docstring, with the log line
 that reported it. Several tests in this repo exist because a symptom was
 misdiagnosed for weeks; the docstring is what stops the next agent from
 re-deriving the wrong cause.
+
+## The word-synced insert layer
+
+A second visual format, off nothing and additive: instead of one picture per
+sentence, a small picture per **noun**, landing on the second that noun is
+spoken. `insert_director.py` plans it, `comfy_client.render_inserts` draws it,
+`Short.tsx`'s `InsertLayer` pops it in, `sfx_gen`'s `pop` marks it.
+
+**The pipeline can do this because it already transcribes its own voiceover.**
+`remotion_renderer` runs Whisper over the finished audio for captions, so
+word-level timings exist before the planner runs — the expensive half of this
+format is already paid for.
+
+**The planner never renders.** `python scripts/insert_director.py "<script>"`
+prints the plan in a second with no GPU, no ComfyUI and no network, which is
+the point: argue with a bad plan before spending GPU on it.
+
+**Insert images are drawn while the stills model is still loaded**, between the
+beats and the `/free` that precedes any motion engine. Twenty-eight extra
+renders on a warm model, not twenty-eight model loads — the measured cost on
+this box is loading, not sampling (see wan_t2v: 2 seconds of sampling inside a
+330-second clip).
+
+Every rejection rule in `insert_director` exists because a real script leaked
+something undrawable, and each names what leaked. Do not "simplify" them
+without re-running the planner on a real script first.

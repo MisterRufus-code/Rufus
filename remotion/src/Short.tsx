@@ -2,6 +2,7 @@ import React from 'react';
 import {
   AbsoluteFill,
   Audio,
+  Img,
   Loop,
   OffthreadVideo,
   interpolate,
@@ -53,6 +54,15 @@ export type EditPlan = {
   beats: BeatDirection[];
 };
 
+// One word-synced cutaway. `at` is the second the narrator SAYS the word, taken
+// from the same Whisper pass that drives the captions — see insert_director.py.
+export type Insert = {
+  word: string;
+  at: number;
+  hold: number;
+  file: string; // filename inside public/<job>/
+};
+
 export type ShortProps = {
   job: string;
   clips: string[]; // filenames inside public/<job>/
@@ -62,9 +72,72 @@ export type ShortProps = {
   words: Word[];
   durationInSeconds: number;
   edit?: EditPlan | null; // per-beat direction; null = use the default cycle
+  inserts?: Insert[] | null; // word-synced cutaways; absent = the old look
 };
 
 const HIGHLIGHT = /[\d$%]/;
+
+// ── Word-synced insert ───────────────────────────────────────────────────────
+// The format this serves: the narrator says "palace" and a palace appears on
+// the word. Not a transition — the scene underneath does not change, an object
+// lands on top of it and leaves. That is why it pops rather than fades, and why
+// the sound under it is a blip and not a whoosh.
+const INSERT_FRACTION = 0.42; // of frame width — big enough to read, small
+                              // enough that the beat behind it still reads
+const InsertLayer: React.FC<{inserts: Insert[]; job: string}> = ({inserts, job}) => {
+  const frame = useCurrentFrame();
+  const {fps, width, height} = useVideoConfig();
+
+  return (
+    <>
+      {inserts.map((ins, i) => {
+        const startFrame = Math.round(ins.at * fps);
+        const holdFrames = Math.max(1, Math.round((ins.hold || 0.7) * fps));
+        const local = frame - startFrame;
+        if (local < 0 || local > holdFrames) return null;
+
+        // Spring in, hard cut out. An insert that fades away competes for
+        // attention with the next word; one that simply stops does not.
+        const scale = spring({
+          frame: local,
+          fps,
+          config: {damping: 12, mass: 0.5, stiffness: 190},
+          from: 0.55,
+          to: 1,
+        });
+        // Alternate sides so twenty of them do not stack in one place, and
+        // keep them clear of the caption band at the vertical centre.
+        const left = i % 2 === 0;
+        const size = width * INSERT_FRACTION;
+
+        return (
+          <AbsoluteFill key={`ins-${i}-${ins.word}`} style={{pointerEvents: 'none'}}>
+            <div
+              style={{
+                position: 'absolute',
+                width: size,
+                height: size,
+                left: left ? width * 0.06 : width - size - width * 0.06,
+                top: i % 4 < 2 ? height * 0.16 : height * 0.62,
+                transform: `scale(${scale}) rotate(${left ? -3 : 3}deg)`,
+                borderRadius: 18,
+                overflow: 'hidden',
+                boxShadow: '0 18px 48px rgba(0,0,0,0.55)',
+                border: '6px solid #fff',
+                backgroundColor: '#fff',
+              }}
+            >
+              <Img
+                src={staticFile(`${job}/${ins.file}`)}
+                style={{width: '100%', height: '100%', objectFit: 'cover'}}
+              />
+            </div>
+          </AbsoluteFill>
+        );
+      })}
+    </>
+  );
+};
 
 // ── One background clip with Ken Burns motion ────────────────────────────────
 // The director's vocabulary, expressed as the motion this component already
@@ -254,6 +327,7 @@ export const Short: React.FC<ShortProps> = ({
   music,
   words,
   edit,
+  inserts,
 }) => {
   const frame = useCurrentFrame();
   const {fps, durationInFrames} = useVideoConfig();
@@ -311,6 +385,8 @@ export const Short: React.FC<ShortProps> = ({
           })}
         </TransitionSeries>
       )}
+
+      {inserts && inserts.length ? <InsertLayer inserts={inserts} job={job} /> : null}
 
       <Captions words={words} />
       <ProgressBar />

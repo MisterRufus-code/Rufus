@@ -1008,6 +1008,55 @@ def _await_image(prompt_id: str, timeout: float | None = None) -> bytes | None:
     return None
 
 
+def render_inserts(inserts: list[dict], out_dir: Path,
+                   niche: str | None = None, base_seed: int | None = None
+                   ) -> list[dict]:
+    """Draw one small image per planned insert. Returns the plan, annotated.
+
+    SEPARATE FROM THE BEATS ON PURPOSE, and cheap by design. An insert is on
+    screen for well under a second at a fraction of frame width, so it is
+    rendered small and simple: what has to read is the silhouette, and detail
+    at that size is GPU spent on pixels nobody resolves.
+
+    Called while the stills model is ALREADY LOADED, between the beats and the
+    /free that precedes any motion engine — twenty-eight extra renders on a
+    warm model, not twenty-eight model loads. That ordering is the whole reason
+    this format is affordable on a box where loading dominates.
+
+    Fail-open per insert: one that does not render is dropped from the returned
+    plan rather than failing the run. The renderer simply shows fewer pictures,
+    which is a quieter video and not a broken one.
+    """
+    if not inserts:
+        return []
+    out_dir.mkdir(parents=True, exist_ok=True)
+    base = base_seed if base_seed is not None else random.randint(1, 2**31 - 1)
+    done: list[dict] = []
+    for i, item in enumerate(inserts):
+        prompt = str(item.get("prompt") or item.get("word") or "").strip()
+        if not prompt:
+            continue
+        name = f"insert_{i:02d}_{re.sub(r'[^a-z0-9]+', '', str(item.get('word', '')))[:16]}.png"
+        path = out_dir / name
+        try:
+            raw = _render_image(prompt, base + i * 7919, uuid.uuid4().hex,
+                                niche=niche)
+        except Exception as e:
+            print(f"[inserts] {item.get('word')!r} failed ({e}) — skipping")
+            continue
+        if not raw:
+            print(f"[inserts] {item.get('word')!r} produced nothing — skipping")
+            continue
+        try:
+            path.write_bytes(raw)
+        except OSError as e:
+            print(f"[inserts] could not write {name} ({e}) — skipping")
+            continue
+        done.append({**item, "file": name})
+    print(f"[inserts] {len(done)}/{len(inserts)} rendered into {out_dir.name}")
+    return done
+
+
 def generate_clips(queries: list[str], n: int = 4,
                    clip_duration: float = 8.0, niche: str | None = None) -> list[Path]:
     """Generate one Ken Burns clip per query via ComfyUI, in order.
