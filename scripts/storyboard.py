@@ -118,10 +118,19 @@ def _prompt(script: str, beats: list[str], era_tags: list[str],
         "Empty rooms are the cheapest way to say a thing is bad, and they make "
         "a viewer feel nothing. A face or a pair of hands is what makes a "
         "number land.\n"
-        "4. LET THE FRAME CARRY THE FEELING, not a described emotion. Not 'his "
-        "expression one of despair' — a stall with nothing left on it. Not "
+        "4. LET THE FRAME CARRY THE FEELING, not a described emotion. Not "
         "'revealing the anguish of misplaced trust' — a fist of coins held out "
-        "and no one reaching. What is IN the frame, never what someone feels.\n"
+        "and no one reaching. A feeling named as a feeling gives the image "
+        "model nothing to draw.\n"
+        "4b. BUT DRAW THE FACE AND THE POSTURE. A face is a physical thing and "
+        "it is the fastest way a viewer feels a line, so every shot with a "
+        "person in it says what their face and body are DOING, in the same "
+        "concrete language as everything else: brows pulled down and mouth "
+        "flat, eyes wide and mouth open, head dropped and shoulders rounded, "
+        "one arm thrown up. Never 'looking determined', 'appearing anxious', "
+        "'a sense of unease' — those are rule 4 again in a costume. Vary it: "
+        "a sequence where every face does the same thing is a sequence with no "
+        "story in it.\n"
         "5. OBEY THE ERA TAG on each shot. [present day] means an ordinary "
         "scene of today; a year means every visible detail belongs to it.\n"
         "6. NEVER NAME WORDS THAT WOULD BE PRINTED IN FRAME. No headline text, "
@@ -533,17 +542,69 @@ def _unshown_nouns(visuals: list[str], beats: list[str]) -> list[str]:
     shots contained copper. So ask the sequence question instead — which
     concrete nouns does the narration name that the pictures never show — and
     a beat answered by a neighbouring shot no longer counts as a miss.
+
+    THE SECOND ROUND OF NOISE, and the fix. Moving up a level stopped the
+    seven-of-ten false alarms but the report itself then ran long: a live run
+    named "costs, often, private, sells, quite, takes (+23 more)". Half of
+    those are adverbs and verbs — _content_words is tuned for VISUALS, where
+    the cost of keeping a doubtful word is one extra noun in a prompt, and
+    narration is full of words that pass it and could never be drawn.
+
+    insert_director._is_drawable is the strict half of the same vocabulary,
+    tuned on this channel's scripts for exactly this question — is there a
+    picture of this word — so ask it rather than keeping a second list here.
+    Imported lazily because insert_director imports THIS module; fail-open to
+    the looser test if it is unavailable, which is the report as it read
+    before, noise and all, rather than no report.
     """
     shown = set()
     for v in visuals:
         shown |= _content_words(v)
 
+    try:
+        from insert_director import _is_drawable as drawable
+    except Exception:
+        def drawable(w: str) -> bool:      # type: ignore[misc]
+            return True
+
     named: list[str] = []
     for beat in beats:
         for w in sorted(_content_words(beat)):
-            if w not in shown and w not in named:
+            if w not in shown and w not in named and drawable(w):
                 named.append(w)
     return named
+
+
+# At most this share of a sequence may carry the restated thread. See
+# _already_shows for the run that set it.
+THREAD_SHARE = 0.35
+
+
+def _already_shows(visual: str, carries: str) -> bool:
+    """Whether the shot already names the thing the thread is carrying.
+
+    THE FAILURE, from a real run. The thread was "the lemonade stand" and the
+    line `Continuing from the previous shot: the lemonade stand.` was appended
+    to NINE of ten shots — including shot 2, which opened "A child stands
+    behind the wooden lemonade stand". A Danegeld run did the same with a
+    stack of silver coins in six of ten. The owner's report was the obvious
+    consequence: every picture had coins in it.
+
+    Two bugs in one. The thread was restated where the shot said it already —
+    pure duplication, and duplication in a prompt reads as emphasis, so the
+    coins grew until they were the subject of every frame. And it was restated
+    EVERYWHERE, which is the same mistake as carrying a mood: a thread named in
+    every shot stops connecting them and starts making them the same picture.
+
+    So this answers the first half — does the visual already contain the
+    thread's own nouns — and THREAD_SHARE answers the second. A thread is a
+    thing the sequence RETURNS to; returning is only visible against shots that
+    do something else."""
+    words = _content_words(carries)
+    if not words:
+        return False
+    seen = _content_words(visual)
+    return bool(words & seen)
 
 
 def _clean(plan: dict, n_beats: int,
@@ -559,6 +620,9 @@ def _clean(plan: dict, n_beats: int,
     if not isinstance(shots, list) or len(shots) != n_beats:
         return None
     out: list[str] = []
+    # HOW OFTEN THE THREAD MAY BE RESTATED. See _already_shows for the failure.
+    thread_budget = max(2, round(n_beats * THREAD_SHARE))
+    restated = 0
     for entry in shots:
         if not isinstance(entry, dict):
             return None
@@ -569,14 +633,20 @@ def _clean(plan: dict, n_beats: int,
         carries = entry.get("carries_over")
         if isinstance(carries, str) and carries.strip():
             carries = carries.strip()
-            if _is_a_thing(carries):
+            if not _is_a_thing(carries):
+                print(f"[storyboard] dropped mood-only thread: {carries!r}")
+            elif _already_shows(visual, carries):
+                pass                       # the shot names it already
+            elif restated < thread_budget:
                 # Stated as continuity so the image model has the thread too,
                 # not only the storyboard's own notes.
                 visual = (f"{visual.rstrip('.')}. Continuing from the previous "
                           f"shot: {carries}.")
-            else:
-                print(f"[storyboard] dropped mood-only thread: {carries!r}")
+                restated += 1
         out.append(visual)
+    if restated:
+        print(f"[storyboard] carried the thread into {restated} of "
+              f"{n_beats} shot(s)")
 
     # Name the concrete things the script mentions that no picture shows.
     # WARNING, never rejection: not every noun deserves a frame, and this repo

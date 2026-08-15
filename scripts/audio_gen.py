@@ -66,6 +66,13 @@ MUSIC_VOL    = 0.14        # static music volume (simple-mix fallback path)
 MUSIC_BED    = 0.30        # music bed volume BEFORE sidechain ducking (full mix)
 BAR_HEIGHT   = 14          # retention progress bar thickness (px)
 
+# WORD-SYNCED INSERT LAYER (see insert_director.py). Small pictures that pop in
+# on the second their phrase is spoken, over the beat clip and UNDER the
+# captions. Geometry only — which pictures and when is planned elsewhere.
+INSERT_W      = 460        # rendered width on a 1080-wide frame
+INSERT_MARGIN = 70         # gap from the frame edge
+INSERT_YS     = (300, 560, 430)   # cycled so consecutive inserts don't stack
+
 # RUFUS_SFX=0 drops the whole synthesized layer (hit/whoosh/riser) — the
 # lever for "these effects don't belong on this channel" without touching
 # three separate gain values. Default stays on for anyone who hasn't
@@ -661,9 +668,51 @@ def _ffmpeg_filter_path_escape(path) -> str:
     return str(path).replace("\\", "/").replace(":", "\\:")
 
 
+def _insert_overlay_parts(inserts: list[dict], base: int,
+                          src: str = "vb") -> tuple[list[str], str]:
+    """Overlay chain for the word-synced inserts. Returns (parts, last label).
+
+    WHY THIS LIVES IN THE FFMPEG PATH AT ALL. The layer was built into the
+    Remotion renderer first, and RUFUS_RENDERER defaults to `ffmpeg` — so the
+    owner set RUFUS_INSERT_MODE, RUFUS_INSERT_MAX=40 and got exactly the ten
+    beat pictures they had before, twice, with nothing in the log to say why.
+    A feature that only exists on the path nobody runs is not shipped, and
+    silence about it is the fail-silent this repo keeps paying for.
+
+    Each insert is one still image input, scaled and hard-cut in and out with
+    `enable=between(t,...)` — hard cuts on purpose, since the fast-cut style
+    this serves reads better without an ease. eof_action=pass so a short input
+    can never truncate the video: the worst case is a picture that stops
+    early, and the video still finishes.
+    """
+    parts: list[str] = []
+    prev = src
+    for k, ins in enumerate(inserts):
+        try:
+            at = float(ins.get("at", 0.0))
+            hold = float(ins.get("hold", 0.7))
+        except (TypeError, ValueError):
+            continue
+        end = at + max(0.2, hold)
+        x = INSERT_MARGIN if k % 2 == 0 else W - INSERT_W - INSERT_MARGIN
+        y = INSERT_YS[k % len(INSERT_YS)]
+        parts.append(
+            f"[{base + k}:v]scale={INSERT_W}:-1,setsar=1,fps={FPS},"
+            f"format=rgba[ins{k}]"
+        )
+        parts.append(
+            f"[{prev}][ins{k}]overlay=x={x}:y={y}:"
+            f"enable='between(t,{at:.3f},{end:.3f})':eof_action=pass[ov{k}]"
+        )
+        prev = f"ov{k}"
+    return parts, prev
+
+
 def _finish_video(parts: list[str], total: float, eq_filter: str,
-                  ass_esc: str, fonts_dir_esc: str, accent_hex: str) -> str:
-    """Shared tail: edge fades → grade → progress bar → captions → [vout]."""
+                  ass_esc: str, fonts_dir_esc: str, accent_hex: str,
+                  inserts: list[dict] | None = None,
+                  insert_base: int = 0) -> str:
+    """Shared tail: edge fades → grade → bar → inserts → captions → [vout]."""
     fade_out_st = max(0.0, total - FADE_EDGE)
     fade_in_str = f"fade=type=in:st=0:d={FADE_IN:.3f}," if FADE_IN > 0 else ""
     parts.append(
@@ -677,14 +726,24 @@ def _finish_video(parts: list[str], total: float, eq_filter: str,
         f"[vg][bar]overlay=x='-{W}+{W}*t/{total:.3f}':y={H - BAR_HEIGHT}:"
         f"eof_action=pass,format=yuv420p[vb]"
     )
-    parts.append(f"[vb]ass='{ass_esc}':fontsdir='{fonts_dir_esc}'[vout]")
+    last = "vb"
+    if inserts:
+        # Under the captions, exactly as the Remotion path stacks them: a word
+        # is illustrated by the picture, never covered by it.
+        ins_parts, last = _insert_overlay_parts(inserts, insert_base)
+        parts.extend(ins_parts)
+        parts.append(f"[{last}]format=yuv420p[vins]")
+        last = "vins"
+    parts.append(f"[{last}]ass='{ass_esc}':fontsdir='{fonts_dir_esc}'[vout]")
     return ";\n".join(parts)
 
 
 def _video_filter_complex(input_lengths: list[float], boundaries: list[float],
                           total: float, over_w: int, over_h: int, pad_y: int,
                           eq_filter: str, ass_esc: str, fonts_dir_esc: str,
-                          accent_hex: str, grades: list[str] | None = None) -> str:
+                          accent_hex: str, grades: list[str] | None = None,
+                          inserts: list[dict] | None = None,
+                          insert_base: int = 0) -> str:
     """Ken Burns per clip → sentence-aligned xfades → grade/bar/captions."""
     n = len(input_lengths)
     grades = grades or []
@@ -706,13 +765,16 @@ def _video_filter_complex(input_lengths: list[float], boundaries: list[float],
             current = out_name
         parts.append(f"[{current}]null[vcat]")
 
-    return _finish_video(parts, total, eq_filter, ass_esc, fonts_dir_esc, accent_hex)
+    return _finish_video(parts, total, eq_filter, ass_esc, fonts_dir_esc,
+                         accent_hex, inserts, insert_base)
 
 
 def _video_filter_complex_concat(input_lengths: list[float], total: float,
                                  over_w: int, over_h: int, pad_y: int,
                                  eq_filter: str, ass_esc: str, fonts_dir_esc: str,
-                                 accent_hex: str, grades: list[str] | None = None) -> str:
+                                 accent_hex: str, grades: list[str] | None = None,
+                                 inserts: list[dict] | None = None,
+                                 insert_base: int = 0) -> str:
     """Hard-concat fallback (no transitions). Used when xfade errors."""
     n = len(input_lengths)
     grades = grades or []
@@ -724,7 +786,8 @@ def _video_filter_complex_concat(input_lengths: list[float], total: float,
     else:
         concat_inputs = "".join(f"[v{i}]" for i in range(n))
         parts.append(f"{concat_inputs}concat=n={n}:v=1:a=0[vcat]")
-    return _finish_video(parts, total, eq_filter, ass_esc, fonts_dir_esc, accent_hex)
+    return _finish_video(parts, total, eq_filter, ass_esc, fonts_dir_esc,
+                         accent_hex, inserts, insert_base)
 
 
 def _silence_trim_cmd(src: Path, dst: Path) -> list[str]:
@@ -1118,13 +1181,58 @@ def render(script: str, bg_paths: "Path | list[Path]", out_dir: Path,
                 sfx_files.append(sfx["riser"])
                 sfx_events.append((riser_at, SFX_RISER_GAIN * _w(len(boundaries))))
 
+        # WORD-SYNCED INSERTS. Planned here because this is the first moment
+        # the FINISHED voiceover has been transcribed — an insert is pinned to
+        # the second its phrase is actually spoken, and only Whisper knows
+        # that. Fail-open: any failure leaves `inserts` empty and this renders
+        # exactly the video it rendered before the layer existed.
+        inserts: list[dict] = []
+        # Alongside the keyframes of the same run, not in temp: these are the
+        # only record of what the insert layer actually drew, the owner
+        # reviews them in the dashboard gallery, and the debug root is already
+        # the thing the maintenance job prunes.
+        try:
+            _run_id = os.environ.get("RUFUS_DEBUG_RUN_ID") or f"audio_{stamp}"
+            insert_dir = paths.debug_root() / _run_id / "inserts"
+        except Exception:
+            insert_dir = tmp_dir / f"{stamp}_inserts"
+        try:
+            import insert_director
+            if insert_director.enabled():
+                spoken = [{"text": w.word.strip(),
+                           "start": float(w.start), "end": float(w.end)}
+                          for seg in segments for w in seg.words]
+                planned = insert_director.plan_for(
+                    script, spoken, insert_director.style_suffix())
+                if planned:
+                    print(insert_director.describe(planned))
+                    import comfy_client
+                    inserts = comfy_client.render_inserts(planned, insert_dir)
+        except Exception as e:
+            print(f"[inserts] unavailable ({e}) — rendering without them")
+        insert_paths = [insert_dir / str(i["file"]) for i in inserts
+                        if (insert_dir / str(i.get("file", ""))).exists()]
+        inserts = inserts[:len(insert_paths)]
+
         use_xfade = n > 1 and _ffmpeg_has_xfade()
         print(f"[4/4] Rendering {n} clip{'s' if n > 1 else ''} → {audio_dur:.1f}s"
               f"{' + music' if has_music else ''}"
               f"{f' + {len(sfx_events)} sfx' if sfx_events else ''}"
+              f"{f' + {len(inserts)} insert(s)' if inserts else ''}"
               f"{' [xfade]' if use_xfade else ''}…")
 
-        def _build_cmd(fc: str, input_lengths: list[float], with_sfx: bool) -> list:
+        def _insert_base(with_sfx: bool) -> int:
+            """Input index of the first insert image.
+
+            Inserts are appended LAST so that every audio index the mix
+            filters already compute from `n` keeps its meaning — the audio
+            graph must not have to know this layer exists.
+            """
+            return n + 1 + (1 if has_music else 0) + \
+                (len(sfx_files) if with_sfx else 0)
+
+        def _build_cmd(fc: str, input_lengths: list[float], with_sfx: bool,
+                       with_inserts: bool = True) -> list:
             c = ["ffmpeg", "-y", "-loglevel", "warning"]
             for bg, seg_t in zip(bg_paths, input_lengths):
                 c += ["-stream_loop", "-1", "-t", f"{seg_t + 0.05:.3f}", "-i", str(bg)]
@@ -1134,6 +1242,14 @@ def render(script: str, bg_paths: "Path | list[Path]", out_dir: Path,
             if with_sfx:
                 for sf in sfx_files:
                     c += ["-i", str(sf)]
+            if with_inserts:
+                for pic in insert_paths:
+                    # Held for the whole video and switched on by the overlay's
+                    # `enable` window: a still costs nothing to keep available,
+                    # and an input that ENDS mid-video is how an overlay
+                    # silently stops appearing.
+                    c += ["-loop", "1", "-framerate", str(FPS),
+                          "-t", f"{audio_dur + 0.5:.3f}", "-i", str(pic)]
             c += ["-filter_complex", fc, "-map", "[vout]", "-map", "[aout]"]
             c += [
                 "-t", f"{audio_dur:.3f}",
@@ -1144,29 +1260,53 @@ def render(script: str, bg_paths: "Path | list[Path]", out_dir: Path,
             ]
             return c
 
-        rendered = False
-        if use_xfade:
-            fc = (
+        def _xfade_fc(with_inserts: bool) -> str:
+            return (
                 _video_filter_complex(lens_xfade, boundaries, audio_dur, over_w, over_h,
                                       pad_y, eq_filter, ass_esc, fonts_esc, accent_hex,
-                                      grades)
+                                      grades,
+                                      inserts if with_inserts else None,
+                                      _insert_base(bool(sfx_events)))
                 + ";\n"
                 + _audio_filter_complex(n, audio_dur, has_music, sfx_events,
                                         with_deesser=_ffmpeg_has_filter("deesser"))
             )
+
+        rendered = False
+        # THE LADDER, with the insert layer as its own rung. The layer adds
+        # forty inputs and forty overlays to the most fragile string in this
+        # repo, so a failure there must cost the PICTURES and not the video —
+        # and it must say so, because a video that quietly lost its inserts
+        # looks exactly like a video that was never planning to have any.
+        attempts: list[tuple[str, str, list[float], bool, bool]] = []
+        if use_xfade:
+            if inserts:
+                attempts.append(("full mix", _xfade_fc(True), lens_xfade,
+                                 bool(sfx_events), True))
+                attempts.append(("full mix without inserts", _xfade_fc(False),
+                                 lens_xfade, bool(sfx_events), False))
+            else:
+                attempts.append(("full mix", _xfade_fc(False), lens_xfade,
+                                 bool(sfx_events), False))
+
+        for label, fc, lens, with_sfx, with_ins in attempts:
             # A timeout must degrade exactly like a nonzero return code — fall
-            # through to the simple pipeline, never freeze an autonomous run.
+            # through to the next rung, never freeze an autonomous run.
             try:
-                r = subprocess.run(_build_cmd(fc, lens_xfade, with_sfx=bool(sfx_events)),
+                r = subprocess.run(_build_cmd(fc, lens, with_sfx=with_sfx,
+                                              with_inserts=with_ins),
                                    capture_output=True, text=True, timeout=RENDER_TIMEOUT)
                 if r.returncode == 0:
                     rendered = True
-                else:
-                    print(f"[render] full mix failed (rc={r.returncode}: "
-                          f"{r.stderr[-200:].strip()}), retrying with simple pipeline…")
+                    break
+                print(f"[render] {label} failed (rc={r.returncode}: "
+                      f"{r.stderr[-200:].strip()}) — trying the next rung…")
             except subprocess.TimeoutExpired:
-                print(f"[render] full mix timed out after {RENDER_TIMEOUT}s — "
-                      f"retrying with simple pipeline…")
+                print(f"[render] {label} timed out after {RENDER_TIMEOUT}s — "
+                      f"trying the next rung…")
+            if with_ins:
+                print(f"[inserts] ⚠ {len(inserts)} insert(s) dropped — the "
+                      f"filtergraph carrying them would not render")
 
         if not rendered:
             fc = (
@@ -1177,8 +1317,12 @@ def render(script: str, bg_paths: "Path | list[Path]", out_dir: Path,
                 + _audio_filter_simple(n, audio_dur, has_music,
                                        with_loudnorm=_ffmpeg_has_filter("loudnorm"))
             )
+            if inserts and not attempts:
+                print(f"[inserts] ⚠ {len(inserts)} insert(s) dropped — the "
+                      f"simple pipeline renders without them")
             try:
-                r2 = subprocess.run(_build_cmd(fc, lens_concat, with_sfx=False),
+                r2 = subprocess.run(_build_cmd(fc, lens_concat, with_sfx=False,
+                                               with_inserts=False),
                                     capture_output=True, text=True, timeout=RENDER_TIMEOUT)
             except subprocess.TimeoutExpired:
                 raise RuntimeError(f"FFmpeg fallback render timed out after {RENDER_TIMEOUT}s")

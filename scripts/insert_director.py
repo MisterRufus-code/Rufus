@@ -155,6 +155,18 @@ _POSITIONAL = {
     "through", "under", "upon", "ahead", "apart", "away", "back", "forward",
 }
 
+# Degree and stance adverbs. They survive every suffix rule here — "quite" and
+# "grey" both reached a live report of things no shot showed — because they end
+# in nothing distinctive and are not verbs. There is no picture of "quite".
+_ADVERBS = {
+    "quite", "very", "rather", "almost", "nearly", "barely", "hardly",
+    "simply", "merely", "truly", "really", "surely", "clearly", "exactly",
+    "already", "still", "always", "never", "often", "sometimes", "usually",
+    "again", "instead", "however", "therefore", "meanwhile", "suddenly",
+    "finally", "eventually", "overnight", "today", "tomorrow", "yesterday",
+    "enough", "even", "just", "only", "much", "quickly", "slowly",
+}
+
 # Dates. A month is a label on time; it has no picture, and it was the very
 # first thing this planner chose, because good scripts open on a date.
 _CALENDAR = {
@@ -180,6 +192,22 @@ _VERB_PLURALS = {
 def enabled() -> bool:
     return os.environ.get("RUFUS_INSERTS", "1").strip().lower() \
         not in ("0", "false", "no", "off")
+
+
+def style_suffix() -> str:
+    """The channel's own look, so an insert belongs to the beat behind it.
+
+    Reusing comfy_client's detail suffix rather than writing a second style
+    string is the same rule the world lock follows: two descriptions of one
+    look drift, and the drift shows up as an insert that is visibly from a
+    different video. Lives here rather than in a renderer because BOTH
+    renderers need it and the second copy is where the drift starts.
+    """
+    try:
+        import comfy_client
+        return comfy_client._detail_suffix()
+    except Exception:
+        return ""
 
 
 def _cfg(name: str, default: float) -> float:
@@ -274,6 +302,8 @@ def _is_drawable(word: str) -> bool:
     """
     if word in _TOO_GENERIC or word in _POSITIONAL or word in _CALENDAR:
         return False
+    if word in _ADVERBS:
+        return False
     if word in _PLAIN_ADJECTIVES or word in _NUMBER_WORDS or word in _BARE_VERBS:
         return False
     if word in _VERB_PLURALS:
@@ -357,6 +387,23 @@ def plan(script: str, words: list[dict], style: str = "") -> list[dict]:
     return out
 
 
+def _with_style(base: str, style: str) -> str:
+    """Base prompt + the channel style, with the insert's own framing LAST.
+
+    An insert composites OVER a beat clip that already draws the place, so it
+    has to be a cutout — a second background behind a 460px picture in the
+    corner just makes two competing scenes in one frame. The channel's style
+    block now asks for a background (it must: the beats looked like figures
+    floating in white without one), so the override has to come after it.
+    Prompts are read most-recent-wins by every model this pipeline drives.
+    """
+    if not (style and style.strip()):
+        return base
+    return (f"{base}. {style.strip()} For THIS picture only: no background "
+            f"scenery, no room, no horizon — the subject alone on a plain "
+            f"flat backdrop, cut out and ready to place over another image.")
+
+
 def insert_prompt(noun: str, style: str = "") -> str:
     """What to draw for one insert.
 
@@ -369,7 +416,7 @@ def insert_prompt(noun: str, style: str = "") -> str:
     base = (f"A single {_singular(noun)}, centred in frame, one clear object, "
             f"plain flat background, bold readable silhouette, no text, "
             f"no words, no letters")
-    return f"{base}. {style.strip()}" if style and style.strip() else base
+    return _with_style(base, style)
 
 
 # Words whose singular is not the word minus an "s", or which are not plural at
@@ -455,7 +502,7 @@ def phrase_prompt(text: str, style: str = "") -> str:
     base = (f"A simple scene showing: {clean}. One clear subject, "
             f"uncluttered, bold readable silhouette, no text, no words, "
             f"no letters")
-    return f"{base}. {style.strip()}" if style and style.strip() else base
+    return _with_style(base, style)
 
 
 def plan_phrases(script: str, words: list[dict], style: str = "") -> list[dict]:

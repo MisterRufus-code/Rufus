@@ -109,19 +109,36 @@ def test_no_inserts_means_no_work(tmp_path):
 
 # ── the renderer seam ────────────────────────────────────────────────────────
 
-def test_the_renderer_plans_inserts_after_transcription():
+def _renderer_sources() -> dict:
+    """Both renderers. THE FFMPEG ONE IS THE ONE THAT ACTUALLY RUNS —
+    RUFUS_RENDERER defaults to "ffmpeg" — and the insert layer shipped into
+    the Remotion path alone, so the owner set RUFUS_INSERT_MODE and
+    RUFUS_INSERT_MAX=40 and got the same ten beat pictures twice, with nothing
+    in the log to explain it. Every seam test below therefore asks the
+    question of BOTH paths."""
+    import audio_gen
+    return {
+        "remotion": Path(remotion_renderer.__file__).read_text(encoding="utf-8"),
+        "ffmpeg": Path(audio_gen.__file__).read_text(encoding="utf-8"),
+    }
+
+
+def test_both_renderers_plan_inserts_after_transcription():
     """An insert is pinned to the second its word is SPOKEN, and only the
     Whisper pass over the finished voiceover knows that. Planning earlier would
     mean guessing from the script."""
-    src = Path(remotion_renderer.__file__).read_text(encoding="utf-8")
-    assert src.index("_transcribe") < src.index("insert_director")
+    for name, src in _renderer_sources().items():
+        assert src.index("insert_director") > 0, name
+        transcribe = min(i for i in (src.find("_transcribe"), src.find("words"))
+                         if i >= 0)
+        assert transcribe < src.rindex("insert_director.plan_for"), name
 
 
-def test_the_layer_is_wrapped_so_it_can_never_break_a_render():
-    src = Path(remotion_renderer.__file__).read_text(encoding="utf-8")
-    block = src.split("import insert_director")[1].split("props = {")[0]
-    assert "except Exception" in block
-    assert "rendering without them" in block
+def test_both_renderers_wrap_the_layer_so_it_can_never_break_a_render():
+    for name, src in _renderer_sources().items():
+        block = src.rsplit("import insert_director", 1)[1][:1500]
+        assert "except Exception" in block, name
+        assert "without them" in block, name
 
 
 def test_inserts_reach_the_composition_as_a_prop():
@@ -131,9 +148,26 @@ def test_inserts_reach_the_composition_as_a_prop():
 
 def test_the_insert_style_is_the_channels_own():
     """An insert in a different look from the beat behind it reads as a bug —
-    exactly what text-to-video did to this channel's flat-vector style."""
-    src = Path(remotion_renderer.__file__).read_text(encoding="utf-8")
+    exactly what text-to-video did to this channel's flat-vector style. Both
+    renderers ask ONE function so the two paths cannot drift into two looks."""
+    import insert_director
+    src = Path(insert_director.__file__).read_text(encoding="utf-8")
     assert "_detail_suffix" in src
+    for name, rsrc in _renderer_sources().items():
+        assert "style_suffix" in rsrc, name
+
+
+def test_an_insert_overrides_the_style_block_background():
+    """The channel style now asks for scenery behind the figures, which is
+    right for a beat and wrong for a 460px cutout composited over one: two
+    backgrounds in one frame is two competing scenes. The override has to come
+    AFTER the style block, because that is the half a model reads last."""
+    import insert_director
+    out = insert_director.insert_prompt("coins", "STYLE ASKING FOR A ROOM.")
+    assert out.index("STYLE ASKING FOR A ROOM") < out.index("no background")
+    phrase = insert_director.phrase_prompt("he paid the men",
+                                           "STYLE ASKING FOR A ROOM.")
+    assert "no background scenery" in phrase
 
 
 # ── the composition ──────────────────────────────────────────────────────────
@@ -288,3 +322,61 @@ def test_render_inserts_asks_for_the_small_size(monkeypatch, tmp_path):
     comfy_client.render_inserts(
         [{"word": "sword", "at": 1.0, "hold": 0.7, "prompt": "a sword"}], tmp_path)
     assert got["px"] == comfy_client._insert_px()
+
+
+# ── the ffmpeg overlay layer ─────────────────────────────────────────────────
+# Verified once against a real ffmpeg 6.1 render before these were written: an
+# insert is absent at t=0.2, red on the left at t=1.0, and gone again with the
+# second one blue on the right at t=2.5. These keep the graph that did it.
+
+def test_the_overlay_chain_switches_each_insert_on_at_its_own_second():
+    import audio_gen
+    parts, last = audio_gen._insert_overlay_parts(
+        [{"at": 0.5, "hold": 1.0}, {"at": 2.0, "hold": 0.7}], base=4)
+    graph = ";".join(parts)
+    assert "enable='between(t,0.500,1.500)'" in graph
+    assert "enable='between(t,2.000,2.700)'" in graph
+    assert "[4:v]" in graph and "[5:v]" in graph, "inputs are indexed from base"
+    assert last == "ov1"
+
+
+def test_an_insert_never_truncates_the_video():
+    """eof_action=pass: the worst an insert input can do is stop early. Without
+    it a short overlay input ends the whole output stream."""
+    import audio_gen
+    parts, _ = audio_gen._insert_overlay_parts([{"at": 1.0, "hold": 0.5}], base=2)
+    assert "eof_action=pass" in ";".join(parts)
+
+
+def test_inserts_sit_under_the_captions():
+    """A word is illustrated by its picture, never covered by it — the same
+    stacking order Short.tsx uses on the Remotion path."""
+    import audio_gen
+    fc = audio_gen._finish_video(
+        ["[0:v]null[vcat]"], 10.0, "eq=contrast=1.0", "sub.ass", "fonts",
+        "#FFD23F", inserts=[{"at": 1.0, "hold": 0.5}], insert_base=3)
+    assert fc.index("overlay=x=") < fc.index("ass='sub.ass'")
+
+
+def test_no_plan_leaves_the_graph_byte_for_byte_unchanged():
+    """The layer is additive or it is nothing: a run without inserts must
+    render the video this pipeline rendered before it existed."""
+    import audio_gen
+    # A fresh parts list per call — _finish_video appends to the one it is
+    # given, and sharing it would compare a graph against itself twice over.
+    def graph(**kw):
+        return audio_gen._finish_video(["[0:v]null[vcat]"], 10.0,
+                                       "eq=contrast=1.0", "sub.ass", "fonts",
+                                       "#FFD23F", **kw)
+    assert graph() == graph(inserts=[], insert_base=3)
+
+
+def test_the_ffmpeg_ladder_can_drop_inserts_without_losing_the_render():
+    """Forty extra inputs and forty overlays go into the most fragile string in
+    this repo. A failure there has to cost the pictures, not the video — and it
+    has to SAY so, because a video that quietly lost its inserts looks exactly
+    like one that never planned any."""
+    import audio_gen
+    src = Path(audio_gen.__file__).read_text(encoding="utf-8")
+    assert "full mix without inserts" in src
+    assert "insert(s) dropped" in src

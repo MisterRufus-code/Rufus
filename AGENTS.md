@@ -104,7 +104,15 @@ bootstraps a reference portrait and feeds it through
 character" — check `character_engine.enabled(niche)` before assuming any is
 live. Naming a character in a prompt is **not** describing them: an image model
 renders each beat from noise with no memory of the others, so a beat that says
-only "the Chronicler appears again" will render a different person.
+only "the narrator appears again" will render a different person.
+
+**No niche currently has a character switched on.** money_history ran one (a
+hooded narrator) and the owner removed it: it took the first, middle and last
+shot of every sequence, so three frames in ten went to a mascot instead of the
+story. The mechanism is intact and the five SD niches still ship starter
+mascots with `"enabled": false` — turning one on is a `config/niches.json`
+edit, not a code change. Do not re-add a character to a niche without being
+asked for one.
 
 **Fact-checking and quality gates live in `script_writer.py`**, layered rather
 than single: hook grounding against the source seed, body pre-checks (banned

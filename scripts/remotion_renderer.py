@@ -59,16 +59,14 @@ def _check_ready() -> None:
 
 
 def _insert_style() -> str:
-    """The channel's own look, so an insert belongs to the beat behind it.
+    """The channel's look for inserts — see insert_director.style_suffix.
 
-    Reusing comfy_client's detail suffix rather than writing a second style
-    string is the same rule the world lock follows: two descriptions of one
-    look drift, and the drift shows up as an insert that is visibly from a
-    different video.
+    Both renderers ask the same function rather than each holding a copy, so
+    the two paths cannot drift into two looks.
     """
     try:
-        import comfy_client
-        return comfy_client._detail_suffix()
+        import insert_director
+        return insert_director.style_suffix()
     except Exception:
         return ""
 

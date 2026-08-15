@@ -64,10 +64,35 @@ def test_carried_continuity_reaches_the_image_model():
     """The thread has to be IN the prompt, not only in the storyboard's notes
     — the renderer never sees the JSON."""
     plan = _reply(2)
+    # A thread the shot does NOT already name — see _already_shows for why the
+    # other case is deliberately silent now.
+    plan["shots"][1]["carries_over"] = "the merchant's leather ledger"
+    out = storyboard._clean(plan, 2)
+    assert "Continuing from the previous shot: the merchant's leather ledger" in out[1]
+    assert "Continuing from" not in out[0], "shot 1 has nothing to continue from"
+
+
+def test_a_thread_the_shot_already_names_is_not_restated():
+    """THE COIN BUG. A live run appended `Continuing from the previous shot:
+    the lemonade stand.` to nine of ten shots, including one that opened "A
+    child stands behind the wooden lemonade stand" — and the owner's gallery
+    came back with the same object in every single picture. Duplication in a
+    prompt reads as emphasis."""
+    plan = _reply(2)
     plan["shots"][1]["carries_over"] = "the same coin from shot 1, now thinner"
     out = storyboard._clean(plan, 2)
-    assert "Continuing from the previous shot: the same coin from shot 1" in out[1]
-    assert "Continuing from" not in out[0], "shot 1 has nothing to continue from"
+    assert "Continuing from" not in out[1], "the shot already says coin"
+
+
+def test_the_thread_cannot_be_restated_in_every_shot():
+    """A thread named in every shot stops connecting them and starts making
+    them the same picture — the identical failure as carrying a mood."""
+    plan = _reply(10)
+    for shot in plan["shots"]:
+        shot["carries_over"] = "the merchant's leather ledger"
+    out = storyboard._clean(plan, 10)
+    carried = sum("Continuing from" in v for v in out)
+    assert 0 < carried <= 4, carried
 
 
 def test_junk_is_rejected():
@@ -105,11 +130,21 @@ def test_prompt_asks_for_continuity_between_shots():
 
 
 def test_prompt_puts_feeling_in_the_frame_not_in_an_adjective():
-    """"his expression one of despair" and "revealing the anguish of misplaced
-    trust" both shipped in the last run."""
+    """"revealing the anguish of misplaced trust" shipped in a real run."""
     p = _prompt()
-    assert "his expression one of despair" in p
-    assert "What is IN the frame, never what someone feels" in p
+    assert "revealing the anguish of misplaced trust" in p
+    assert "A feeling named as a feeling gives the image model nothing to draw" in p
+
+
+def test_prompt_asks_for_the_face_as_a_physical_thing():
+    """The ban on named emotions was reading as a ban on FACES, and the
+    gallery came back with ten identical blank expressions. A face is a
+    physical thing; "brows pulled down" is drawable and "looking determined"
+    is not."""
+    p = _prompt()
+    assert "DRAW THE FACE AND THE POSTURE" in p
+    assert "brows pulled down and mouth flat" in p
+    assert "Never 'looking determined'" in p
 
 
 def test_prompt_carries_the_per_beat_era_tag():
@@ -170,7 +205,7 @@ def test_a_valid_reply_comes_back_in_beat_order(monkeypatch, tmp_path):
     body = json.dumps({"through_line": "one coin", "shots": [
         {"n": 1, "visual": "A bright new coin fills the frame on a stone counter.",
          "carries_over": None},
-        {"n": 2, "visual": "The same counter, the coin now thin and grey and alone.",
+        {"n": 2, "visual": "The same counter, bare now, dust settled in the grain.",
          "carries_over": "the coin from shot 1"},
     ]})
 

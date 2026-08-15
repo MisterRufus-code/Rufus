@@ -21,7 +21,9 @@ import shot_chain  # noqa: E402
 import storyboard  # noqa: E402
 
 _SCENE = "A worn silver coin lies alone on a bare wooden counter"
-_CARRY = "the same coin from shot 1, now thinner"
+# A thread the scene does NOT already name — storyboard._already_shows
+# deliberately skips the marker when the shot says it itself.
+_CARRY = "the merchant's leather ledger"
 _CHAINED = f"{_SCENE}. {shot_chain.MARKER} {_CARRY}."
 
 

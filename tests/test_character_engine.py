@@ -185,19 +185,23 @@ def test_the_repeated_part_stays_tiny(monkeypatch, tmp_path):
     assert len(ce.short_ref("money_history")) < 200
 
 
-def test_real_money_history_character_ships_a_short_description():
-    """The shipped config must define the short form explicitly rather than
-    relying on the truncation fallback."""
+def test_money_history_ships_no_character_at_all():
+    """REMOVED BY THE OWNER. money_history ran with "the Chronicler" — a
+    hooded narrator pinned into the first, middle and last shot of every
+    sequence — and the decision was to take it out completely: three of ten
+    frames went to a mascot instead of the story, and every one of them also
+    dragged in the restatement clause that keeps his cloak consistent.
+
+    The MECHANISM stays (character_engine.py is generic and the five SD niches
+    still ship starter mascots, all disabled). What must not come back is a
+    character on this niche — with no `character` key, every call site falls
+    through and nothing about the character path executes."""
     import json as _json
     from pathlib import Path as _Path
     real = _json.loads((_Path(__file__).parent.parent / "config" / "niches.json")
                        .read_text(encoding="utf-8"))
-    char = real["niches"]["money_history"]["character"]
-    assert char.get("short_description")
-    assert len(char["short_description"].split()) <= 25
-    # 'ledger' would trip main._defuse_readable_text and push the character's
-    # own prop out of focus — the short form deliberately carries the lantern.
-    assert "ledger" not in char["short_description"].lower()
+    assert "character" not in real["niches"]["money_history"]
+    assert "chronicler" not in _json.dumps(real).lower()
 
 
 def test_character_clause_falls_back_to_generic_name(monkeypatch, tmp_path):

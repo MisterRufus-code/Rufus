@@ -1121,7 +1121,16 @@ def render_inserts(inserts: list[dict], out_dir: Path,
     out_dir.mkdir(parents=True, exist_ok=True)
     base = base_seed if base_seed is not None else random.randint(1, 2**31 - 1)
     done: list[dict] = []
+    # A dead engine fails every one of these the same way. Three in a row is
+    # not bad luck, it is the engine, and forty identical error lines bury the
+    # one sentence that explains the whole run.
+    misses = 0
     for i, item in enumerate(inserts):
+        if misses >= 3:
+            print(f"[inserts] 3 failures in a row — stopping after "
+                  f"{len(done)}/{len(inserts)}. The image engine is not "
+                  f"answering; start ComfyUI (or set RUFUS_INSERTS=0).")
+            break
         prompt = str(item.get("prompt") or item.get("word") or "").strip()
         if not prompt:
             continue
@@ -1132,15 +1141,18 @@ def render_inserts(inserts: list[dict], out_dir: Path,
                                 niche=niche, px=_insert_px())
         except Exception as e:
             print(f"[inserts] {item.get('word')!r} failed ({e}) — skipping")
+            misses += 1
             continue
         if not raw:
             print(f"[inserts] {item.get('word')!r} produced nothing — skipping")
+            misses += 1
             continue
         try:
             path.write_bytes(raw)
         except OSError as e:
             print(f"[inserts] could not write {name} ({e}) — skipping")
             continue
+        misses = 0
         done.append({**item, "file": name})
     print(f"[inserts] {len(done)}/{len(inserts)} rendered into {out_dir.name}")
     return done

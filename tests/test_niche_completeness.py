@@ -173,22 +173,12 @@ def test_money_history_permits_evergreen_concepts_not_just_events():
     assert "no get-rich talk" in gpt_system
 
 
-def test_money_history_character_is_timeless_and_enabled():
-    """The recurring-character feature (character_engine.py) is live for
-    money_history: a deliberately timeless/archetypal design (per the
-    channel-owner's Calliope-Labs direction) that reads as a narrator/guide
-    rather than a literal period inhabitant, specifically so it can stay on
-    without fighting the PERIOD ACCURACY rule the rest of every scene still
-    follows."""
-    char = NICHES["money_history"].get("character")
-    assert isinstance(char, dict)
-    assert char.get("enabled") is True
-    desc = char.get("description", "").lower()
-    assert desc
-    assert "timeless" in desc
-    # Must NOT anchor the design to any one era's fashion — that's the whole
-    # point of choosing a hooded/archetypal figure over period dress.
-    assert "not tied to any historical period" in desc or "not pinned" in desc
+def test_money_history_has_no_recurring_character():
+    """The Chronicler was removed at the owner's request — see
+    test_character_engine.test_money_history_ships_no_character_at_all for the
+    reasoning. A niche with no `character` key runs the whole pipeline with
+    every character branch falling through, which is the intended state here."""
+    assert "character" not in NICHES["money_history"]
 
 
 def test_every_sd_niche_has_a_starter_character_disabled_by_default():
