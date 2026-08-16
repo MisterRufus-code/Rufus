@@ -1176,6 +1176,30 @@ PAGE_STYLE = """<!doctype html><html><head><meta charset="utf-8">
     .btn { padding: 12px 20px; }
     th, td { padding: 12px 10px; }
   }
+  .fmt-switch { display:inline-flex; gap:0; margin-left:10px; vertical-align:middle;
+                border:1px solid var(--line); border-radius:8px; overflow:hidden }
+  .fmt-switch form { margin:0 }
+  button.fmt { border:0; background:var(--card); color:var(--muted);
+               padding:5px 11px; font-size:13px; cursor:pointer; font-family:inherit }
+  button.fmt:hover { color:var(--fg) }
+  button.fmt.on { background:var(--accent); color:#fff; font-weight:600 }
+  .fmt-badge { margin-left:10px; color:var(--muted); font-size:13px }
+  .style-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(230px,1fr));
+                gap:14px; margin-top:16px }
+  .style-card { border:1px solid var(--line); border-radius:12px; overflow:hidden;
+                background:var(--card); display:flex; flex-direction:column }
+  .style-card.on { border-color:var(--accent); box-shadow:0 0 0 2px var(--accent) }
+  .style-card img { width:100%; aspect-ratio:16/9; object-fit:cover; display:block;
+                    background:var(--bg) }
+  .style-card .noimg { width:100%; aspect-ratio:16/9; display:flex; align-items:center;
+                       justify-content:center; color:var(--muted); font-size:13px;
+                       background:var(--bg); text-align:center; padding:10px }
+  .style-card .body { padding:10px 12px; display:flex; flex-direction:column; gap:8px;
+                      flex:1 }
+  .style-card h4 { margin:0; font-size:15px }
+  .style-card p { margin:0; font-size:12.5px; color:var(--muted); line-height:1.45;
+                  flex:1 }
+  .style-card .row { display:flex; gap:8px }
 </style></head><body>
 """
 
@@ -1184,6 +1208,7 @@ PAGE_STYLE = """<!doctype html><html><head><meta charset="utf-8">
 NAV_ITEMS = [
     ("/generate",   "▶ Make a video",                     "generate"),
     ("/thumbnails", "🎨 Thumbnails",                      "thumbnail"),
+    ("/styles",     "🎨 Style",                           "settings"),
     ("/failures",   "⚠ Failures &amp; rejected attempts", "view"),
     ("/performance", "📈 Performance",                    "view"),
     ("/trending",   "🔥 Trending",                        "view"),
@@ -1257,6 +1282,43 @@ LIVEBAR_JS = """
 """
 
 
+
+def _format_switch() -> str:
+    """Short ⇄ Long, in the header, on every page.
+
+    WHY IT LIVES UP HERE and not in Settings. It is not a preference like the
+    seed count — it decides the aspect ratio, the script length, the number of
+    pictures and how long the GPU is busy, and it is the one thing the owner
+    said they wanted to change per video rather than per channel. A setting
+    buried three pages deep that changes everything is a setting people forget
+    is set, and this dashboard has already been bitten by exactly that with
+    SD_CLIPS.
+
+    Shown to whoever may change settings; everyone else sees the CURRENT
+    format as plain text, because knowing what the next run will make is
+    useful even when you cannot change it.
+    """
+    import video_format
+    current = video_format.name()
+    if not auth.can("settings"):
+        return (f'<span class="fmt-badge" title="the shape of the next run">'
+                f'{_esc(video_format.profile()["label"])}</span>')
+    out = ['<span class="fmt-switch" title="the shape of the next run">']
+    for fid in ("short", "long"):
+        prof = video_format.PROFILES[fid]
+        on = " on" if fid == current else ""
+        label = "Shorts" if fid == "short" else "Long-form"
+        out.append(
+            f'<form method="post" action="/format" style="display:inline">'
+            f'<input type="hidden" name="format" value="{fid}">'
+            f'<button class="fmt{on}" type="submit" '
+            f'title="{_esc(prof["width"])}×{_esc(prof["height"])}, '
+            f'{_esc(prof["words_min"])}–{_esc(prof["words_max"])} words">'
+            f'{label}</button></form>')
+    out.append("</span>")
+    return "".join(out)
+
+
 def _head() -> str:
     """Page header with the nav this user may actually use.
 
@@ -1273,7 +1335,7 @@ def _head() -> str:
                f'<span class="role">{_esc(user.get("role", "?"))}</span>'
                f' · <a class="navlink" href="/logout" style="margin-left:6px">sign out</a></span>')
     return (PAGE_STYLE + '<header><a href="/"><h1>🎬 Rufus Dashboard</h1></a>\n'
-            + links + who + "</header>\n<main>\n"
+            + links + _format_switch() + who + "</header>\n<main>\n"
             + '<div id="livebar"><span class="item">'
               '<span class="dot warn"></span>checking…</span></div>\n'
             + LIVEBAR_JS)
@@ -2154,6 +2216,180 @@ def settings_users_link():
             link = f"{auth._base_url()}/?token={u['token']}"
             return redirect(f"/settings/users?link={_urlquote(link)}&name={_urlquote(name)}")
     return redirect("/settings/users?error=" + _urlquote("No such user."))
+
+
+@app.route("/styles")
+def styles_page():
+    """Pick the look, by looking at it.
+
+    A style is 1,500 words of prose describing line weight, palette and how a
+    background behaves. Choosing between seven of those from a dropdown means
+    choosing by NAME, which is how a channel spent weeks in a beige wash
+    nobody had asked for — the words said "soft muted flat colours" and only
+    a rendered frame said what that meant.
+
+    So the previews are RENDERED, not shipped. One fixed scene, the same for
+    every style, through the same ComfyUI stills workflow the videos use, so
+    the differences on this page are differences you will actually get. A
+    style with no preview yet says so and offers to make one; nothing here
+    pretends to show you art it has not produced.
+    """
+    auth.require("settings")
+    import comfy_client
+    import video_format
+
+    presets = comfy_client.style_presets()
+    current = (os.environ.get("RUFUS_STYLE") or "").strip()
+    prev_dir = _style_preview_dir()
+    busy = [c for c in _channels() if _run_in_progress(c)]
+
+    cards = ""
+    for sid in sorted(presets):
+        text = presets[sid]
+        # The opening sentence is the style's own summary of itself.
+        blurb = text.split(".")[0][:180] + "."
+        img = prev_dir / f"{sid}.png"
+        if img.exists():
+            thumb = (f'<img src="/styles/preview/{_esc(sid)}?v={int(img.stat().st_mtime)}" '
+                     f'alt="{_esc(sid)} preview" loading="lazy">')
+        else:
+            thumb = ('<div class="noimg">no preview yet —<br>render one to see '
+                     'this style</div>')
+        on = " on" if sid == current else ""
+        pick = ("<span class='muted' style='font-size:12px'>in use</span>"
+                if sid == current else
+                f'<form method="post" action="/styles/use" style="display:inline">'
+                f'<input type="hidden" name="style" value="{_esc(sid)}">'
+                f'<button type="submit">Use this</button></form>')
+        render = (f'<form method="post" action="/styles/preview" style="display:inline">'
+                  f'<input type="hidden" name="style" value="{_esc(sid)}">'
+                  f'<button type="submit" class="ghost">'
+                  f'{"Re-render" if img.exists() else "Render preview"}</button></form>')
+        cards += (f'<div class="style-card{on}">{thumb}<div class="body">'
+                  f'<h4>{_esc(sid)}</h4><p>{_esc(blurb)}</p>'
+                  f'<div class="row">{pick}{render}</div></div></div>\n')
+
+    note = ""
+    if busy:
+        note = (f'<p class="muted">A run is using the GPU ({_esc(", ".join(busy))}), '
+                f'so previews have to wait for it to finish.</p>')
+    elif not _comfyui_reachable():
+        note = ('<p class="muted">ComfyUI is not answering, so previews cannot '
+                'be rendered right now. Picking a style still works.</p>')
+
+    body = f"""
+    <a class="back" href="/">← back</a>
+    <h2 style="margin-top:14px">Style</h2>
+    <p class="muted">The look every picture is rendered in. Previews are real
+       renders of one fixed scene — the same scene for every style — through
+       the same workflow the videos use, so what you see here is what you get.
+       Applies to the next run in {_esc(video_format.profile()["label"])}.</p>
+    {_msg_banner()}
+    {note}
+    <div class="style-grid">{cards}</div>
+    """
+    return _head() + body + PAGE_TAIL
+
+
+def _style_preview_dir() -> Path:
+    import paths
+    d = paths.media_root() / "style_previews"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+# ONE SCENE FOR ALL OF THEM. A picker where each card shows a different
+# subject compares subjects, not styles — the whole point is that the only
+# variable between these frames is the style block.
+STYLE_PREVIEW_SCENE = ("Two people stand at a market stall on a street, one "
+                       "handing a coin to the other, crates and a low wall "
+                       "behind them, hills on the horizon under an open sky.")
+
+
+@app.route("/styles/preview", methods=["POST"])
+def styles_preview():
+    auth.require("settings")
+    import comfy_client
+    import image_gen
+
+    sid = (request.form.get("style") or "").strip()
+    presets = comfy_client.style_presets()
+    if sid not in presets:
+        return redirect("/styles?error=" + _urlquote("Unknown style"))
+
+    busy = [c for c in _channels() if _run_in_progress(c)]
+    if busy:
+        return redirect("/styles?error=" + _urlquote(
+            f"A video run is using the GPU ({', '.join(busy)}) — try again "
+            f"when it finishes."))
+
+    # add_detail=False, then the style appended by hand: the automatic suffix
+    # is whatever RUFUS_STYLE currently is, and a picker that previewed the
+    # style you already have would be a picker in name only.
+    try:
+        path = image_gen.generate_image(
+            f"{STYLE_PREVIEW_SCENE} {presets[sid]}",
+            width=image_gen.THUMB_W, height=image_gen.THUMB_H,
+            add_detail=False, timeout=image_gen.WEB_TIMEOUT)
+    except Exception as e:
+        return redirect("/styles?error=" + _urlquote(f"Render failed: {e}"))
+    if path is None:
+        return redirect("/styles?error=" + _urlquote(
+            "Render failed — check ComfyUI is running and a stills workflow "
+            "is exported to config/stills_api.json"))
+
+    try:
+        import shutil
+        shutil.copyfile(path, _style_preview_dir() / f"{sid}.png")
+    except OSError as e:
+        return redirect("/styles?error=" + _urlquote(f"Could not save it: {e}"))
+    return redirect("/styles?msg=" + _urlquote(f"Rendered a {sid} preview."))
+
+
+@app.route("/styles/preview/<style_id>")
+def styles_preview_image(style_id: str):
+    auth.require("view")
+    d = _style_preview_dir()
+    name = f"{Path(style_id).name}.png"
+    if not (d / name).exists():
+        abort(404)
+    return send_from_directory(str(d), name)
+
+
+@app.route("/styles/use", methods=["POST"])
+def styles_use():
+    """Save the style the way every launch path reads it."""
+    auth.require("settings")
+    import comfy_client
+    sid = (request.form.get("style") or "").strip()
+    if sid not in comfy_client.style_presets():
+        return redirect("/styles?error=" + _urlquote("Unknown style"))
+    values = _load_settings()
+    values["RUFUS_STYLE"] = sid
+    _save_settings(values)
+    os.environ["RUFUS_STYLE"] = sid
+    return redirect("/styles?msg=" + _urlquote(f"Next run renders in {sid}."))
+
+
+@app.route("/format", methods=["POST"])
+def set_format():
+    """Persist the format for every launch path, not just this page.
+
+    Written through _save_settings so run.bat, the scheduled task and a bare
+    `python scripts/main.py` all see it — the same reason settings_store
+    exists. A header button that only changed THIS process would be the
+    settings-page-obeyed-by-one-launcher bug wearing a nicer hat.
+    """
+    auth.require("settings")
+    import video_format
+    fmt = (request.form.get("format") or "").strip().lower()
+    if fmt not in video_format.PROFILES:
+        return redirect(request.referrer or "/")
+    values = _load_settings()
+    values["RUFUS_FORMAT"] = fmt
+    _save_settings(values)
+    os.environ["RUFUS_FORMAT"] = fmt
+    return redirect(request.referrer or "/")
 
 
 @app.route("/settings/test-notify", methods=["POST"])

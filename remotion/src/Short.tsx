@@ -31,6 +31,10 @@ if (typeof document !== 'undefined') {
 }
 
 export const FPS = 30;
+// The DEFAULT shape, not the only one. Python's video_format profile decides
+// what a run actually renders at (1080x1920 for a Short, 1920x1080 for
+// long-form) and passes it in props; Root's calculateMetadata applies it. These
+// stay as the fallback for a props-less preview in the Remotion studio.
 export const WIDTH = 1080;
 export const HEIGHT = 1920;
 
@@ -73,6 +77,8 @@ export type ShortProps = {
   durationInSeconds: number;
   edit?: EditPlan | null; // per-beat direction; null = use the default cycle
   inserts?: Insert[] | null; // word-synced cutaways; absent = the old look
+  width?: number; // from video_format; absent = the vertical default
+  height?: number;
 };
 
 const HIGHLIGHT = /[\d$%]/;

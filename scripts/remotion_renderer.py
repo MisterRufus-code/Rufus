@@ -24,6 +24,7 @@ import time
 from pathlib import Path
 
 import audio_gen  # same-directory import: TTS, whisper, music, duration logic
+import video_format as _fmt
 
 ROOT         = Path(__file__).parent.parent
 REMOTION_DIR = ROOT / "remotion"
@@ -202,6 +203,11 @@ def render(script: str, bg_paths: "Path | list[Path]", out_dir: Path,
             "music":             music_name,
             "words":             words,
             "durationInSeconds": round(audio_dur, 3),
+            # The render's shape, from the active format profile. Root's
+            # calculateMetadata reads these; without them a long-form job
+            # renders at the vertical default and every frame is cropped.
+            "width": _fmt.dimensions()[0],
+            "height": _fmt.dimensions()[1],
             "edit":              edit,
             "inserts":           inserts or None,
         }

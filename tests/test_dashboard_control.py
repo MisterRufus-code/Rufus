@@ -329,3 +329,78 @@ def test_the_launcher_shows_the_reason_it_exited():
     # end with twenty lines of noise every time.
     tail = text.split('set "RC=%ERRORLEVEL%"')[1]
     assert tail.index('if not "%RC%"=="0"') < tail.index("Get-Content")
+
+
+# ── the format switch, and picking a look by looking at it ───────────────────
+
+def test_the_format_switch_is_in_the_header_on_every_page(client):
+    """Not in Settings. It decides aspect ratio, script length, picture count
+    and how long the GPU is busy, and it is the one thing the owner wants to
+    change per video rather than per channel. A setting three pages deep that
+    changes everything is a setting people forget is set — SD_CLIPS proved
+    that on this dashboard already."""
+    body = client.get("/").data.decode()
+    assert 'action="/format"' in body
+    assert "Shorts" in body and "Long-form" in body
+
+
+def test_switching_format_persists_for_every_launch_path(client, tmp_path,
+                                                         monkeypatch):
+    """A header button that only changed THIS process would be the
+    settings-page-obeyed-by-one-launcher bug wearing a nicer hat."""
+    monkeypatch.setattr(dashboard, "SETTINGS_FILE", tmp_path / "s.json")
+    r = client.post("/format", data={"format": "long"})
+    assert r.status_code in (302, 303)
+    assert dashboard._load_settings()["RUFUS_FORMAT"] == "long"
+    import os as _os
+    assert _os.environ["RUFUS_FORMAT"] == "long"
+    # Leave the process as we found it: an env var set by one test decides
+    # the aspect ratio for every test after it.
+    _os.environ.pop("RUFUS_FORMAT", None)
+
+
+def test_an_unknown_format_changes_nothing(client, tmp_path, monkeypatch):
+    monkeypatch.setattr(dashboard, "SETTINGS_FILE", tmp_path / "s.json")
+    client.post("/format", data={"format": "vertical-ish"})
+    assert "RUFUS_FORMAT" not in dashboard._load_settings()
+
+
+def test_the_style_page_lists_every_preset(client):
+    import comfy_client
+    body = client.get("/styles").data.decode()
+    for sid in comfy_client.style_presets():
+        assert sid in body
+
+
+def test_a_style_with_no_preview_says_so_rather_than_faking_one(client):
+    """Nothing here pretends to show art it has not produced."""
+    body = client.get("/styles").data.decode()
+    assert "no preview yet" in body
+
+
+def test_picking_a_style_persists_it(client, tmp_path, monkeypatch):
+    monkeypatch.setattr(dashboard, "SETTINGS_FILE", tmp_path / "s.json")
+    client.post("/styles/use", data={"style": "storybook"})
+    assert dashboard._load_settings()["RUFUS_STYLE"] == "storybook"
+
+
+def test_an_unknown_style_is_refused(client, tmp_path, monkeypatch):
+    monkeypatch.setattr(dashboard, "SETTINGS_FILE", tmp_path / "s.json")
+    client.post("/styles/use", data={"style": "../../etc/passwd"})
+    assert "RUFUS_STYLE" not in dashboard._load_settings()
+
+
+def test_the_preview_scene_is_the_same_for_every_style():
+    """A picker where each card shows a different subject compares subjects,
+    not styles. The only variable between these frames must be the style
+    block."""
+    import inspect
+    src = inspect.getsource(dashboard.styles_preview)
+    assert "STYLE_PREVIEW_SCENE" in src
+    assert "add_detail=False" in src, (
+        "the automatic suffix is whatever RUFUS_STYLE already is — a picker "
+        "that previewed the style you already have is a picker in name only")
+
+
+def test_a_preview_that_does_not_exist_is_a_404_not_a_traceback(client):
+    assert client.get("/styles/preview/not_a_style").status_code == 404

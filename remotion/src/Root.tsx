@@ -24,6 +24,11 @@ export const Root: React.FC = () => {
       defaultProps={defaultProps}
       calculateMetadata={({props}) => ({
         durationInFrames: Math.max(1, Math.ceil(props.durationInSeconds * FPS)),
+        // The composition takes its SHAPE from the run, so one component
+        // renders both formats. Without this a long-form job rendered at the
+        // vertical default and every landscape frame came out cropped.
+        width: props.width && props.width > 0 ? Math.round(props.width) : WIDTH,
+        height: props.height && props.height > 0 ? Math.round(props.height) : HEIGHT,
       })}
     />
   );
