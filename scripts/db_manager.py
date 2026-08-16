@@ -7,7 +7,9 @@ SQLite helpers for tracking produced videos and their analytics.
   doesn't re-pull metrics for the entire history every day
 """
 
+import re
 import sqlite3
+from datetime import datetime
 from pathlib import Path
 
 ROOT    = Path(__file__).parent.parent
@@ -239,6 +241,70 @@ def mark_upload_failed(video_id: int, error: str):
             "COALESCE(score_reasoning,'') || ? WHERE id=?",
             (f"\n[UPLOAD FAILED — verify on YouTube before retry] {error[:400]}", video_id),
         )
+
+
+# A YouTube id is 11 characters of [A-Za-z0-9_-]. Accepting a whole URL is the
+# point: nobody wants to extract an id from
+# https://www.youtube.com/shorts/dQw4w9WgXcQ?feature=share by hand, and the
+# person doing it at 1am will get it wrong.
+_YT_ID_RE = re.compile(r"(?:youtu\.be/|/shorts/|/embed/|[?&]v=|^)"
+                       r"([A-Za-z0-9_-]{11})(?:[?&/#]|$)")
+
+
+def extract_youtube_id(text: str) -> str | None:
+    """The video id out of a URL, a share link, or a bare id. None if absent."""
+    text = (text or "").strip()
+    if not text:
+        return None
+    m = _YT_ID_RE.search(text)
+    return m.group(1) if m else None
+
+
+def mark_published(video_id: int, youtube_id: str,
+                   published_at: str | None = None) -> bool:
+    """Record that a video is live on YouTube, however it got there.
+
+    WHY THIS EXISTS. Analytics only looks at rows carrying a youtube_id, and
+    only the pipeline's own uploader ever set one. The owner published several
+    videos by hand — which is the correct thing to do while nothing
+    auto-uploads — and every one of them was invisible to the whole learning
+    loop: no metrics fetched, no views recorded, so feedback_analyzer had no
+    winners to learn hooks from and the pipeline's quality judgements stayed
+    guesses about what works.
+
+    A manual upload is not a lesser kind of publish. This is the row it was
+    missing.
+    """
+    yt = extract_youtube_id(youtube_id)
+    if not yt:
+        return False
+    when = published_at or datetime.now().strftime("%Y-%m-%d")
+    with _conn() as c:
+        c.execute("UPDATE videos SET youtube_id=?, upload_status='approved', "
+                  "upload_date=? WHERE id=?", (yt, when, video_id))
+    return True
+
+
+def published_without_metrics(channel: str | None = None) -> list[dict]:
+    """Live videos that have never had a metrics row.
+
+    The honest answer to "is the loop actually closed": a youtube_id means the
+    video is trackable, a metrics row means it has actually been tracked, and
+    the gap between those two numbers is how much of the feedback loop is
+    still theoretical.
+    """
+    q = ("SELECT v.id, v.youtube_id, v.title, v.upload_date, v.score "
+         "FROM videos v LEFT JOIN metrics m ON m.video_id = v.id "
+         "WHERE v.youtube_id IS NOT NULL AND m.id IS NULL")
+    args: list = []
+    if channel:
+        q += " AND v.channel = ?"
+        args.append(channel)
+    q += " ORDER BY v.upload_date DESC"
+    with _conn() as c:
+        rows = c.execute(q, args).fetchall()
+    return [{"id": r[0], "youtube_id": r[1], "title": r[2],
+             "upload_date": r[3], "score": r[4]} for r in rows]
 
 
 def get_recent_tracked_videos(days: int = 30, channel: str = None) -> list[dict]:

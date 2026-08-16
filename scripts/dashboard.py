@@ -1173,6 +1173,7 @@ NAV_ITEMS = [
     ("/trending",   "🔥 Trending",                        "view"),
     ("/gallery",    "🖼 Gallery",                         "view"),
     ("/advice",     "💡 What to change",                  "view"),
+    ("/tracking",   "📊 Tracking",                        "view"),
     ("/insights",   "🔬 Insights",                        "view"),
     ("/logs",       "📜 Logs",                            "view"),
     ("/system",     "🖥 System",                          "system"),
@@ -2224,6 +2225,102 @@ def settings_save():
     return redirect("/settings?msg=" + _urlquote(f"Saved {len(values)} setting(s)."))
 
 
+# ── Published by hand ────────────────────────────────────────────────────────
+
+@app.route("/video/<int:video_id>/published", methods=["POST"])
+def mark_published(video_id: int):
+    """Record that a video is live on YouTube, however it got there.
+
+    THE LOOP THIS CLOSES. Analytics only looks at rows carrying a youtube_id,
+    and only the pipeline's own uploader ever set one. The owner published
+    several videos by hand — the correct thing to do while nothing
+    auto-uploads — and every one was invisible to the whole learning loop: no
+    metrics fetched, no views recorded, so feedback_analyzer had no winners to
+    learn hooks from, and every quality judgement in this pipeline stayed a
+    guess about what works.
+
+    A manual upload is not a lesser kind of publish. Paste the link.
+    """
+    auth.require("approve")
+    _require_localhost()
+    raw = request.form.get("youtube", "")
+    if not db_manager.mark_published(video_id, raw):
+        return redirect(f"/video/{video_id}?error=" + _urlquote(
+            f"Couldn't find a YouTube id in {raw[:60]!r}. Paste the video's "
+            f"link or its 11-character id."))
+    return redirect(f"/video/{video_id}?msg=" + _urlquote(
+        "Recorded as published. Analytics will pick it up on the next fetch "
+        "and its views start feeding the hook learning."))
+
+
+@app.route("/tracking")
+def tracking_page():
+    """How much of the feedback loop is real, and what is missing from it.
+
+    A youtube_id means a video CAN be tracked; a metrics row means it has
+    been. The gap between those two numbers is the honest answer to whether
+    the learning loop is closed, and it was invisible before this page — the
+    dashboard could show 79 videos and imply a working channel while not one
+    of them had a view count attached.
+    """
+    auth.require("view")
+    channel = request.args.get("channel") or None
+    try:
+        untracked = db_manager.published_without_metrics(channel)
+    except Exception as e:
+        body = (f'<a class="back" href="/">← back</a><h2 style="margin-top:14px">'
+                f'Tracking</h2><div class="msg error">{_esc(str(e))}</div>')
+        return _head() + body + PAGE_TAIL
+
+    videos = _recent_videos(limit=500, channel=channel)
+    live = [v for v in videos if v.get("youtube_id")]
+    pending = [v for v in videos if not v.get("youtube_id")]
+
+    rows = ""
+    for v in untracked:
+        rows += (f'<tr><td><a class="row-link" href="/video/{v["id"]}">'
+                 f'{_esc((v.get("title") or "—")[:70])}</a></td>'
+                 f'<td class="muted">{_esc(v.get("upload_date") or "")}</td>'
+                 f'<td class="muted">{v.get("score") or "—"}/10</td>'
+                 f'<td><a href="https://youtu.be/{_esc(v["youtube_id"])}" '
+                 f'target="_blank" rel="noopener">watch</a></td></tr>')
+    untracked_html = (
+        f'<table><tr><th>Video</th><th>Published</th><th>Score</th><th></th></tr>'
+        f'{rows}</table>' if rows else
+        '<p class="muted">Every published video has metrics.</p>')
+
+    note = ""
+    if not live:
+        note = ('<div class="msg error">No video carries a YouTube id, so the '
+                'learning loop has never had any data. If you have published '
+                'any by hand, open the video and paste its link — that is the '
+                'row it is missing.</div>')
+
+    body = f"""
+    <a class="back" href="/">← back</a>
+    <h2 style="margin-top:14px">Tracking</h2>
+    {note}
+    <div class="cards">
+      <div class="card"><div class="num">{len(live)}</div>
+        <div class="label">published (trackable)</div></div>
+      <div class="card"><div class="num">{len(live) - len(untracked)}</div>
+        <div class="label">with view counts</div></div>
+      <div class="card"><div class="num">{len(untracked)}</div>
+        <div class="label">awaiting first fetch</div></div>
+      <div class="card"><div class="num">{len(pending)}</div>
+        <div class="label">never published</div></div>
+    </div>
+    <p class="muted">A YouTube id means a video CAN be tracked; a metrics row
+       means it has been. Published videos with no metrics are picked up by
+       <code>python scripts/analytics_fetcher.py</code> — which is also what
+       feeds the hook learning, so until this middle number moves, every
+       quality judgement in the pipeline is a guess about what works.</p>
+    <h2>Published, not yet measured</h2>
+    {untracked_html}
+    """
+    return _head() + body + PAGE_TAIL
+
+
 # ── Advice ───────────────────────────────────────────────────────────────────
 
 def _advice_now() -> tuple[list[dict], dict]:
@@ -2716,6 +2813,39 @@ def video_detail(video_id):
                     f'href="/video/{v["id"]}/download">⬇ Download mp4</a>')
     actions_html = f'<div class="actions">{buttons}</div>' if buttons else ""
 
+    # ALREADY ON YOUTUBE? SAY SO. Publishing by hand is the correct thing to do
+    # while nothing auto-uploads, and it left the video invisible to analytics
+    # — no youtube_id, so no metrics, so no view counts, so nothing for the
+    # hook learning to learn from. One paste fixes that per video.
+    published_html = ""
+    if auth.can("approve"):
+        if v.get("youtube_id"):
+            published_html = (
+                f'<h2>On YouTube</h2>'
+                f'<p class="muted">Tracked as '
+                f'<a href="https://youtu.be/{_esc(v["youtube_id"])}" target="_blank" '
+                f'rel="noopener">{_esc(v["youtube_id"])}</a>. Its views feed the '
+                f'hook learning on the next analytics fetch — see '
+                f'<a href="/tracking">Tracking</a>.</p>')
+        else:
+            published_html = f"""
+        <h2>Published this one by hand?</h2>
+        <p class="muted">Paste its link and the pipeline can track it. Without
+           a YouTube id there are no view counts, and with no view counts every
+           quality judgement here stays a guess about what works.</p>
+        <form method="post" action="/video/{v['id']}/published"
+              style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end">
+          <div style="flex:1;min-width:260px">
+            <label for="yt">YouTube link or id</label>
+            <input class="field" style="margin:6px 0 0" type="text" id="yt"
+                   name="youtube" required
+                   placeholder="https://youtube.com/shorts/... or the 11-character id">
+          </div>
+          <button class="btn save" type="submit" style="height:38px">
+            Mark as published</button>
+        </form>
+        """
+
     edit_html = ""
     if v["upload_status"] != "approved" and auth.can("edit"):
         edit_html = f"""
@@ -2779,6 +2909,7 @@ def video_detail(video_id):
        ({v['attempts_used'] or '?'} attempts, temp {v['final_temperature'] or '?'})</p>
     <table style="max-width:320px">{crit_rows}</table>
     {actions_html}
+    {published_html}
     {edit_html}
     {_preview_block(v['run_id'])}
     <h2>Script</h2>
