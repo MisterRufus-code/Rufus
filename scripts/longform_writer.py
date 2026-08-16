@@ -448,6 +448,16 @@ def write(seed: dict | None, analysis: str, niche: str,
 
     print(f"[longform] {words} words in {len(body)} sections "
           f"(target {prof['words_min']}–{prof['words_max']})")
+
+    # THE SAME GATES THE SHORT WRITER'S RESULT CARRIES. main reads score,
+    # fact_ok, cost_usd and attempts_used off this dict — the first three with
+    # BRACKETS, so a missing key is a KeyError immediately after the script is
+    # written and before a single frame is rendered. Worse than the crash: the
+    # score is what the review queue ranks by and what the upload gate reads,
+    # so a long-form script without one is a video that can never be judged.
+    score, fact_ok, fact_reason, cost = _judge(client, script, seed,
+                                               outline["cold_open"], niche,
+                                               run_id)
     return {
         "script": script,
         "hook": outline["cold_open"],
@@ -455,7 +465,47 @@ def write(seed: dict | None, analysis: str, niche: str,
         "words": words,
         "sections": len(body),
         "format": "long",
+        "score": score,
+        "fact_ok": fact_ok,
+        "fact_reason": fact_reason,
+        "attempts_used": len(body),
+        "cost_usd": cost,
     }
+
+
+def _judge(client, script: str, seed: dict | None, hook: str, niche: str,
+           run_id: str | None) -> tuple[int, bool, str, float]:
+    """Score the finished script and check it against its source.
+
+    Reuses script_writer's own rubric and fact gate rather than growing a
+    second opinion: a long-form script judged by different standards than a
+    Short would make the two incomparable in the same review queue, and the
+    queue is sorted by score.
+
+    Fail-open, and honest about it — a score of 0 with a reason beats a made-up
+    7, because 7 would auto-publish.
+    """
+    import script_writer as sw
+    score, fact_ok, reason, cost = 0, True, "", 0.0
+    try:
+        score, _crits, _why, c, _ms = sw._score(client, script, seed or {},
+                                                hook, run_id or "", niche)
+        cost += c
+    except Exception as e:
+        print(f"[longform] scoring failed ({e}) — held for review at 0")
+    try:
+        fact_ok, reason, c = sw._fact_gate(client, seed, script)
+        cost += c
+        if not fact_ok:
+            # The same cap the Shorts writer applies: a script that invents is
+            # not a good script that needs a note, it is a held one.
+            print(f"[longform] ⚠ FACT GATE FAILED: {reason}")
+            score = min(score, 4)
+    except Exception as e:
+        print(f"[longform] fact gate failed to run ({e}) — not held on that")
+    print(f"[longform] score {score}/10, fact gate "
+          f"{'pass' if fact_ok else 'FAIL'}, cost ${cost:.4f}")
+    return score, fact_ok, reason, cost
 
 
 _HEADING_RE = re.compile(

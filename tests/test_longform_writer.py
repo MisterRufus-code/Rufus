@@ -209,3 +209,65 @@ def test_it_passes_the_niche_name_not_a_config_dict():
     i = src.index("longform_writer.write(")
     call = src[i:i + 200]
     assert "active.get(" not in call
+
+
+# ── the result has to be the shape main reads ────────────────────────────────
+
+def test_the_result_carries_every_key_main_reads():
+    """main reads score, attempts_used and cost_usd with BRACKETS — a missing
+    one is a KeyError immediately after the script is written and before a
+    single frame is rendered. And the score is what the review queue ranks by
+    and what the upload gate reads, so a long-form script without one is a
+    video that can never be judged."""
+    import re
+    src = (Path(lf.__file__).parent / "main.py").read_text(encoding="utf-8")
+    i = src.index("result = write_script_until_good(")
+    after = src[i:i + 9000]
+    needed = {a or b for a, b in re.findall(
+        r'result(?:\s*or\s*\{\})?\s*(?:\.get\(\s*["\']([a-z_]+)["\']'
+        r'|\[\s*["\']([a-z_]+)["\'])', after)}
+    src_lf = Path(lf.__file__).read_text(encoding="utf-8")
+    block = src_lf[src_lf.index('    return {\n        "script": script,'):]
+    block = block[:block.index("}")]
+    for key in needed:
+        assert f'"{key}"' in block, f"main reads result['{key}'] and it is absent"
+
+
+def test_a_failed_score_holds_the_video_rather_than_inventing_one(monkeypatch,
+                                                                  capsys):
+    """A made-up 7 would auto-publish. A 0 with a reason will not."""
+    import script_writer as sw
+    monkeypatch.setattr(sw, "_score",
+                        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("down")))
+    monkeypatch.setattr(sw, "_fact_gate", lambda *a, **k: (True, "", 0.0))
+    score, ok, reason, cost = lf._judge(object(), "a script", None, "hook",
+                                        "money_history", None)
+    assert score == 0
+    assert "held for review at 0" in capsys.readouterr().out
+
+
+def test_a_failed_fact_gate_caps_the_score():
+    """The same cap the Shorts writer applies: a script that invents is not a
+    good script that needs a note, it is a held one."""
+    import script_writer as sw
+    import types
+    fake = types.SimpleNamespace()
+    sw_score = lambda *a, **k: (9, {}, "", 0.01, 10)
+    sw_fact = lambda *a, **k: (False, "INVENTED — no source for that figure", 0.01)
+    orig_s, orig_f = sw._score, sw._fact_gate
+    sw._score, sw._fact_gate = sw_score, sw_fact
+    try:
+        score, ok, reason, cost = lf._judge(fake, "s", None, "h", "n", None)
+    finally:
+        sw._score, sw._fact_gate = orig_s, orig_f
+    assert score <= 4 and ok is False
+    assert "INVENTED" in reason
+
+
+def test_it_scores_with_the_same_rubric_as_a_short():
+    """A long-form script judged by different standards than a Short makes the
+    two incomparable in one review queue — and the queue is sorted by score."""
+    import inspect
+    src = inspect.getsource(lf._judge)
+    assert "sw._score(" in src
+    assert "sw._fact_gate(" in src
