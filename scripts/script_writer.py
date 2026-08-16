@@ -2081,8 +2081,24 @@ def _generate(client: OpenAI, system: str, user: str, model: str,
 
 # ── Body scorer ─────────────────────────────────────────────────────────────────
 
+def _is_long_form() -> bool:
+    """Which shape of video is being scored. Never raises — a scorer that
+    cannot import the profile scores a Short, which is the default format."""
+    try:
+        import video_format
+        return video_format.is_long()
+    except Exception:
+        return False
+
+
+# PAYOFF is the long-form name for the LOOP criterion and is stored under the
+# same key. The axis really is one axis — did the ending close the circle the
+# opening drew — but the DEVICE is different, and asking a nine-minute
+# explainer for a Shorts loop line is asking it for something its own writer is
+# told not to produce. One key, so db_manager's column and _fixes_from_crits
+# keep working and the two formats stay comparable in the review queue.
 _CRIT_RE = re.compile(
-    r"^(SPECIFICITY|HOOK|COMPRESSION|LOOP|HUMAN|TOTAL):\s*(\d+)",
+    r"^(SPECIFICITY|HOOK|COMPRESSION|LOOP|PAYOFF|HUMAN|TOTAL):\s*(\d+)",
     re.MULTILINE | re.IGNORECASE,
 )
 
@@ -2110,34 +2126,105 @@ def _score(client: OpenAI, script: str, seed: dict, hook: str, run_id: str,
         "0=invented/vague, 1=one specific, 2=several, 3=every claim grounded.\n"
     )
 
+    # THE RUBRIC KNOWING WHICH VIDEO IT IS LOOKING AT.
+    #
+    # Four of the lines below describe a Short specifically, and three of those
+    # are not merely irrelevant to a nine-minute explainer — they penalise it
+    # for doing what longform_writer was told to do. The loop line is a
+    # DISQUALIFIER (final ≤4), and long-form does not end on a loop: it ends by
+    # paying a counted promise, which is the shape its outline plans. So every
+    # long-form script would have come back capped at 4, held from publishing
+    # forever, by a gate measuring a device its own generator is instructed not
+    # to write. That is this repo's own named failure — the gate knowing
+    # something the generator was never told — with the sign flipped.
+    #
+    # It stays ONE rubric out of ten with the same criteria names, because the
+    # review queue sorts both formats by this number and a second scale would
+    # make them incomparable. Only the sentences that name a Shorts device are
+    # swapped for the long-form equivalent of the same axis.
+    long_form = _is_long_form()
+    editor_frame = (
+        "You are a ruthless documentary editor. Score the SCRIPT BODY (the cold "
+        "open is pre-vetted). This is a nine-minute narrated explainer, not a "
+        "Short — length is the format here, not padding. Judge whether the "
+        "promises it makes get paid.\n\n"
+        if long_form else
+        "You are a ruthless short-form editor. Score the SCRIPT BODY (the hook is pre-vetted).\n\n"
+    )
+    close_disqualifier = (
+        "□ The close does not pay the counted promise the opening made ('three "
+        "ways', 'two things that had to be true') — it stops rather than lands\n"
+        if long_form else
+        "□ Loop line (second-to-last) shares zero content words with the hook\n"
+    )
+    sensory_disqualifier = (
+        "□ NO EARLY SENSORY DETAIL: zero concrete physical detail a viewer could "
+        "see, hear, feel, smell, or taste appears in the OPENING SECTION — the "
+        "viewer decides in the first thirty seconds whether this is worth nine "
+        "minutes, and an abstraction cannot be pictured\n\n"
+        if long_form else
+        "□ NO EARLY SENSORY DETAIL: zero concrete physical detail a viewer could see, hear, "
+        "feel, smell, or taste appears in the FIRST THIRD of the body (the setup, right after "
+        "the hook) — a sensory detail buried near the end doesn't stop the swipe; it has to "
+        "land while the viewer is still deciding whether to keep watching\n\n"
+    )
+    hook_criterion = (
+        "HOOK 0-2: Does the body carry through the situation the cold open put "
+        "the viewer inside, or is it abandoned once the facts start? "
+        "0=abandoned, 1=partial, 2=carried to the close.\n"
+        if long_form else
+        "HOOK 0-2: Does the body deliver on the cognitive itch the hook opened? 0=unanswered, 1=partial, 2=paid off in loop.\n"
+    )
+    # A twelve-word average over 1,300 words is a machine gun, not compression,
+    # and the real long-form padding failure is different: the same fact said
+    # again in a later section because the writer had space to fill.
+    compression_criterion = (
+        "COMPRESSION 0-2: Every SECTION earns its place. Penalize a fact or "
+        "figure restated in a later section, a section that adds no new claim, "
+        "and hedging (maybe/perhaps/could/might). A long sentence is not "
+        "padding; a repeated idea is. 0=repetitive, 1=mostly tight, 2=every "
+        "section adds.\n"
+        if long_form else
+        "COMPRESSION 0-2: Every sentence earns its place. Penalize avg sentence >12 words and hedging (maybe/perhaps/could/might). 0=padded, 1=mostly tight, 2=every word counts.\n"
+    )
+    close_criterion = (
+        "PAYOFF 0-2: Does the close pay the counted promise and land its last "
+        "line against the viewer's own life? 0=it stops, 1=it summarizes, "
+        "2=it pays the count and lands.\n"
+        if long_form else
+        "LOOP 0-2: Does the second-to-last line mirror the hook's structure or pose the question the hook answered? Token-echo required. 0=no echo, 1=thematic only, 2=structural mirror.\n"
+    )
+    close_reply = (
+        "PAYOFF: [0-2]/2 — [quote the closing line, name the promise it pays]\n"
+        if long_form else
+        "LOOP: [0-2]/2 — [quote the loop line, explain echo]\n"
+    )
+
     prompt = (
         f"SCRIPT:\n\"{script}\"\n\n"
         f"FIXED HOOK (line 1): \"{hook}\"\n"
         f"SOURCE ({seed_type} seed): \"{seed_text}\"\n\n"
-        "You are a ruthless short-form editor. Score the SCRIPT BODY (the hook is pre-vetted).\n\n"
+        + editor_frame +
         "STEP 1 — DISQUALIFIERS (any one → final ≤4):\n"
         + invented_disqualifier +
         "□ Script uses placeholder names (John/Sarah/Mike/Alex) as if real\n"
         "□ Script adopts first-person voice of someone in the source\n"
         "□ Script has zero specifics (no number, name, date, or verbatim detail)\n"
-        "□ Loop line (second-to-last) shares zero content words with the hook\n"
+        + close_disqualifier +
         "□ BORING: Body has no tension, contradiction, or turning point — reads like a neutral Wikipedia summary\n"
-        "□ NO EARLY SENSORY DETAIL: zero concrete physical detail a viewer could see, hear, "
-        "feel, smell, or taste appears in the FIRST THIRD of the body (the setup, right after "
-        "the hook) — a sensory detail buried near the end doesn't stop the swipe; it has to "
-        "land while the viewer is still deciding whether to keep watching\n\n"
+        + sensory_disqualifier +
         "STEP 2 — SCORE EACH (only if no disqualifiers):\n"
-        + specificity_criterion +
-        "HOOK 0-2: Does the body deliver on the cognitive itch the hook opened? 0=unanswered, 1=partial, 2=paid off in loop.\n"
-        "COMPRESSION 0-2: Every sentence earns its place. Penalize avg sentence >12 words and hedging (maybe/perhaps/could/might). 0=padded, 1=mostly tight, 2=every word counts.\n"
-        "LOOP 0-2: Does the second-to-last line mirror the hook's structure or pose the question the hook answered? Token-echo required. 0=no echo, 1=thematic only, 2=structural mirror.\n"
+        + specificity_criterion
+        + hook_criterion
+        + compression_criterion
+        + close_criterion +
         "HUMAN 0-1: Sounds like a real expert with opinions. Reward opinion words (worst/wrong/smartest/scared). Penalize neutral description. 0=AI/generic, 1=genuine voice.\n\n"
         "STEP 3 — REPLY EXACTLY:\n"
         "DISQUALIFIERS: [list, or 'none']\n"
         "SPECIFICITY: [0-3]/3 — [explain]\n"
         "HOOK: [0-2]/2 — [explain]\n"
         "COMPRESSION: [0-2]/2 — [explain]\n"
-        "LOOP: [0-2]/2 — [quote the loop line, explain echo]\n"
+        + close_reply +
         "HUMAN: [0-1]/1 — [explain]\n"
         "TOTAL: [sum]/10"
     )
@@ -2160,6 +2247,11 @@ def _score(client: OpenAI, script: str, seed: dict, hook: str, run_id: str,
         total = None
         for m in _CRIT_RE.finditer(reasoning):
             key = m.group(1).lower()
+            # One axis, two device names — see _CRIT_RE. Stored under "loop"
+            # so the column, the retry fixes and the queue ranking are the
+            # same measurement in both formats.
+            if key == "payoff":
+                key = "loop"
             val = int(m.group(2))
             if key == "total":
                 total = val

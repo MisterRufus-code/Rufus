@@ -1,5 +1,7 @@
 """Tests for script_writer.py – banned-phrase detection and blacklist keying."""
 
+import pytest
+
 from script_writer import _blacklist_key, _find_banned
 
 
@@ -1243,3 +1245,129 @@ def test_the_consequence_stack_is_rationed():
     """It is the one place repetition is wanted, and the reason it works is
     that it is rare."""
     assert "not use it more than once" in _body_guidance()
+
+
+# ── The rubric knowing which video it is looking at ───────────────────────────
+#
+# The loop line is a DISQUALIFIER (final ≤4), and long-form does not end on a
+# loop — longform_writer's outline plans a close that pays a counted promise,
+# because that is what holds a nine-minute audience. So the gate was capping
+# every long-form script at 4 and holding it from publishing forever, for not
+# containing a device its own generator is instructed not to write.
+
+def _capture_rubric():
+    """The prompt _score actually sends, with a client that only records."""
+    from script_writer import _score
+    captured = {}
+
+    class FakeClient:
+        class chat:
+            class completions:
+                @staticmethod
+                def create(**kw):
+                    captured.update(kw)
+                    msg = type("M", (), {"content": "DISQUALIFIERS: none\nTOTAL: 8/10"})()
+                    choice = type("C", (), {"message": msg})()
+                    usage = type("U", (), {"prompt_tokens": 10, "completion_tokens": 5})()
+                    return type("R", (), {"choices": [choice], "usage": usage})()
+
+    _score(FakeClient(), "some script", {"type": "wikipedia", "content": "x"},
+           "some hook", "run1", "finance")
+    return captured["messages"][0]["content"]
+
+
+def test_the_shorts_rubric_is_untouched(monkeypatch):
+    """The shipping channel is scored by exactly the rubric it was scored by
+    yesterday. Every video in the review queue was ranked with these lines, so
+    a change here silently re-ranks the entire back catalogue against the new
+    ones."""
+    monkeypatch.setenv("RUFUS_FORMAT", "short")
+    p = _capture_rubric()
+    assert "ruthless short-form editor" in p
+    assert "□ Loop line (second-to-last) shares zero content words with the hook" in p
+    assert "avg sentence >12 words" in p
+    assert "FIRST THIRD of the body" in p
+    assert "LOOP: [0-2]/2 — [quote the loop line, explain echo]" in p
+    assert "PAYOFF" not in p
+
+
+def test_long_form_is_not_judged_on_a_loop_it_was_told_not_to_write(monkeypatch):
+    monkeypatch.setenv("RUFUS_FORMAT", "long")
+    p = _capture_rubric()
+    assert "Loop line" not in p
+    assert "short-form editor" not in p
+    assert "counted promise" in p
+    assert "PAYOFF: [0-2]/2" in p
+
+
+def test_long_form_is_not_penalised_for_sentences_over_twelve_words(monkeypatch):
+    """A twelve-word average over 1,300 words is a machine gun, not
+    compression. The real long-form padding failure is the same fact said
+    again three sections later, which is what the criterion now names."""
+    monkeypatch.setenv("RUFUS_FORMAT", "long")
+    p = _capture_rubric()
+    assert "avg sentence >12 words" not in p
+    assert "restated in a later section" in p
+
+
+def test_the_sensory_window_is_the_opening_not_a_third_of_nine_minutes(monkeypatch):
+    monkeypatch.setenv("RUFUS_FORMAT", "long")
+    p = _capture_rubric()
+    assert "FIRST THIRD" not in p
+    assert "OPENING SECTION" in p
+
+
+def test_both_formats_still_score_out_of_the_same_ten(monkeypatch):
+    """One scale, or the review queue is sorting two different numbers into
+    one column."""
+    for fmt in ("short", "long"):
+        monkeypatch.setenv("RUFUS_FORMAT", fmt)
+        p = _capture_rubric()
+        assert "SPECIFICITY 0-3" in p and "HUMAN 0-1" in p, fmt
+        assert "TOTAL: [sum]/10" in p, fmt
+        assert p.count("0-2:") == 3, fmt
+
+
+@pytest.mark.parametrize("fmt", ["short", "long"])
+def test_every_criterion_the_rubric_asks_for_is_one_the_parser_reads(monkeypatch, fmt):
+    """The drift this file exists to prevent, in its cheapest form: renaming a
+    criterion in the prompt and not in _CRIT_RE loses that criterion's points
+    silently, and the total quietly falls by two."""
+    import re as _re
+    from script_writer import _CRIT_RE
+    monkeypatch.setenv("RUFUS_FORMAT", fmt)
+    p = _capture_rubric()
+    reply = p.split("STEP 3 — REPLY EXACTLY:")[1]
+    asked = _re.findall(r"^([A-Z]+):", reply, _re.MULTILINE)
+    assert asked, fmt
+    for name in asked:
+        if name == "DISQUALIFIERS":
+            continue
+        assert _CRIT_RE.match(f"{name}: 1"), f"{fmt}: rubric asks for {name}, parser ignores it"
+
+
+def test_the_long_form_payoff_is_stored_as_the_same_axis(monkeypatch):
+    """PAYOFF and LOOP are one column. db_manager writes crits['loop'] and the
+    retry fixes read it, so a long-form score arriving under a new key would
+    be a criterion that scores and then evaporates."""
+    from script_writer import _score
+    monkeypatch.setenv("RUFUS_FORMAT", "long")
+
+    class FakeClient:
+        class chat:
+            class completions:
+                @staticmethod
+                def create(**kw):
+                    msg = type("M", (), {"content":
+                        "DISQUALIFIERS: none\nSPECIFICITY: 3/3 — x\nHOOK: 2/2 — x\n"
+                        "COMPRESSION: 2/2 — x\nPAYOFF: 2/2 — x\nHUMAN: 1/1 — x\n"
+                        "TOTAL: 10/10"})()
+                    choice = type("C", (), {"message": msg})()
+                    usage = type("U", (), {"prompt_tokens": 10, "completion_tokens": 5})()
+                    return type("R", (), {"choices": [choice], "usage": usage})()
+
+    total, crits, _r, _c, _ms = _score(FakeClient(), "s", {"type": "wikipedia"},
+                                       "h", "run1", "finance")
+    assert total == 10
+    assert crits["loop"] == 2
+    assert "payoff" not in crits
