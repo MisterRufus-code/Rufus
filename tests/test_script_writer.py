@@ -1170,3 +1170,76 @@ def test_a_figure_outside_the_corpus_is_still_refused():
     corpus = sw.grounding_corpus(seed, "1. CONTRADICTION: gold beat silver.")
     assert sw._ungrounded_number("Bank of England issued notes since 1694.",
                                  corpus) == "1694"
+
+
+# ── devices read off an eleven-minute script that holds its audience ─────────
+
+def _body_guidance() -> str:
+    """The guidance block, with whitespace normalised.
+
+    Prose wraps. "we cannot\n  prove" is the same instruction as "we cannot
+    prove" to every reader including the model, and a test that fails on the
+    line break is testing the line break."""
+    import re
+    from pathlib import Path as _P
+    import script_writer as sw
+    src = _P(sw.__file__).read_text(encoding="utf-8")
+    i = src.find("NAMING THE LIMIT IS A THIRD OPTION")
+    assert i > 0, "the guidance moved"
+    return re.sub(r"\s+", " ",
+                  src[i:src.find("NUMBERS ARE SPOKEN, NOT PRINTED:", i)])
+
+
+def test_naming_the_limit_is_offered_as_a_third_option():
+    """Between asserting what the source does not support — which is the
+    MIND-READ and INVENTED rejection, the single biggest cause in the log —
+    and leaving it out, there is a move that is both honest and better
+    television: say what is known, then say where the knowing stops."""
+    g = _body_guidance()
+    assert "we are not sure" in g
+    assert "we cannot prove" in g
+
+
+def test_it_recommends_only_words_the_hedging_gate_allows():
+    """The guidance nearly told the model to write "possibly" and
+    "probably" — both on the banned hedging list, so every attempt taking the
+    advice would have been rejected for taking it. That is the gate knowing
+    something the generator was never told, arriving from the other side."""
+    import script_writer as sw
+    g = _body_guidance()
+    import re
+    for phrase in re.findall(r'"([a-z][a-z\' ]+)"', g):
+        # Only the RECOMMENDED forms, which appear before the "Do NOT" line.
+        if g.index(f'"{phrase}"') > g.index("Do NOT reach for"):
+            continue
+        assert sw._find_hedging(phrase) is None, phrase
+
+
+def test_the_banned_alternatives_are_named_so_nobody_reaches_for_them():
+    """Show the generator the whole rule, the way the forbidden-openers list
+    now is."""
+    import script_writer as sw
+    g = _body_guidance()
+    missing = [w for w in sw._standards()["hedging_words"] if w not in g.lower()]
+    assert not missing, (
+        f"the writer is judged by these and never shown them: {missing}. "
+        f"Add them to the Do-NOT list, the way all 21 forbidden openers are "
+        f"now shown to the hook factory.")
+
+
+def test_the_three_devices_are_taught_with_worked_examples():
+    import re
+    from pathlib import Path as _P
+    import script_writer as sw
+    src = re.sub(r"\s+", " ", _P(sw.__file__).read_text(encoding="utf-8"))
+    for device in ("NEGATION THEN CORRECTION", "THE OBJECT AS PROOF",
+                   "THE CONSEQUENCE STACK"):
+        assert device in src, device
+    assert "It lost silver." in src
+    assert "tinder fungus, flint and iron pyrite" in src
+
+
+def test_the_consequence_stack_is_rationed():
+    """It is the one place repetition is wanted, and the reason it works is
+    that it is rare."""
+    assert "not use it more than once" in _body_guidance()

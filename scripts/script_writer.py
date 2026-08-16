@@ -1841,6 +1841,55 @@ MOTIVE — THE ONE THING THAT KILLS A FINISHED VIDEO:
   filmed it. That is the whole test.
 - This does NOT mean writing blandly. Indignation about what HAPPENED is
   wanted. Certainty about what someone was thinking is what gets rejected.
+- NAMING THE LIMIT IS A THIRD OPTION, and the one that keeps getting missed.
+  Between asserting something the source does not support and leaving it out
+  entirely there is a move that is both honest and better television: say
+  what is known, then say where the knowing stops.
+    ✗ "They kept the fire alive because they knew they could not restart it."
+    ✓ "We are not sure how reliably anyone could start a fire from scratch
+       then. What we do know is that they carried embers wrapped in leaves."
+    ✗ "The paintings were made on rainy days."
+    ✓ "We cannot prove the paintings were made on rainy days. But they are
+       hundreds of metres in, and nobody crawls that far when the hunting is
+       good."
+  A viewer trusts a narrator who says "we don't know" and distrusts one who
+  never does.
+- USE THESE EXACT FORMS, because the hedging gate below rejects the obvious
+  alternatives and you would lose the attempt: "we are not sure", "we cannot
+  prove", "no source records", "the evidence stops at", "almost certainly",
+  "what we do know is". Those are precise about the EVIDENCE.
+  Do NOT reach for any of these — every one is an automatic rejection:
+  "maybe", "perhaps", "could be", "might be", "kind of", "sort of",
+  "I think", "possibly", "probably", "somewhat". They soften the CLAIM
+  without telling anyone why, which is the opposite move and the reason the
+  ban exists. (The list above is config/script_standards.json's own
+  hedging_words, in full — a rule the writer is judged by and never shown is
+  a rule it breaks.)
+
+THREE DEVICES THAT DO THE MOST WORK PER WORD. Read off a long-form history
+script that holds an audience for eleven minutes; all three fit forty seconds.
+
+- NEGATION THEN CORRECTION. State what a thing was NOT, then what it was. The
+  contradiction the hook gate wants, in one sentence and no extra words.
+    ✓ "Rain wasn't an inconvenience. It was a crisis."
+    ✓ "The coin didn't lose value. It lost silver."
+  Two short sentences beat one long one here — the full stop IS the turn.
+
+- THE OBJECT AS PROOF. An abstract claim is an argument; an object somebody
+  dug up is evidence, and it is also a picture the storyboard can draw.
+    ✗ "Losing your fire was serious."
+    ✓ "The 5,300-year-old man found frozen in the Alps was carrying tinder
+       fungus, flint and iron pyrite in his belt pouch."
+  When the source names a thing that survives — a pouch, a ledger, a wreck, a
+  stamped coin — put the thing in the script. It grounds the claim, it passes
+  the fact gate, and it gives the pictures something real to be about.
+
+- THE CONSEQUENCE STACK. Two or three short clauses in the same shape,
+  escalating, then a hard stop.
+    ✓ "You can't hunt. You can't see tracks. You can't move."
+    ✓ "The mint closed. The wages stayed. The bread doubled."
+  This is the one place repetition is wanted: the repeated shape is what
+  makes the last item land. Do not use it more than once in a script.
 
 NUMBERS ARE SPOKEN, NOT PRINTED:
 - A voice engine reads every digit you write. "$4,210,500,000,000 for one
@@ -2134,7 +2183,9 @@ def preanalyze(seed: dict, scene: str = "") -> tuple[str, str, float]:
     duplicate API call inside the script writer.
     """
     _, active = _load_niche()
-    client    = OpenAI(api_key=_load_key())
+    import llm
+    llm.announce()
+    client    = llm.client(_load_key())
     run_id    = new_run_id()
     if seed:
         print(f"[gpt] run_id={run_id} seed: {seed.get('type', '?')} from {seed.get('source', 'Unknown')}")
@@ -2250,7 +2301,9 @@ def write_script(scene_description: str, seed: dict | None = None,
     """
     std            = _standards()
     niche, active  = _load_niche()
-    client         = OpenAI(api_key=_load_key())
+    import llm
+    llm.announce()
+    client         = llm.client(_load_key())
     run_id         = run_id or new_run_id()
     total_cost     = 0.0
 

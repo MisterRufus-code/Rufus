@@ -1067,7 +1067,9 @@ def plan(script: str, beats: list[str], era_tags: list[str] | None = None,
             key = json.loads(keys_file.read_text(encoding="utf-8")).get("openai", "")
         if not key or key.startswith("YOUR_") or key.startswith("FILL_"):
             return None
-        client = OpenAI(api_key=key)
+        import llm
+        llm.announce()
+        client = llm.client(key)
         resp = client.chat.completions.create(
             model=_model(),
             messages=[{"role": "user",

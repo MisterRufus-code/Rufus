@@ -78,7 +78,8 @@ def _judge(prompt: str, *, phase: str = None, niche: str = None,
         return True, "no OpenAI key — supervisor skipped"
     try:
         from openai import OpenAI
-        client = OpenAI(api_key=key)
+        import llm
+        client = llm.client(key)
         resp = client.chat.completions.create(
             model=MODEL,
             messages=[{"role": "user", "content": prompt}],
