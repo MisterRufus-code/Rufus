@@ -198,3 +198,41 @@ def test_upload_posts_source_comment_when_url_provided(tmp_path, monkeypatch):
     assert captured == {"video_id": "vid123",
                         "source_url": "https://en.wikipedia.org/wiki/X",
                         "seed_source": "Wikipedia"}
+
+
+# ── the timezone database Windows does not have ──────────────────────────────
+
+def test_a_missing_timezone_database_does_not_lose_the_upload(monkeypatch, capsys):
+    """Linux and macOS ship an IANA database and zoneinfo reads it; Windows
+    ships none, so there `tzdata` IS the database — and it was in no
+    requirements file. Live, on a finished render:
+
+        Upload failed (not uploaded, safe to retry):
+        'No time zone found with key America/New_York'
+
+    A scheduling nicety refusing to publish work that was ready. The schedule
+    is worth having; it is not worth the upload."""
+    import zoneinfo
+
+    def _boom(name):
+        raise zoneinfo.ZoneInfoNotFoundError(f"'No time zone found with key {name}'")
+
+    monkeypatch.setattr(zoneinfo, "ZoneInfo", _boom)
+    assert youtube_uploader._next_peak_utc(tz_name="America/New_York") == ""
+    out = capsys.readouterr().out
+    assert "pip install tzdata" in out
+    assert "WITHOUT a scheduled publish time" in out
+
+
+def test_the_schedule_still_works_when_the_database_is_there():
+    when = youtube_uploader._next_peak_utc(peak_hours=[8, 12, 17, 20],
+                                           tz_name="America/New_York")
+    assert when.endswith("Z") and len(when) == 20, when
+
+
+def test_tzdata_is_declared():
+    """It is not an optional extra on Windows — it is the only copy of the
+    data the standard library needs."""
+    from pathlib import Path as _P
+    req = (_P(youtube_uploader.__file__).parent.parent / "requirements.txt")
+    assert "tzdata" in req.read_text(encoding="utf-8")

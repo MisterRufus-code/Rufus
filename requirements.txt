@@ -64,5 +64,12 @@ google-auth>=2.20
 google-auth-oauthlib>=1.2
 google-auth-httplib2>=0.2
 
+# The IANA timezone database. Linux and macOS ship one and zoneinfo reads it;
+# Windows has none at all, so on Windows THIS PACKAGE IS the database. Without
+# it the uploader's scheduled-publish time raised
+#   'No time zone found with key America/New_York'
+# and refused a video that was already rendered.
+tzdata>=2024.1
+
 # tests
 pytest>=8.0

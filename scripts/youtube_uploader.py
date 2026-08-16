@@ -75,10 +75,31 @@ def _next_peak_utc(peak_hours: list[int] = None, tz_name: str = None) -> str:
     """Return ISO 8601 UTC timestamp for the next peak hour, ≥5 min from now.
     Peak hours/timezone come from the channel config (US-ET defaults).
     Uses zoneinfo so DST is automatic — no hardcoded UTC offset."""
-    from zoneinfo import ZoneInfo
+    from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
     peaks   = peak_hours or PEAK_HOURS_ET
-    tz      = ZoneInfo(tz_name or "America/New_York")
     now_utc = datetime.now(tz=timezone.utc)
+    try:
+        tz = ZoneInfo(tz_name or "America/New_York")
+    except ZoneInfoNotFoundError:
+        # WINDOWS HAS NO IANA DATABASE. zoneinfo reads the system tz files,
+        # which exist on Linux and macOS and do not exist on Windows at all —
+        # there, the `tzdata` package IS the database, and it was in no
+        # requirements file. Live, this surfaced as
+        #
+        #     Upload failed (not uploaded, safe to retry):
+        #     'No time zone found with key America/New_York'
+        #
+        # on a finished, rendered video: a scheduling nicety refusing to
+        # publish work that was ready. The schedule is worth having and is not
+        # worth the upload, so this says exactly what to install and puts the
+        # video up now instead of holding it hostage.
+        import paths
+        print(f"[youtube] ⚠ no timezone database for "
+              f"{tz_name or 'America/New_York'} — Windows has none of its own. "
+              f"Install it with `{paths.pip_hint('tzdata')}`.")
+        print(f"[youtube]   uploading WITHOUT a scheduled publish time; the "
+              f"video goes up private and you publish it yourself.")
+        return ""
     now_loc = now_utc.astimezone(tz)
 
     for day_delta in range(3):
@@ -246,9 +267,14 @@ def upload(video_path: Path, script: str, thumbnail_path: Path = None,
     status = {"privacyStatus": privacy, "selfDeclaredMadeForKids": False,
              "containsSyntheticMedia": True}
     if privacy == "private":
-        # publishAt is only valid on private uploads (YouTube then auto-publishes)
-        status["publishAt"] = _next_peak_utc(channel.upload.get("peak_hours"),
-                                             channel.upload.get("timezone"))
+        # publishAt is only valid on private uploads (YouTube then auto-publishes).
+        # "" means the timezone database is missing and _next_peak_utc already
+        # said so — upload now rather than lose a finished render to a
+        # scheduling nicety.
+        when = _next_peak_utc(channel.upload.get("peak_hours"),
+                              channel.upload.get("timezone"))
+        if when:
+            status["publishAt"] = when
 
     print(f"[youtube] channel: {channel.id}")
     print(f"[youtube] uploading: {video_path.name}")
