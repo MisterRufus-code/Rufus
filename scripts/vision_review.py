@@ -40,6 +40,16 @@ a fourteen-picture run is under a minute and a 150-picture long-form run is
 ten. That is why it is off by default and why it samples rather than reading
 every sub-frame.
 
+SHARING ONE CARD. This and ComfyUI both want the 3090, and 24GB does not hold
+a stills model and a 7B VLM comfortably at the same time. The run's own order
+mostly solves it: the writers talk to the model, THEN ComfyUI renders, THEN
+this looks at what came out — three phases that do not overlap. What does
+overlap is RESIDENCY, because Ollama keeps a model loaded for five minutes
+after the last request by default and ComfyUI holds its weights between jobs.
+Set OLLAMA_KEEP_ALIVE=30s (or 0) and Ollama gives the memory back before the
+image phase starts. run_review's command line additionally stands down while
+a render holds the channel lock — see _gpu_is_busy.
+
 CONTRACT: fail-open and never fatal. No model, no endpoint, a refusal, a
 malformed reply — all yield no findings and a printed reason. A picture that
 could not be looked at is not a picture that failed.

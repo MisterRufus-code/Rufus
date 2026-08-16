@@ -12,6 +12,7 @@ human looking at them has its quality capped by how often that human looks.
 """
 
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -207,3 +208,39 @@ def test_a_stylised_drawing_is_not_counted_as_missing_its_prompt():
     """This is a flat cartoon by design; a reviewer marking every frame
     "not photographic" would fire on all of them, which is no signal."""
     assert "not because it is stylised" in vr._PROMPT
+
+
+# ── two things that want the same 24GB ───────────────────────────────────────
+
+def test_the_command_line_stands_down_while_a_render_is_running(monkeypatch,
+                                                                capsys):
+    """`run_review.py --all` at a prompt while a render is going would load a
+    7B vision model onto a 3090 ComfyUI is already using, and take both down
+    with an out-of-memory error."""
+    import run_review
+    monkeypatch.setattr(run_review, "_gpu_is_busy", lambda: "main_en")
+    monkeypatch.setattr(run_review, "all_run_ids", lambda limit=None: [])
+    monkeypatch.setattr(run_review, "patterns",
+                        lambda limit=None: {"runs_reviewed": 0, "recurring": []})
+    monkeypatch.setattr(sys, "argv", ["run_review.py", "--all"])
+    run_review.main()
+    out = capsys.readouterr().out
+    assert "measuring the text only" in out
+    assert os.environ.get("RUFUS_VISION") == "0"
+
+
+def test_inside_a_run_the_guard_does_not_fire(monkeypatch):
+    """main.py itself holds that lock, so checking there would skip the
+    picture review on every single run — the guard preventing exactly the
+    thing it exists to enable. Only the command line asks."""
+    import inspect
+    import run_review
+    assert "_gpu_is_busy" not in inspect.getsource(run_review.review)
+    assert "_gpu_is_busy" in inspect.getsource(run_review.main)
+
+
+def test_a_lock_check_that_breaks_does_not_block_the_review(monkeypatch):
+    import run_review
+    monkeypatch.setattr("channel_config.list_channels",
+                        lambda: (_ for _ in ()).throw(RuntimeError("no config")))
+    assert run_review._gpu_is_busy() == ""

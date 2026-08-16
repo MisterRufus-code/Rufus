@@ -533,7 +533,49 @@ def patterns(limit: int = 20) -> dict:
     }
 
 
+def _gpu_is_busy() -> str:
+    """The channel whose render currently holds the GPU, or "".
+
+    ONLY THE COMMAND LINE ASKS. Inside a run, main.py itself holds this lock,
+    so checking there would skip the picture review on every single run — the
+    guard would prevent exactly the thing it exists to enable. What this
+    protects against is the other case: somebody running `run_review.py --all`
+    from a prompt while a render is going, loading a 7B vision model onto a
+    3090 that ComfyUI is already using and taking both down with an
+    out-of-memory error.
+    """
+    try:
+        import channel_config
+        from filelock import FileLock, Timeout
+        root = Path(__file__).parent.parent
+        for cid in channel_config.list_channels():
+            # The exact name main.py's _acquire_lock() uses — same lock,
+            # checked non-blockingly rather than held.
+            lock = FileLock(str(root / f"rufus.{cid}.lock.lock"))
+            try:
+                lock.acquire(timeout=0)
+            except Timeout:
+                return cid
+            except Exception:
+                continue
+            lock.release()
+    except Exception:
+        pass
+    return ""
+
+
 def main() -> None:
+    # The text half is free and runs whatever else is happening. The picture
+    # half wants the GPU, and a render is already using it.
+    import vision_review
+    if vision_review.enabled():
+        busy = _gpu_is_busy()
+        if busy:
+            print(f"[review] a run is rendering ({busy}) — measuring the text "
+                  f"only. The picture review needs the GPU that run is using; "
+                  f"re-run this when it finishes.")
+            os.environ["RUFUS_VISION"] = "0"
+
     args = [a for a in sys.argv[1:] if a != "--all"]
     if "--all" in sys.argv[1:]:
         ids = all_run_ids(limit=None)
