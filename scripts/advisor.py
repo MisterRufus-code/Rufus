@@ -66,9 +66,17 @@ _REMEDIES = {
         "why": ("This is the \"why is everything coins\" report as a number. "
                 "A sequence built around one prop has nothing to cut to."),
         "setting": None,
-        "action": ("Usually the script's fault rather than the storyboard's: "
-                   "a script that names one thing eight times gets eight "
-                   "pictures of it. Check the beats on the Insights page."),
+        "action": ("The storyboard now measures its own plan and re-plans the "
+                   "surplus shots before anything is rendered, so a run made "
+                   "since that change should not show this. If it does, the "
+                   "re-plan is either switched off (RUFUS_STORYBOARD_REPAIR) "
+                   "or the replacements are coming back naming the same "
+                   "object — the run's log says which. Older runs keep "
+                   "reporting it until newer ones are measured."),
+        # NOT "the script's fault, check the Insights page", which is what
+        # this said while the pipeline had no answer for it. Advice that
+        # explains a defect instead of naming the lever is advice nobody can
+        # act on, and it aged into advice that contradicted the fix.
     },
     "pictures_held_too_long": {
         "title": "Pictures are held too long",

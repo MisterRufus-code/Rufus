@@ -109,7 +109,24 @@ def _prompt(script: str, beats: list[str], era_tags: list[str],
         "3. ONE SUBJECT PER SHOT. A frame with a coin AND a merchant AND a "
         "market AND a ledger has no subject. Choose the one thing the line is "
         "actually about and fill the frame with it.\n"
-        "3b. PUT PEOPLE IN IT. At least half the shots must show a person "
+        "3a. THE SUBJECT MUST CHANGE ACROSS THE SEQUENCE. Rule 1 says draw the "
+        "thing the line names, and a script about money names money in most of "
+        "its lines — so obeying rule 1 alone produces ten pictures of a coin, "
+        "which is the single most common complaint about this channel's "
+        "videos. No object may be the subject of more than about a THIRD of "
+        "the shots. What a line gives you besides its object: the PERSON doing "
+        "it, their hands mid-action, their face, the place around them, what "
+        "they were doing a second before, the thing that happened next, the "
+        "person it happened TO. \"A hand pushes a coin across the counter\" is "
+        "about the hand. \"The queue outside has not moved\" is about the "
+        "queue.\n"
+        "3b. WHEN THE SAME OBJECT MUST APPEAR TWICE, SHOW A DIFFERENT VERB. "
+        "The picture is the ACTION, not the noun: minted, weighed, bitten, "
+        "hidden, spent, refused, dropped, swept up. A coin lying on a surface, "
+        "then lying on a different surface, is one picture twice however "
+        "different the surfaces are — nothing is happening in either. If you "
+        "cannot say what is being DONE in a shot, it is not a shot yet.\n"
+        "3c. PUT PEOPLE IN IT. At least half the shots must show a person "
         "DOING something — hands counting coins, a man locking a door, a woman "
         "carrying a crate, a queue that does not move. The same previous run "
         "returned eight shots out of ten with no one in them (\"devoid of "
@@ -700,6 +717,170 @@ def _clean(plan: dict, n_beats: int,
     return out
 
 
+def dominant_subject(visuals: list[str]) -> dict:
+    """The object present in the most shots, and in how many.
+
+    ONE DEFINITION, MEASURED IN ONE PLACE. run_review already answers exactly
+    this question about finished runs — it is the "why all the images with
+    coin" report as a number — so this asks run_review rather than growing a
+    second opinion beside it. A pipeline that repairs by one definition while
+    the analyzer reports by another produces a run that fixes itself and is
+    then told it did not, which is the failure mode this repo has hit more
+    than once.
+
+    Fail-open to the local vocabulary if run_review will not import: a rougher
+    count is still worth having, and no storyboard should die over a metric.
+    """
+    if not visuals:
+        return {"word": "", "shots": 0, "share": 0.0}
+    try:
+        from run_review import _subject_words as subject_words
+    except Exception:
+        subject_words = _content_words           # type: ignore[assignment]
+    from collections import Counter
+    counts: Counter = Counter()
+    for v in visuals:
+        counts.update(subject_words(v))
+    if not counts:
+        return {"word": "", "shots": 0, "share": 0.0}
+    word, hits = counts.most_common(1)[0]
+    return {"word": word, "shots": hits, "share": round(hits / len(visuals), 3)}
+
+
+def _dominant_share_limit() -> float:
+    """The share at which one object stops being a thread and becomes the
+    subject of the video. run_review owns the number for the same reason
+    dominant_subject does."""
+    try:
+        from run_review import DOMINANT_SHARE
+        return float(DOMINANT_SHARE)
+    except Exception:
+        return 0.55
+
+
+def repair_enabled() -> bool:
+    return os.environ.get("RUFUS_STORYBOARD_REPAIR", "1").strip().lower() \
+        not in ("0", "false", "no", "off")
+
+
+def _revision_prompt(script: str, beats: list[str], visuals: list[str],
+                     word: str, n_hits: int, targets: list[int]) -> str:
+    """Ask for new shots for the ones that repeat the dominant object."""
+    lines = "\n".join(
+        f"{i + 1}. LINE: {beats[i] if i < len(beats) else ''}\n"
+        f"   CURRENT SHOT: {visuals[i]}" for i in targets)
+    return (
+        f"You planned a {len(visuals)}-shot sequence for this narration, and "
+        f"\"{word}\" is the subject of {n_hits} of the {len(visuals)} shots. "
+        f"That is the sequence's main defect: a viewer sees the same picture "
+        f"over and over and swipes away.\n\n"
+        f"FULL NARRATION:\n{script}\n\n"
+        f"REPLACE ONLY THESE SHOTS. Each must still be a picture of ITS OWN "
+        f"LINE — do not drift to a different part of the story — but it must "
+        f"be about something other than the {word}:\n{lines}\n\n"
+        f"WHAT TO SHOW INSTEAD, in order of preference: the person acting, "
+        f"their hands mid-action, their face and posture, the person it "
+        f"happens to, the place around them, the moment just before or just "
+        f"after. Every replacement must have a VERB in it — something being "
+        f"done, not something lying somewhere. The {word} may still be "
+        f"visible; it must not be what the shot is about.\n"
+        f"Keep the same house rules: no lettering, no words printed in frame, "
+        f"no camera or lens language, no named emotions — draw the face and "
+        f"the posture instead. Two or three plain sentences each.\n\n"
+        f'Reply with ONLY this JSON: {{"shots": [{{"n": <shot number>, '
+        f'"visual": "..."}}, ...]}}')
+
+
+def _revary(client, model: str, script: str, beats: list[str],
+            visuals: list[str]) -> list[str]:
+    """Re-plan the shots that repeat the dominant object.
+
+    WHY A SECOND CALL AND NOT A HARDER RULE. Rule 3a asks for variety and the
+    model mostly obeys it, but when the narration names one thing in nine of
+    its ten lines, rule 1 (draw the literal thing the line names) and rule 3a
+    point in opposite directions, and rule 1 wins — correctly, shot by shot,
+    and wrongly for the sequence. Nothing written into a single prompt
+    reliably resolves that, because the conflict only becomes visible once all
+    the shots exist. Measuring the finished plan and asking again for the
+    offending shots is the cheapest thing that actually sees the problem.
+
+    Costs one extra call, on runs that need it. Fail-open in every direction:
+    any error, any malformed reply, any shot that comes back too short, and
+    the original plan stands.
+    """
+    if not repair_enabled() or len(visuals) < 5:
+        return visuals
+    d = dominant_subject(visuals)
+    limit = _dominant_share_limit()
+    if not d["word"] or d["share"] <= limit:
+        return visuals
+
+    word = d["word"]
+    # Keep the shots where it belongs most — the earliest ones, which is where
+    # the object is introduced — and revise the surplus. Budget is the share
+    # rule 3a asks for, so the repair aims past the threshold rather than at
+    # it; landing exactly on the limit leaves the next measurement reporting a
+    # defect the run just fixed.
+    budget = max(1, round(len(visuals) / 3.0))
+    hits = [i for i, v in enumerate(visuals) if word in _subject_of(v)]
+    targets = hits[budget:]
+    if not targets:
+        return visuals
+    print(f"[storyboard] \"{word}\" is the subject of {d['shots']} of "
+          f"{len(visuals)} shots — re-planning {len(targets)} of them")
+    try:
+        resp = client.chat.completions.create(
+            model=model,
+            messages=[{"role": "user",
+                       "content": _revision_prompt(script, beats, visuals,
+                                                   word, d["shots"],
+                                                   targets)}],
+            temperature=0.9, max_tokens=1500, timeout=90,
+            response_format={"type": "json_object"},
+        )
+        raw = json.loads(resp.choices[0].message.content or "{}")
+    except Exception as e:
+        print(f"[storyboard] re-plan skipped (non-fatal): {e}")
+        return visuals
+
+    out = list(visuals)
+    changed = 0
+    for entry in (raw.get("shots") or []):
+        if not isinstance(entry, dict):
+            continue
+        try:
+            i = int(entry.get("n", 0)) - 1
+        except (TypeError, ValueError):
+            continue
+        new = _strip_abstraction(str(entry.get("visual", "")).strip())
+        if i not in targets or len(new) < MIN_VISUAL_CHARS:
+            continue
+        # A replacement that names the same object again is not a replacement.
+        # Without this the pass reports success on a reply that changed the
+        # words and not the picture — the shape of failure this whole file
+        # keeps running into.
+        if word in _subject_of(new):
+            continue
+        out[i] = new
+        changed += 1
+    after = dominant_subject(out)
+    if changed:
+        print(f"[storyboard] re-planned {changed} shot(s); \"{after['word']}\" "
+              f"is now the widest subject at {after['shots']} of {len(out)}")
+    else:
+        print("[storyboard] re-plan returned nothing usable — keeping the "
+              "original shots")
+    return out
+
+
+def _subject_of(visual: str) -> set[str]:
+    try:
+        from run_review import _subject_words
+        return _subject_words(visual)
+    except Exception:
+        return _content_words(visual)
+
+
 def _character(niche: str | None) -> tuple[str, str]:
     """(name, short_ref) for the niche's recurring character, or ("", "")."""
     if not niche:
@@ -736,7 +917,8 @@ def plan(script: str, beats: list[str], era_tags: list[str] | None = None,
             key = json.loads(keys_file.read_text(encoding="utf-8")).get("openai", "")
         if not key or key.startswith("YOUR_") or key.startswith("FILL_"):
             return None
-        resp = OpenAI(api_key=key).chat.completions.create(
+        client = OpenAI(api_key=key)
+        resp = client.chat.completions.create(
             model=_model(),
             messages=[{"role": "user",
                        "content": _prompt(script, beats, era_tags,
@@ -747,6 +929,12 @@ def plan(script: str, beats: list[str], era_tags: list[str] | None = None,
         raw = json.loads(resp.choices[0].message.content or "{}")
         visuals = _clean(raw, len(beats), beats)
         if visuals:
+            # BEFORE the thread and the setting are pinned in. Those clauses
+            # are text this pipeline appends, not pictures the storyboard
+            # chose, and counting them would measure our own writing — the
+            # mistake that once made a run look like it was about "market,
+            # cobblestone, bright".
+            visuals = _revary(client, _model(), script, beats, visuals)
             name, short = _character(niche)
             pinned = [_pin_character(v, name, short) for v in visuals]
             n_fixed = sum(1 for a, b in zip(visuals, pinned) if a != b)

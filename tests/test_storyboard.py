@@ -672,3 +672,172 @@ def test_an_interior_still_passes():
     assert storyboard._is_a_place(
         "A dimly lit medieval hall with rough stone walls, a wooden table in "
         "the centre, and a narrow high window casting a beam across the room.")
+
+
+# ── one object in every frame: "why all the images with coin" ────────────────
+#
+# The complaint that has outlived every other one, and the finding that was
+# still at 52% of measured runs after the thread and setting clauses were
+# capped. Those caps fixed the text this pipeline APPENDS; this is the
+# storyboard's own choice of subject, and it comes from rules 1 and 3a
+# disagreeing. Rule 1 says draw the literal thing the line names. A money
+# script names money in nine of ten lines. Obeying rule 1 shot by shot is
+# obeying it wrongly for the sequence, and nothing in a single prompt sees
+# that, because the conflict only exists once all the shots are on the table.
+
+
+class _FakeChoice:
+    def __init__(self, content):
+        self.message = type("M", (), {"content": content})()
+
+
+class _FakeClient:
+    """Records the prompt it was given and replies with canned JSON."""
+
+    def __init__(self, reply: str):
+        self._reply = reply
+        self.prompts: list[str] = []
+        outer = self
+
+        class _Completions:
+            def create(self, **kw):
+                outer.prompts.append(kw["messages"][0]["content"])
+                return type("R", (), {"choices": [_FakeChoice(outer._reply)]})()
+
+        self.chat = type("C", (), {"completions": _Completions()})()
+
+
+_COINS = [
+    "A hand pushes a single coin across the oak counter.",
+    "The same coin lies on the wooden table, alone.",
+    "A coin is bitten between a merchant's teeth.",
+    "The coin sits at the bottom of an open purse.",
+    "A coin spins to a stop on the stone floor.",
+    "A woman turns the coin over in her fingers.",
+]
+_BEATS = ["one", "two", "three", "four", "five", "six"]
+
+
+def test_the_dominant_subject_is_counted_the_way_run_review_counts_it():
+    """A pipeline that repairs by one definition while the analyzer reports by
+    another produces a run that fixes itself and is then told it did not. That
+    has happened in this repo more than once, so the two share the count."""
+    import run_review
+    d = storyboard.dominant_subject(_COINS)
+    assert d["word"] == "coin"
+    assert d["shots"] == 6
+    assert d == {"word": run_review._dominant_subject(_COINS)["word"],
+                 "shots": run_review._dominant_subject(_COINS)["prompts"],
+                 "share": run_review._dominant_subject(_COINS)["share"]}
+
+
+def test_the_threshold_is_run_reviews_threshold():
+    import run_review
+    assert storyboard._dominant_share_limit() == run_review.DOMINANT_SHARE
+
+
+def test_a_varied_sequence_costs_no_second_call():
+    """The repair must be rare. A second model call on every run is a tax on
+    the runs that did nothing wrong."""
+    varied = ["A hand pushes a coin across the counter.",
+              "The queue outside has not moved since dawn.",
+              "A clerk bolts the heavy door from inside.",
+              "A child watches from the top of the stairs.",
+              "Two men argue across an empty counter.",
+              "A woman folds an apron and sets it down."]
+    client = _FakeClient('{"shots": []}')
+    out = storyboard._revary(client, "gpt-4o", "script", _BEATS, varied)
+    assert out == varied
+    assert not client.prompts, "no call should have been made"
+
+
+def test_the_surplus_shots_are_re_planned(monkeypatch, capsys):
+    monkeypatch.delenv("RUFUS_STORYBOARD_REPAIR", raising=False)
+    client = _FakeClient(json.dumps({"shots": [
+        {"n": 3, "visual": "A merchant's jaw clenches as he shakes his head at "
+                           "the man across the counter."},
+        {"n": 4, "visual": "A woman's hands close an empty purse and push it "
+                           "into her coat."},
+        {"n": 5, "visual": "A queue of people stands at a bolted door, nobody "
+                           "moving."},
+        {"n": 6, "visual": "A child on the stairs watches the adults argue "
+                           "below, gripping the railing."},
+    ]}))
+    out = storyboard._revary(client, "gpt-4o", "script", _BEATS, _COINS)
+    assert storyboard.dominant_subject(out)["share"] < 0.55
+    # The introduction survives: the object is still in the sequence.
+    assert out[0] == _COINS[0]
+    assert "re-planned 4 shot(s)" in capsys.readouterr().out
+
+
+def test_a_replacement_that_names_the_same_object_is_refused():
+    """Otherwise the pass reports success on a reply that changed the words and
+    not the picture."""
+    client = _FakeClient(json.dumps({"shots": [
+        {"n": 3, "visual": "The very same coin, now resting on a different "
+                           "counter in better light."},
+    ]}))
+    out = storyboard._revary(client, "gpt-4o", "script", _BEATS, _COINS)
+    assert out == _COINS
+
+
+def test_the_revision_asks_for_a_verb_and_pins_each_shot_to_its_own_line():
+    """A replacement that drifts to another part of the story is a worse
+    defect than the repetition it fixes — it breaks rule 1, which is the one
+    that makes the picture match the words."""
+    client = _FakeClient('{"shots": []}')
+    storyboard._revary(client, "gpt-4o", "the full narration", _BEATS, _COINS)
+    p = client.prompts[0]
+    assert "VERB" in p
+    assert "ITS OWN LINE" in p
+    assert "the full narration" in p
+    # It must show the model the lines it is re-planning against.
+    assert "LINE:" in p and "CURRENT SHOT:" in p
+
+
+def test_the_repair_can_be_switched_off(monkeypatch):
+    monkeypatch.setenv("RUFUS_STORYBOARD_REPAIR", "0")
+    client = _FakeClient('{"shots": []}')
+    assert storyboard._revary(client, "gpt-4o", "s", _BEATS, _COINS) == _COINS
+    assert not client.prompts
+
+
+def test_a_short_sequence_is_left_alone():
+    """Three shots of one object is a sequence about that object, which is
+    fine. Dominance needs enough frames to be dominance."""
+    short = _COINS[:3]
+    client = _FakeClient('{"shots": []}')
+    assert storyboard._revary(client, "gpt-4o", "s", _BEATS, short) == short
+    assert not client.prompts
+
+
+def test_a_broken_reply_keeps_the_original_plan():
+    """Fail-open, like every other model call in this file."""
+    class _Boom(_FakeClient):
+        def __init__(self):
+            super().__init__("")
+            outer = self
+
+            class _C:
+                def create(self, **kw):
+                    raise RuntimeError("upstream is down")
+            self.chat = type("C", (), {"completions": _C()})()
+
+    assert storyboard._revary(_Boom(), "gpt-4o", "s", _BEATS, _COINS) == _COINS
+
+
+def test_the_prompt_tells_the_model_to_vary_the_subject():
+    p = storyboard._prompt("script", ["a", "b"], [])
+    assert "MUST CHANGE ACROSS THE SEQUENCE" in p
+    assert "a THIRD of the shots" in p
+    assert "SHOW A DIFFERENT VERB" in p
+
+
+def test_the_numbered_rules_are_still_unique():
+    """Two rules sharing a number is how one of them gets ignored."""
+    import re
+    p = storyboard._prompt("script", ["a", "b"], [])
+    rules = p.split("WHAT MAKES THIS A STORYBOARD", 1)[1]
+    labels = re.findall(r"^(\d+[a-z]?)\. ", rules, flags=re.M)
+    assert labels, "the rules section moved"
+    assert len(labels) == len(set(labels)), labels

@@ -494,6 +494,11 @@ SETTINGS_GROUPS = [
         ("RUFUS_STORYBOARD", "Storyboard", "bool",
          "Off falls back to per-beat prompts written without seeing the story "
          "— which is what produced ten unrelated pictures."),
+        ("RUFUS_STORYBOARD_REPAIR", "Re-plan repeated shots", "bool",
+         "After the shots are planned, measures whether one object is the "
+         "subject of more than half of them and asks for new shots for the "
+         "surplus — the \"why is everything coins\" fix. One extra model call, "
+         "only on runs that need it."),
         ("RUFUS_SCRIPT_ARCHITECT", "Story architect", "bool",
          "The plan pass that finds a filmable moment before any prose is "
          "written."),
