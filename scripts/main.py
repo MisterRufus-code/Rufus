@@ -1522,9 +1522,28 @@ def run(skip_upload: bool = False, niche_override: str = None, output_dir: Path 
         # or misses the score bar, retry with a WHOLE new hook/angle (the
         # failure is fed forward) instead of redrafting the body under a hook
         # that's already lost. Bounded by RUFUS_SCRIPT_CYCLES/MAX_COST.
-        result = write_script_until_good(scene, seed=seed,
-                                         precomputed_analysis=seed_analysis or None,
-                                         run_id=script_run_id)
+        # LONG-FORM IS A DIFFERENT WRITER, not a raised word cap — see
+        # longform_writer's header. It plans sections, checks the plan against
+        # the source before buying prose, and writes each one with the last
+        # one's ending in hand. Fail-open in the usual way: anything it cannot
+        # finish returns None and the Shorts writer answers instead, so the
+        # format switch can never leave a run with no script.
+        result = None
+        try:
+            import longform_writer
+            if longform_writer.enabled():
+                result = longform_writer.write(
+                    seed, seed_analysis or "", active,
+                    run_id=script_run_id)
+        except Exception as e:
+            print(f"[longform] skipped (non-fatal): {e}")
+            result = None
+
+        if result is None:
+            result = write_script_until_good(
+                scene, seed=seed,
+                precomputed_analysis=seed_analysis or None,
+                run_id=script_run_id)
         script = result["script"]
 
         if check_blacklist(script):
