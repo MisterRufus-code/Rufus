@@ -149,7 +149,7 @@ def continue_shot(prev_png: Path, prompt: str, seed: int, client_id: str,
     clip.
 
     `prev_png` should be the previous beat's RAW model output, not the finished
-    1080x1920 frame: _fit_to_portrait upscales and crops, and feeding that back
+    1080x1920 frame: _fit_to_frame upscales and crops, and feeding that back
     in would re-resample on every link, so the degradation would compound down
     the whole video rather than stopping at one beat.
     """

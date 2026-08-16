@@ -42,8 +42,12 @@ CONFIG_DIR = Path(__file__).parent.parent / "config"
 
 IMG_W = 576    # safe for GTX 1060 6GB
 IMG_H = 1024   # 9:16 portrait ratio
-OUT_W = 1080   # final Shorts width
-OUT_H = 1920   # final Shorts height
+# The finished frame's size, from the active format profile: 1080×1920 for a
+# vertical Short, 1920×1080 for long-form. Two literals here were the reason a
+# second format could not exist — every still was cropped to portrait whatever
+# the render was going to be.
+import video_format as _vf
+OUT_W, OUT_H = _vf.dimensions()
 FPS   = 30
 
 # Ken Burns zoom range (e.g. 0.06 = 1.00x -> 1.06x). Pan drift is derived from

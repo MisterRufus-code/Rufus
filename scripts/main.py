@@ -568,7 +568,13 @@ def _target_beats(script: str) -> int:
             return max(1, int(override))
         except ValueError:
             print(f"[beats] SD_CLIPS={override!r} is not a number — ignoring")
-    return max(10, min(30, round(len(script.split()) / 5.0)))
+    # THE NUMBERS COME FROM THE FORMAT NOW. One picture per five spoken words,
+    # floor 10, ceiling 30 is what a 40-second Short wants; a nine-minute
+    # explainer wants one per nine and a ceiling of 220. Those are the same
+    # rule with different constants, so the constants moved to
+    # video_format.PROFILES and this reads them.
+    import video_format
+    return video_format.target_beats(len(script.split()))
 
 
 def _best_clause_split(beats: list[str], min_words: int):
@@ -1696,6 +1702,8 @@ def run(skip_upload: bool = False, niche_override: str = None, output_dir: Path 
             # cosmetic line from killing a render also kept it from ever
             # working, which is this repo's own rule about fail-open needing
             # fail-loud, broken by the very line that reports the config.
+            import video_format as _fmt
+            print(f"           format: {_fmt.describe()}")
             _beats = _target_beats(script)
             _override = (os.environ.get("SD_CLIPS") or "").strip()
             _from = f" (SD_CLIPS={_override})" if _override else " (from the script)"

@@ -23,7 +23,11 @@ from pathlib import Path
 
 # Publishable-Short targets
 REQ_W, REQ_H     = 1080, 1920
-MIN_DUR, MAX_DUR = 10.0, 180.0     # outside this = broken render (Shorts cap is 3 min)
+# Outside this = broken render. Per-FORMAT: the Shorts cap is 3 minutes, and
+# a nine-minute explainer is not a broken render — it is the other format
+# doing exactly what it was asked to. One ceiling cannot mean both.
+import video_format as _vf
+MIN_DUR, MAX_DUR = _vf.get("qc_min_s", 10.0), _vf.get("qc_max_s", 180.0)
 IDEAL_MIN, IDEAL_MAX = 25.0, 60.0  # retention sweet spot — outside is a warning
 MIN_BYTES        = 1_000_000       # <1MB at 1080×1920 means the encode died
 FPS_MIN, FPS_MAX = 24.0, 61.0

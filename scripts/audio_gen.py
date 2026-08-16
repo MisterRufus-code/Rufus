@@ -53,7 +53,11 @@ ROOT       = Path(__file__).parent.parent
 CONFIG_DIR = ROOT / "config"
 FONTS_DIR  = ROOT / "assets" / "fonts"
 
-W, H         = 1080, 1920
+# The render's shape, from the active format profile — 1080×1920 for a
+# Short, 1920×1080 for long-form. Read at import: a run does not change
+# format halfway through, and every consumer below wants plain ints.
+import video_format as _vf
+W, H         = _vf.dimensions()
 FPS          = 30
 MAX_DUR      = 60.0
 MIN_DUR      = 30.0
@@ -132,7 +136,9 @@ SNAP_WINDOW   = 2.0        # max distance a cut may move to land on a sentence e
 # clamp. The planner had more pictures than the narration had pauses and spent
 # the remainder at the minimum. Below about 1.5s a picture reads as a flash
 # rather than a shot, so the floor now sits where a shot starts being one.
-MIN_SEG       = 1.6
+# The floor is per-FORMAT: an explainer holding ~3.5s a picture wants a calmer
+# 2.5s minimum, and one number cannot be right for both.
+MIN_SEG       = _vf.get("min_seg_s", 1.6)
 
 WHITE = "&H00FFFFFF"
 GREEN = "&H0000FF00"

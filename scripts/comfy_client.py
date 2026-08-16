@@ -63,13 +63,20 @@ from sd_client import (
 )
 
 
-def _fit_to_portrait(img_bytes: bytes, out_path: Path) -> bool:
-    """Cover-resize a stills-model frame to exactly 1080×1920, preserving composition.
+def _fit_to_frame(img_bytes: bytes, out_path: Path) -> bool:
+    """Cover-resize a stills-model frame to exactly OUT_W×OUT_H, preserving
+    composition.
 
     832×1472 (0.5652) vs 1080×1920 (0.5625) are near-identical aspect ratios, so
     we Lanczos-scale to just cover the target and trim the ~0.5% sliver. This
     keeps ~99% of the frame as composed — unlike sd_client's fixed 2× upscale
     + center-crop, which at this generation size would discard 35% of the image.
+
+    The same holds landscape: the long-form profile asks the model for
+    1472×832 against a 1920×1080 target, so the sliver stays ~0.5% there too.
+    Nothing here was ever portrait-specific except the name, and a function
+    called _fit_to_portrait is one nobody would think to call for a landscape
+    render.
     """
     from PIL import Image
     import io as _io
@@ -269,7 +276,7 @@ def _render_image_i2i(prompt: str, seed: int, client_id: str,
     """One img2img step from `init_png`. Returns raw PNG bytes or None.
 
     Deliberately takes the PREVIOUS RAW model output rather than the finished
-    1080×1920 frame: the pipeline's _fit_to_portrait upscales and crops, and
+    1080×1920 frame: the pipeline's _fit_to_frame upscales and crops, and
     feeding that back in would re-resample on every link of the chain, so the
     degradation compounds down the beat."""
     tpl = _i2i_template()
@@ -344,7 +351,7 @@ def _build_i2i_chain(*, base_png: Path, base_raw: bytes, prompt: str, seed: int,
         except OSError:
             break
         raws.append(raw_path)
-        if not _fit_to_portrait(nxt, fitted):
+        if not _fit_to_frame(nxt, fitted):
             break
         frames.append(fitted)
         prev_raw = raw_path
@@ -1514,7 +1521,7 @@ def generate_clips(queries: list[str], n: int = 4,
                 time.sleep(GEN_ERROR_BACKOFF)
                 continue
 
-            if not _fit_to_portrait(img_bytes, png_path):  # → exactly 1080×1920
+            if not _fit_to_frame(img_bytes, png_path):  # → exactly 1080×1920
                 continue
 
             h = _avg_hash(png_path)
@@ -1604,7 +1611,7 @@ def generate_clips(queries: list[str], n: int = 4,
             sub_path = tmp_dir / f"{stamp}_{i}_{pos}.png"
             sub_prompt = f"{prompt.rstrip().rstrip('.')}. {modifier}"
             sub_bytes = _render_image(sub_prompt, seed, client_id, niche=niche)
-            if sub_bytes and _fit_to_portrait(sub_bytes, sub_path):
+            if sub_bytes and _fit_to_frame(sub_bytes, sub_path):
                 slots[pos] = sub_path
             else:
                 print(f"[comfy] sub-frame {pos+1} of clip {i+1} failed — "

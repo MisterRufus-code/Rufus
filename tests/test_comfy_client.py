@@ -55,7 +55,7 @@ def test_hamming_counts_differing_bits():
 _STILLS_W, _STILLS_H = 832, 1472   # the documented stills-model generation bucket
 
 
-def test_fit_to_portrait_outputs_exact_1080x1920(tmp_path):
+def test_fit_to_frame_outputs_the_formats_exact_size(tmp_path):
     import io
     import random
     from PIL import Image
@@ -71,11 +71,11 @@ def test_fit_to_portrait_outputs_exact_1080x1920(tmp_path):
     src.save(buf, format="PNG")
 
     out = tmp_path / "fit.png"
-    assert c._fit_to_portrait(buf.getvalue(), out) is True
+    assert c._fit_to_frame(buf.getvalue(), out) is True
     assert Image.open(out).size == (1080, 1920)
 
 
-def test_fit_to_portrait_trims_only_a_sliver():
+def test_fit_to_frame_trims_only_a_sliver():
     # 832/1472 vs 1080/1920: cover-scale then crop must discard <2% per axis —
     # the whole point vs. a 2×-upscale-then-crop that would discard 35%.
     scale = max(1080 / _STILLS_W, 1920 / _STILLS_H)
@@ -260,7 +260,7 @@ def test_motion_chain_prefers_wan_then_svd(monkeypatch, tmp_path):
     with patch.object(c, "is_available", return_value=True), \
          patch.object(c, "_stills_template", return_value=_dummy_tpl()), \
          patch.object(c, "_render_image", return_value=b"PNG"), \
-         patch.object(c, "_fit_to_portrait", lambda b, p: p.write_bytes(b"i" * 25_000) or True), \
+         patch.object(c, "_fit_to_frame", lambda b, p: p.write_bytes(b"i" * 25_000) or True), \
          patch.object(c, "_avg_hash", return_value=None):
         clips = c.generate_clips(["prompt one", "prompt two"], n=2)
 
@@ -409,7 +409,7 @@ def test_motion_chain_hunyuan_catches_wan_face_skip(monkeypatch, tmp_path):
     with patch.object(c, "is_available", return_value=True), \
          patch.object(c, "_stills_template", return_value=_dummy_tpl()), \
          patch.object(c, "_render_image", return_value=b"PNG"), \
-         patch.object(c, "_fit_to_portrait", lambda b, p: p.write_bytes(b"i" * 25_000) or True), \
+         patch.object(c, "_fit_to_frame", lambda b, p: p.write_bytes(b"i" * 25_000) or True), \
          patch.object(c, "_avg_hash", return_value=None):
         clips = c.generate_clips(["a portrait of a banker"], n=1)
 
@@ -446,7 +446,7 @@ def test_two_phase_all_renders_before_any_motion(monkeypatch, tmp_path):
     with patch.object(c, "is_available", return_value=True), \
          patch.object(c, "_stills_template", return_value=_dummy_tpl()), \
          patch.object(c, "_render_image", side_effect=fake_render), \
-         patch.object(c, "_fit_to_portrait", lambda b, p: p.write_bytes(b"i" * 25_000) or True), \
+         patch.object(c, "_fit_to_frame", lambda b, p: p.write_bytes(b"i" * 25_000) or True), \
          patch.object(c, "_avg_hash", return_value=None), \
          patch.object(c, "_free_comfy_memory", side_effect=lambda: freed.append(1)):
         clips = c.generate_clips(["p1", "p2", "p3"], n=3)
@@ -478,7 +478,7 @@ def test_failed_image_reuses_previous_still_for_beat_alignment(monkeypatch, tmp_
     with patch.object(c, "is_available", return_value=True), \
          patch.object(c, "_stills_template", return_value=_dummy_tpl()), \
          patch.object(c, "_render_image", side_effect=fake_render), \
-         patch.object(c, "_fit_to_portrait", lambda b, p: p.write_bytes(b"i" * 25_000) or True), \
+         patch.object(c, "_fit_to_frame", lambda b, p: p.write_bytes(b"i" * 25_000) or True), \
          patch.object(c, "_avg_hash", return_value=None), \
          patch.object(c, "_animate_to_clip", side_effect=fake_kenburns), \
          patch.object(c, "GEN_ERROR_BACKOFF", 0):
@@ -501,7 +501,7 @@ def test_free_not_called_in_stills_only_mode(monkeypatch, tmp_path):
     with patch.object(c, "is_available", return_value=True), \
          patch.object(c, "_stills_template", return_value=_dummy_tpl()), \
          patch.object(c, "_render_image", return_value=b"PNG"), \
-         patch.object(c, "_fit_to_portrait", lambda b, p: p.write_bytes(b"i" * 25_000) or True), \
+         patch.object(c, "_fit_to_frame", lambda b, p: p.write_bytes(b"i" * 25_000) or True), \
          patch.object(c, "_avg_hash", return_value=None), \
          patch.object(c, "_animate_to_clip", side_effect=fake_kenburns), \
          patch.object(c, "_free_comfy_memory", side_effect=lambda: freed.append(1)):
@@ -577,7 +577,7 @@ def test_generate_clips_sends_the_detailed_prompt(monkeypatch):
     with patch.object(c, "is_available", return_value=True), \
          patch.object(c, "_stills_template", return_value=_dummy_tpl()), \
          patch.object(c, "_render_image", side_effect=fake_render), \
-         patch.object(c, "_fit_to_portrait", lambda b, p: p.write_bytes(b"i" * 25_000) or True), \
+         patch.object(c, "_fit_to_frame", lambda b, p: p.write_bytes(b"i" * 25_000) or True), \
          patch.object(c, "_avg_hash", return_value=None), \
          patch.object(c, "_animate_to_clip",
                       lambda png, clip, duration=8.0, idx=0: clip.write_bytes(b"x" * 60_000) or True):
@@ -788,7 +788,7 @@ def test_generate_clips_threads_niche_into_render(monkeypatch):
     with patch.object(c, "is_available", return_value=True), \
          patch.object(c, "_stills_template", return_value=_dummy_tpl()), \
          patch.object(c, "_render_image", side_effect=fake_render), \
-         patch.object(c, "_fit_to_portrait", lambda b, p: p.write_bytes(b"i" * 25_000) or True), \
+         patch.object(c, "_fit_to_frame", lambda b, p: p.write_bytes(b"i" * 25_000) or True), \
          patch.object(c, "_avg_hash", return_value=None), \
          patch.object(c, "_animate_to_clip",
                       lambda png, clip, duration=8.0, idx=0: clip.write_bytes(b"x" * 60_000) or True):
@@ -871,7 +871,7 @@ def test_multiframe_renders_n_frames_per_beat_at_one_seed(monkeypatch):
     with patch.object(c, "is_available", return_value=True), \
          patch.object(c, "_stills_template", return_value=_dummy_tpl()), \
          patch.object(c, "_render_image", side_effect=fake_render), \
-         patch.object(c, "_fit_to_portrait", lambda b, p: p.write_bytes(b"i" * 25_000) or True), \
+         patch.object(c, "_fit_to_frame", lambda b, p: p.write_bytes(b"i" * 25_000) or True), \
          patch.object(c, "_avg_hash", return_value=None), \
          patch.object(c, "_animate_to_clip",
                       lambda png, clip, duration=8.0, idx=0, min_bytes=0:
@@ -910,7 +910,7 @@ def test_multiframe_orders_frames_earlier_peak_later(monkeypatch):
     with patch.object(c, "is_available", return_value=True), \
          patch.object(c, "_stills_template", return_value=_dummy_tpl()), \
          patch.object(c, "_render_image", side_effect=fake_render), \
-         patch.object(c, "_fit_to_portrait",
+         patch.object(c, "_fit_to_frame",
                       lambda b, p: p.write_bytes(b + b"|" + b"x" * 25_000) or True), \
          patch.object(c, "_avg_hash", return_value=None), \
          patch.object(c, "_animate_to_clip", side_effect=fake_animate), \
@@ -936,7 +936,7 @@ def test_multiframe_bypasses_motion_engines(monkeypatch):
     with patch.object(c, "is_available", return_value=True), \
          patch.object(c, "_stills_template", return_value=_dummy_tpl()), \
          patch.object(c, "_render_image", return_value=b"PNG"), \
-         patch.object(c, "_fit_to_portrait", lambda b, p: p.write_bytes(b"i" * 25_000) or True), \
+         patch.object(c, "_fit_to_frame", lambda b, p: p.write_bytes(b"i" * 25_000) or True), \
          patch.object(c, "_avg_hash", return_value=None), \
          patch.object(c, "_animate_to_clip",
                       lambda png, clip, duration=8.0, idx=0, min_bytes=0:
@@ -961,7 +961,7 @@ def test_multiframe_sub_frames_are_not_hash_checked(monkeypatch):
     with patch.object(c, "is_available", return_value=True), \
          patch.object(c, "_stills_template", return_value=_dummy_tpl()), \
          patch.object(c, "_render_image", return_value=b"PNG"), \
-         patch.object(c, "_fit_to_portrait", lambda b, p: p.write_bytes(b"i" * 25_000) or True), \
+         patch.object(c, "_fit_to_frame", lambda b, p: p.write_bytes(b"i" * 25_000) or True), \
          patch.object(c, "_avg_hash", side_effect=lambda p: hashed.append(p) or 123), \
          patch.object(c, "_animate_to_clip",
                       lambda png, clip, duration=8.0, idx=0, min_bytes=0:
@@ -987,7 +987,7 @@ def test_multiframe_survives_a_failed_sub_frame(monkeypatch):
     with patch.object(c, "is_available", return_value=True), \
          patch.object(c, "_stills_template", return_value=_dummy_tpl()), \
          patch.object(c, "_render_image", side_effect=flaky), \
-         patch.object(c, "_fit_to_portrait", lambda b, p: p.write_bytes(b"i" * 25_000) or True), \
+         patch.object(c, "_fit_to_frame", lambda b, p: p.write_bytes(b"i" * 25_000) or True), \
          patch.object(c, "_avg_hash", return_value=None), \
          patch.object(c, "_animate_to_clip",
                       lambda png, clip, duration=8.0, idx=0, min_bytes=0:
@@ -1011,7 +1011,7 @@ def test_frames_per_beat_one_keeps_the_original_single_still_path(monkeypatch):
     with patch.object(c, "is_available", return_value=True), \
          patch.object(c, "_stills_template", return_value=_dummy_tpl()), \
          patch.object(c, "_render_image", side_effect=lambda *a, **k: renders.append(1) or b"PNG"), \
-         patch.object(c, "_fit_to_portrait", lambda b, p: p.write_bytes(b"i" * 25_000) or True), \
+         patch.object(c, "_fit_to_frame", lambda b, p: p.write_bytes(b"i" * 25_000) or True), \
          patch.object(c, "_avg_hash", return_value=None), \
          patch.object(c, "_animate_to_clip",
                       lambda png, clip, duration=8.0, idx=0, min_bytes=50_000:
@@ -1078,7 +1078,7 @@ def test_build_i2i_chain_feeds_each_frame_into_the_next(tmp_path):
         return b"RAW" + bytes([len(inits)])
 
     with patch.object(c, "_render_image_i2i", side_effect=fake_i2i), \
-         patch.object(c, "_fit_to_portrait",
+         patch.object(c, "_fit_to_frame",
                       lambda b, p: p.write_bytes(b"i" * 25_000) or True):
         frames = c._build_i2i_chain(
             base_png=tmp_path / "base.png", base_raw=b"RAW0", prompt="a florin",
@@ -1098,7 +1098,7 @@ def test_build_i2i_chain_uses_a_different_seed_each_link(tmp_path):
 
     with patch.object(c, "_render_image_i2i",
                       side_effect=lambda p, s, cid, init: seeds.append(s) or b"RAW"), \
-         patch.object(c, "_fit_to_portrait",
+         patch.object(c, "_fit_to_frame",
                       lambda b, p: p.write_bytes(b"i" * 25_000) or True):
         c._build_i2i_chain(base_png=tmp_path / "b.png", base_raw=b"R", prompt="x",
                            seed=5, client_id="cid", n=4, tmp_dir=tmp_path,
@@ -1115,7 +1115,7 @@ def test_build_i2i_chain_stops_early_without_losing_the_beat(tmp_path):
         return None if calls["n"] == 3 else b"RAW"
 
     with patch.object(c, "_render_image_i2i", side_effect=flaky), \
-         patch.object(c, "_fit_to_portrait",
+         patch.object(c, "_fit_to_frame",
                       lambda b, p: p.write_bytes(b"i" * 25_000) or True):
         frames = c._build_i2i_chain(base_png=tmp_path / "b.png", base_raw=b"R",
                                     prompt="x", seed=1, client_id="cid", n=5,
@@ -1127,7 +1127,7 @@ def test_build_i2i_chain_stops_early_without_losing_the_beat(tmp_path):
 def test_build_i2i_chain_cleans_up_its_raw_intermediates(tmp_path):
     """The raw model outputs exist only to be fed to the next link."""
     with patch.object(c, "_render_image_i2i", return_value=b"RAW"), \
-         patch.object(c, "_fit_to_portrait",
+         patch.object(c, "_fit_to_frame",
                       lambda b, p: p.write_bytes(b"i" * 25_000) or True):
         c._build_i2i_chain(base_png=tmp_path / "b.png", base_raw=b"R", prompt="x",
                            seed=1, client_id="cid", n=4, tmp_dir=tmp_path,
@@ -1185,7 +1185,7 @@ def test_i2i_mode_falls_back_when_no_template_exported(monkeypatch):
          patch.object(c, "_stills_template", return_value=_dummy_tpl()), \
          patch.object(c, "_i2i_template", return_value=None), \
          patch.object(c, "_render_image", return_value=b"PNG"), \
-         patch.object(c, "_fit_to_portrait", lambda b, p: p.write_bytes(b"i" * 25_000) or True), \
+         patch.object(c, "_fit_to_frame", lambda b, p: p.write_bytes(b"i" * 25_000) or True), \
          patch.object(c, "_avg_hash", return_value=None), \
          patch.object(c, "_build_i2i_chain") as chain, \
          patch.object(c, "_animate_to_clip",
@@ -1214,7 +1214,7 @@ def test_i2i_mode_interpolates_instead_of_cutting(monkeypatch, tmp_path):
          patch.object(c, "_stills_template", return_value=_dummy_tpl()), \
          patch.object(c, "_i2i_template", return_value=_dummy_tpl()), \
          patch.object(c, "_render_image", return_value=b"PNG"), \
-         patch.object(c, "_fit_to_portrait", lambda b, p: p.write_bytes(b"i" * 25_000) or True), \
+         patch.object(c, "_fit_to_frame", lambda b, p: p.write_bytes(b"i" * 25_000) or True), \
          patch.object(c, "_avg_hash", return_value=None), \
          patch.object(c, "_build_i2i_chain", return_value=fake_frames), \
          patch.object(c, "_assemble_smooth_beat",
@@ -1251,7 +1251,7 @@ def test_i2v_mode_forces_the_motion_chain_despite_frames_per_beat(monkeypatch):
     with patch.object(c, "is_available", return_value=True), \
          patch.object(c, "_stills_template", return_value=_dummy_tpl()), \
          patch.object(c, "_render_image", return_value=b"PNG"), \
-         patch.object(c, "_fit_to_portrait", lambda b, p: p.write_bytes(b"i" * 25_000) or True), \
+         patch.object(c, "_fit_to_frame", lambda b, p: p.write_bytes(b"i" * 25_000) or True), \
          patch.object(c, "_avg_hash", return_value=None), \
          patch.object(c, "_free_comfy_memory", lambda: None):
         c.generate_clips(["a florin"], n=1, clip_duration=4.8)
