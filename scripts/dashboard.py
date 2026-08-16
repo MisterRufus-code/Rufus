@@ -507,6 +507,22 @@ SETTINGS_GROUPS = [
         ("RUFUS_SEED_TRIES", "Seed attempts", "number",
          "How many sources to try before accepting one the supervisor "
          "rejected. Default 4."),
+        ("RUFUS_VISION", "Look at the pictures", "bool",
+         "After a run, a vision model opens every keyframe and checks it "
+         "against the prompt that made it: does it show what was asked, is "
+         "there garbled lettering, is the face the one the storyboard "
+         "specified. The only check that sees pixels — everything else here "
+         "reads text. Costs seconds per frame, so it is off by default."),
+        ("RUFUS_VISION_MODEL", "Vision model", "text",
+         "qwen2.5vl:7b on your own 3090 through Ollama, or gpt-4o-mini in the "
+         "cloud. Needs RUFUS_LLM_BASE set for a local one."),
+        ("RUFUS_LLM_BASE", "Local model endpoint", "text",
+         "http://localhost:11434/v1 for Ollama. Set it and the scripts, the "
+         "storyboard, the gates and the picture review all run on your own "
+         "GPU instead of the API. Empty = OpenAI."),
+        ("RUFUS_LLM_MODEL", "Local model", "text",
+         "The model name your endpoint serves, e.g. qwen3:14b. Per-stage "
+         "overrides exist too — see docs/ENVIRONMENT.md."),
         ("RUFUS_OPENALEX", "Papers as sources", "bool",
          "Peer-reviewed abstracts from OpenAlex, tried before the discussion "
          "threads. An abstract states a year, names its authors and carries "

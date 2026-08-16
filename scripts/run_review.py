@@ -447,6 +447,22 @@ def review(run_id: str, video_path: Path | None = None) -> dict:
         "frames": _near_duplicates(frames),
     }
     m["findings"] = _findings(m)
+
+    # AND THEN LOOK AT THEM. Everything above is measured from text — the
+    # prompts, the script, the QC sidecar — and every image defect this
+    # channel has actually suffered was found by the owner opening the
+    # gallery instead. Off by default (it costs seconds a frame); when it is
+    # on, its findings join the rest so one page answers "what is wrong with
+    # this run" rather than two.
+    try:
+        import vision_review
+        if vision_review.enabled():
+            seen = vision_review.review_frames(frames, prompts)
+            if seen.get("looked_at"):
+                m["vision"] = seen
+                m["findings"].extend(seen.get("findings", []))
+    except Exception as e:                      # never fatal, always audible
+        print(f"[review] picture review skipped (non-fatal): {e}")
     return m
 
 
