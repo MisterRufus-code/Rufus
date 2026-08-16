@@ -66,14 +66,34 @@ def test_a_suggestion_with_a_setting_carries_the_value_to_set():
     assert it["setting"] == "SD_CLIPS" and it["value"]
 
 
-def test_advice_already_followed_is_not_repeated():
-    """An instruction someone has already carried out reads as the tool not
-    noticing, and is how a suggestions list becomes wallpaper."""
-    items = advisor.advise(_patterns(("pictures_held_too_long", 0.6)),
+def test_advice_already_followed_is_demoted_not_just_debuttoned():
+    """A live page showed "Too few pictures for the length" as the top HIGH
+    finding with "Already set to 24" tacked on the end, and drove the
+    readiness line with it. The measurements behind it are of runs made BEFORE
+    the change — removing the button was not enough."""
+    items = advisor.advise(_patterns(("pictures_held_too_long", 1.0)),
                            settings={"SD_CLIPS": "24"})
     it = next(i for i in items if i["id"] == "pictures_held_too_long")
     assert it["setting"] is None
-    assert "Already set" in it["action"]
+    assert it["severity"] == "low"
+    assert it["done"] is True
+    assert "already fixed" in it["title"]
+    assert "clears once newer runs are measured" in it["action"]
+
+
+def test_something_already_fixed_sinks_below_live_problems():
+    items = advisor.advise(
+        _patterns(("pictures_held_too_long", 1.0), ("one_object_dominates", 0.5)),
+        settings={"SD_CLIPS": "24"})
+    assert items[-1]["id"] == "pictures_held_too_long"
+
+
+def test_readiness_ignores_what_was_already_fixed():
+    """A readiness line reading "needs work — too few pictures" when the beat
+    count was raised an hour ago is reporting the past as the present."""
+    pat = _patterns(("pictures_held_too_long", 1.0))
+    assert advisor.readiness(pat, {}, {})["state"] == "needs work"
+    assert advisor.readiness(pat, {}, {"SD_CLIPS": "24"})["state"] == "good"
 
 
 def test_every_offered_setting_actually_exists():

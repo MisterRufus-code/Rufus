@@ -100,7 +100,9 @@ _REMEDIES = {
     },
     "few_pictures": {
         "title": "Too few pictures for the length",
-        "why": "At ~40 seconds, ten pictures is four seconds a frame.",
+        "why": ("A picture per four spoken words is roughly a cut every "
+                "second and a half; far fewer and a still sits on screen long "
+                "enough for a viewer to feel it."),
         "setting": "SD_CLIPS",
         "value": "24",
         "action": ("The beat count is computed from script length unless "
@@ -145,12 +147,22 @@ def advise(patterns: dict, stats: dict | None = None,
             "setting": rem.get("setting"),
             "value": rem.get("value"),
         }
-        # Do not offer a setting that is already at the suggested value — an
-        # instruction someone has already followed reads as the tool not
-        # noticing, and it is how a suggestions list becomes wallpaper.
+        # ADVICE ALREADY FOLLOWED IS HISTORY, NOT ADVICE. Removing the button
+        # was not enough: a live page showed "Too few pictures for the length"
+        # as the top HIGH finding with "Already set to 24" tacked on the end,
+        # and drove the readiness line with it. The measurements behind it are
+        # of runs that PREDATE the change — the fix is in, and what is left is
+        # a record of the runs made before it. Saying so, quietly, at the
+        # bottom, is the honest shape; leading with it tells the owner to do
+        # something they have already done.
         current = settings.get(item["setting"]) if item["setting"] else None
         if item["setting"] and current == item["value"]:
-            item["action"] += f" Already set to {item['value']}."
+            item["title"] += " (already fixed)"
+            item["action"] = (f"{item['setting']} is already {current}. These "
+                              f"measurements are of runs made before that, so "
+                              f"this clears once newer runs are measured.")
+            item["severity"] = "low"
+            item["done"] = True
             item["setting"] = item["value"] = None
         out.append(item)
 
@@ -221,7 +233,10 @@ def readiness(patterns: dict, stats: dict | None = None,
     thing standing between here and the next one.
     """
     stats = stats or {}
-    items = advise(patterns, stats, settings)
+    # Anything already acted on is excluded: a readiness line that reads "needs
+    # work — too few pictures" when the beat count was raised an hour ago is
+    # reporting the past as the present.
+    items = [i for i in advise(patterns, stats, settings) if not i.get("done")]
     high = [i for i in items if i["severity"] == "high"]
     if high:
         return {"state": "needs work", "detail": high[0]["title"]}
