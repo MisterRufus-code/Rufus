@@ -944,3 +944,51 @@ def test_a_varied_sequence_draws_no_warning(capsys):
     storyboard._clean({"shots": shots}, 3)
     out = capsys.readouterr().out
     assert "every face in this sequence is the same one" not in out
+
+
+# ── one world, moved through ─────────────────────────────────────────────────
+#
+# From five frames of a channel doing this well: a zebra at a waterhole, then
+# the same waterhole with the zebra bolting, then the same field with a lion
+# lying in it. Same horizon, same colours, same landmarks — the sequence reads
+# as one place a moment later. Then, once, a figure shrugging on plain white:
+# a bare frame that works precisely because everything around it is a full
+# scene.
+
+def test_the_prompt_asks_the_place_to_advance_rather_than_repeat():
+    p = storyboard._prompt("script", ["a", "b"], [])
+    assert "STAY IN THE PLACE, AND ADVANCE IT" in p
+    assert "Say what CHANGED" in p
+
+
+def test_a_bare_frame_is_allowed_but_rationed():
+    """It works BECAUSE the rest is a full scene. Left unmentioned the model
+    never uses it; left unqualified it becomes the default, which is the
+    figure-floating-on-paper look this style is trying to leave behind."""
+    p = storyboard._prompt("script", ["a", "b"], [])
+    assert "DELIBERATE PUNCHLINE" in p
+    assert "sparingly" in p
+
+
+def test_the_style_no_longer_fades_the_background():
+    """"soft muted flat colours, drawn thinner and paler than the foreground"
+    was the instruction, and the whole gallery came back beige. The background
+    is quieter because it is simpler and further away, not because it is
+    faded."""
+    import json
+    style = json.loads((Path(storyboard.__file__).parent.parent / "config" /
+                        "styles.json").read_text(encoding="utf-8"))["stickman"]
+    assert "paler than the foreground" not in style
+    assert "soft muted flat colours" not in style
+    assert "SATURATED" in style
+    assert "grass is green" in style
+
+
+def test_the_style_keeps_people_simple_and_draws_the_animals():
+    """The contrast is the charm: simple stick humans against a properly drawn
+    zebra. The old text flattened both to one level of detail."""
+    import json
+    style = json.loads((Path(storyboard.__file__).parent.parent / "config" /
+                        "styles.json").read_text(encoding="utf-8"))["stickman"]
+    assert "ANIMALS AND OBJECTS ARE DRAWN PROPERLY" in style
+    assert "stick-figure" in style

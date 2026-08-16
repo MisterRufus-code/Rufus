@@ -42,17 +42,24 @@ def test_stickman_asks_for_a_background_that_places_the_scene():
     s = STYLES["stickman"]
     assert "pure white background" not in s
     assert "not deliberately filled with colour is pure white" not in s
-    assert "DRAW THE PLACE" in s
-    assert "floor or horizon line" in s
+    assert "BUILD THE WHOLE PLACE" in s
+    assert "horizon line" in s
 
 
 def test_stickman_backgrounds_stay_out_of_the_subjects_way():
     """The fix must not swing into the other failure — a busy background on a
     frame that is on screen for four seconds at thumbnail size reads as
-    noise."""
+    noise.
+
+    NOT BY FADING IT, which is how this was worded before and what the second
+    gallery showed: "soft muted flat colours, drawn thinner and paler than the
+    foreground" produced sixty beige stills where only the figure looked
+    finished. A background is quieter because it is simpler and further away,
+    not because it is washed out."""
     s = STYLES["stickman"]
-    assert "never competes with the subject" in s
-    assert "empty space around the figures" in s
+    assert "quieter than the subject" in s
+    assert "reads instantly at thumbnail size" in s
+    assert "paler than the foreground" not in s
 
 
 def test_stickman_faces_carry_the_emotion():
