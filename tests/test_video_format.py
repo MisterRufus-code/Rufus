@@ -259,3 +259,59 @@ def test_no_module_still_writes_the_frame_size_down_itself():
     assert not offenders, ("the frame size is written down again in "
                            + ", ".join(offenders)
                            + " — import it from video_format instead")
+
+
+# ── the clamp that was a guillotine ──────────────────────────────────────────
+
+@pytest.mark.parametrize("fmt,cap,floor", [("short", 60.0, 30.0),
+                                           ("long", 1500.0, 240.0)])
+def test_the_render_clamps_to_the_format_not_to_sixty_seconds(monkeypatch, fmt, cap, floor):
+    """audio_gen does `min(audio_dur, MAX_DUR)` after transcription, so this
+    number does not warn — it TRUNCATES, and it truncates narration that has
+    already been written, judged, voiced and paid for. At a fixed 60.0 a
+    nine-minute script came out sixty seconds long, ending mid-sentence, and
+    QC then reported the file as broken for being 60s when the format wanted
+    240 — a true complaint about entirely the wrong thing."""
+    monkeypatch.setenv("RUFUS_FORMAT", fmt)
+    import audio_gen
+    importlib.reload(audio_gen)
+    assert audio_gen.MAX_DUR == cap
+    assert audio_gen.MIN_DUR == floor
+
+
+def test_the_renderers_clamp_to_the_same_number(monkeypatch):
+    """remotion_renderer reads audio_gen.MAX_DUR rather than keeping its own,
+    which is the only reason both paths move together."""
+    monkeypatch.setenv("RUFUS_FORMAT", "long")
+    import audio_gen, remotion_renderer
+    importlib.reload(audio_gen)
+    importlib.reload(remotion_renderer)
+    src = (Path(__file__).parent.parent / "scripts" / "remotion_renderer.py").read_text(encoding="utf-8")
+    assert "audio_gen.MAX_DUR" in src and "audio_gen.MIN_DUR" in src
+
+
+def test_the_clamp_never_cuts_a_render_qc_would_have_accepted():
+    """A ceiling below the QC band would hand QC a file it is guaranteed to
+    reject, and the log would blame the length rather than the clamp."""
+    for fmt in ("short", "long"):
+        p = video_format.profile(fmt)
+        assert p["render_max_s"] <= p["qc_max_s"], fmt
+        assert p["render_min_s"] >= p["qc_min_s"], fmt
+
+
+@pytest.mark.parametrize("fmt,dur", [("short", 64.0), ("long", 240.0)])
+def test_the_music_bed_is_long_enough_to_not_be_a_ringtone(monkeypatch, fmt, dur):
+    """64s cleared the Shorts ceiling so a Short never loops its bed. The same
+    64s under a nine-minute video is eight chords repeated eight times."""
+    monkeypatch.setenv("RUFUS_FORMAT", fmt)
+    import music_gen
+    importlib.reload(music_gen)
+    assert music_gen.BED_DUR == dur
+
+
+def test_a_short_still_never_loops_its_bed(monkeypatch):
+    monkeypatch.setenv("RUFUS_FORMAT", "short")
+    import audio_gen, music_gen
+    importlib.reload(audio_gen)
+    importlib.reload(music_gen)
+    assert music_gen.BED_DUR > audio_gen.MAX_DUR

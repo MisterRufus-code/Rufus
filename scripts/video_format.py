@@ -62,6 +62,15 @@ PROFILES: dict[str, dict] = {
         # The cut rhythm. audio_gen.MIN_SEG — raised from 1.2 after a real
         # 24-picture run put thirteen shots on the floor.
         "min_seg_s": 1.6,
+        # audio_gen.MAX_DUR / MIN_DUR: the renderer CLAMPS the timeline to this
+        # after transcription. Not a warning — a truncation, so it is the one
+        # number here that can silently throw away narration that was already
+        # written, voiced and paid for.
+        "render_max_s": 60.0,
+        "render_min_s": 30.0,
+        # music_gen.BED_DUR — 64s is a hair over the ceiling above, so a Short
+        # never loops its bed at all and there is no seam to hear.
+        "music_bed_s": 64.0,
         # qc_check.MIN_DUR / MAX_DUR: outside this, the render is broken.
         "qc_min_s": 10.0,
         "qc_max_s": 180.0,
@@ -98,6 +107,19 @@ PROFILES: dict[str, dict] = {
         # Calmer than a Short by design. A 3.5s average with a 2.5s floor
         # leaves room for the cut planner to land on real pauses.
         "min_seg_s": 2.5,
+        # The clamp becomes a safety net instead of a guillotine: past 25
+        # minutes something has gone wrong with the narration, and below four
+        # this is not the format it claims to be. Matching the QC bounds is
+        # deliberate — a render the clamp allows is a render QC will accept.
+        "render_max_s": 1500.0,
+        "render_min_s": 240.0,
+        # Long-form cannot have the never-loops property — synthesizing
+        # twenty-five minutes of chords to guarantee it would be minutes of CPU
+        # for a tail nobody reaches. Four minutes is the longest bed that is
+        # still cheap, and audio_gen's -stream_loop covers the rest: eight
+        # chords heard twice is a bed, the same eight heard nine times is a
+        # ringtone.
+        "music_bed_s": 240.0,
         "qc_min_s": 240.0,
         "qc_max_s": 1500.0,
         # NOT the Shorts numbers scaled — a different viewing situation. 140px

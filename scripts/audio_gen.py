@@ -59,8 +59,15 @@ FONTS_DIR  = ROOT / "assets" / "fonts"
 import video_format as _vf
 W, H         = _vf.dimensions()
 FPS          = 30
-MAX_DUR      = 60.0
-MIN_DUR      = 30.0
+# THE TIMELINE CEILING, AND IT TRUNCATES. Line ~1225 clamps the transcribed
+# duration to MAX_DUR, so this is not a warning threshold — everything past it
+# is cut off mid-sentence, after the voice has been generated and paid for.
+# Fixed at 60.0 it was the Shorts cap, and a nine-minute narration would have
+# come out sixty seconds long: QC would then have called the file broken for
+# being 60s when the format wanted 240-1500, which is the truthful complaint
+# about entirely the wrong thing.
+MAX_DUR      = float(_vf.get("render_max_s", 60.0))
+MIN_DUR      = float(_vf.get("render_min_s", 30.0))
 CLUSTER_SIZE = 1           # 1 word at a time — Hormozi style
 
 XFADE_DUR    = 0.30        # crossfade duration between clips (seconds)

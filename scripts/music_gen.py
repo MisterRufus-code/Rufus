@@ -21,7 +21,11 @@ ROOT      = Path(__file__).parent.parent
 MUSIC_DIR = ROOT / "assets" / "music_synth"
 
 SAMPLE_RATE = 48000
-BED_DUR     = 64.0    # > MAX_DUR(60s) so the renderer never hits a loop seam
+# Per-format, and the number carried its own reason in a comment that could
+# not check itself: "> MAX_DUR(60s)" was true of one format and a hand-copy of
+# another module's constant. See video_format.PROFILES for what each is for.
+import video_format as _vf
+BED_DUR     = float(_vf.get("music_bed_s", 64.0))
 CHORD_DUR   = 8.0     # seconds per chord
 MIN_BYTES   = 500_000
 
