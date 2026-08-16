@@ -382,19 +382,129 @@ SETTINGS_FILE = ROOT / "config" / "dashboard_settings.json"
 
 # (env var, label, kind, help). kind: "bool" (tri-state — blank means "don't
 # override, use whatever's already configured") or "select:opt1,opt2,...".
-SETTINGS_SCHEMA = [
-    ("RUFUS_STILLS_ONLY", "Stills only", "bool",
-     "Force Ken Burns on stills only, overriding Hunyuan/Wan/LTX/SVD all at once."),
-    ("RUFUS_RENDERER", "Renderer", "select:ffmpeg,remotion",
-     "remotion needs `cd remotion && npm install` once; falls back to ffmpeg on any failure."),
-    ("RUFUS_LTX", "LTX motion engine", "bool", "Enable/disable the LTX-2.3 engine."),
-    ("RUFUS_HUNYUAN", "Hunyuan motion engine", "bool", "Enable/disable the Hunyuan engine."),
-    ("RUFUS_WAN", "Wan motion engine", "bool", "Enable/disable the Wan engine."),
-    ("RUFUS_CHARACTER_MODE", "Recurring character", "bool",
-     "Global on/off for character_engine.py's recurring-character feature "
-     "(per-niche detail — description, timeless design, enable/disable a "
-     "specific niche's character — is edited in config/niches.json)."),
+# EVERY KNOB THE OWNER ACTUALLY TURNS, in one form.
+#
+# WHY THIS GREW. The schema held six switches, so running a video the way this
+# channel now runs it meant seven `$env:` lines in PowerShell before every
+# single run — and getting one of them wrong (a cmd `set` in a PowerShell
+# prompt, a stale RUFUS_BEAT_MOTION from an earlier experiment) is invisible
+# until the video comes out wrong. The owner's instruction was plain: the
+# software is run from the dashboard, not from a terminal. So anything worth
+# setting is here, grouped by the decision it belongs to.
+#
+# `kind` is one of:
+#   bool               on / off / (default)
+#   select:a,b,c       a fixed set
+#   text               free text
+#   secret             free text, rendered masked (webhooks, tokens)
+#   number             free text, validated as a number on save
+SETTINGS_GROUPS = [
+    ("Look", "How the pictures are drawn.", [
+        ("RUFUS_STYLE", "Style preset", "select:stickman,flat_vector,ink_woodcut",
+         "Named look from config/styles.json, appended to every image prompt "
+         "byte for byte. Leave at (default) to use the niche's own style_suffix."),
+        ("RUFUS_STILLS_DETAIL", "Style override (literal)", "text",
+         "A style block written out in full. Beats the preset above — for a "
+         "one-off experiment that does not deserve a name yet."),
+        ("RUFUS_STILLS_ONLY", "Stills only", "bool",
+         "Force images-only, overriding Wan/Hunyuan/LTX/SVD all at once. On "
+         "this hardware a motion clip is minutes; a still is seconds."),
+    ]),
+    ("Pictures per video", "How many, and how they move.", [
+        ("SD_CLIPS", "Beats (pictures)", "number",
+         "One storyboard shot, one prompt and one cut each. Left empty it is "
+         "computed from the script — about one per four spoken words, floor "
+         "10, ceiling 30."),
+        ("RUFUS_BEAT_MOTION", "How a beat moves", "select:cut,kenburns,i2i,hero,i2v",
+         "cut = several stills hard-cut inside the beat (what stills-only "
+         "picks on its own). kenburns = one still, zoom only. i2v = a real "
+         "motion model per beat, measured in minutes each on this box."),
+        ("RUFUS_FRAMES_PER_BEAT", "Stills per beat", "number",
+         "Only in cut/i2i mode. Six is the most the progression arc has steps "
+         "for; beyond that raise the beat count instead."),
+    ]),
+    ("Word-synced inserts", "Small pictures that pop in on the word.", [
+        ("RUFUS_INSERTS", "Insert layer", "bool",
+         "Off by default in a run that already has many beats — inserts are a "
+         "second set of pictures on top of them."),
+        ("RUFUS_INSERT_MODE", "Insert mode", "select:nouns,phrases",
+         "nouns = a picture per drawable noun, capped by the script's "
+         "vocabulary. phrases = a picture per clause, tiling the narration."),
+        ("RUFUS_INSERT_MAX", "Most inserts", "number",
+         "Ceiling for one video. In noun mode the script's vocabulary is "
+         "usually the real limit, so raising this alone changes nothing."),
+        ("RUFUS_PHRASE_WORDS", "Words per insert", "number",
+         "Phrase mode only. Four is about a second and a half of narration."),
+    ]),
+    ("Sound", "The synthesized layer. Every gain is 0-1.", [
+        ("RUFUS_SFX", "Sound effects", "bool",
+         "Off drops the whole layer — hit, bubble and riser together."),
+        ("RUFUS_BUBBLE_GAIN", "Bubble (every cut)", "number",
+         "Plays on every cut, so it compounds fast. 0.05 is felt without "
+         "stepping on the narration."),
+        ("RUFUS_HIT_GAIN", "Hit (on the hook)", "number",
+         "The sub-bass punch under the first line. Plays once, 0.03s in."),
+        ("RUFUS_RISER_GAIN", "Riser (into the payoff)", "number",
+         "The swell leading into the final beat. Plays once, and its weight "
+         "follows the tone of the beat it introduces."),
+        ("RUFUS_TTS", "Voice engine", "select:elevenlabs,kokoro,edge",
+         "ElevenLabs needs a cloned voice on a free account; Kokoro is local "
+         "and free and is what this channel has been using."),
+    ]),
+    ("Where it goes", "Notifications and publishing.", [
+        ("RUFUS_DISCORD_WEBHOOK", "Discord webhook", "secret",
+         "Server Settings → Integrations → Webhooks → New Webhook → Copy URL. "
+         "Every finished video is posted there with its score and hold reason, "
+         "and the mp4 itself when it fits under Discord's attachment limit."),
+        ("RUFUS_DISCORD_UPLOAD", "Attach the mp4", "bool",
+         "Off posts a link only. On is the default and is what makes the "
+         "phone useful — the video plays in the channel."),
+        ("RUFUS_NTFY_TOPIC", "ntfy topic", "text",
+         "Free phone push, no account: install the ntfy app and subscribe to "
+         "a topic nobody else would guess."),
+        ("RUFUS_MIN_UPLOAD_SCORE", "Hold below score", "number",
+         "Nothing auto-uploads regardless; this decides what the review queue "
+         "flags as held."),
+    ]),
+    ("Engines", "Which models may run at all.", [
+        ("RUFUS_RENDERER", "Renderer", "select:ffmpeg,remotion",
+         "remotion needs `cd remotion && npm install` once; any failure falls "
+         "back to ffmpeg, so a render always completes."),
+        ("RUFUS_WAN", "Wan 2.2", "bool",
+         "Text-to-video and image-to-video. A mixture-of-experts model whose "
+         "weights stream from disk on 16GB of RAM — minutes per clip here."),
+        ("RUFUS_HUNYUAN", "Hunyuan 1.5", "bool",
+         "Image-to-video. Its template is exported and its models load, so "
+         "this is one switch away from producing motion."),
+        ("RUFUS_LTX", "LTX 2.3", "bool",
+         "Image-to-video, the fastest of the three and the least faithful to "
+         "the still it was given."),
+        ("RUFUS_T2V", "Wan text-to-video", "bool",
+         "Only ever renders the hero beat, and only in hero mode."),
+        ("RUFUS_CHARACTER_MODE", "Recurring character", "bool",
+         "Global switch for character_engine.py. No niche currently has one "
+         "configured, so this does nothing until config/niches.json does."),
+    ]),
+    ("Writing", "The script, and what may reach the queue.", [
+        ("RUFUS_STORYBOARD", "Storyboard", "bool",
+         "Off falls back to per-beat prompts written without seeing the story "
+         "— which is what produced ten unrelated pictures."),
+        ("RUFUS_SCRIPT_ARCHITECT", "Story architect", "bool",
+         "The plan pass that finds a filmable moment before any prose is "
+         "written."),
+        ("RUFUS_SUPERVISOR", "Supervisors", "bool",
+         "The seed and fact gates. Off means nothing is held for review."),
+        ("RUFUS_SEED_TRIES", "Seed attempts", "number",
+         "How many sources to try before accepting one the supervisor "
+         "rejected. Default 4."),
+        ("RUFUS_NEWSPAPERS", "Newspaper source", "bool",
+         "Library of Congress scans. Turn off if the endpoint stays dead."),
+    ]),
 ]
+
+# Flat view, for the save handler and anything that only needs the keys.
+SETTINGS_SCHEMA = [row for _title, _blurb, rows in SETTINGS_GROUPS for row in rows]
+SETTINGS_KINDS = {key: kind for key, _label, kind, _help in SETTINGS_SCHEMA}
 
 
 def _load_settings() -> dict:
@@ -975,6 +1085,7 @@ NAV_ITEMS = [
     ("/performance", "📈 Performance",                    "view"),
     ("/trending",   "🔥 Trending",                        "view"),
     ("/gallery",    "🖼 Gallery",                         "view"),
+    ("/logs",       "📜 Logs",                            "view"),
     ("/system",     "🖥 System",                          "system"),
     ("/settings",   "⚙ Settings",                         "settings"),
 ]
@@ -1127,7 +1238,11 @@ def _videos_table(videos: list[dict], *, previews: bool = False) -> str:
 
 
 def _msg_banner() -> str:
-    ok_msg  = request.args.get("ok")
+    # `msg` is a synonym for `ok`. Two spellings exist because half the
+    # redirects in this file already used one and half the newer ones reach for
+    # the other, and a success banner that silently does not appear is a worse
+    # outcome than accepting both.
+    ok_msg  = request.args.get("ok") or request.args.get("msg")
     err_msg = request.args.get("error")
     if ok_msg:
         return f'<div class="msg ok">{_esc(ok_msg)}</div>'
@@ -1707,39 +1822,85 @@ def thumbnail_file(filename):
                                as_attachment=request.args.get("download") == "1")
 
 
+def _setting_field(key: str, kind: str, val: str) -> str:
+    """One input, chosen by kind. Everything renders as a control the owner can
+    actually use — the previous version made every setting a dropdown, which
+    meant a webhook URL or a beat count simply could not be entered here."""
+    if kind == "bool":
+        opts = [("", "(default — don't override)"), ("1", "on"), ("0", "off")]
+    elif kind.startswith("select:"):
+        opts = [("", "(default)")] + [(o, o) for o in kind.split(":", 1)[1].split(",")]
+    else:
+        # A secret is masked but NOT hidden from the owner: they need to see
+        # that a webhook is set, and a password field that silently shows an
+        # empty box for a stored value is how people paste it in twice.
+        typ = "password" if kind == "secret" else "text"
+        place = {"number": "e.g. 24", "secret": "paste the URL",
+                 "text": "(default)"}.get(kind, "(default)")
+        return (f'<input class="field" style="margin:0" type="{typ}" name="{key}" '
+                f'value="{_esc(val)}" placeholder="{place}" '
+                f'autocomplete="off" spellcheck="false">')
+    options = "".join(
+        f'<option value="{_esc(v)}" {"selected" if val == v else ""}>{_esc(t)}</option>'
+        for v, t in opts)
+    return f'<select name="{_esc(key)}">{options}</select>'
+
+
 @app.route("/settings")
 def settings():
-    """Edit common tunables from a form instead of PowerShell/editing JSON
-    by hand. Applies immediately to runs launched FROM this dashboard; a
-    Task Scheduler run needs run_scheduled.bat updated separately to read
-    config/dashboard_settings.json too — not wired automatically, since env
-    vars don't propagate between independent processes."""
+    """Every tunable, grouped by the decision it belongs to.
+
+    THE POINT OF THIS PAGE, in the owner's words: the software is run from the
+    dashboard, not from a terminal. Seven `$env:` lines before every run is not
+    a workflow — it is seven chances to leave a stale value from an earlier
+    experiment somewhere no log will mention.
+
+    Applies immediately to runs launched FROM this dashboard. A Task Scheduler
+    run needs run_scheduled.bat pointed at the same file; env vars do not
+    propagate between independent processes.
+    """
     auth.require("settings")
+    if request.args.get("reset") == "1":
+        _require_localhost()
+        _save_settings({})
+        return redirect("/settings?msg=" +
+                        _urlquote("Cleared — every setting is back to the "
+                                  "pipeline default."))
     values = _load_settings()
-    rows = ""
-    for key, label, kind, help_text in SETTINGS_SCHEMA:
-        val = values.get(key, "")
-        if kind == "bool":
-            opts = [("", "(default — don't override)"), ("1", "on"), ("0", "off")]
-        else:
-            opts = [("", "(default)")] + [(o, o) for o in kind.split(":", 1)[1].split(",")]
-        options = "".join(
-            f'<option value="{_esc(v)}" {"selected" if val == v else ""}>{_esc(t)}</option>'
-            for v, t in opts)
-        rows += (f"<tr><td>{_esc(label)}</td>"
-                f"<td><select name=\"{key}\">{options}</select></td></tr>"
-                f"<tr><td colspan='2' class='muted' style='padding-top:0'>{_esc(help_text)}</td></tr>\n")
+    n_set = sum(1 for k in SETTINGS_KINDS if values.get(k))
+
+    sections = ""
+    for title, blurb, rows_spec in SETTINGS_GROUPS:
+        rows = ""
+        for key, label, kind, help_text in rows_spec:
+            val = values.get(key, "")
+            marker = ' <span class="badge ok">set</span>' if val else ""
+            rows += (
+                f'<tr><td style="width:38%"><strong>{_esc(label)}</strong>{marker}'
+                f'<div class="muted" style="margin-top:2px">{_esc(help_text)}</div></td>'
+                f'<td style="vertical-align:top">{_setting_field(key, kind, val)}'
+                f'<div class="muted" style="margin-top:4px"><code>{_esc(key)}</code></div>'
+                f'</td></tr>\n')
+        sections += (f'<h2>{_esc(title)}</h2>'
+                     f'<p class="muted" style="margin:0 0 6px">{_esc(blurb)}</p>'
+                     f'<table>{rows}</table>')
 
     body = f"""
     <a class="back" href="/">← back</a>
     <h2 style="margin-top:14px">Settings</h2>
-    <p class="muted">Applies to runs launched from THIS dashboard (Run a
-       video now, Queue a topic, Trending) immediately. A Task Scheduler
-       run needs run_scheduled.bat updated separately to read the same
-       file — leaving a setting at "(default)" never overrides anything.</p>
+    {_msg_banner()}
+    <p class="muted">Everything here applies to runs launched from THIS
+       dashboard — Run a video now, Queue a topic, Trending. An empty field
+       means "don't override", so the pipeline's own default wins.
+       <strong>{n_set}</strong> of {len(SETTINGS_KINDS)} currently set.</p>
     <form method="post" action="/settings/save">
-      <table>{rows}</table>
-      <button class="btn save" type="submit" style="margin-top:12px">Save</button>
+      {sections}
+      <div style="position:sticky;bottom:0;padding:12px 0;background:inherit">
+        <button class="btn save" type="submit">Save all</button>
+        <a class="muted" href="/settings?reset=1" style="margin-left:14px"
+           onclick="return confirm('Clear every override and go back to pipeline defaults?')">
+           reset everything to defaults</a>
+      </div>
     </form>
     <h2>Dashboard users</h2>
     <p class="muted">Add or remove who can reach this dashboard — a partner,
@@ -1862,15 +2023,130 @@ def settings_users_link():
 
 @app.route("/settings/save", methods=["POST"])
 def settings_save():
+    """Save the overrides, rejecting a number that is not one.
+
+    VALIDATED HERE AND NOT LATER. A beat count of "24 " or "twenty-four"
+    reaches the run as an env var, and the reader that fails to parse it falls
+    back to its default silently — so the owner sets a value, sees no error,
+    and gets the old behaviour with nothing in the log to explain it."""
     auth.require("settings")
     _require_localhost()
-    values = {}
-    for key, label, kind, help_text in SETTINGS_SCHEMA:
+    values, bad = {}, []
+    for key, label, kind, _help in SETTINGS_SCHEMA:
         v = request.form.get(key, "").strip()
-        if v:
-            values[key] = v
+        if not v:
+            continue
+        if kind == "number":
+            try:
+                float(v)
+            except ValueError:
+                bad.append(f"{label} ({v!r} is not a number)")
+                continue
+        values[key] = v
     _save_settings(values)
-    return redirect("/settings")
+    if bad:
+        return redirect("/settings?error=" + _urlquote("Not saved: " + "; ".join(bad)))
+    return redirect("/settings?msg=" + _urlquote(f"Saved {len(values)} setting(s)."))
+
+
+# ── Logs ─────────────────────────────────────────────────────────────────────
+
+LOG_TAIL_BYTES = 240_000     # ~2000 lines; a full run log runs to a few hundred KB
+
+
+def _log_files(limit: int = 40) -> list[dict]:
+    """Every run log, newest first.
+
+    Two naming schemes live side by side and both matter: rufus_YYYYMMDD.log is
+    the tee'd console log a run.bat run writes, and dashboard_run_<epoch>.log is
+    what _launch_run captures for a run started from this page. Reading only one
+    of them would hide exactly half the runs from the person trying to work out
+    what happened.
+    """
+    out: list[dict] = []
+    for d in (ROOT / "logs",):
+        if not d.is_dir():
+            continue
+        for f in d.glob("*.log"):
+            try:
+                st = f.stat()
+            except OSError:
+                continue
+            out.append({"name": f.name, "size": st.st_size, "mtime": st.st_mtime,
+                        "source": "dashboard" if f.name.startswith("dashboard_run_")
+                                  else "console"})
+    out.sort(key=lambda r: r["mtime"], reverse=True)
+    return out[:limit]
+
+
+def _read_log(name: str, tail: int = LOG_TAIL_BYTES) -> str:
+    """The last `tail` bytes of one log, or "" if it cannot be read.
+
+    Tailed rather than read whole because these grow without bound and the
+    interesting part of a failed run is always the end. Path is resolved and
+    re-checked against the logs directory — the filename arrives from a query
+    string, and `..` in it would otherwise read anything on the disk.
+    """
+    d = (ROOT / "logs").resolve()
+    f = (d / name).resolve()
+    if f.parent != d or not f.is_file():
+        return ""
+    try:
+        with open(f, "rb") as fh:
+            fh.seek(0, os.SEEK_END)
+            size = fh.tell()
+            fh.seek(max(0, size - tail))
+            raw = fh.read()
+    except OSError as e:
+        return f"(could not read {name}: {e})"
+    text = raw.decode("utf-8", errors="replace")
+    if size > tail:
+        text = f"… showing the last {tail // 1000}KB of {size // 1000}KB …\n\n" + text
+    return text
+
+
+@app.route("/logs")
+def logs_page():
+    """Read a run's log without opening a terminal.
+
+    Auto-refreshes while a run is in progress, because the reason to be on this
+    page at all is usually that something is running right now and the owner
+    wants to see where it has got to.
+    """
+    auth.require("view")
+    files = _log_files()
+    name = request.args.get("file") or (files[0]["name"] if files else "")
+    running = _run_in_progress("default")
+
+    rows = ""
+    for f in files:
+        sel = ' style="background:rgba(59,130,246,0.12)"' if f["name"] == name else ""
+        rows += (f'<tr{sel}><td><a class="row-link" href="/logs?file={_urlquote(f["name"])}">'
+                 f'{_esc(f["name"])}</a></td>'
+                 f'<td class="muted">{f["source"]}</td>'
+                 f'<td class="muted">{f["size"] // 1024} KB</td>'
+                 f'<td class="muted">{_fmt_ts(f["mtime"])}</td></tr>')
+    table = (f'<table><tr><th>File</th><th>From</th><th>Size</th><th>Modified</th></tr>'
+             f'{rows}</table>' if rows else
+             '<p class="muted">No logs yet — they appear here after the first run.</p>')
+
+    text = _read_log(name) if name else ""
+    refresh = ('<meta http-equiv="refresh" content="10">' if running else "")
+    note = ('<div class="msg ok">A run is in progress — this page refreshes '
+            'every 10 seconds.</div>' if running else "")
+
+    body = f"""
+    {refresh}
+    <a class="back" href="/">← back</a>
+    <h2 style="margin-top:14px">Logs</h2>
+    {note}
+    {table}
+    <h2>{_esc(name) or "—"}</h2>
+    <pre style="background:#0b0d12;border:1px solid #2a2d34;border-radius:10px;
+                padding:14px;overflow:auto;max-height:70vh;font-size:12px;
+                line-height:1.45;white-space:pre-wrap;word-break:break-word">{_esc(text)}</pre>
+    """
+    return _head() + body + PAGE_TAIL
 
 
 @app.route("/gallery")
