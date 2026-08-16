@@ -25,7 +25,7 @@ second, and only then is any GPU time spent drawing it. `python -m
 insert_director "<script>"` prints the plan for a real script.
 
 Env:
-  RUFUS_INSERTS        1 (default) — 0 disables the whole layer
+  RUFUS_INSERTS        0 (default) — 1 turns the whole layer on
   RUFUS_INSERT_MAX     28  most inserts in one video
   RUFUS_INSERT_GAP     0.45 minimum seconds between two inserts
   RUFUS_INSERT_HOLD    0.70 seconds an insert stays on screen
@@ -190,8 +190,22 @@ _VERB_PLURALS = {
 
 
 def enabled() -> bool:
-    return os.environ.get("RUFUS_INSERTS", "1").strip().lower() \
-        not in ("0", "false", "no", "off")
+    """Whether the insert layer runs at all. OFF unless asked for.
+
+    IT USED TO DEFAULT ON, and that is how a run came back with "images on
+    top of images": twenty-eight full-frame beat pictures with fourteen more
+    overlaid on them. The owner had been switching it off by hand with
+    `$env:RUFUS_INSERTS="0"` in every terminal, so the default was never
+    exercised until they stopped typing it — which is exactly the moment a
+    wrong default surfaces.
+
+    An insert is a SECOND set of pictures painted over a video that is already
+    finished. That is a deliberate style, not a sensible default, and the beat
+    count now derives from the script so the base video is dense on its own.
+    RUFUS_INSERTS=1 turns it on.
+    """
+    return os.environ.get("RUFUS_INSERTS", "0").strip().lower() \
+        in ("1", "true", "yes", "on")
 
 
 def style_suffix() -> str:

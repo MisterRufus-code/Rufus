@@ -767,18 +767,39 @@ def _detail_suffix() -> str:
     """
     literal = os.environ.get("RUFUS_STILLS_DETAIL")
     if literal is not None and literal.strip():
+        _say_look("RUFUS_STILLS_DETAIL (a literal override)")
         return literal.strip()
 
     name = os.environ.get("RUFUS_STYLE", "").strip()
     if name:
         presets = style_presets()
         if name in presets:
+            _say_look(f"{name} (config/styles.json)")
             return presets[name].strip()
         known = ", ".join(sorted(presets)) or "none loaded"
         print(f"[comfy] RUFUS_STYLE={name!r} is not a known style — using the "
               f"default look. Known: {known}")
 
+    # SAY WHICH LOOK IS IN FORCE, ESPECIALLY THIS ONE. The fall-through was
+    # silent, and a run came back rendered in flat vector when the owner
+    # expected stickman — because RUFUS_STYLE was set in a terminal for weeks
+    # and then wasn't. Nothing in twenty-five minutes of log said which look
+    # was chosen; the style text was there, buried inside all twenty-eight
+    # prompts, where nobody reads it.
+    _say_look("the built-in default — set RUFUS_STYLE for a named look "
+              f"({', '.join(sorted(style_presets())) or 'none loaded'})")
     return os.environ.get("RUFUS_STILLS_DETAIL", DEFAULT_DETAIL_SUFFIX).strip()
+
+
+_LOOK_SAID = ""
+
+
+def _say_look(source: str) -> None:
+    """Announce the look once per run, not once per prompt."""
+    global _LOOK_SAID
+    if _LOOK_SAID != source:
+        _LOOK_SAID = source
+        print(f"[comfy] look: {source}")
 
 
 # Photographic direction that CONTRADICTS the flat-2D style: camera bodies,

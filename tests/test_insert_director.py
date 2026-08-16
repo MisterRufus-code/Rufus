@@ -23,6 +23,18 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
 import insert_director as ins  # noqa: E402
 
 
+@pytest.fixture(autouse=True)
+def _layer_on(monkeypatch):
+    """These test the PLANNER, not whether the layer is switched on.
+
+    The layer is off by default now — an insert is a second set of pictures
+    painted over a finished video, which is a deliberate style rather than a
+    sensible default, and a run came back with fourteen overlaid on
+    twenty-eight full-frame beats because nobody had exercised that default.
+    The one test that cares about the switch sets it itself."""
+    monkeypatch.setenv("RUFUS_INSERTS", "1")
+
+
 def _words(text: str, step: float = 0.32) -> list[dict]:
     """Synthetic word timings in the shape Whisper produces."""
     import re
@@ -323,3 +335,19 @@ def test_phrase_mode_respects_the_cap(monkeypatch):
 
 def test_phrase_mode_is_safe_with_no_timings():
     assert ins.plan_phrases(_SCRIPT, []) == []
+
+
+def test_the_layer_is_off_unless_asked_for(monkeypatch):
+    """It defaulted ON, and the owner had been switching it off by hand in
+    every terminal — so the default was never exercised until they stopped
+    typing it, which is exactly when a wrong default surfaces. The result was
+    a run with fourteen overlays on top of twenty-eight full-frame pictures:
+    "images on top of images"."""
+    monkeypatch.delenv("RUFUS_INSERTS", raising=False)
+    assert ins.enabled() is False
+    for on in ("1", "true", "yes", "on", "ON"):
+        monkeypatch.setenv("RUFUS_INSERTS", on)
+        assert ins.enabled() is True, on
+    for off in ("0", "false", "no", "off", "", "nonsense"):
+        monkeypatch.setenv("RUFUS_INSERTS", off)
+        assert ins.enabled() is False, off

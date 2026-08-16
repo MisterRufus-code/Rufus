@@ -1673,6 +1673,29 @@ def run(skip_upload: bool = False, niche_override: str = None, output_dir: Path 
     if video_source in DEFERRED_SOURCES:
         run_progress.update(2, f"generating images for each beat ({video_source})")
         print(f"[ 2.5/7 ]  Generating clips from script content ({video_source})...")
+        # WHAT THIS RUN IS ACTUALLY DOING, in three lines, before it spends
+        # half an hour doing it. A run came back rendered in flat vector when
+        # the owner expected stickman, and with fourteen overlays on top of
+        # twenty-eight full-frame pictures — both were the DEFAULTS, both were
+        # visible only as a style string buried inside all twenty-eight
+        # prompts and one line eight hundred lines further down. The
+        # information existed and was unreadable, which is the same as not
+        # having it.
+        try:
+            import comfy_client as _cc
+            import insert_director as _ins
+            _style = (os.environ.get("RUFUS_STYLE") or "").strip()
+            _look = _style if _style in _cc.style_presets() else "default"
+            _ins_on = _ins.enabled()
+            print(f"           look: {_look}"
+                  f" · pictures: {max_scenes} beat(s)"
+                  f" × {_cc._frames_per_beat()} frame(s)"
+                  f" · inserts: {'ON' if _ins_on else 'off'}")
+            if _look == "default" and _style:
+                print(f"           ⚠ RUFUS_STYLE={_style!r} is not a known "
+                      f"style — this renders in the default look")
+        except Exception as e:
+            print(f"           (config summary unavailable: {e})")
         try:
             # One image per beat, and the beat count now comes from the
             # LENGTH of the script rather than a flat 10 — see _target_beats.
