@@ -252,6 +252,30 @@ def _prompt(script: str, beats: list[str], era_tags: list[str],
         "give the setting, keep it in every shot set there. Light that jumps "
         "from window-left to firelit-right between two shots of the same room "
         "is the fastest way to make one location look like two.\n"
+        "9. FRAME IT. A shot is not only a subject and a place, it is a "
+        "DISTANCE, and until now this brief never asked for one — so every "
+        "sequence came back at the same comfortable middle distance, which "
+        "reads as a slideshow however good the drawings are. Give every shot "
+        "a `framing`, one of exactly these four words:\n"
+        "    wide    — the whole place, figures small in it. Establishes, and "
+        "makes a person look outnumbered.\n"
+        "    mid     — one or two figures from the knees up, the place still "
+        "readable behind them. The workhorse.\n"
+        "    close   — head and shoulders, or two hands and the thing they "
+        "hold. The face carries the beat.\n"
+        "    detail  — one object filling the frame: the coin, the lock, the "
+        "empty bowl. Use it on the beat that names a thing.\n"
+        "9b. VARY IT, AND CUT ON THE CHANGE. Never three of the same framing "
+        "in a row. The strongest moment in a sequence is a CLOSE straight "
+        "after a WIDE, or a DETAIL straight after a close — the jump in "
+        "distance is what a viewer feels as emphasis, and it costs nothing. "
+        "Put your biggest jump on the beat that turns.\n"
+        "9c. SCALE IS AN ARGUMENT. When a line is about power, size or being "
+        "overwhelmed, say it with the FRAME rather than with an adjective: "
+        "one small figure with the thing that dwarfs it cropped by the edges "
+        "of the picture, so the viewer cannot see all of it at once. A tiny "
+        "person between two enormous animals, both running off the frame, "
+        "says outmatched better than any sentence in the narration can.\n"
         f"{character_clause}"
         + _direction_clause()
         + "\nEach `visual` is 2-3 plain sentences describing only what the camera "
@@ -267,10 +291,10 @@ def _prompt(script: str, beats: list[str], era_tags: list[str],
         'unemployment and its impact on society\\" is an essay title and is '
         'wrong>",\n'
         ' "shots": [{"n": 1, "visual": "...", "carries_over": null, '
-        '"in_setting": true}, ...]}\n'
+        '"in_setting": true, "framing": "wide|mid|close|detail"}, ...]}\n'
         f"Exactly {len(beats)} shots, n from 1 to {len(beats)}. Set "
         f"`in_setting` false only for a shot that deliberately leaves the "
-        f"place."
+        f"place, and give every shot a `framing`."
     )
 
 
@@ -837,6 +861,75 @@ def _already_shows(visual: str, carries: str) -> bool:
     return bool(words & seen)
 
 
+# ── framing ──────────────────────────────────────────────────────────────────
+#
+# WHAT THE BRIEF NEVER ASKED FOR. A shot is a subject, a place AND a distance,
+# and this module asked for the first two. So every sequence came back at the
+# same comfortable middle distance — which is not a look, it is the absence of
+# one, and it reads as a slideshow however good the drawings are. The
+# reference frames that prompted this work precisely because the distance
+# moves: a wide plain with a figure small in it, then a close on a face, then
+# one object filling the frame.
+#
+# Four words, because a vocabulary the model can hold is a vocabulary it
+# obeys. Each maps to a phrase the image model actually understands — the
+# storyboard's word is for planning, the phrase is what gets rendered.
+_FRAMINGS = {
+    "wide": ("Wide shot: the whole place is visible and the figures are small "
+             "within it, standing on the ground plane with the horizon behind "
+             "them"),
+    "mid": ("Medium shot: one or two figures from the knees up, filling the "
+            "middle of the frame, with the place still readable behind them"),
+    "close": ("Close shot: head and shoulders, or two hands and the object "
+              "they hold, filling most of the frame"),
+    "detail": ("Close detail: one single object fills the frame almost edge "
+               "to edge, seen large and plainly"),
+}
+_DEFAULT_FRAMING = "mid"
+
+# Three of the same distance running is where a sequence stops moving. Two is
+# a pair; three is a habit.
+_MAX_RUN = 2
+
+
+def _framing_of(entry: dict) -> str:
+    raw = str(entry.get("framing") or "").strip().lower()
+    return raw if raw in _FRAMINGS else ""
+
+
+def _apply_framing(visual: str, framing: str) -> str:
+    """Put the distance in front of the shot, where the renderer reads it.
+
+    FIRST, not appended. An image model weights the opening of a prompt most
+    heavily, and this is the one instruction that decides what the picture IS
+    rather than what is in it — the same reason the style block goes last and
+    the subject goes first.
+    """
+    phrase = _FRAMINGS.get(framing)
+    if not phrase:
+        return visual
+    return f"{phrase}. {visual}"
+
+
+def _vary_framings(chosen: list[str]) -> list[str]:
+    """Break a run of the same distance, deterministically.
+
+    The prompt asks for variety and mostly gets it; this is the backstop for
+    the run that comes back wide-wide-wide-wide. It changes the THIRD in a
+    run and not the first two, so a deliberate pair survives — a wide
+    establishing followed by a second wide is a real choice, and a fourth is
+    not.
+    """
+    out = list(chosen)
+    for i in range(_MAX_RUN, len(out)):
+        if out[i] and out[i] == out[i - 1] == out[i - _MAX_RUN]:
+            # Jump the distance rather than nudging it: the felt beat is the
+            # SIZE of the change, so a wide becomes a close, not a mid.
+            out[i] = {"wide": "close", "close": "wide",
+                      "mid": "detail", "detail": "mid"}.get(out[i], "mid")
+    return out
+
+
 def _clean(plan: dict, n_beats: int,
            beats: list[str] | None = None) -> list[str] | None:
     """The visuals in beat order, or None if the reply can't be trusted.
@@ -850,16 +943,24 @@ def _clean(plan: dict, n_beats: int,
     if not isinstance(shots, list) or len(shots) != n_beats:
         return None
     out: list[str] = []
+    # The distance each shot asked for, collected first so a run of four wides
+    # can be broken before any of them is written into a prompt.
+    wanted = [_framing_of(e) if isinstance(e, dict) else "" for e in shots]
+    framings = _vary_framings(wanted)
+    n_varied = sum(1 for a, b in zip(wanted, framings) if a != b)
+
     # HOW OFTEN THE THREAD MAY BE RESTATED. See _already_shows for the failure.
     thread_budget = max(2, round(n_beats * THREAD_SHARE))
     restated = 0
-    for entry in shots:
+    for shot_i, entry in enumerate(shots):
         if not isinstance(entry, dict):
             return None
         visual = str(entry.get("visual", "")).strip()
         if len(visual) < MIN_VISUAL_CHARS:
             return None
         visual = _pin_expression(_strip_abstraction(visual))
+        visual = _apply_framing(visual, framings[shot_i]
+                                if shot_i < len(framings) else "")
         carries = entry.get("carries_over")
         if isinstance(carries, str) and carries.strip():
             carries = carries.strip()
@@ -883,6 +984,24 @@ def _clean(plan: dict, n_beats: int,
     # "resignation" and "a look of loss", the renderer drew its default, and
     # every stage downstream saw text that looked fine. One line, only when
     # there are people to have faces.
+    # WHAT DISTANCES THIS SEQUENCE ACTUALLY USED. One line, because the whole
+    # point of asking for framing is that a sequence stuck at one distance is
+    # invisible in the prompts and obvious on screen.
+    chosen = [f for f in framings if f]
+    if chosen:
+        from collections import Counter
+        counts = Counter(chosen)
+        shown = ", ".join(f"{k}×{v}" for k, v in counts.most_common())
+        print(f"[storyboard] framing: {shown}")
+        if n_varied:
+            print(f"[storyboard] broke {n_varied} run(s) of the same distance")
+        if len(counts) == 1 and len(chosen) >= 4:
+            print(f"[storyboard] ⚠ every shot is the same distance — the "
+                  f"sequence never moves")
+    elif n_beats >= 4:
+        print("[storyboard] no framing given — shots render at the model's "
+              "own default distance")
+
     faces = _face_variety(out)
     if faces:
         used = ", ".join(f"{k}×{v}" for k, v in sorted(faces.items(),

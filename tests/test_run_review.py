@@ -372,3 +372,43 @@ def test_all_really_means_all(tmp_path, monkeypatch):
     # The last mention of --all is the branch that acts on it; the first is
     # the line that strips it out of argv.
     assert "all_run_ids(limit=None)" in src.rsplit('"--all"', 1)[1]
+
+
+# ── did the camera ever move ─────────────────────────────────────────────────
+
+def test_the_framing_marks_match_the_storyboards_own():
+    """_FRAMING_MARKS is a hand-copy of storyboard._FRAMINGS' opening words,
+    kept so this module can read a finished run with nothing else loaded. A
+    hand-copy drifts — _deserved_beats did, for sixty runs — so the agreement
+    is asserted rather than remembered."""
+    import storyboard
+    for key, mark in run_review._FRAMING_MARKS.items():
+        assert storyboard._FRAMINGS[key].startswith(mark.rstrip(":")), key
+    assert set(run_review._FRAMING_MARKS) == set(storyboard._FRAMINGS)
+
+
+def test_a_sequence_that_never_changes_distance_is_a_finding(tmp_path,
+                                                             monkeypatch):
+    """Invisible in the text — every prompt differs, every subject differs —
+    and unmistakable on screen."""
+    prompts = [f"Wide shot: the whole place. A clerk numbered {i}. {OLD_NICHE_STYLE}"
+               for i in range(8)]
+    _write_styled(tmp_path, monkeypatch, prompts, OLD_NICHE_STYLE)
+    ids = [f["id"] for f in run_review.review("r1")["findings"]]
+    assert "one_distance_everywhere" in ids
+
+
+def test_a_moving_sequence_draws_no_finding(tmp_path, monkeypatch):
+    marks = ["Wide shot:", "Close shot:", "Medium shot:", "Close detail:"]
+    prompts = [f"{marks[i % 4]} a clerk numbered {i}. {OLD_NICHE_STYLE}"
+               for i in range(8)]
+    _write_styled(tmp_path, monkeypatch, prompts, OLD_NICHE_STYLE)
+    ids = [f["id"] for f in run_review.review("r1")["findings"]]
+    assert "one_distance_everywhere" not in ids
+
+
+def test_prompts_without_framing_are_not_reported(tmp_path, monkeypatch):
+    """Runs made before framing existed must not all light up."""
+    _write_styled(tmp_path, monkeypatch, VARIED, OLD_NICHE_STYLE)
+    ids = [f["id"] for f in run_review.review("r1")["findings"]]
+    assert "one_distance_everywhere" not in ids

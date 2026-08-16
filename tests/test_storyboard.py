@@ -1072,3 +1072,109 @@ def test_the_brief_follows_the_format(monkeypatch):
     importlib.reload(video_format)
     assert "landscape" in storyboard._brief()
     assert "nine minutes" in storyboard._brief()
+
+
+# ── a shot is also a DISTANCE ────────────────────────────────────────────────
+#
+# The brief asked for a subject and a place and never for a distance, so every
+# sequence came back at the same comfortable middle one — which is not a look,
+# it is the absence of one, and it reads as a slideshow however good the
+# drawings are. The reference frames work precisely because the distance
+# moves: a wide plain with a figure small in it, then a close on a face, then
+# one object filling the frame.
+
+def _shots(framings):
+    return [{"n": i + 1, "carries_over": None,
+             "visual": "A clerk stands at the oak counter as the queue waits "
+                       "behind him, hands flat on the wood.",
+             "framing": f}
+            for i, f in enumerate(framings)]
+
+
+def test_the_framing_reaches_the_prompt():
+    out = storyboard._clean({"shots": _shots(["wide", "close", "detail"])}, 3)
+    assert out[0].startswith("Wide shot:")
+    assert out[1].startswith("Close shot:")
+    assert out[2].startswith("Close detail:")
+
+
+def test_it_goes_FIRST_where_the_renderer_weights_it():
+    """An image model weights the opening of a prompt most heavily, and this
+    is the one instruction that decides what the picture IS rather than what
+    is in it."""
+    out = storyboard._clean({"shots": _shots(["detail"])}, 1)
+    assert out[0].index("Close detail") < out[0].index("clerk")
+
+
+def test_an_unknown_framing_is_ignored_rather_than_rendered():
+    out = storyboard._clean({"shots": _shots(["dutch angle drone orbit"])}, 1)
+    assert out[0].startswith("A clerk")
+
+
+def test_a_shot_with_no_framing_still_renders():
+    """Framing is an improvement, never a requirement — a plan without it must
+    produce the same pictures it always did."""
+    shots = _shots(["wide"])
+    del shots[0]["framing"]
+    out = storyboard._clean({"shots": shots}, 1)
+    assert out and out[0].startswith("A clerk")
+
+
+# ── the backstop ─────────────────────────────────────────────────────────────
+
+def test_a_run_of_four_wides_is_broken():
+    """The prompt asks for variety and mostly gets it. This is for the run
+    that comes back wide-wide-wide-wide."""
+    got = storyboard._vary_framings(["wide"] * 6)
+    assert got[:2] == ["wide", "wide"], "a deliberate pair survives"
+    assert len(set(got)) > 1
+
+
+def test_a_deliberate_pair_survives():
+    """A wide establishing followed by a second wide is a real choice. A
+    fourth is not."""
+    assert storyboard._vary_framings(["wide", "wide", "mid", "close"]) == \
+        ["wide", "wide", "mid", "close"]
+
+
+def test_the_break_jumps_the_distance_rather_than_nudging_it():
+    """The felt beat is the SIZE of the change, so a wide becomes a close,
+    not a mid."""
+    assert storyboard._vary_framings(["wide"] * 3)[2] == "close"
+    assert storyboard._vary_framings(["close"] * 3)[2] == "wide"
+
+
+def test_nothing_to_vary_is_left_alone():
+    assert storyboard._vary_framings([]) == []
+    assert storyboard._vary_framings(["", "", ""]) == ["", "", ""]
+
+
+# ── it has to be said out loud ───────────────────────────────────────────────
+
+def test_the_distances_used_are_printed(capsys):
+    storyboard._clean({"shots": _shots(["wide", "close", "mid", "detail"])}, 4)
+    assert "framing: " in capsys.readouterr().out
+
+
+def test_a_sequence_that_never_moves_says_so(capsys):
+    """Stuck at one distance is invisible in the prompts and obvious on
+    screen — which is the whole reason to ask for framing at all."""
+    storyboard._clean({"shots": _shots(["mid", "mid", "mid", "mid", "mid"])}, 5)
+    out = capsys.readouterr().out
+    assert "every shot is the same distance" in out or "broke" in out
+
+
+# ── the brief ────────────────────────────────────────────────────────────────
+
+def test_the_prompt_teaches_the_four_words_and_the_jump():
+    p = storyboard._prompt("script", ["a", "b"], [])
+    for word in ("wide", "mid", "close", "detail"):
+        assert f"    {word}" in p, word
+    assert "Never three of the same framing" in p
+    assert "SCALE IS AN ARGUMENT" in p
+    assert "cropped by the edges" in p
+
+
+def test_the_json_contract_asks_for_it():
+    p = storyboard._prompt("script", ["a", "b"], [])
+    assert '"framing": "wide|mid|close|detail"' in p

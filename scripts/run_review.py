@@ -170,6 +170,34 @@ def _keyframes(d: Path) -> list[Path]:
     return sorted(p for p in d.glob("*.png") if p.is_file())
 
 
+# The framing phrases storyboard._FRAMINGS puts at the FRONT of every prompt.
+# Matched here rather than imported so this module keeps its contract of
+# reading a finished run with nothing else loaded — and asserted equal in
+# tests, because a copy that drifts is the failure this repo keeps meeting.
+_FRAMING_MARKS = {
+    "wide": "Wide shot:",
+    "mid": "Medium shot:",
+    "close": "Close shot:",
+    "detail": "Close detail:",
+}
+
+
+def _framing_counts(prompts: list[str]) -> dict:
+    """Which distances the sequence used, and whether it ever moved.
+
+    A sequence at one distance for its whole length is invisible in the text —
+    every prompt differs, every subject differs — and unmistakable on screen.
+    That is the same shape as the face defect, and the same reason it needed
+    counting rather than noticing.
+    """
+    counts = {k: sum(1 for p in prompts if p.lstrip().startswith(v))
+              for k, v in _FRAMING_MARKS.items()}
+    given = sum(counts.values())
+    return {"counts": counts, "given": given,
+            "distinct": sum(1 for v in counts.values() if v),
+            "share": round(given / len(prompts), 3) if prompts else 0.0}
+
+
 def _clause_counts(prompts: list[str]) -> dict:
     n = len(prompts) or 1
     thread = sum(1 for p in prompts if THREAD_MARK in p)
@@ -396,6 +424,19 @@ def _findings(m: dict) -> list[dict]:
     # about the past repeated forty-eight times. By this module's own standard
     # that is not a finding, it is noise, and noise is what people learn to
     # scroll past.
+    fr = m.get("framing") or {}
+    if fr.get("given", 0) >= 4 and fr.get("distinct") == 1:
+        only = next(k for k, v in fr["counts"].items() if v)
+        out.append({
+            "id": "one_distance_everywhere",
+            "severity": "medium",
+            "text": (f"Every one of {fr['given']} shots is framed '{only}'. "
+                     f"A sequence that never changes distance reads as a "
+                     f"slideshow however good the drawings are — and it is "
+                     f"invisible in the prompts, because every subject "
+                     f"differs."),
+        })
+
     want = _deserved_beats(m.get("script_words", 0))
     if m.get("beats") and want and m["beats"] < want * 0.7:
         out.append({
@@ -443,6 +484,7 @@ def review(run_id: str, video_path: Path | None = None) -> dict:
         "script_words": len(script.split()) if script else 0,
         "clauses": _clause_counts(prompts),
         "dominant_subject": _dominant_subject(prompts),
+        "framing": _framing_counts(prompts),
         "cuts": _cut_metrics(video_path),
         "frames": _near_duplicates(frames),
     }
