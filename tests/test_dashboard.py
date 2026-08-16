@@ -1069,7 +1069,8 @@ def test_trending_page_lists_niche_links(client):
 
 def test_trending_page_shows_queries_and_queue_buttons(client, monkeypatch):
     import research
-    monkeypatch.setattr(research, "_trending_queries", lambda niche: ["gold price surge"])
+    monkeypatch.setattr(research, "trending_queries_with_reason",
+                        lambda niche: (["gold price surge"], ""))
     r = client.get("/trending?niche=finance")
     body = r.data.decode()
     assert "gold price surge" in body
@@ -1079,16 +1080,33 @@ def test_trending_page_shows_queries_and_queue_buttons(client, monkeypatch):
 
 def test_trending_page_handles_no_results(client, monkeypatch):
     import research
-    monkeypatch.setattr(research, "_trending_queries", lambda niche: [])
+    monkeypatch.setattr(research, "trending_queries_with_reason",
+                        lambda niche: ([], "Google Trends answered, and "
+                                           "nothing is rising for these seeds "
+                                           "this week. Nothing to fix."))
     r = client.get("/trending?niche=finance")
     assert b"No rising queries" in r.data
+
+
+def test_the_empty_page_says_WHICH_of_the_four_it_was(client, monkeypatch):
+    """"pytrends not installed, rate-limited, or nothing rising this week" was
+    three guesses and a shrug on a page whose whole job is to tell you
+    something: one of those needs a pip command, one clears by itself, one is
+    not a problem at all — and they printed identically."""
+    import research
+    monkeypatch.setattr(research, "trending_queries_with_reason",
+                        lambda niche: ([], "pytrends is not installed — "
+                                           "`pip install pytrends`"))
+    body = client.get("/trending?niche=finance").data.decode()
+    assert "pip install pytrends" in body
+    assert "rate-limited, or nothing rising" not in body, "the old shrug"
 
 
 def test_trending_page_handles_lookup_failure(client, monkeypatch):
     import research
     def boom(niche):
         raise RuntimeError("pytrends rate-limited")
-    monkeypatch.setattr(research, "_trending_queries", boom)
+    monkeypatch.setattr(research, "trending_queries_with_reason", boom)
     r = client.get("/trending?niche=finance")
     assert b"Trend lookup failed" in r.data
 
