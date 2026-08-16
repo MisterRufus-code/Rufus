@@ -137,6 +137,15 @@ def _prompt(script: str, beats: list[str], era_tags: list[str],
         "no inscriptions, no dates on objects — the image model garbles "
         "lettering and it is the clearest sign a machine made this. Write the "
         "object as a blank physical thing instead.\n"
+        "6b. THE LAST LINE IS A SIGN-OFF, NOT A SCENE. The narration ends on a "
+        "fixed channel line — \"Part of a series on how money really began\", "
+        "\"Follow for the real history of money\". It is spoken, so it needs a "
+        "picture, but it is ABOUT the channel and not about the story, and a "
+        "run that took it literally returned \"a banner reading 'Part of a "
+        "series'\" and \"a book titled 'How Money Really Began'\" — two frames "
+        "of garbled lettering to close on. Give those beats the last image of "
+        "the STORY instead: the object one final time, the place empty, the "
+        "hand closing. Never a banner, a book cover, a title card or a logo.\n"
         "7. DECIDE THE PLACE BEFORE YOU DRAW ANY SHOT. `setting` names the ONE "
         "location this sequence lives in, described by its physical anchors — "
         "the surface, the walls, the light and where it comes from. \"A low "
@@ -601,6 +610,12 @@ def _unshown_nouns(visuals: list[str], beats: list[str]) -> list[str]:
 # _already_shows for the run that set it.
 THREAD_SHARE = 0.35
 
+# And at most this share may carry the restated SETTING. Lower than the thread
+# because the setting clause is longer and says less: a thread names a new
+# object the shot should contain, while the setting repeats a room the shot is
+# already in.
+SETTING_SHARE = 0.25
+
 
 def _already_shows(visual: str, carries: str) -> bool:
     """Whether the shot already names the thing the thread is carrying.
@@ -750,9 +765,24 @@ def plan(script: str, beats: list[str], era_tags: list[str] | None = None,
                       f"room — dropping it (shots keep their own places)")
                 setting = ""
             if setting:
+                # CAPPED, for the same reason the thread is. At ten shots this
+                # fired three or four times and read as a reminder; at
+                # twenty-four it fired THIRTEEN times, and "Same place as the
+                # rest of the sequence: market, cobblestone, bright" appended
+                # to half the sequence is no longer a reminder — it is a
+                # second description competing with each shot's own, on every
+                # other frame. The pin exists for the shot that forgot where
+                # it was, not for the sequence.
                 flags = _in_setting_flags(raw, len(visuals))
-                placed = [_pin_setting(v, setting) if keep else v
-                          for v, keep in zip(visuals, flags)]
+                budget = max(2, round(len(visuals) * SETTING_SHARE))
+                placed, used = [], 0
+                for v, keep in zip(visuals, flags):
+                    pinned_v = _pin_setting(v, setting) if keep else v
+                    if pinned_v != v and used >= budget:
+                        pinned_v = v
+                    elif pinned_v != v:
+                        used += 1
+                    placed.append(pinned_v)
                 n_placed = sum(1 for a, b in zip(visuals, placed) if a != b)
                 print(f"[storyboard] setting: {setting}")
                 if n_placed:

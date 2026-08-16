@@ -685,7 +685,14 @@ _TEXT_PROP_RE = re.compile(
     r"protest|protesters|demonstration|rally|march|picket|strike|"
     r"storefront|shopfront|shop front|store front|marquee|"
     r"stock exchange|trading floor|newsstand|classroom|blackboard|whiteboard|"
-    r"memorial|gravestone|headstone|plaque|map)\b")
+    r"memorial|gravestone|headstone|plaque|map|signpost|signboard)\b"
+    # THE CONSTRUCTION, not just the object. "A signpost reading 'Marshalltown,
+    # Iowa'" slipped through a net that had `sign` in it, because \bsign\b does
+    # not match "signpost" — and the giveaway was never the noun anyway. A shot
+    # that quotes words is asking for lettering whatever it hangs them on, so
+    # match the asking.
+    r"|\b(reading|titled|that reads|that says|inscribed|engraved|"
+    r"emblazoned|labelled|labeled|with the words|spelling out)\b")
 
 # PHRASED AFFIRMATIVELY, ON PURPOSE. The previous version of this clause read
 # "…absolutely no readable text, numbers, or interface elements anywhere in the
