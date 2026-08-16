@@ -17,6 +17,9 @@ import subprocess
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).parent))
+import paths  # noqa: E402  (after the path insert, like every sibling script)
+
 ROOT        = Path(__file__).parent.parent
 CONFIG_DIR  = ROOT / "config"
 KEYS_FILE   = CONFIG_DIR / "keys.json"
@@ -122,7 +125,7 @@ def run() -> None:
     if not missing:
         ok(f"Python packages  ({', '.join(required)})")
     else:
-        err("Python packages", f"missing: {', '.join(missing)}  →  pip install -r requirements.txt")
+        err("Python packages", f"missing: {', '.join(missing)}  →  {paths.pip_hint('-r requirements.txt')}")
 
     # ── Voice backends (informational) ─────────────────────────────────────────────
     tts_backend = os.environ.get("RUFUS_TTS", "edge").strip().lower()
@@ -143,22 +146,22 @@ def run() -> None:
         ok(f"Kokoro TTS available  (RUFUS_TTS=kokoro, voice: {os.environ.get('RUFUS_KOKORO_VOICE','am_adam')}){'  ← ACTIVE' if tts_backend == 'kokoro' else ''}")
     except ImportError:
         if tts_backend == "kokoro":
-            err("Kokoro TTS", "RUFUS_TTS=kokoro but kokoro not installed — pip install kokoro>=0.9.2 soundfile")
+            err("Kokoro TTS", f"RUFUS_TTS=kokoro but kokoro not installed — {paths.pip_hint('kokoro>=0.9.2', 'soundfile')}")
         else:
-            warn("Kokoro TTS", "not installed — pip install kokoro>=0.9.2 soundfile for a free local voice (RUFUS_TTS=kokoro)")
+            warn("Kokoro TTS", f"not installed — {paths.pip_hint('kokoro>=0.9.2', 'soundfile')} for a free local voice (RUFUS_TTS=kokoro)")
 
     try:
         __import__("TTS")
         ok(f"XTTS v2 available  (RUFUS_TTS=xtts for free local voice){'  ← ACTIVE' if tts_backend == 'xtts' else ''}")
     except ImportError:
-        warn("XTTS v2", "not installed – pip install TTS for free local voice cloning (RUFUS_TTS=xtts)")
+        warn("XTTS v2", f"not installed – {paths.pip_hint('TTS')} for free local voice cloning (RUFUS_TTS=xtts)")
 
     # ── MusicGen (informational — optional AI music backend) ────────────────────
     try:
         from audiocraft.models import MusicGen as _MG  # noqa: F401
         ok("MusicGen available  (Meta AudioCraft — AI-generated on-tone music)")
     except ImportError:
-        warn("MusicGen", "not installed — pip install audiocraft for AI music generation (optional)")
+        warn("MusicGen", f"not installed — {paths.pip_hint('audiocraft')} for AI music generation (optional)")
 
     # ── Diffusers (in-process SD — no A1111 server needed) ──────────────────────
     video_src = os.environ.get("RUFUS_VIDEO_SOURCE", "sd").lower()
@@ -168,10 +171,10 @@ def run() -> None:
         ok(f"Diffusers available  ({model_key}, RUFUS_VIDEO_SOURCE=diffusers){'  ← ACTIVE' if video_src == 'diffusers' else ''}")
     except ImportError:
         if video_src == "diffusers":
-            err("Diffusers", "RUFUS_VIDEO_SOURCE=diffusers but diffusers not installed — "
-                "pip install diffusers transformers accelerate")
+            err("Diffusers", f"RUFUS_VIDEO_SOURCE=diffusers but diffusers not "
+                f"installed — {paths.pip_hint('diffusers', 'transformers', 'accelerate')}")
         else:
-            warn("Diffusers", "not installed — pip install diffusers transformers accelerate "
+            warn("Diffusers", f"not installed — {paths.pip_hint('diffusers', 'transformers', 'accelerate')} "
                  "(enables RUFUS_VIDEO_SOURCE=diffusers, no A1111 server needed)")
 
     # ── pytrends (Google Trends trending signal — optional) ──────────────────────
@@ -179,7 +182,7 @@ def run() -> None:
         from pytrends.request import TrendReq as _TR  # noqa: F401
         ok("pytrends available  (Google Trends signal — timely hooks)")
     except ImportError:
-        warn("pytrends", "not installed — pip install pytrends>=4.9.0 for trending-topic hook boost (optional)")
+        warn("pytrends", f"not installed — {paths.pip_hint('pytrends>=4.9.0')} for trending-topic hook boost (optional)")
 
     # ── ComfyUI stills (only relevant if a niche uses it or it's selected) ───────
     try:

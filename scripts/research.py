@@ -343,9 +343,10 @@ def trending_queries_with_reason(niche_name: str) -> tuple[list[str], str]:
     try:
         from pytrends.request import TrendReq
     except ImportError:
-        return [], ("pytrends is not installed — `pip install pytrends` (it is "
-                    "in requirements-optional.txt). Runs still work: research "
-                    "falls back to its own topic chain.")
+        import paths
+        return [], (f"pytrends is not installed — run `{paths.pip_hint('pytrends')}` "
+                    f"(it is in requirements-optional.txt). Runs still work: "
+                    f"research falls back to its own topic chain.")
 
     seeds = NICHE_TREND_SEEDS.get(niche_name)
     if not seeds:
@@ -1648,7 +1649,9 @@ def _reddit_skip_reason() -> str | None:
                 "subreddits would fail identically. Create a free 'script' app "
                 "at https://www.reddit.com/prefs/apps to restore them")
     if not _PRAW_AVAILABLE:
-        return "praw is not installed (pip install praw) — credentials are set but unusable"
+        import paths
+        return (f"praw is not installed (run `{paths.pip_hint('praw')}`) — "
+                f"credentials are set but unusable")
     return None
 
 

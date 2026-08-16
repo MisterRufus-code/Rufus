@@ -21,6 +21,8 @@ import random
 import sys
 from pathlib import Path
 
+import paths
+
 ROOT         = Path(__file__).parent.parent
 SYNTH_DIR    = ROOT / "assets" / "music_synth"
 MAX_VARIANTS = 3   # keep up to 3 distinct tracks per niche so every video sounds fresh
@@ -119,7 +121,8 @@ def generate_music(niche: str, duration: float = 65.0, force: bool = False) -> P
     import importlib.util
     if importlib.util.find_spec("audiocraft") is None:
         print("[musicgen] audiocraft not installed — skipping AI music "
-              "(Jamendo/local music is used instead; pip install audiocraft to enable)")
+              f"(Jamendo/local music is used instead; run "
+              f"`{paths.pip_hint('audiocraft')}` to enable)")
         return random.choice(existing) if existing else None
 
     # Determine next slot (0-based, wrap around if somehow over cap)

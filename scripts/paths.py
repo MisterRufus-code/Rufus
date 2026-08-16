@@ -21,6 +21,7 @@ specific vars win when you want to split them across drives.
 """
 
 import os
+import sys
 from pathlib import Path
 
 ROOT = Path(__file__).parent.parent
@@ -137,3 +138,29 @@ def write_run_report(run_id: str, *, script: str = "", prompts: list[str] | None
     except Exception as e:
         print(f"[report] run-report write failed (non-fatal): {e}")
         return None
+
+
+# ── how to install something INTO THE INTERPRETER THAT IS RUNNING ────────────
+
+def pip_hint(*packages: str) -> str:
+    """The install command for the Python actually running this code.
+
+    WHY NOT JUST SAY "pip install X". Because on the owner's machine that
+    installs into the wrong Python, and it did: told `pip install pytrends
+    praw`, the shell resolved `pip` to the SYSTEM interpreter at
+    AppData\\Local\\Programs\\Python\\Python311 while the pipeline runs from
+    <repo>\\.venv. Both commands "succeeded". Nothing changed for Rufus, and
+    the only clue was a "Requirement already satisfied" line naming a
+    site-packages directory nobody reads.
+
+    This is the same defect as a launcher running a bare `python` — a name
+    resolved from PATH instead of from the interpreter that matters — which
+    this repo has already fixed in five .bat files. Advice a program prints
+    about itself has to be runnable against itself, so it names sys.executable
+    and lets the running Python resolve its own pip.
+    """
+    exe = sys.executable or "python"
+    # A path with spaces ("Program Files") needs quoting to survive a shell.
+    if " " in exe:
+        exe = f'"{exe}"'
+    return f"{exe} -m pip install {' '.join(packages)}"

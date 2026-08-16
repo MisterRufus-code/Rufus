@@ -117,3 +117,40 @@ def test_run_report_settings_block_printed_once(monkeypatch, tmp_path):
                      "seconds": 1.0, "steps": 12}
     out = paths.write_run_report("r", motion=[rec(1), rec(2), rec(3)])
     assert out.read_text(encoding="utf-8").count("Motion engine settings") == 1
+
+
+# ── advice a program prints about itself has to be runnable against itself ───
+
+def test_the_install_hint_names_the_running_interpreter():
+    """"pip install X" resolves `pip` from PATH, which on the owner's machine
+    is the SYSTEM Python while the pipeline runs from <repo>\\.venv. Told to
+    run `pip install pytrends praw`, they did, both commands reported success,
+    and nothing changed for Rufus — the only clue was a "Requirement already
+    satisfied" line naming a site-packages directory nobody reads.
+
+    Same defect as a launcher running a bare `python`: a name resolved from
+    PATH instead of from the interpreter that matters. Five .bat files in this
+    repo have already been fixed for it."""
+    import sys
+    hint = paths.pip_hint("pytrends")
+    assert "-m pip install pytrends" in hint
+    assert sys.executable.split("/")[-1].split("\\")[-1] in hint
+
+
+def test_a_path_with_spaces_survives_a_shell(monkeypatch):
+    """C:\\Program Files\\Python311\\python.exe unquoted is two arguments."""
+    monkeypatch.setattr("sys.executable", r"C:\Program Files\Py\python.exe")
+    assert paths.pip_hint("praw").startswith('"C:\\Program Files\\Py\\python.exe"')
+
+
+def test_several_packages_are_one_command():
+    assert paths.pip_hint("a", "b", "c").endswith("-m pip install a b c")
+
+
+def test_the_optional_package_messages_use_it():
+    """These are the exact lines the owner reads when something is missing —
+    research's pytrends and praw notes, and musicgen's audiocraft note."""
+    from pathlib import Path as _P
+    for name in ("research.py", "musicgen_gen.py", "health_check.py"):
+        src = (_P(paths.__file__).parent / name).read_text(encoding="utf-8")
+        assert "pip_hint(" in src, name
