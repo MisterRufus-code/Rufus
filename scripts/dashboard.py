@@ -507,6 +507,14 @@ SETTINGS_GROUPS = [
         ("RUFUS_SEED_TRIES", "Seed attempts", "number",
          "How many sources to try before accepting one the supervisor "
          "rejected. Default 4."),
+        ("RUFUS_OPENALEX", "Papers as sources", "bool",
+         "Peer-reviewed abstracts from OpenAlex, tried before the discussion "
+         "threads. An abstract states a year, names its authors and carries "
+         "the study's own figures — the three things the fact gate keeps "
+         "rejecting scripts for lacking."),
+        ("RUFUS_OPENALEX_MAILTO", "OpenAlex contact email", "text",
+         "Optional. OpenAlex's \"polite pool\" gives higher rate limits to "
+         "requests carrying a contact address. Nothing breaks without it."),
         ("RUFUS_NEWSPAPERS", "Newspaper source", "bool",
          "Library of Congress scans. Turn off if the endpoint stays dead."),
     ]),

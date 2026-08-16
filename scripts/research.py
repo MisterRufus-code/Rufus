@@ -424,6 +424,10 @@ def _seed_id(seed: dict) -> str:
         return "hn:" + (seed.get("url") or seed.get("title", ""))
     if t == "stackexchange":
         return "se:" + (seed.get("url") or seed.get("title", ""))
+    if t == "openalex":
+        # Must match the "oa:" prefix fetch_openalex_story checks against, or
+        # every run re-reads the same most-cited paper forever.
+        return "oa:" + (seed.get("url") or seed.get("title", ""))
     if t == "rss":
         return "rss:" + (seed.get("url") or seed.get("title", ""))
     if t == "wikipedia":
@@ -811,6 +815,173 @@ def fetch_stackexchange_story(niche_name: str, used_ids: set | None = None) -> d
         "title":   title,
         "content": _clean_text(body),
         "url":     link,
+    }
+
+
+# ── OpenAlex: peer-reviewed papers as source material ───────────────────────
+#
+# WHY A SCHOLARLY SOURCE, and why it is first. Every fact-gate rejection in the
+# owner's log is one of two sentences — "not supported by the source, which
+# does not provide this specific figure" and "MIND-READ: the script claims the
+# government rigged the game". Both come from the same place: the writer must
+# open on a dated moment with a named person and a hard number, and a
+# StackExchange thread ("In what ways was the Gold Confiscation Act
+# beneficial") contains an argument instead of an event. It cannot satisfy its
+# rules from that material, so it invents the specifics and the gate correctly
+# kills the result.
+#
+# An abstract is the opposite shape. It states a year, names authors, and
+# carries the study's own figures, because that is what an abstract is for.
+# supervisor.groundability() asks for exactly those three things, so papers
+# pass the check the discussion threads fail — not by loosening the gate, but
+# by feeding it material a story can actually be built from.
+#
+# OpenAlex is free, keyless, and asks only for a mailto in the query string as
+# a courtesy (the "polite pool", which gets better rate limits). 250M works.
+OPENALEX_URL     = "https://api.openalex.org/works"
+OPENALEX_TIMEOUT = 12.0
+OPENALEX_PER_PAGE = 25
+OPENALEX_MAX_PAGE = 4
+
+# An abstract shorter than this is a stub — a title restated, or a
+# publisher's placeholder — and cannot ground a script.
+OPENALEX_MIN_ABSTRACT = 400
+
+
+def _openalex_enabled() -> bool:
+    return os.environ.get("RUFUS_OPENALEX", "1").strip().lower() \
+        not in ("0", "false", "no", "off")
+
+
+def _openalex_mailto() -> str:
+    """The polite-pool contact. OpenAlex asks for one and rewards it with
+    higher rate limits; it is not authentication and nothing breaks without
+    it."""
+    return (os.environ.get("RUFUS_OPENALEX_MAILTO") or "").strip()
+
+
+def _abstract_from_inverted_index(index: dict | None) -> str:
+    """OpenAlex ships abstracts as {word: [positions]}, not as text.
+
+    A licensing artefact rather than a design one — the inverted index is not
+    considered a reproduction of the abstract. Rebuilding it is the documented
+    and intended use, and it is exact: every position is known, so the result
+    is the abstract verbatim rather than an approximation.
+    """
+    if not isinstance(index, dict) or not index:
+        return ""
+    slots: dict[int, str] = {}
+    for word, positions in index.items():
+        if not isinstance(positions, list):
+            continue
+        for pos in positions:
+            if isinstance(pos, int):
+                slots[pos] = word
+    if not slots:
+        return ""
+    return " ".join(slots[i] for i in sorted(slots))
+
+
+def fetch_openalex_story(niche_name: str, used_ids: set | None = None) -> dict | None:
+    """A cited paper on one of the niche's topics, as a seed.
+
+    Fail-open like every other fetcher: no network, no results, a malformed
+    reply — all return None and the chain continues.
+    """
+    if not _openalex_enabled():
+        return None
+    if used_ids is None:
+        used_ids = set()
+
+    topics = SE_TOPIC_QUERIES.get(niche_name)
+    if not topics:
+        return None
+    # The SAME topic list StackExchange rotates through. One niche, one set of
+    # subjects — a second list here would drift from it within a month, and
+    # the drift would be invisible.
+    query = random.choice(topics)
+    page = random.randint(1, OPENALEX_MAX_PAGE)
+
+    params = {
+        "search": query,
+        # has_abstract is the whole point; without it most results are titles.
+        "filter": "has_abstract:true,type:article",
+        "per-page": str(OPENALEX_PER_PAGE),
+        "page": str(page),
+        # Most-cited first: a well-cited paper has been read, checked and
+        # argued with, which is a decent proxy for "the facts in it hold up".
+        "sort": "cited_by_count:desc",
+    }
+    if _openalex_mailto():
+        params["mailto"] = _openalex_mailto()
+
+    try:
+        r = httpx.get(OPENALEX_URL, params=params, timeout=OPENALEX_TIMEOUT,
+                      follow_redirects=True)
+        r.raise_for_status()
+        works = r.json().get("results", []) or []
+    except Exception as e:
+        print(f"[research] OpenAlex unreachable ({e})")
+        return None
+
+    rejected = {"no_abstract": 0, "short": 0, "seen": 0}
+    usable = []
+    for w in works:
+        # THE SAME KEY _seed_id RECORDS, or nothing is ever seen as used. The
+        # first version checked the OpenAlex id here while _seed_id stored the
+        # DOI, so the two never matched and the most-cited paper on a topic
+        # would have come back every single run — the "136 prior seeds will be
+        # skipped" machinery quietly doing nothing for this source.
+        wid = str(w.get("doi") or w.get("id") or "")
+        if not wid or f"oa:{wid}" in used_ids:
+            rejected["seen"] += 1
+            continue
+        abstract = _abstract_from_inverted_index(w.get("abstract_inverted_index"))
+        if not abstract:
+            rejected["no_abstract"] += 1
+            continue
+        if len(abstract) < OPENALEX_MIN_ABSTRACT:
+            rejected["short"] += 1
+            continue
+        usable.append((w, abstract))
+
+    if not usable:
+        why = ", ".join(f"{n} {k}" for k, n in rejected.items() if n)
+        print(f"[research] OpenAlex [{query}, page {page}]: {len(works)} works, "
+              f"none usable ({why or 'no works'})")
+        return None
+    print(f"[research] OpenAlex [{query}, page {page}]: "
+          f"{len(usable)} of {len(works)} usable")
+
+    work, abstract = random.choice(usable[:SAMPLE_POOL])
+    authors = [a.get("author", {}).get("display_name", "")
+               for a in (work.get("authorships") or [])[:4]]
+    authors = [a for a in authors if a]
+    year = work.get("publication_year")
+    journal = (((work.get("primary_location") or {}).get("source") or {})
+               .get("display_name") or "")
+
+    # THE PROVENANCE GOES INTO THE TEXT, not just into metadata. groundability
+    # reads title+content, the fact gate compares the script against content,
+    # and the hook's allowed-numbers list is built from the same string — so a
+    # year that lives only in a JSON field is a year the writer may not use.
+    # Stated as a sentence, it is citable: "In 2015, Darimont and colleagues
+    # found..." is a legitimate opening this channel could never write before.
+    head = []
+    if year:
+        head.append(f"Published {year}")
+    if journal:
+        head.append(f"in {journal}")
+    if authors:
+        head.append(f"by {', '.join(authors)}")
+    prefix = (" ".join(head) + ". ") if head else ""
+
+    return {
+        "type":    "openalex",
+        "source":  journal or "openalex.org",
+        "title":   str(work.get("title") or work.get("display_name") or "").strip(),
+        "content": _clean_text(prefix + abstract),
+        "url":     work.get("doi") or work.get("id") or "",
     }
 
 
@@ -1731,6 +1902,18 @@ def get_seed(niche_name: str | None = None, topic: str | None = None) -> dict:
                 print(f"[research] using Reddit story from {seed['source']}: \"{seed['title'][:60]}\"")
                 _mark_seed_used(seed)
                 return _with_trending(seed)
+
+    # OpenAlex FIRST among the keyless sources, and deliberately ahead of
+    # StackExchange. An abstract states a year, names its authors and carries
+    # the study's own figures; a discussion thread contains an argument. The
+    # fact gate has been rejecting scripts for missing exactly the first three
+    # things, so this is that failure answered at the source rather than at
+    # the gate. RUFUS_OPENALEX=0 restores the old order.
+    seed = fetch_openalex_story(name, used_ids=used_set)
+    if seed:
+        print(f"[research] using paper: \"{seed['title'][:60]}\" ({seed['source']})")
+        _mark_seed_used(seed)
+        return _with_trending(seed)
 
     # StackExchange: keyless API, never IP-blocked like Reddit's public JSON
     seed = fetch_stackexchange_story(name, used_ids=used_set)

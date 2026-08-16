@@ -791,3 +791,119 @@ def test_the_list_only_caller_is_unaffected():
     """Every existing caller treats [] as "no trend signal" and carries on;
     the reason is additive."""
     assert isinstance(research._trending_queries("money_history"), list)
+
+
+# ── OpenAlex: papers instead of discussion threads ───────────────────────────
+
+_WORK = {
+    "id": "https://openalex.org/W123",
+    "doi": "https://doi.org/10.1126/science.aac4249",
+    "title": "The unique ecology of human predators",
+    "publication_year": 2015,
+    "cited_by_count": 900,
+    "primary_location": {"source": {"display_name": "Science"}},
+    "authorships": [{"author": {"display_name": "Chris Darimont"}},
+                    {"author": {"display_name": "Caroline Fox"}}],
+    # A real abstract arrives as {word: [positions]} — see the licensing note
+    # in _abstract_from_inverted_index.
+    "abstract_inverted_index": {
+        # DIGITS, as real abstracts write them. An earlier version of this
+        # fixture spelled its numbers out ("fourteen times") and
+        # groundability refused it — correctly. The hook gate compares digit
+        # tokens against the source, so a source whose only figures are words
+        # cannot ground a numeric hook, and the two checks agreeing about that
+        # is the point.
+        w: [i] for i, w in enumerate(
+            ("Humans kill adult prey at rates up to 14 times higher than other "
+             "predators do, with especially intense exploitation of terrestrial "
+             "carnivores and fishes, a pattern measured across 2,125 species "
+             "worldwide. Median exploitation of adult biomass reached 14.1% for "
+             "marine fishes against 6.3% for the predators they replaced, and "
+             "the imbalance is sharpest for large-bodied carnivores whose adult "
+             "survivorship falls furthest below the rates their populations "
+             "evolved with, on every continent examined.").split())
+    },
+}
+
+
+def test_the_abstract_is_rebuilt_exactly():
+    """OpenAlex ships abstracts as an inverted index for licensing reasons.
+    Every position is known, so the rebuild is the abstract verbatim rather
+    than an approximation."""
+    idx = {"the": [0, 3], "coin": [1], "was": [2], "answer": [4]}
+    assert research._abstract_from_inverted_index(idx) == "the coin was the answer"
+
+
+def test_junk_indexes_do_not_raise():
+    for junk in (None, {}, {"a": "not a list"}, {"a": [None]}, []):
+        assert isinstance(research._abstract_from_inverted_index(junk), str)
+
+
+def _fake_openalex(monkeypatch, works):
+    class _R:
+        status_code = 200
+        def raise_for_status(self): pass
+        def json(self): return {"results": works}
+    monkeypatch.setattr(research.httpx, "get", lambda *a, **k: _R())
+
+
+def test_a_paper_becomes_a_groundable_seed(monkeypatch):
+    """The whole point. supervisor.groundability wants a year, a second
+    figure and proper nouns; an abstract has all three because that is what an
+    abstract is for."""
+    import supervisor
+    _fake_openalex(monkeypatch, [_WORK])
+    seed = research.fetch_openalex_story("money_history", used_ids=set())
+    assert seed and seed["type"] == "openalex"
+    ok, why = supervisor.groundability(seed)
+    assert ok, why
+
+
+def test_the_year_and_authors_are_in_the_TEXT(monkeypatch):
+    """groundability reads title+content, the fact gate compares the script
+    against content, and the hook's allowed-numbers list is built from the same
+    string — so a year living only in a JSON field is a year the writer may
+    not use."""
+    _fake_openalex(monkeypatch, [_WORK])
+    seed = research.fetch_openalex_story("money_history", used_ids=set())
+    assert "2015" in seed["content"]
+    assert "Darimont" in seed["content"]
+    assert "Science" in seed["content"]
+
+
+def test_a_paper_already_used_is_skipped(monkeypatch, capsys):
+    """The dedup key must be the one _seed_id records. The first version
+    checked the OpenAlex id while _seed_id stored the DOI, so the most-cited
+    paper on a topic would have come back every single run."""
+    _fake_openalex(monkeypatch, [_WORK])
+    seed = research.fetch_openalex_story("money_history", used_ids=set())
+    used = {research._seed_id(seed)}
+    assert used == {"oa:https://doi.org/10.1126/science.aac4249"}
+    assert research.fetch_openalex_story("money_history", used_ids=used) is None
+
+
+def test_a_stub_abstract_is_refused(monkeypatch):
+    w = dict(_WORK, abstract_inverted_index={"Short": [0], "abstract.": [1]})
+    _fake_openalex(monkeypatch, [w])
+    assert research.fetch_openalex_story("money_history", used_ids=set()) is None
+
+
+def test_no_network_is_survivable(monkeypatch, capsys):
+    def _boom(*a, **k):
+        raise RuntimeError("dns is down")
+    monkeypatch.setattr(research.httpx, "get", _boom)
+    assert research.fetch_openalex_story("money_history", used_ids=set()) is None
+    assert "OpenAlex unreachable" in capsys.readouterr().out
+
+
+def test_it_can_be_switched_off(monkeypatch):
+    monkeypatch.setenv("RUFUS_OPENALEX", "0")
+    assert research.fetch_openalex_story("money_history", used_ids=set()) is None
+
+
+def test_it_shares_the_niche_topics_with_stackexchange():
+    """A second topic list would drift from the first within a month, and the
+    drift would be invisible."""
+    import inspect
+    src = inspect.getsource(research.fetch_openalex_story)
+    assert "SE_TOPIC_QUERIES" in src
