@@ -283,6 +283,22 @@ def test_few_pictures_is_measured_against_the_script(tmp_path, monkeypatch):
                               if f["id"] == "few_pictures")
 
 
+def test_the_analyzer_measures_against_the_rule_the_pipeline_uses(monkeypatch):
+    """_deserved_beats is a hand-copy of main._target_beats, and a hand-copy
+    drifts. It did: the pipeline moved to one picture per five spoken words the
+    same day the cut rhythm was fixed, this copy stayed on four, and for sixty
+    measured runs the analyzer reported videos as short of a target nothing was
+    aiming at any more. That is the measurement contradicting the feature — the
+    thing this module exists to catch — so the agreement is asserted, not
+    remembered."""
+    import main
+    monkeypatch.delenv("SD_CLIPS", raising=False)
+    for words in (0, 12, 36, 92, 110, 200, 400):
+        script = "word " * words
+        assert run_review._deserved_beats(words) == (
+            main._target_beats(script) if words else 0), words
+
+
 def test_sub_frames_of_one_beat_are_not_duplicates(tmp_path, monkeypatch):
     """In cut mode a beat is saved as 07.png, 07a.png, 07b.png — the same
     scene a moment apart, on one seed, near-identical BY DESIGN. Counting them

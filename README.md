@@ -487,16 +487,29 @@ no link to send at all.
 ### Always-on server (Windows)
 
 ```powershell
-.\serve.ps1 -Tailscale     # dashboard + watchdog start at boot, published to your tailnet
-.\serve.ps1 -Status        # what's registered, what's answering, who has access
+.\serve.ps1 -Tailscale     # dashboard + watchdog start at logon, published to your tailnet
+.\serve.ps1 -Status        # what's RUNNING, what's answering, who has access
+.\serve.ps1 -Restart       # start both again without rebooting
 .\serve.ps1 -Unregister    # remove the boot tasks
 ```
 
-Two Task Scheduler entries run at startup (before anyone logs in): the
-dashboard, and `scripts/watchdog.py`, which polls `/healthz` and restarts the
-dashboard if it stops answering — a crashed Flask process otherwise leaves
-the tailnet URL dead until someone happens to try it. Set
-`RUFUS_WATCHDOG_COMFY=1` plus `COMFY_START_CMD` to have it revive ComfyUI too.
+Two Task Scheduler entries with an at-startup trigger: the dashboard, and
+`scripts/watchdog.py`, which polls `/healthz` and restarts the dashboard if it
+stops answering — a crashed Flask process otherwise leaves the tailnet URL
+dead until someone happens to try it. Set `RUFUS_WATCHDOG_COMFY=1` plus
+`COMFY_START_CMD` to have it revive ComfyUI too.
+
+They run **as you, so they start at logon**, not at the boot prompt — see the
+header of `serve.ps1` for how to move them to SYSTEM and why that is not the
+default.
+
+**Reading `-Status` correctly.** Task Scheduler says `Running` while a process
+is alive and `Ready` once it has exited, so on a task meant to run forever,
+`Ready` is the failure. `-Status` used to print both states as
+"registered (*state*)" in green, which is how a watchdog that had been dead for
+days looked healthy; it now reports the two separately and prints the task's
+last exit code, with `9009` (the venv interpreter is missing) and `3` (port
+already held) spelled out.
 
 For the box to answer at 3am it must not sleep:
 `powercfg /change standby-timeout-ac 0`.

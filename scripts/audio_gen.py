@@ -580,7 +580,7 @@ def _clause_ends(segments) -> list[float]:
 
     WHY THE CUT PLANNER NEEDS THESE NOW. Cuts used to snap to sentence ends
     only, which was right when a 40-second video had ten of them and ten
-    pictures. With a picture roughly every four spoken words there are twice
+    pictures. With a picture roughly every five spoken words there are twice
     as many cuts as there are sentences, so most of them fell back to the even
     grid — landing mid-phrase, which is exactly the "image doesn't match what
     he's saying" the owner reported. A comma is a real pause in the narration

@@ -21,8 +21,16 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).parent.parent
-LAUNCHERS = ["run.bat", "run_scheduled.bat", "run_dashboard.bat",
-             "run_wan_fast.bat"]
+# EVERY .bat THAT STARTS PYTHON, not a hand-kept subset. run_watchdog.bat was
+# left off this list when the rest were fixed, kept its bare `python`, and died
+# on `import requests` under the system interpreter every time the scheduled
+# task started it — so the process whose entire job was noticing that the
+# dashboard had stopped was itself the first thing to stop. The list is now
+# derived, and test_the_list_covers_every_launcher below fails if a new .bat
+# escapes it.
+LAUNCHERS = sorted(
+    p.name for p in Path(__file__).parent.parent.glob("*.bat")
+)
 
 
 def _body(name: str) -> str:
@@ -32,6 +40,16 @@ def _body(name: str) -> str:
         line for line in (ROOT / name).read_text(encoding="utf-8").splitlines()
         if not line.strip().upper().startswith("REM")
     )
+
+
+def test_the_list_covers_every_launcher():
+    """A derived list can go empty — a bad glob makes every parametrized test
+    below pass by having nothing to run, which is the quietest way for this
+    file to stop protecting anything. Name the ones that must be in it,
+    run_watchdog.bat first: it is the one a hand-kept list already lost."""
+    for required in ("run_watchdog.bat", "run_dashboard.bat", "run.bat",
+                     "run_scheduled.bat", "run_wan_fast.bat"):
+        assert required in LAUNCHERS
 
 
 @pytest.mark.parametrize("name", LAUNCHERS)

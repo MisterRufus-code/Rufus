@@ -413,7 +413,7 @@ SETTINGS_GROUPS = [
     ("Pictures per video", "How many, and how they move.", [
         ("SD_CLIPS", "Beats (pictures)", "number",
          "One storyboard shot, one prompt and one cut each. Left empty it is "
-         "computed from the script — about one per four spoken words, floor "
+         "computed from the script — about one per five spoken words, floor "
          "10, ceiling 30."),
         ("RUFUS_BEAT_MOTION", "How a beat moves", "select:cut,kenburns,i2i,hero,i2v",
          "cut = several stills hard-cut inside the beat (what stills-only "

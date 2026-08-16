@@ -3,13 +3,30 @@
 #   .\serve.ps1                  # register: dashboard + watchdog start at boot
 #   .\serve.ps1 -Tailscale       # ...and publish it to your tailnet over https
 #   .\serve.ps1 -Status          # what's registered / running / reachable
+#   .\serve.ps1 -Restart         # start both tasks again without rebooting
 #   .\serve.ps1 -Unregister      # remove the boot tasks (leaves data alone)
 #
-# What "always on" means here: two Windows scheduled tasks that run AT STARTUP
-# under your account, before anyone logs in - the dashboard itself, and the
-# watchdog that restarts it if it stops answering. Nothing is installed as a
-# real Windows service (that needs nssm/srvany); a startup task is what gets
-# you the same practical result with only built-in tools.
+# What "always on" means here, precisely: two Windows scheduled tasks with an
+# AT STARTUP trigger, running under your account - the dashboard itself, and
+# the watchdog that restarts it if it stops answering. Nothing is installed as
+# a real Windows service (that needs nssm/srvany); a startup task is what gets
+# you the closest practical thing with only built-in tools.
+#
+# THE LIMIT OF THAT, stated because the previous version of this comment
+# claimed "before anyone logs in" and that is not what schtasks creates without
+# a stored password. A task registered with no /RU runs with an interactive
+# token, so it starts when you log on rather than at the boot prompt. On a box
+# somebody signs into, the difference is a few seconds; on one that reboots
+# unattended overnight, the dashboard is down until the next logon.
+#
+# To get true pre-logon start, re-register the two tasks under the SYSTEM
+# account by hand:
+#     schtasks /Create /TN "Rufus Dashboard" /TR "<path>\run_dashboard.bat" /SC ONSTART /RU SYSTEM /RL HIGHEST /F
+# It is not the default here on purpose: SYSTEM has its own profile, so every
+# %USERPROFILE% cache the pipeline uses (HuggingFace weights, Whisper models)
+# resolves somewhere else and gets re-downloaded on the first run the dashboard
+# launches. That is a fair trade for a headless box and a bad surprise for a
+# desktop, so it is a decision to make rather than one to inherit.
 #
 # The dashboard stays bound to 127.0.0.1 and is published with `tailscale
 # serve`. It is never bound to 0.0.0.0 and never port-forwarded - see
@@ -21,6 +38,7 @@
 param(
     [switch]$Tailscale,
     [switch]$Status,
+    [switch]$Restart,
     [switch]$Unregister
 )
 
@@ -55,13 +73,46 @@ if ($Status) {
     Write-Host "Rufus server status" -ForegroundColor Cyan
     Write-Host "-------------------"
 
+    # READY IS NOT RUNNING. This block used to print "registered (Ready)" in
+    # green for both tasks, and that is how a dead watchdog looked healthy for
+    # days: Task Scheduler says "Running" while a process is alive and "Ready"
+    # once it has exited. For a task that is supposed to run forever, Ready IS
+    # the failure — it means the thing started, quit, and is now merely
+    # eligible to start again at the next boot. Green on that is the status
+    # screen agreeing with the problem.
+    #
+    # /V adds Last Run Time and Last Result, which is the part that says WHY:
+    # 9009 is the venv guard in the .bat, 1 is a Python traceback, 0 is a
+    # process that decided on its own to stop.
     foreach ($t in @($DashTask, $WatchTask)) {
-        $q = schtasks /Query /TN "$t" /FO LIST 2>$null
-        if ($LASTEXITCODE -eq 0) {
-            $state = ($q | Select-String "Status:").ToString().Split(":")[1].Trim()
-            Write-Host ("{0,-18} registered ({1})" -f $t, $state) -ForegroundColor Green
-        } else {
+        $q = schtasks /Query /TN "$t" /FO LIST /V 2>$null
+        if ($LASTEXITCODE -ne 0) {
             Write-Host ("{0,-18} not registered" -f $t) -ForegroundColor Yellow
+            continue
+        }
+        $state = (($q | Select-String "^Status:") | Select-Object -First 1)
+        $state = if ($state) { $state.ToString().Split(":", 2)[1].Trim() } else { "unknown" }
+        $last  = (($q | Select-String "^Last Run Time:") | Select-Object -First 1)
+        $last  = if ($last) { $last.ToString().Split(":", 2)[1].Trim() } else { "" }
+        $code  = (($q | Select-String "^Last Result:") | Select-Object -First 1)
+        $code  = if ($code) { $code.ToString().Split(":", 2)[1].Trim() } else { "" }
+
+        if ($state -eq "Running") {
+            Write-Host ("{0,-18} running" -f $t) -ForegroundColor Green
+        } elseif ($state -eq "unknown") {
+            # schtasks output is localized. On a non-English Windows there is
+            # no "Status:" line to find, and calling that "NOT running" would
+            # be inventing a failure — the opposite mistake to the one this
+            # block was written to fix, and just as misleading.
+            Write-Host ("{0,-18} registered; state unreadable (localized schtasks output)" -f $t) -ForegroundColor Yellow
+        } else {
+            Write-Host ("{0,-18} NOT running (task state: {1})" -f $t, $state) -ForegroundColor Red
+            if ($last) { Write-Host ("{0,-18}   last run {1}, exit code {2}" -f "", $last, $code) }
+            switch ($code) {
+                "9009" { Write-Host ("{0,-18}   exit 9009 = the .venv interpreter was missing. Recreate it:" -f "") -ForegroundColor Yellow
+                         Write-Host ("{0,-18}   python -m venv .venv ; .\.venv\Scripts\pip install -r requirements.txt" -f "") }
+                "3"    { Write-Host ("{0,-18}   exit 3 = port {1} was already held by another process." -f "", $Port) -ForegroundColor Yellow }
+            }
         }
     }
 
@@ -72,11 +123,19 @@ if ($Status) {
         }
     } catch {
         Write-Host ("{0,-18} NOT answering on port {1}" -f "dashboard", $Port) -ForegroundColor Red
-        $log = Join-Path $Root "logs\dashboard.log"
-        if (Test-Path $log) {
-            Write-Host "Last lines of logs\dashboard.log:" -ForegroundColor Yellow
-            Get-Content $log -Tail 15 | ForEach-Object { Write-Host "  $_" }
+        foreach ($name in @("dashboard", "watchdog")) {
+            $log = Join-Path $Root "logs\$name.log"
+            if (Test-Path $log) {
+                Write-Host ""
+                Write-Host "Last lines of logs\$name.log:" -ForegroundColor Yellow
+                Get-Content $log -Tail 12 | ForEach-Object { Write-Host "  $_" }
+            }
         }
+        # BOTH logs, not just the dashboard's. When the dashboard is down the
+        # first question is why the watchdog did not bring it back, and that
+        # answer has never been in dashboard.log.
+        Write-Host ""
+        Write-Host "Start them now with:  .\serve.ps1 -Restart" -ForegroundColor Cyan
     }
 
     if (Test-Path $UrlFile) {
@@ -92,6 +151,30 @@ if ($Status) {
     Write-Host ""
     Write-Host "Users with access:" -ForegroundColor Cyan
     & (Get-PythonExe) (Join-Path $Root "scripts\auth.py") list
+    exit 0
+}
+
+# --------------------------------------------------------------- restart ----
+# The command -Status now tells you to run. Both tasks are ONSTART, so without
+# this the only documented way to bring them back was a reboot, and the honest
+# answer to "the dashboard is down" cannot be "restart Windows".
+if ($Restart) {
+    foreach ($t in @($DashTask, $WatchTask)) {
+        schtasks /End /TN "$t" 2>$null | Out-Null
+        schtasks /Run /TN "$t" 2>$null | Out-Null
+        if ($LASTEXITCODE -eq 0) {
+            Write-Host ("Started: {0}" -f $t) -ForegroundColor Green
+        } else {
+            Write-Host ("Could not start {0} - is it registered? (.\serve.ps1)" -f $t) -ForegroundColor Red
+        }
+    }
+    Start-Sleep -Seconds 5
+    try {
+        Invoke-WebRequest -Uri "http://127.0.0.1:$Port/healthz" -TimeoutSec 5 -UseBasicParsing | Out-Null
+        Write-Host ("dashboard answering on port {0}" -f $Port) -ForegroundColor Green
+    } catch {
+        Write-Host ("dashboard still NOT answering on port {0} - .\serve.ps1 -Status has the reason" -f $Port) -ForegroundColor Red
+    }
     exit 0
 }
 
@@ -212,7 +295,7 @@ if ($LASTEXITCODE -ne 0) {
     Write-Host "Failed to register '$DashTask' - run this PowerShell as Administrator." -ForegroundColor Red
     exit 1
 }
-Write-Host "Registered: $DashTask (starts at boot)" -ForegroundColor Green
+Write-Host "Registered: $DashTask (starts when you log on)" -ForegroundColor Green
 
 schtasks /Create /TN "$WatchTask" /TR "`"$WatchBat`"" /SC ONSTART /RL HIGHEST /F | Out-Null
 if ($LASTEXITCODE -ne 0) {
@@ -242,10 +325,13 @@ try {
 }
 
 Write-Host ""
-Write-Host "Done. The dashboard now starts with Windows." -ForegroundColor Green
+Write-Host "Done. The dashboard now starts when you log on." -ForegroundColor Green
+Write-Host "(Not before that: these tasks run as you, not as SYSTEM - see the header"
+Write-Host " of this script for how to change that and what it costs.)"
 Write-Host ""
 Write-Host "Add your partner:   python scripts\auth.py add james --role partner"
 Write-Host "Check everything:   .\serve.ps1 -Status"
+Write-Host "Bring it back up:   .\serve.ps1 -Restart"
 Write-Host "Daily video runs:   .\schedule_daily.ps1 -Times `"09:00,17:00`""
 Write-Host "Stop serving:       .\serve.ps1 -Unregister"
 Write-Host ""

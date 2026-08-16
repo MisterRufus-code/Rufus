@@ -403,7 +403,7 @@ def _findings(m: dict) -> list[dict]:
             "severity": "low",
             "text": (f"{m['beats']} pictures for a {m['script_words']}-word "
                      f"script. The current beat rule would give about {want} "
-                     f"— roughly one per four spoken words. SD_CLIPS overrides "
+                     f"— roughly one per five spoken words. SD_CLIPS overrides "
                      f"it."),
         })
     return out
@@ -416,10 +416,18 @@ def _deserved_beats(words: int) -> int:
     pipeline, and this module's contract is that it reads finished runs with
     nothing else loaded. The rule is one line and the comment says where the
     original lives — main._target_beats.
+
+    THE COST OF THAT DUPLICATION, PAID ONCE ALREADY. main._target_beats moved
+    from four words to five the same day the cut rhythm was fixed, and this
+    copy did not. For a while the analyzer was reporting runs as short of a
+    target the pipeline had stopped aiming at — the measurement contradicting
+    the feature, which is the failure this module exists to catch. The test
+    beside it now asserts the two agree, so the next divergence fails a test
+    rather than a video.
     """
     if not words:
         return 0
-    return max(10, min(30, round(words / 4.0)))
+    return max(10, min(30, round(words / 5.0)))
 
 
 def review(run_id: str, video_path: Path | None = None) -> dict:
