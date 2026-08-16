@@ -164,3 +164,34 @@ def test_the_entry_points_that_notify_read_the_saved_settings():
         text = (root / name).read_text(encoding="utf-8")
         assert "settings_store" in text, name
         assert "settings_store.apply()" in text, name
+
+
+def test_a_powershell_written_file_still_loads(tmp_path, monkeypatch):
+    """Windows PowerShell 5.1's `Set-Content -Encoding utf8` writes a BOM, and
+    editing this file from a PowerShell prompt is a documented way to set it.
+    Read as plain utf-8 those three bytes make json.loads throw, the loader
+    returned {} without a word, and EVERY saved setting vanished — the style,
+    the renderer, the dashboard URL, the ntfy topic — while the run carried on
+    using built-in defaults as though the file had never existed."""
+    f = tmp_path / "dashboard_settings.json"
+    f.write_bytes(b"\xef\xbb\xbf" + json.dumps({"RUFUS_STYLE": "stickman"}).encode())
+    monkeypatch.setattr(settings_store, "SETTINGS_FILE", f)
+    assert settings_store.load() == {"RUFUS_STYLE": "stickman"}
+
+
+def test_an_unparseable_file_is_loud(tmp_path, monkeypatch, capsys):
+    """A missing file is the ordinary case and stays quiet. A file that EXISTS
+    and will not parse is somebody's configuration being ignored."""
+    f = tmp_path / "dashboard_settings.json"
+    f.write_text("{ this is not json", encoding="utf-8")
+    monkeypatch.setattr(settings_store, "SETTINGS_FILE", f)
+    assert settings_store.load() == {}
+    out = capsys.readouterr().out
+    assert "not valid JSON" in out
+    assert "EVERY saved setting is being ignored" in out
+
+
+def test_a_missing_file_says_nothing(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(settings_store, "SETTINGS_FILE", tmp_path / "nope.json")
+    assert settings_store.load() == {}
+    assert capsys.readouterr().out == ""

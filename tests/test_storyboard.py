@@ -140,10 +140,17 @@ def test_prompt_asks_for_the_face_as_a_physical_thing():
     """The ban on named emotions was reading as a ban on FACES, and the
     gallery came back with ten identical blank expressions. A face is a
     physical thing; "brows pulled down" is drawable and "looking determined"
-    is not."""
+    is not.
+
+    ASKING FOR GEOMETRY WAS NOT ENOUGH — the second gallery, sixty stills, had
+    the same worried face on nearly every figure, because the shots were still
+    written as "their face showing resignation" and the renderer answers an
+    emotion word with its default. The rule now hands over the five faces the
+    style block can actually draw, in its own words, so there is nothing left
+    to paraphrase."""
     p = _prompt()
-    assert "DRAW THE FACE AND THE POSTURE" in p
-    assert "brows pulled down and mouth flat" in p
+    assert "DRAW THE FACE AS GEOMETRY" in p
+    assert "brows slanted up at their inner ends" in p
     assert "Never 'looking determined'" in p
 
 
@@ -841,3 +848,99 @@ def test_the_numbered_rules_are_still_unique():
     labels = re.findall(r"^(\d+[a-z]?)\. ", rules, flags=re.M)
     assert labels, "the rules section moved"
     assert len(labels) == len(set(labels)), labels
+
+
+# ── the same face on every figure ────────────────────────────────────────────
+#
+# From a gallery of sixty stills: nearly every stick figure wore the same
+# worried face — brows up at the inner ends, small frown — whatever the line
+# was about. The style block defines five faces in GEOMETRY, and the shots were
+# asking for emotions instead:
+#
+#     "their face showing resignation"
+#     "a look of loss on their face"
+#     "Roosevelt's face, determined and focused"
+#
+# An image model cannot draw resignation. Handed a word that matches none of
+# the five, it falls back to its default, which is why the default was on every
+# frame. Rule 4 already forbade naming feelings; it was being obeyed everywhere
+# except the one place it mattered most.
+
+def test_a_named_emotion_becomes_the_geometry_that_draws_it():
+    got = storyboard._pin_expression(
+        "A person hands a pile of coins to a teller, their face showing "
+        "resignation.")
+    assert "resignation" not in got
+    assert "brows slanted up at their inner ends" in got
+
+
+def test_the_look_of_x_form_is_caught_too():
+    got = storyboard._pin_expression(
+        "A hand clutches a few paper dollars, a look of loss on their face.")
+    assert "look of loss" not in got
+    assert "downward mouth curve" in got
+
+
+def test_the_adverb_form_is_caught():
+    got = storyboard._pin_expression("Roosevelt stands at the podium, "
+                                     "looking determined.")
+    assert "looking determined" not in got
+    assert "brows angled down and inward" in got
+
+
+def test_an_ordinary_list_is_not_mangled():
+    """The abstraction stripper had exactly this bug once — a real object in a
+    real list eaten because it matched a pattern. A picture of the founder is
+    a picture, not a feeling."""
+    s = "A cluttered desk holds a ledger, a picture of the founder, and a lamp."
+    assert storyboard._pin_expression(s) == s
+
+
+def test_a_word_outside_the_five_keeps_its_own_phrasing():
+    """Forcing every unknown word into the nearest of five faces would be
+    inventing an emotion the shot never asked for."""
+    s = "A clerk stands at the counter, looking upward."
+    assert storyboard._pin_expression(s) == s
+
+
+def test_the_geometry_matches_the_style_block_word_for_word():
+    """Two descriptions of a face in one prompt is two instructions competing.
+    The renderer's own words are in config/styles.json — if they are edited
+    there and not here, the prompt starts arguing with the style block."""
+    import json
+    style = json.loads((Path(storyboard.__file__).parent.parent / "config" /
+                        "styles.json").read_text(encoding="utf-8"))["stickman"]
+    for geom in storyboard._FACE_GEOMETRY.values():
+        head = geom.split(" over ")[0].split(" with ")[0]
+        assert head in style, head
+
+
+def test_the_prompt_hands_over_the_five_faces():
+    p = storyboard._prompt("script", ["a", "b"], [])
+    assert "brows raised high over a small open oval mouth" in p
+    assert "at least three of" in p
+    assert "MUST DIFFER ACROSS THE SEQUENCE" in p
+
+
+def test_one_face_across_a_whole_sequence_is_reported(capsys):
+    """Nothing in the pipeline could have noticed this: the shots said
+    "resignation", the renderer drew its default, and every stage downstream
+    saw text that looked fine."""
+    grief = storyboard._FACE_GEOMETRY["grief"]
+    shots = [{"n": i + 1, "visual": f"A clerk stands at the counter, {grief}, "
+                                    f"as the queue waits behind him.",
+              "carries_over": None} for i in range(4)]
+    storyboard._clean({"shots": shots}, 4)
+    out = capsys.readouterr().out
+    assert "faces: grief×4" in out
+    assert "every face in this sequence is the same one" in out
+
+
+def test_a_varied_sequence_draws_no_warning(capsys):
+    geoms = [storyboard._FACE_GEOMETRY[k] for k in ("grief", "shock", "anger")]
+    shots = [{"n": i + 1, "visual": f"A clerk at the counter, {g}, as the "
+                                    f"queue waits behind him.",
+              "carries_over": None} for i, g in enumerate(geoms)]
+    storyboard._clean({"shots": shots}, 3)
+    out = capsys.readouterr().out
+    assert "every face in this sequence is the same one" not in out

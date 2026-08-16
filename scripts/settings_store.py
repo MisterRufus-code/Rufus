@@ -57,10 +57,35 @@ def _is_secret(key: str) -> bool:
 
 
 def load() -> dict:
-    """The saved settings, or {} if there are none or the file is unreadable."""
+    """The saved settings, or {} if there are none or the file is unreadable.
+
+    utf-8-SIG, NOT utf-8, and this is not pedantry. Windows PowerShell 5.1's
+    `Set-Content -Encoding utf8` writes a BYTE ORDER MARK, so a settings file
+    edited from a PowerShell prompt — which is how the owner was told to edit
+    it — starts with three bytes that json.loads rejects outright:
+
+        Unexpected UTF-8 BOM (decode using utf-8-sig)
+
+    utf-8-sig reads both, so nothing is lost by preferring it.
+
+    AND IT SAYS SO WHEN IT CANNOT READ. The silent return was the real damage:
+    one BOM made EVERY saved setting vanish — the style, the renderer, the
+    dashboard URL, the ntfy topic — with no message anywhere, and the pipeline
+    ran on its built-in defaults as though the file had never existed. A
+    missing file is normal and stays quiet; a file that exists and will not
+    parse is a person's configuration being ignored, and they have to be told.
+    """
     try:
-        data = json.loads(SETTINGS_FILE.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError, ValueError):
+        raw = SETTINGS_FILE.read_text(encoding="utf-8-sig")
+    except OSError:
+        return {}                       # no file yet: the ordinary case
+    try:
+        data = json.loads(raw)
+    except (json.JSONDecodeError, ValueError) as e:
+        print(f"[settings] {SETTINGS_FILE.name} exists but is not valid JSON "
+              f"({e}) — EVERY saved setting is being ignored for this run. "
+              f"Fix it on the dashboard's Settings page, or delete the file "
+              f"to start over.")
         return {}
     if not isinstance(data, dict):
         return {}

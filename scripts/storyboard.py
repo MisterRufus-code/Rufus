@@ -139,15 +139,32 @@ def _prompt(script: str, beats: list[str], era_tags: list[str],
         "'revealing the anguish of misplaced trust' — a fist of coins held out "
         "and no one reaching. A feeling named as a feeling gives the image "
         "model nothing to draw.\n"
-        "4b. BUT DRAW THE FACE AND THE POSTURE. A face is a physical thing and "
-        "it is the fastest way a viewer feels a line, so every shot with a "
-        "person in it says what their face and body are DOING, in the same "
-        "concrete language as everything else: brows pulled down and mouth "
-        "flat, eyes wide and mouth open, head dropped and shoulders rounded, "
-        "one arm thrown up. Never 'looking determined', 'appearing anxious', "
-        "'a sense of unease' — those are rule 4 again in a costume. Vary it: "
-        "a sequence where every face does the same thing is a sequence with no "
-        "story in it.\n"
+        "4b. DRAW THE FACE AS GEOMETRY, IN THESE EXACT WORDS. A face is the "
+        "fastest way a viewer feels a line, and the renderer can only draw "
+        "five of them. Every shot with a person picks ONE and writes it out:\n"
+        "    - brows angled down and inward over a flat or down-curved mouth "
+        " (anger, defiance, resolve)\n"
+        "    - brows raised high over a small open oval mouth  (shock, alarm, "
+        "disbelief)\n"
+        "    - brows slanted up at their inner ends over a downward mouth "
+        "curve  (worry, grief, resignation)\n"
+        "    - a wide upturned curve with the eyes squeezed to short arcs  "
+        "(relief, triumph, delight)\n"
+        "    - brows flat and mouth a short straight line  (cold "
+        "indifference, official detachment)\n"
+        "Never 'looking determined', 'a face showing resignation', 'a look of "
+        "loss on their face' — those name the feeling instead of drawing it, "
+        "which is rule 4 in a costume, and the renderer answers every one of "
+        "them with the SAME neutral worried face. A gallery of sixty stills "
+        "from this channel had that face on nearly every figure.\n"
+        "4c. THE FACES MUST DIFFER ACROSS THE SEQUENCE. Use at least three of "
+        "the five in any sequence with people in it, and put them where the "
+        "narration turns: the shock belongs on the reveal, the flat official "
+        "face on the announcement, the grief after the loss. A sequence where "
+        "every face does the same thing is a sequence with no story in it, "
+        "whatever the pictures behind the figures are doing. The posture "
+        "carries it too — shoulders thrown up, back hunched, head dropped, "
+        "one arm reaching, one figure leaning away from another.\n"
         "5. OBEY THE ERA TAG on each shot. [present day] means an ordinary "
         "scene of today; a year means every visible detail belongs to it.\n"
         "6. NEVER NAME WORDS THAT WOULD BE PRINTED IN FRAME. No headline text, "
@@ -478,6 +495,110 @@ _ABSTRACTION_TAIL = re.compile(
 )
 
 
+# ── faces ────────────────────────────────────────────────────────────────────
+#
+# WHY THIS EXISTS, from a gallery of sixty stills: every figure had the same
+# worried face — brows up at the inner ends, small frown — whatever the line
+# was about. Not a model limitation. The storyboard was writing
+#
+#     "their face showing resignation"
+#     "a look of loss on their face"
+#     "Roosevelt's face, determined and focused"
+#
+# which is rule 4 ("a feeling named as a feeling gives the image model nothing
+# to draw") surviving in the one place it does the most damage. The renderer's
+# style block defines five faces in GEOMETRY — where the brows sit, what the
+# mouth does — and an emotion word matches none of them, so the model falls
+# back to the same neutral-sad default on every frame.
+#
+# The fix is a translation, not a rejection: the shot meant something, and the
+# geometry is the same sentence in a language the model can draw. Phrased to
+# match config/styles.json word for word, so the prompt and the style block
+# are not two descriptions of a face competing with each other.
+_FACE_GEOMETRY = {
+    "anger": "brows angled down and inward over a flat or down-curved mouth",
+    "shock": "brows raised high over a small open oval mouth",
+    "grief": "brows slanted up at their inner ends over a downward mouth curve",
+    "delight": "a wide upturned curve with the eyes squeezed to short arcs",
+    "cold": "brows flat and mouth a short straight line",
+}
+
+# Emotion words → which of the five faces draws it. Deliberately small: these
+# are the words that actually turned up in this channel's storyboards, and a
+# word not in the list keeps its own phrasing rather than being forced into an
+# approximation.
+_FACE_WORDS = {
+    "anger": ("anger", "angry", "fury", "furious", "rage", "outrage",
+              "indignation", "defiance", "defiant", "determined",
+              "determination", "resolve", "resolute", "frustration",
+              "frustrated"),
+    "shock": ("shock", "shocked", "surprise", "surprised", "disbelief",
+              "astonishment", "astonished", "alarm", "alarmed", "panic",
+              "fear", "afraid", "horror", "horrified"),
+    "grief": ("grief", "sorrow", "sadness", "sad", "loss", "despair",
+              "resignation", "resigned", "defeat", "defeated", "worry",
+              "worried", "anxiety", "anxious", "unease", "dismay",
+              "exhaustion", "exhausted", "weary"),
+    "delight": ("delight", "delighted", "joy", "joyful", "relief", "relieved",
+                "triumph", "triumphant", "excitement", "excited", "hope",
+                "hopeful", "pride", "proud"),
+    "cold": ("indifference", "indifferent", "detachment", "detached",
+             "impassive", "blank", "unmoved", "stern", "cold", "calm",
+             "composure", "composed", "focused", "concentration"),
+}
+_WORD_TO_FACE = {w: face for face, words in _FACE_WORDS.items() for w in words}
+
+_EMOTION_ALT = "|".join(sorted(_WORD_TO_FACE, key=len, reverse=True))
+
+# The three shapes this defect actually takes. Each captures the emotion word
+# so it can be swapped for geometry rather than deleted — a shot with a face
+# described badly is still a shot that wanted a face.
+_FACE_PATTERNS = (
+    # "a look of loss on their face", "an expression of relief on his face"
+    re.compile(r"\b an?\s+(?:look|expression|air)\s+of\s+"
+               rf"(?P<word>{_EMOTION_ALT})\b"
+               r"(?:\s+(?:on|across|over)\s+(?:their|his|her|its|the)\s+face)?",
+               re.IGNORECASE | re.VERBOSE),
+    # "their face showing resignation", "her face full of worry"
+    re.compile(r"\b(?:their|his|her|its|the)\s+face[,]?\s+"
+               r"(?:showing|shows|full\s+of|filled\s+with|set\s+in|"
+               r"twisted\s+in|lit\s+with|betraying)\s+"
+               rf"(?P<word>{_EMOTION_ALT})\b",
+               re.IGNORECASE),
+    # "looking determined", "appearing anxious", "eyes wide with fear"
+    re.compile(r"\b(?:looking|appearing|seeming|visibly)\s+"
+               rf"(?P<word>{_EMOTION_ALT})\b", re.IGNORECASE),
+)
+
+
+def _pin_expression(visual: str) -> str:
+    """Swap a named emotion for the face geometry that draws it."""
+    def _swap(m: "re.Match") -> str:
+        face = _WORD_TO_FACE.get(m.group("word").lower())
+        return f" {_FACE_GEOMETRY[face]}" if face else m.group(0)
+
+    out = visual
+    for pat in _FACE_PATTERNS:
+        out = pat.sub(_swap, out)
+    return re.sub(r"\s{2,}", " ", out).replace(" ,", ",").strip()
+
+
+def _face_variety(visuals: list[str]) -> dict:
+    """Which of the five faces the sequence uses, and how often.
+
+    A sequence where every face does the same thing is a sequence with no
+    story in it — the prompt says so, and until this counted it, nothing
+    checked whether the sequence had obeyed.
+    """
+    from collections import Counter
+    counts: Counter = Counter()
+    for v in visuals:
+        for face, geom in _FACE_GEOMETRY.items():
+            if geom.split(" over ")[0] in v or geom in v:
+                counts[face] += 1
+    return dict(counts)
+
+
 def _strip_abstraction(visual: str) -> str:
     """Cut the "…, embodying X" tail off a shot description.
 
@@ -683,7 +804,7 @@ def _clean(plan: dict, n_beats: int,
         visual = str(entry.get("visual", "")).strip()
         if len(visual) < MIN_VISUAL_CHARS:
             return None
-        visual = _strip_abstraction(visual)
+        visual = _pin_expression(_strip_abstraction(visual))
         carries = entry.get("carries_over")
         if isinstance(carries, str) and carries.strip():
             carries = carries.strip()
@@ -701,6 +822,20 @@ def _clean(plan: dict, n_beats: int,
     if restated:
         print(f"[storyboard] carried the thread into {restated} of "
               f"{n_beats} shot(s)")
+
+    # THE FACES, counted. The complaint was "always the same face expressions"
+    # and nothing in this pipeline could have noticed: the shots said
+    # "resignation" and "a look of loss", the renderer drew its default, and
+    # every stage downstream saw text that looked fine. One line, only when
+    # there are people to have faces.
+    faces = _face_variety(out)
+    if faces:
+        used = ", ".join(f"{k}×{v}" for k, v in sorted(faces.items(),
+                                                       key=lambda kv: -kv[1]))
+        print(f"[storyboard] faces: {used}")
+        if len(faces) == 1 and sum(faces.values()) >= 3:
+            print(f"[storyboard] ⚠ every face in this sequence is the same "
+                  f"one — the arc has no turn in it")
 
     # Name the concrete things the script mentions that no picture shows.
     # WARNING, never rejection: not every noun deserves a frame, and this repo

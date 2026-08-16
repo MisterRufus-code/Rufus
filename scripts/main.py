@@ -1687,8 +1687,20 @@ def run(skip_upload: bool = False, niche_override: str = None, output_dir: Path 
             _style = (os.environ.get("RUFUS_STYLE") or "").strip()
             _look = _style if _style in _cc.style_presets() else "default"
             _ins_on = _ins.enabled()
+            # THE BEAT COUNT IS COMPUTED HERE, not read from a variable that
+            # does not exist yet. It did exactly that — `max_scenes` is
+            # assigned in the block BELOW this one — so every run since this
+            # header shipped printed "(config summary unavailable: cannot
+            # access local variable 'max_scenes')" instead of the three facts
+            # it exists to show. The try/except that was there to keep a
+            # cosmetic line from killing a render also kept it from ever
+            # working, which is this repo's own rule about fail-open needing
+            # fail-loud, broken by the very line that reports the config.
+            _beats = _target_beats(script)
+            _override = (os.environ.get("SD_CLIPS") or "").strip()
+            _from = f" (SD_CLIPS={_override})" if _override else " (from the script)"
             print(f"           look: {_look}"
-                  f" · pictures: {max_scenes} beat(s)"
+                  f" · pictures: {_beats} beat(s){_from}"
                   f" × {_cc._frames_per_beat()} frame(s)"
                   f" · inserts: {'ON' if _ins_on else 'off'}")
             if _look == "default" and _style:

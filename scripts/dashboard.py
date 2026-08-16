@@ -524,8 +524,11 @@ def _load_settings() -> dict:
     because THIS is the editor: it must show a key the loader would filter out
     (so the owner can see and delete it) rather than hiding it. settings_store
     is the reader every run uses; the difference is deliberate."""
+    # utf-8-sig: PowerShell's `Set-Content -Encoding utf8` leaves a BOM, and
+    # the editor has to be able to OPEN a file someone edited by hand — being
+    # unable to is how a whole configuration silently reverts to defaults.
     try:
-        return json.loads(SETTINGS_FILE.read_text(encoding="utf-8"))
+        return json.loads(SETTINGS_FILE.read_text(encoding="utf-8-sig"))
     except (OSError, json.JSONDecodeError, ValueError):
         return {}
 
