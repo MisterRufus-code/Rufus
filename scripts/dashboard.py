@@ -1090,6 +1090,7 @@ NAV_ITEMS = [
     ("/performance", "📈 Performance",                    "view"),
     ("/trending",   "🔥 Trending",                        "view"),
     ("/gallery",    "🖼 Gallery",                         "view"),
+    ("/advice",     "💡 What to change",                  "view"),
     ("/insights",   "🔬 Insights",                        "view"),
     ("/logs",       "📜 Logs",                            "view"),
     ("/system",     "🖥 System",                          "system"),
@@ -2112,6 +2113,112 @@ def settings_save():
     if bad:
         return redirect("/settings?error=" + _urlquote("Not saved: " + "; ".join(bad)))
     return redirect("/settings?msg=" + _urlquote(f"Saved {len(values)} setting(s)."))
+
+
+# ── Advice ───────────────────────────────────────────────────────────────────
+
+def _advice_now() -> tuple[list[dict], dict]:
+    """(items, readiness). Empty and "unmeasured" on any failure."""
+    try:
+        import advisor
+        import run_review
+        pat = run_review.patterns(limit=30)
+        st = _stats()
+        cfg = _load_settings()
+        return advisor.advise(pat, st, cfg), advisor.readiness(pat, st, cfg)
+    except Exception as e:
+        print(f"[dashboard] advice unavailable: {e}")
+        return [], {"state": "unmeasured", "detail": str(e)}
+
+
+@app.route("/advice")
+def advice_page():
+    """What to change before the next video, and a button that changes it.
+
+    THE GAP THIS CLOSES. Insights says what happened; this says what to do
+    about it, and then does it. A suggestion the reader has to translate into
+    a settings change, on another page, under a name they have to remember, is
+    a suggestion most people do not act on — so the ones that map to a setting
+    carry the button that sets it.
+
+    Nothing here is a model's opinion. Every line is derived from measurements
+    already on disk, which is what makes it checkable rather than plausible.
+    """
+    auth.require("view")
+    items, ready = _advice_now()
+
+    tone = {"needs work": "held", "workable": "pending",
+            "good": "ok", "unmeasured": "pending"}.get(ready["state"], "pending")
+    header = (f'<div class="card" style="width:100%">'
+              f'<span class="badge {tone}">{_esc(ready["state"])}</span> '
+              f'<span class="muted">{_esc(ready["detail"])}</span></div>')
+
+    if not items:
+        body = (f'<a class="back" href="/">← back</a>'
+                f'<h2 style="margin-top:14px">What to change</h2>{header}'
+                f'<p class="muted">Nothing to suggest — every measured run is '
+                f'inside its thresholds.</p>')
+        return _head() + body + PAGE_TAIL
+
+    cards = ""
+    for it in items:
+        badge = {"high": "held", "medium": "pending", "low": "ok"}.get(
+            it["severity"], "ok")
+        apply_btn = ""
+        if it.get("setting") and it.get("value"):
+            apply_btn = (
+                f'<form method="post" action="/advice/apply" style="margin-top:10px">'
+                f'<input type="hidden" name="key" value="{_esc(it["setting"])}">'
+                f'<input type="hidden" name="value" value="{_esc(it["value"])}">'
+                f'<button class="btn save" type="submit">'
+                f'Set {_esc(it["setting"])} = {_esc(it["value"])}</button></form>')
+        cards += (
+            f'<div class="card" style="width:100%;margin-bottom:12px">'
+            f'<span class="badge {badge}">{_esc(it["severity"])}</span> '
+            f'<strong>{_esc(it["title"])}</strong>'
+            f'<div class="muted" style="margin:6px 0">{_esc(it["evidence"])}</div>'
+            f'<p style="margin:6px 0">{_esc(it["why"])}</p>'
+            f'<p style="margin:6px 0"><strong>Do:</strong> {_esc(it["action"])}</p>'
+            f'{apply_btn}</div>')
+
+    body = f"""
+    <a class="back" href="/">← back</a>
+    <h2 style="margin-top:14px">What to change</h2>
+    {_msg_banner()}
+    {header}
+    <p class="muted">Derived from the last runs' own measurements — no model,
+       nothing to configure. A finding has to appear in a real share of runs
+       before it lands here, because advice that fires every time is advice
+       people learn to scroll past.</p>
+    {cards}
+    """
+    return _head() + body + PAGE_TAIL
+
+
+@app.route("/advice/apply", methods=["POST"])
+def advice_apply():
+    """Apply one suggestion, and only one the advisor actually offered.
+
+    The key and value arrive from a form, so they are checked against the
+    settings schema rather than trusted — a POST that could write an arbitrary
+    key into the settings file would be writing arbitrary environment into
+    every future run.
+    """
+    auth.require("settings")
+    _require_localhost()
+    key = request.form.get("key", "").strip()
+    value = request.form.get("value", "").strip()
+    if key not in SETTINGS_KINDS:
+        return redirect("/advice?error=" + _urlquote(f"{key} is not a setting."))
+    offered = {(i.get("setting"), i.get("value")) for i in _advice_now()[0]}
+    if (key, value) not in offered:
+        return redirect("/advice?error=" + _urlquote(
+            "That suggestion is no longer current — reload and try again."))
+    values = dict(_load_settings())
+    values[key] = value
+    _save_settings(values)
+    return redirect("/advice?msg=" + _urlquote(
+        f"{key} set to {value}. It applies to the next run started here."))
 
 
 # ── Insights ─────────────────────────────────────────────────────────────────
