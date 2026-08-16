@@ -97,3 +97,45 @@ def test_the_frame_fit_is_no_longer_named_for_one_shape():
 
 def test_the_run_can_say_which_shape_it_is_making():
     assert "1080×1920" in video_format.describe()
+
+
+# ── the frame is not the only thing that changes shape ──────────────────────
+
+@pytest.mark.parametrize("fmt,size,margin", [
+    ("short", 140, 600),
+    ("long", 58, 70),
+])
+def test_captions_follow_the_format(monkeypatch, fmt, size, margin):
+    """140px and MarginV 600 are right for a phone at arm's length with the
+    Shorts UI covering the bottom fifth. On a 1080-tall landscape frame the
+    same numbers are 13% of the height with the words halfway up the
+    picture."""
+    monkeypatch.setenv("RUFUS_FORMAT", fmt)
+    import audio_gen
+    importlib.reload(audio_gen)
+    assert audio_gen.FONTSIZE == size
+    assert audio_gen.MARGIN_V == margin
+
+
+def test_the_caption_is_a_sane_share_of_the_frame_in_both():
+    """The check that would have caught this by arithmetic instead of by
+    watching a video: a caption over a tenth of the frame height is a caption
+    that IS the video."""
+    for fmt in ("short", "long"):
+        p = video_format.profile(fmt)
+        share = p["caption_size"] / p["height"]
+        assert 0.04 <= share <= 0.09, (fmt, round(share, 3))
+
+
+def test_the_caption_sits_inside_the_frame_in_both():
+    for fmt in ("short", "long"):
+        p = video_format.profile(fmt)
+        assert p["caption_margin_v"] + p["caption_size"] < p["height"], fmt
+
+
+def test_an_insert_never_swallows_the_frame():
+    """460 of 1080 is 43% of the width — fine on a phone, and on a landscape
+    frame it would cover most of the shot it is meant to annotate."""
+    for fmt in ("short", "long"):
+        p = video_format.profile(fmt)
+        assert p["insert_w"] / p["width"] < 0.5, fmt

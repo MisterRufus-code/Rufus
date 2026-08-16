@@ -65,6 +65,14 @@ PROFILES: dict[str, dict] = {
         # qc_check.MIN_DUR / MAX_DUR: outside this, the render is broken.
         "qc_min_s": 10.0,
         "qc_max_s": 180.0,
+        # Burned-in captions. 140px on a 1920-tall frame is 7% of the height —
+        # big, because a Short is watched on a phone at arm's length and the
+        # words are half the format. MarginV 600 sits ~31% up: below the face
+        # zone, above the Shorts UI that covers the bottom fifth.
+        "caption_size": 140,
+        "caption_margin_v": 600,
+        # The word-synced insert cutaway, on a 1080-wide frame.
+        "insert_w": 460,
     },
     "long": {
         "id": "long",
@@ -92,6 +100,17 @@ PROFILES: dict[str, dict] = {
         "min_seg_s": 2.5,
         "qc_min_s": 240.0,
         "qc_max_s": 1500.0,
+        # NOT the Shorts numbers scaled — a different viewing situation. 140px
+        # on a 1080-tall frame would be 13% of the height, and long-form is
+        # watched further away on a bigger screen where the picture is the
+        # point and the caption is an aid. 58px is ~5.4%, the broadcast
+        # subtitle proportion. MarginV 70 puts it near the bottom edge, where
+        # there is no app UI to avoid and no reason to cover the frame.
+        "caption_size": 58,
+        "caption_margin_v": 70,
+        # Proportionally smaller on a wider frame: 460 of 1080 is 43% of the
+        # width and would swallow a landscape shot.
+        "insert_w": 520,
     },
 }
 

@@ -73,7 +73,7 @@ BAR_HEIGHT   = 14          # retention progress bar thickness (px)
 # WORD-SYNCED INSERT LAYER (see insert_director.py). Small pictures that pop in
 # on the second their phrase is spoken, over the beat clip and UNDER the
 # captions. Geometry only — which pictures and when is planned elsewhere.
-INSERT_W      = 460        # rendered width on a 1080-wide frame
+INSERT_W      = _vf.get("insert_w", 460)   # per-format; see video_format
 INSERT_MARGIN = 70         # gap from the frame edge
 INSERT_YS     = (300, 560, 430)   # cycled so consecutive inserts don't stack
 
@@ -153,8 +153,12 @@ _ABBREV_RE    = re.compile(
 
 FONT_NAME = "Anton"        # downloaded to assets/fonts/; Arial fallback if missing
 FONT_FILE = FONTS_DIR / "Anton-Regular.ttf"
-FONTSIZE  = 140            # larger = better mobile readability
-MARGIN_V  = 600            # ~31% from bottom: below the portrait face zone, above Shorts UI
+# CAPTIONS ARE PER-FORMAT, not per-pipeline. 140px and MarginV 600 are right
+# for a phone held at arm's length with the Shorts UI covering the bottom
+# fifth; on a 1080-tall landscape frame the same numbers are 13% of the height
+# with the words sitting halfway up the picture. See video_format.PROFILES.
+FONTSIZE  = _vf.get("caption_size", 140)
+MARGIN_V  = _vf.get("caption_margin_v", 600)
 
 # Hard ceiling for a single ffmpeg render pass — a hung/looping ffmpeg must
 # fail the attempt (and fall through to the simple pipeline), never freeze an
