@@ -9,9 +9,9 @@ picture. They describe it, the RTX 3090 renders it through the same ComfyUI
 stills workflow the video pipeline uses (config/stills_api.json), and the PNG
 lands somewhere the dashboard can hand straight to their phone.
 
-Landscape by default (1280x720) because that's YouTube's thumbnail frame — the
-video pipeline's own stills are 1080x1920 portrait, the wrong shape here. Pass
---portrait for a vertical image instead.
+Landscape by default (1280x720) because that's YouTube's thumbnail frame, which
+is not necessarily the video's — a Short renders 1080x1920, the wrong shape for
+a thumbnail. Pass --frame for an image at the active format's frame size.
 
 Deduplicated against recent output (video frames AND other thumbnails, one
 shared history — see generate_image()'s docstring): a near-duplicate gets one
@@ -48,7 +48,12 @@ import paths
 # YouTube's thumbnail frame: 1280x720 is the documented minimum-recommended
 # size and the 16:9 ratio every surface crops toward.
 THUMB_W, THUMB_H = 1280, 720
-PORTRAIT_W, PORTRAIT_H = 1080, 1920
+# The other offer: the shape of the video itself, so an image made here can be
+# dropped into a run. Called PORTRAIT_W/H and fixed at 1080×1920 while there
+# was only one format — on a long-form channel that option produced a vertical
+# image labelled "matches the video frame" that matched nothing.
+import video_format as _vf
+FRAME_W, FRAME_H = _vf.dimensions()
 
 # Cap for a browser-initiated render. The dashboard runs threaded=False, so a
 # request that blocks holds up EVERY other user — including the owner trying
@@ -242,16 +247,17 @@ def main() -> int:
     ap.add_argument("prompt", help="What the image should show")
     ap.add_argument("--out", "-o", help="Output PNG path (default: media_library/thumbnails/)")
     ap.add_argument("--seed", type=int, help="Reuse a seed to reproduce an image")
-    ap.add_argument("--portrait", action="store_true",
-                    help=f"Render {PORTRAIT_W}x{PORTRAIT_H} vertical instead of {THUMB_W}x{THUMB_H}")
-    ap.add_argument("--width", type=int, help="Explicit width (overrides --portrait)")
+    ap.add_argument("--portrait", "--frame", dest="frame", action="store_true",
+                    help=f"Render at the video frame {FRAME_W}x{FRAME_H} "
+                         f"instead of {THUMB_W}x{THUMB_H}")
+    ap.add_argument("--width", type=int, help="Explicit width (overrides --frame)")
     ap.add_argument("--height", type=int, help="Explicit height")
     ap.add_argument("--no-detail", action="store_true",
                     help="Skip the photographic detail suffix — use the prompt verbatim")
     args = ap.parse_args()
 
-    width  = args.width  or (PORTRAIT_W if args.portrait else THUMB_W)
-    height = args.height or (PORTRAIT_H if args.portrait else THUMB_H)
+    width  = args.width  or (FRAME_W if args.frame else THUMB_W)
+    height = args.height or (FRAME_H if args.frame else THUMB_H)
 
     path = generate_image(args.prompt, Path(args.out) if args.out else None,
                           width=width, height=height, seed=args.seed,

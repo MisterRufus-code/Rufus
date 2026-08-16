@@ -9,7 +9,7 @@ Runs on CPU or GPU. First run downloads the model (~2-6GB, cached to
 Activate with: RUFUS_VIDEO_SOURCE=diffusers
 
 Model options (set RUFUS_DIFFUSERS_MODEL):
-  sdxl-turbo   (default) — 4-step, fast, 1080×1920, no negative prompt
+  sdxl-turbo   (default) — 4-step, fast, no negative prompt
   sdxl         — 25-step, full quality, negative prompt supported
   flux-schnell — FLUX.1-schnell, best quality, needs 12GB+ VRAM
 
@@ -28,7 +28,15 @@ CONFIG_DIR = Path(__file__).parent.parent / "config"
 MEDIA_DIR  = Path(__file__).parent.parent / "media_library"
 CACHE_DIR  = MEDIA_DIR / "diffusers_cache"
 
-W, H          = 1080, 1920
+# The frame this run is making, from the active format profile — the size the
+# model is asked for AND the size the Ken Burns clip is written at, which here
+# are the same number because this backend generates straight to the output
+# size. Two literals until a second format existed: a long-form run selecting
+# RUFUS_VIDEO_SOURCE=diffusers would have generated portrait stills for a
+# landscape render, and qc_check would have failed the file at the last gate
+# for being the shape this module insisted on.
+import video_format as _vf
+W, H          = _vf.dimensions()
 KEN_BURNS_DUR = 8.0
 FPS           = 30
 

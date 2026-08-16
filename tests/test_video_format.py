@@ -164,3 +164,98 @@ def test_the_shorts_pixels_come_back_out_exactly(monkeypatch):
     assert (audio_gen.W, audio_gen.H) == (1080, 1920)
     assert audio_gen.FONTSIZE == 140 and audio_gen.MARGIN_V == 600
     assert audio_gen.MIN_SEG == 1.6
+
+
+# ── the backends that were still holding the old pair ────────────────────────
+#
+# audio_gen, Short.tsx, sd_client and qc_check were the four the search for
+# "1080" found first. These two are the ones it found last, and they are worse
+# in one way: they are ALTERNATIVE renderers, chosen by an env var, so a
+# long-form run that happened to pick either would have produced portrait
+# stills for a landscape render with every other module doing its job
+# correctly.
+
+@pytest.mark.parametrize("fmt,size", [("short", (1080, 1920)),
+                                      ("long",  (1920, 1080))])
+def test_diffusers_generates_at_the_format_size(monkeypatch, fmt, size):
+    """RUFUS_VIDEO_SOURCE=diffusers asks the model for W×H and writes the Ken
+    Burns clip at W×H — one pair used twice, so a stale literal here is a
+    portrait still AND a portrait clip."""
+    monkeypatch.setenv("RUFUS_FORMAT", fmt)
+    import diffusers_client
+    importlib.reload(diffusers_client)
+    assert (diffusers_client.W, diffusers_client.H) == size
+
+
+@pytest.mark.parametrize("fmt,size", [("short", (1080, 1920)),
+                                      ("long",  (1920, 1080))])
+def test_hyperframes_builds_the_page_at_the_format_size(monkeypatch, fmt, size):
+    """Here the number is not only a dimension — it is written into the prompt
+    in words, so a hard-coded pair instructs the model to build a 1080×1920
+    page for a 1920×1080 video and it will do exactly that."""
+    monkeypatch.setenv("RUFUS_FORMAT", fmt)
+    import hyperframes_client
+    importlib.reload(hyperframes_client)
+    assert (hyperframes_client.OUT_W, hyperframes_client.OUT_H) == size
+
+
+@pytest.mark.parametrize("fmt,size", [("short", (1080, 1920)),
+                                      ("long",  (1920, 1080))])
+def test_the_thumbnail_takes_the_video_shape(monkeypatch, fmt, size):
+    """thumbnail_gen RESIZES the extracted frame to this size without
+    preserving aspect, so a fixed portrait pair does not letterbox a long-form
+    thumbnail — it squeezes it, on the one image that decides the click."""
+    monkeypatch.setenv("RUFUS_FORMAT", fmt)
+    import thumbnail_gen
+    importlib.reload(thumbnail_gen)
+    assert (thumbnail_gen.THUMB_W, thumbnail_gen.THUMB_H) == size
+    # Whatever the format, the composed thumbnail clears YouTube's documented
+    # 1280×720 minimum on its long edge.
+    assert max(size) >= 1280
+
+
+def test_the_manual_image_tool_offers_the_real_frame(monkeypatch):
+    """The dashboard's second shape is captioned "video frame". A fixed
+    1080×1920 there made that caption a false statement on a long-form
+    channel — and YouTube's own thumbnail shape stays 1280×720 either way,
+    because that one is not the video's business."""
+    monkeypatch.setenv("RUFUS_FORMAT", "long")
+    import image_gen
+    importlib.reload(image_gen)
+    assert (image_gen.FRAME_W, image_gen.FRAME_H) == (1920, 1080)
+    assert (image_gen.THUMB_W, image_gen.THUMB_H) == (1280, 720)
+
+
+def test_no_module_still_writes_the_frame_size_down_itself():
+    """The sweep, as a test, so the eighth place cannot be added quietly.
+
+    Every module that needs the frame size imports it. This parses each script
+    and looks for an ASSIGNMENT holding both numbers — the exact shape all
+    seven original copies had (`W, H = 1080, 1920`). Parsing rather than
+    grepping is what makes it usable: the literals also appear in docstrings
+    and in UI labels, where they are prose, and a check that reports those
+    every time is a check people learn to ignore.
+
+    It found four on its first run, two of which were live defects.
+    """
+    import ast as _ast
+    scripts = Path(__file__).parent.parent / "scripts"
+    frame = {1080, 1920}
+    offenders = []
+    for py in sorted(scripts.glob("*.py")):
+        if py.name == "video_format.py":
+            continue
+        try:
+            tree = _ast.parse(py.read_text(encoding="utf-8"))
+        except SyntaxError:                     # not this test's business
+            continue
+        for node in _ast.walk(tree):
+            if not isinstance(node, (_ast.Assign, _ast.AnnAssign)) or node.value is None:
+                continue
+            nums = {v.value for v in _ast.walk(node.value)
+                    if isinstance(v, _ast.Constant) and isinstance(v.value, int)}
+            if frame <= nums:
+                offenders.append(f"{py.name}:{node.lineno}")
+    assert not offenders, ("the frame size is written down again in "
+                           + ", ".join(offenders)
+                           + " — import it from video_format instead")

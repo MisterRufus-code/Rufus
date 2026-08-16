@@ -1361,3 +1361,44 @@ def test_cli_defaults_to_stills_only():
     assert 'os.environ.setdefault("RUFUS_STILLS_ONLY", "1")' in main_block
     assert main_block.index('setdefault("RUFUS_STILLS_ONLY"') < \
            main_block.index("generate_clips("), "must be set BEFORE generating"
+
+
+# ── the template the format switch cannot reach ──────────────────────────────
+
+def test_a_matched_workflow_says_nothing(capsys):
+    """832×1472 into 1080×1920 discards ~0.5%. A warning here would fire on
+    every single frame of every normal run, which is the noise this repo has
+    twice had to walk back."""
+    c._crop_warned = False
+    loss = c._warn_if_mostly_cropped(832, 1472)
+    assert loss < 0.02
+    assert capsys.readouterr().out == ""
+
+
+def test_a_portrait_workflow_on_a_landscape_frame_is_loud(monkeypatch, capsys):
+    """The failure nothing downstream can see: the render succeeds, QC passes,
+    the file is exactly 1920×1080, and every picture in it is the middle
+    third of a portrait image with the heads cropped off."""
+    monkeypatch.setattr(c, "OUT_W", 1920)
+    monkeypatch.setattr(c, "OUT_H", 1080)
+    c._crop_warned = False
+    loss = c._warn_if_mostly_cropped(832, 1472)
+    assert loss > 0.6
+    out = capsys.readouterr().out
+    assert "832×1472" in out and "1920×1080" in out
+    assert "stills_api.json" in out, "a warning that does not name the fix"
+
+
+def test_the_crop_warning_is_said_once_not_per_frame(monkeypatch, capsys):
+    """A hundred and fifty identical lines is not a louder warning."""
+    monkeypatch.setattr(c, "OUT_W", 1920)
+    monkeypatch.setattr(c, "OUT_H", 1080)
+    c._crop_warned = False
+    for _ in range(5):
+        c._warn_if_mostly_cropped(832, 1472)
+    assert capsys.readouterr().out.count("cropped away") == 1
+
+
+def test_a_zero_sized_image_does_not_divide_by_zero():
+    c._crop_warned = False
+    assert c._warn_if_mostly_cropped(0, 0) == 0.0

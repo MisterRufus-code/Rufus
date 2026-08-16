@@ -46,6 +46,7 @@ import uuid
 from pathlib import Path
 
 import paths
+import video_format as _vf
 
 import requests
 
@@ -61,6 +62,47 @@ from sd_client import (
     OUT_W,
     OUT_H,
 )
+
+
+# How much of the model's picture may be thrown away by the cover-crop before
+# it stops being a fit and starts being a different composition. The matched
+# case discards ~0.5%; a portrait template rendered for a landscape frame
+# discards about two thirds, taking the head off every shot the storyboard
+# framed.
+_MAX_CROP_LOSS = 0.15
+_crop_warned = False
+
+
+def _warn_if_mostly_cropped(w: int, h: int) -> float:
+    """Fraction of the model's frame the cover-crop will discard. Warns once.
+
+    THE TEMPLATE IS THE OWNER'S, NOT THE PROFILE'S. config/stills_api.json is
+    exported from ComfyUI and this module never rewrites its size — that is the
+    template-only contract, and it is the right one: the workflow's latent size
+    is tuned to the checkpoint it was exported with. But it means the format
+    switch cannot reach it. Ask for long-form with a portrait stills workflow
+    and everything still "works": the render succeeds, QC passes, the file is
+    1920×1080, and every picture in it is the middle third of a portrait image.
+
+    Nothing downstream can see that, because by the time anything looks, the
+    frame is the right shape. So this says it at the only moment it is visible
+    — once per run, naming the fix — rather than resizing the latent behind the
+    owner's back or failing a render that is otherwise fine.
+    """
+    global _crop_warned
+    if w <= 0 or h <= 0:
+        return 0.0
+    scale = max(OUT_W / w, OUT_H / h)
+    kept = (OUT_W * OUT_H) / float(round(w * scale) * round(h * scale))
+    loss = max(0.0, 1.0 - kept)
+    if loss > _MAX_CROP_LOSS and not _crop_warned:
+        _crop_warned = True
+        sw, sh = _vf.still_dimensions()
+        print(f"[comfy] ⚠ the stills workflow renders {w}×{h} but this run's "
+              f"frame is {OUT_W}×{OUT_H} — {loss * 100:.0f}% of every picture "
+              f"is cropped away to fit. Re-export config/stills_api.json with "
+              f"the latent at {sw}×{sh} for {_vf.name()}.")
+    return loss
 
 
 def _fit_to_frame(img_bytes: bytes, out_path: Path) -> bool:
@@ -83,6 +125,7 @@ def _fit_to_frame(img_bytes: bytes, out_path: Path) -> bool:
 
     img  = Image.open(_io.BytesIO(img_bytes)).convert("RGB")
     w, h = img.size
+    _warn_if_mostly_cropped(w, h)
     scale = max(OUT_W / w, OUT_H / h)
     new_w, new_h = round(w * scale), round(h * scale)
     img = img.resize((new_w, new_h), Image.LANCZOS)

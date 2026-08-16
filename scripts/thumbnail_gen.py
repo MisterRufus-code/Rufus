@@ -46,7 +46,15 @@ FONT_CANDIDATES = [
     "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
 ]
 
-THUMB_W, THUMB_H = 1080, 1920
+# The thumbnail is the video's own frame with a title band on it, and line 234
+# RESIZES the extracted frame to this size without preserving aspect. Hard-coded
+# portrait, a long-form thumbnail would have been a 1920×1080 frame squeezed
+# into 1080×1920 — every face in it a third as wide as it was drawn, on the one
+# image that decides whether anybody clicks. Taking the frame size means the
+# ratio always matches the source, and 1920×1080 clears YouTube's 1280×720
+# minimum with room to spare.
+import video_format as _vf
+THUMB_W, THUMB_H = _vf.dimensions()
 FONT_SIZE        = 110    # readable at 300px preview width on YouTube
 MAX_LINE_CHARS   = 22     # wrap at ~22 chars for 2-line readability
 

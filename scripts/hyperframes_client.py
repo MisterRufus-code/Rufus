@@ -38,7 +38,12 @@ CONFIG_DIR = Path(__file__).parent.parent / "config"
 KEYS_FILE  = CONFIG_DIR / "keys.json"
 TMP_DIR    = Path(__file__).parent.parent / "media_library" / "temp" / "hf"
 
-OUT_W, OUT_H = 1080, 1920
+# The scene size handed to the HTML renderer, from the active format profile.
+# It is written into the prompt AND into the fallback scene's own CSS, so a
+# hard-coded pair here does not merely mis-size the output — it tells the model
+# in words to build a 1080×1920 page for a 1920×1080 video.
+import video_format as _vf
+OUT_W, OUT_H = _vf.dimensions()
 MODEL        = "gpt-4o-mini"
 MIN_BYTES    = 50_000
 

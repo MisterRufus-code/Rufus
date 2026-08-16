@@ -1920,15 +1920,16 @@ def thumbnails_page():
     {_msg_banner()}
     <p class="muted">Renders on the owner's RTX 3090 through the same image
        model the videos use. Takes a few seconds — the page waits for it.
-       1280×720 is YouTube's thumbnail shape; portrait matches the video frame.</p>
+       1280×720 is YouTube's thumbnail shape; the other option matches the
+       frame the next run renders at.</p>
     <form method="post" action="/thumbnails/generate">
       <label for="tp">Describe the image</label>
       <input class="field" type="text" id="tp" name="prompt" required
              placeholder="a cracked hourglass spilling gold coins across a desk">
       <label for="tshape">Shape</label>
       <select class="field" id="tshape" name="shape">
-        <option value="landscape">Landscape 1280×720 (YouTube thumbnail)</option>
-        <option value="portrait">Portrait 1080×1920 (video frame)</option>
+        <option value="landscape">Landscape {image_gen.THUMB_W}×{image_gen.THUMB_H} (YouTube thumbnail)</option>
+        <option value="frame">{image_gen.FRAME_W}×{image_gen.FRAME_H} (video frame)</option>
       </select>
       <button class="btn save" type="submit">Generate</button>
     </form>
@@ -1956,8 +1957,11 @@ def thumbnails_generate():
             f"A video run is using the GPU ({', '.join(busy)}). "
             f"Thumbnails have to wait for it to finish — try again shortly."))
 
-    portrait = request.form.get("shape") == "portrait"
-    w, h = ((image_gen.PORTRAIT_W, image_gen.PORTRAIT_H) if portrait
+    # "frame" is the video's own shape, whatever format the next run is.
+    # "portrait" is the value the form used to send and older bookmarks and
+    # any open tab still do, so it keeps meaning the same thing.
+    want_frame = request.form.get("shape") in ("frame", "portrait")
+    w, h = ((image_gen.FRAME_W, image_gen.FRAME_H) if want_frame
             else (image_gen.THUMB_W, image_gen.THUMB_H))
     try:
         path = image_gen.generate_image(prompt, width=w, height=h,

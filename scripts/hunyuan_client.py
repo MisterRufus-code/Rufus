@@ -190,7 +190,8 @@ def _submit_verbose(graph: dict, client_id: str) -> str | None:
 
 def animate_image(png_path: Path, out_path: Path, duration: float = 8.0,
                   idx: int = 0, prompt: str = "") -> bool:
-    """Wan-contract i2v: PNG in → 1080×1920 mp4 at out_path. False = the
+    """Wan-contract i2v: PNG in → mp4 at out_path, at the run's frame size
+    (the fit happens downstream, same as every other motion engine). False = the
     caller falls through to the next engine. Faces are WELCOME here — this
     engine exists to animate the shots Wan skips."""
     tpl = comfy_template.load_template(_template_path())
