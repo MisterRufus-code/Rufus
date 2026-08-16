@@ -439,7 +439,12 @@ def write(seed: dict | None, analysis: str, niche: str,
         print(f"[longform] only {len(body)} sections survived — falling back")
         return None
 
-    script = "\n".join([_opening(outline)] + body)
+    # BLANK LINES BETWEEN SECTIONS, not single newlines. They are paragraphs,
+    # and the TTS engines treat them as such: Kokoro chunks on blank lines and
+    # puts a real breath between chunks, so a single-newline join would hand it
+    # one 1,300-word block to read flat, with no pause at any of the seams the
+    # outline worked to create. The section breaks ARE the pacing.
+    script = "\n\n".join([_opening(outline)] + body)
     words = len(script.split())
 
     dup = repeated_across_sections(body)

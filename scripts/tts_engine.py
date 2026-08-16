@@ -330,6 +330,43 @@ def _eleven_key() -> str:
     return key
 
 
+# ElevenLabs refuses a single request past this many characters. A 40-second
+# Short is ~650 and never came near it; a nine-minute script is ~7,500 and
+# would have been rejected outright — the format change turning a working
+# voice into a failed render, on the one stage with no fallback of its own.
+ELEVEN_MAX_CHARS = 4800
+
+
+def _paragraph_batches(script: str, limit: int) -> list[str]:
+    """Split on paragraph breaks, packing as much into each request as fits.
+
+    ON PARAGRAPHS, never mid-sentence. A join at a sentence boundary is
+    inaudible; a join mid-clause is a stutter the listener hears and cannot
+    explain. The long-form writer already separates its sections with blank
+    lines, so the seams this cuts on are the ones the outline chose.
+    """
+    paras = [p.strip() for p in script.split("\n\n") if p.strip()]
+    if not paras:
+        return [script]
+    out, cur = [], ""
+    for para in paras:
+        if cur and len(cur) + len(para) + 2 > limit:
+            out.append(cur)
+            cur = para
+        elif cur:
+            cur = f"{cur}\n\n{para}"
+        else:
+            cur = para
+        # A single paragraph over the limit still has to go somewhere; send it
+        # and let the API decide rather than cutting a sentence in half.
+        while len(cur) > limit and "\n\n" not in cur:
+            out.append(cur[:limit])
+            cur = cur[limit:]
+    if cur:
+        out.append(cur)
+    return out
+
+
 def _elevenlabs(script: str, out_path: Path) -> None:
     """Synthesize with ElevenLabs → mp3 written directly to out_path.
 
@@ -337,6 +374,41 @@ def _elevenlabs(script: str, out_path: Path) -> None:
     expressive delivery (pauses, emphasis), high similarity keeps the timbre
     consistent across a video, style adds intonation. speaker_boost adds presence.
     """
+    import httpx
+
+    key = _eleven_key()
+    if not key:
+        raise RuntimeError("no ElevenLabs key in config/keys.json")
+
+    # LONGER THAN ONE REQUEST ALLOWS? Say it in pieces and glue the mp3s.
+    # mp3 frames concatenate byte-wise, which is why every simple "cat *.mp3"
+    # works — no re-encode, no quality loss, and the joins land on paragraph
+    # breaks the writer already chose.
+    batches = _paragraph_batches(script, ELEVEN_MAX_CHARS)
+    if len(batches) > 1:
+        print(f"[tts] {len(script)} characters — sending as {len(batches)} "
+              f"requests, joined at paragraph breaks")
+        parts = []
+        try:
+            for i, part in enumerate(batches):
+                piece = out_path.with_suffix(f".part{i}.mp3")
+                _elevenlabs_once(part, piece)
+                parts.append(piece)
+            with open(out_path, "wb") as f:
+                for piece in parts:
+                    f.write(piece.read_bytes())
+        finally:
+            for piece in parts:
+                try:
+                    piece.unlink()
+                except OSError:
+                    pass
+        return
+    _elevenlabs_once(script, out_path)
+
+
+def _elevenlabs_once(script: str, out_path: Path) -> None:
+    """One request. Raises on any non-200, with the cause distilled."""
     import httpx
 
     key = _eleven_key()
