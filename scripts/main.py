@@ -2029,6 +2029,19 @@ def _run_or_notify(niche: str | None, **kwargs) -> None:
 
 
 if __name__ == "__main__":
+    # THE DASHBOARD'S SETTINGS, ON EVERY LAUNCH PATH. Applied here rather than
+    # in one launcher because there are five ways a run starts (run.bat,
+    # run_scheduled.bat, the dashboard, a Task Scheduler entry, a bare python
+    # scripts/main.py) and a settings page obeyed by some of them is worse
+    # than none: it teaches the owner to trust a form that is sometimes
+    # ignored. Anything already in the environment still wins — see
+    # settings_store for why that is the right way round.
+    try:
+        import settings_store
+        settings_store.apply()
+    except Exception as e:
+        print(f"[settings] not applied (non-fatal): {e}")
+
     parser = argparse.ArgumentParser(description="Rufus pipeline runner")
     parser.add_argument("--skip-upload", action="store_true", help="Render only, skip YouTube upload")
     parser.add_argument("--niche",       type=str,            help="Override niche (e.g. finance, motivation, mindset)")

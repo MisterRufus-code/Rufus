@@ -1,0 +1,84 @@
+#!/usr/bin/env python3
+"""
+settings_store.py — the settings the dashboard saves, read by every launch path.
+
+THE GAP THIS CLOSES, and it is a bad one. config/dashboard_settings.json was
+written by the settings page and read by exactly one caller: the dashboard's
+own _launch_run. So the owner could set the style, the beat count, the Discord
+webhook and the sound levels in a form built for the purpose, then start a
+video with run.bat — the way every video on this channel has actually been
+started — and none of it applied. The dashboard's own help text admitted as
+much in a parenthesis, which is not a fix, it is a confession.
+
+The instruction was "the whole thing is managed from the dashboard, not run
+every time from the software". A settings page that only three of five launch
+paths obey does not do that.
+
+PRECEDENCE, and why this way round. A variable already in the environment
+wins; saved settings fill in what is missing. So:
+
+    the dashboard form   = the channel's defaults, set once, obeyed everywhere
+    $env:X="Y" at a prompt = an override for THIS run
+
+which is the way round a person expects: what you type now beats what you
+saved last week. It also means run_dashboard.bat's own `set RUFUS_STILLS_ONLY`
+still works, and a settings file cannot silently countermand a deliberate
+one-off experiment.
+
+CONTRACT: never raises, never overwrites, and says what it did. A settings
+file that quietly changed a run would be worse than no settings file — this
+prints the keys it applied, so a surprising run has its cause in the log.
+"""
+
+import json
+import os
+from pathlib import Path
+
+SETTINGS_FILE = Path(__file__).parent.parent / "config" / "dashboard_settings.json"
+
+# Never let a saved setting reach into the process environment for anything
+# outside this pipeline's own namespace. The file is written by a form, and a
+# form that could set PATH would be a form that could run anything.
+_ALLOWED_PREFIXES = ("RUFUS_", "SD_CLIPS", "RENDER_TIMEOUT")
+
+
+def load() -> dict:
+    """The saved settings, or {} if there are none or the file is unreadable."""
+    try:
+        data = json.loads(SETTINGS_FILE.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, ValueError):
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    return {str(k): str(v) for k, v in data.items()
+            if v not in (None, "") and str(k).startswith(_ALLOWED_PREFIXES)}
+
+
+def apply(env: dict | None = None, *, announce: bool = True) -> list[str]:
+    """Fill in the settings the environment does not already set.
+
+    Returns the keys applied. `env` defaults to os.environ, so the ordinary
+    call mutates the real process environment — which is the point: every
+    module downstream reads its configuration from there, and this is the one
+    place that has to know a settings file exists at all.
+    """
+    target = os.environ if env is None else env
+    saved = load()
+    if not saved:
+        return []
+    applied = []
+    for key, value in sorted(saved.items()):
+        if target.get(key) in (None, ""):
+            target[key] = value
+            applied.append(key)
+    if applied and announce:
+        shown = ", ".join(f"{k}={saved[k]}" for k in applied
+                          if "WEBHOOK" not in k and "TOKEN" not in k)
+        hidden = sum(1 for k in applied if "WEBHOOK" in k or "TOKEN" in k)
+        note = shown + (f" (+{hidden} secret)" if hidden else "")
+        print(f"[settings] from the dashboard: {note}")
+    skipped = [k for k in saved if k not in applied]
+    if skipped and announce:
+        print(f"[settings] the environment already sets {', '.join(sorted(skipped))} "
+              f"— those win for this run")
+    return applied

@@ -513,6 +513,12 @@ SETTINGS_KINDS = {key: kind for key, _label, kind, _help in SETTINGS_SCHEMA}
 
 
 def _load_settings() -> dict:
+    """What the settings page has saved.
+
+    Reads the file directly rather than going through settings_store.load(),
+    because THIS is the editor: it must show a key the loader would filter out
+    (so the owner can see and delete it) rather than hiding it. settings_store
+    is the reader every run uses; the difference is deliberate."""
     try:
         return json.loads(SETTINGS_FILE.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError, ValueError):
@@ -1961,9 +1967,11 @@ def settings():
     a workflow — it is seven chances to leave a stale value from an earlier
     experiment somewhere no log will mention.
 
-    Applies immediately to runs launched FROM this dashboard. A Task Scheduler
-    run needs run_scheduled.bat pointed at the same file; env vars do not
-    propagate between independent processes.
+    Applies to EVERY launch path — this dashboard, run.bat, run_scheduled.bat,
+    a Task Scheduler entry, a bare `python scripts/main.py`. main.py reads the
+    same file at startup (see settings_store), because a settings page obeyed
+    by some launchers and not others is worse than none: it teaches the owner
+    to trust a form that is sometimes ignored.
     """
     auth.require("settings")
     if request.args.get("reset") == "1":
@@ -1995,9 +2003,11 @@ def settings():
     <a class="back" href="/">← back</a>
     <h2 style="margin-top:14px">Settings</h2>
     {_msg_banner()}
-    <p class="muted">Everything here applies to runs launched from THIS
-       dashboard — Run a video now, Queue a topic, Trending. An empty field
-       means "don't override", so the pipeline's own default wins.
+    <p class="muted">These are the channel's defaults, and every way of
+       starting a run obeys them — this page, <code>run.bat</code>, the
+       scheduled task. An empty field means "don't override", so the
+       pipeline's own default wins; and a variable you set in a terminal beats
+       what is saved here, for that run only.
        <strong>{n_set}</strong> of {len(SETTINGS_KINDS)} currently set.</p>
     <form method="post" action="/settings/save">
       {sections}
