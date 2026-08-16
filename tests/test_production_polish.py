@@ -224,11 +224,13 @@ def test_audio_simple_with_music_uses_static_volume():
 def test_sfx_cmds_use_lavfi_synthesis():
     from pathlib import Path
     hit    = _sfx_cmd("hit",    Path("/tmp/hit.wav"))
-    whoosh = _sfx_cmd("whoosh", Path("/tmp/whoosh.wav"))
+    bubble = _sfx_cmd("bubble", Path("/tmp/bubble.wav"))
     riser  = _sfx_cmd("riser",  Path("/tmp/riser.wav"))
     assert "sine=frequency=52:duration=0.45" in " ".join(hit)
-    assert "anoisesrc=colour=pink" in " ".join(whoosh)
+    # aevalsrc, not sine: the RISE is the sound, and sine holds one frequency.
+    assert "aevalsrc" in " ".join(bubble)
     assert "anoisesrc=colour=white" in " ".join(riser)
+    assert _sfx_cmd("whoosh", Path("/tmp/x.wav")) is None, "the whoosh is gone"
     assert _sfx_cmd("nope", Path("/tmp/x.wav")) is None
 
 

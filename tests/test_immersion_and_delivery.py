@@ -86,7 +86,7 @@ def test_sfx_master_switch_can_be_disabled(monkeypatch):
 
 
 def test_hit_and_riser_gains_are_env_tunable(monkeypatch):
-    """Whoosh already had this lever (RUFUS_WHOOSH_GAIN); hit and riser must
+    """The cut sound already had this lever (RUFUS_BUBBLE_GAIN); hit and riser must
     have the same shape of escape hatch now."""
     monkeypatch.setenv("RUFUS_HIT_GAIN", "0.1")
     monkeypatch.setenv("RUFUS_RISER_GAIN", "0.05")
@@ -113,14 +113,14 @@ def test_hit_and_riser_defaults_were_actually_lowered():
     assert audio_gen.SFX_RISER_GAIN < 0.55
 
 
-def test_whoosh_still_the_quietest_layer():
+def test_the_cut_sound_is_still_the_quietest_layer():
     """Whoosh plays up to 9x/video vs hit/riser's once each — it must stay
     the quietest of the three regardless of where the other two land."""
     import importlib
     import audio_gen
     importlib.reload(audio_gen)
-    assert audio_gen.SFX_WHOOSH_GAIN < audio_gen.SFX_HIT_GAIN
-    assert audio_gen.SFX_WHOOSH_GAIN < audio_gen.SFX_RISER_GAIN
+    assert audio_gen.SFX_BUBBLE_GAIN < audio_gen.SFX_HIT_GAIN
+    assert audio_gen.SFX_BUBBLE_GAIN < audio_gen.SFX_RISER_GAIN
 
 
 def test_sfx_disabled_skips_ensure_sfx_entirely(monkeypatch, tmp_path):

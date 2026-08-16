@@ -29,13 +29,13 @@ import sfx_gen  # noqa: E402
 
 # ── the pop ──────────────────────────────────────────────────────────────────
 
-def test_the_insert_sound_is_not_the_whoosh():
-    """A whoosh is a TRANSITION — "we are moving from here to there" — which is
+def test_the_insert_sound_is_not_the_cut_sound():
+    """The cut sound is a TRANSITION — "we are moving from here to there" — which is
     right for a scene cut and wrong for an object landing on top of a scene
-    that has not changed. Twenty whooshes in forty seconds is traffic noise."""
+    that has not changed. Twenty of them in forty seconds is traffic noise."""
     cmd = sfx_gen._sfx_cmd("pop", Path("/tmp/x.wav"))
     assert cmd is not None
-    assert sfx_gen._sfx_cmd("whoosh", Path("/tmp/x.wav")) != cmd
+    assert sfx_gen._sfx_cmd("bubble", Path("/tmp/x.wav")) != cmd
 
 
 def test_the_pop_is_short_enough_not_to_smear():
@@ -53,13 +53,13 @@ def test_a_box_that_cannot_synthesize_the_pop_keeps_its_other_sounds(
     feature the owner is not using would be a bad trade — and the original
     all-or-nothing rule would have done exactly that."""
     monkeypatch.setattr(sfx_gen, "SFX_DIR", tmp_path)
-    for name in ("hit", "whoosh", "riser"):          # already cached
+    for name in ("hit", "bubble", "riser"):          # already cached
         (tmp_path / f"{name}.wav").write_bytes(b"\0" * (sfx_gen.MIN_BYTES + 1))
     monkeypatch.setattr(sfx_gen, "_sfx_cmd",
                         lambda name, out: None if name == "pop" else [])
 
     got = sfx_gen.ensure_sfx()
-    assert {"hit", "whoosh", "riser"} <= set(got)
+    assert {"hit", "bubble", "riser"} <= set(got)
     assert "pop" not in got
 
 

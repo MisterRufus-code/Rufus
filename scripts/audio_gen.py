@@ -4,7 +4,7 @@
 Changes from v3.0 — "cinematic edit" upgrade:
 - Cuts snap to SENTENCE BOUNDARIES from Whisper word timestamps (editor-grade
   pacing) with a short punchy first cut (~2-4s) for the hook pattern-interrupt.
-- Sound design: synthesized SFX layer (sub-bass hit on the hook, whoosh on
+- Sound design: synthesized SFX layer (sub-bass hit on the hook, bubble on
   every cut, riser into the final beat) — see sfx_gen.py, zero APIs.
 - Music is DUCKED DYNAMICALLY under the voice via sidechaincompress (breathes
   back up in speech gaps) instead of a fixed low volume.
@@ -73,13 +73,13 @@ INSERT_W      = 460        # rendered width on a 1080-wide frame
 INSERT_MARGIN = 70         # gap from the frame edge
 INSERT_YS     = (300, 560, 430)   # cycled so consecutive inserts don't stack
 
-# RUFUS_SFX=0 drops the whole synthesized layer (hit/whoosh/riser) — the
+# RUFUS_SFX=0 drops the whole synthesized layer (hit/bubble/riser) — the
 # lever for "these effects don't belong on this channel" without touching
 # three separate gain values. Default stays on for anyone who hasn't
 # formed an opinion either way.
 SFX_ENABLED = os.environ.get("RUFUS_SFX", "1").strip().lower() not in ("0", "false", "no", "off")
 
-# SFX layer gains (relative, 0-1). whoosh plays on EVERY cut (up to 9x per
+# SFX layer gains (relative, 0-1). The cut sound plays on EVERY cut (up to 23x per
 # video) so it went through five rounds of channel-owner feedback pushing it
 # down to near-inaudible — hit and riser each play only ONCE per video and
 # were never tuned the same way, on the (wrong) assumption that "once" meant
@@ -90,7 +90,36 @@ SFX_ENABLED = os.environ.get("RUFUS_SFX", "1").strip().lower() not in ("0", "fal
 # all three env-tunable the same way, so any future adjustment (including
 # "0" on an individual layer) needs no code change.
 SFX_HIT_GAIN    = float(os.environ.get("RUFUS_HIT_GAIN", "0.45"))     # sub-bass hit on the hook (once, 0.03s in)
-SFX_WHOOSH_GAIN = float(os.environ.get("RUFUS_WHOOSH_GAIN", "0.02"))  # transition swoosh into each cut
+
+
+def _bubble_gain() -> float:
+    """Gain for the cut sound, honouring the old whoosh variable out loud.
+
+    The whoosh it replaces sat at 0.02 — five rounds of owner feedback pushed
+    it to near-inaudible, which was right for a sheet of filtered noise playing
+    on every cut. A bubble is a different animal: one short rounded tone, the
+    same drawing style as the pictures, and at 0.02 it would simply not be
+    there. 0.05 is felt without stepping on the narration.
+
+    RUFUS_WHOOSH_GAIN still works, because someone who tuned that number is
+    tuning THIS layer, and silently ignoring their setting would be the worst
+    of both. It says so when it does.
+    """
+    raw = os.environ.get("RUFUS_BUBBLE_GAIN", "").strip()
+    if not raw:
+        legacy = os.environ.get("RUFUS_WHOOSH_GAIN", "").strip()
+        if legacy:
+            print(f"[sfx] RUFUS_WHOOSH_GAIN={legacy} — the whoosh is gone; "
+                  f"using it for the bubble (RUFUS_BUBBLE_GAIN renames it)")
+            raw = legacy
+    try:
+        return float(raw) if raw else 0.05
+    except ValueError:
+        print(f"[sfx] bubble gain {raw!r} is not a number — using 0.05")
+        return 0.05
+
+
+SFX_BUBBLE_GAIN = _bubble_gain()   # bubble into each cut
 SFX_RISER_GAIN  = float(os.environ.get("RUFUS_RISER_GAIN", "0.28"))   # riser leading into the final beat (once)
 
 # Cut planning
@@ -105,7 +134,7 @@ GREEN = "&H0000FF00"
 _HIGHLIGHT_RE = re.compile(r'[\d$%]')
 _SENT_END_RE  = re.compile(r'[.!?…]["\')\]]*$')
 # Words whose trailing period is an abbreviation, not a sentence end — without
-# this guard, "the U.S. dollar" put a scene cut + whoosh SFX mid-sentence.
+# this guard, "the U.S. dollar" put a scene cut + cut SFX mid-sentence.
 _ABBREV_RE    = re.compile(
     r'^(mr|mrs|ms|dr|st|vs|etc|inc|co|jr|sr|prof|gen|col|sgt|no'
     r'|[a-z](\.[a-z])+)\.$', re.IGNORECASE)
@@ -525,7 +554,7 @@ def _tts(script: str, mp3_path: Path, tones: list[str] | None = None) -> None:
 def _sentence_ends(segments) -> list[float]:
     """Timestamps where a spoken sentence ends (word text ends with . ! ? …).
     Abbreviations ('U.S.', 'Mr.', 'vs.') are excluded — their periods were
-    counted as sentence ends, landing scene cuts and whoosh SFX mid-sentence."""
+    counted as sentence ends, landing scene cuts and cut SFX mid-sentence."""
     ends = []
     for seg in segments:
         for w in seg.words:
@@ -1179,7 +1208,7 @@ def render(script: str, bg_paths: "Path | list[Path]", out_dir: Path,
         fonts_esc   = _ffmpeg_filter_path_escape(FONTS_DIR).replace("'", "\\'")
         has_music   = music_path is not None and Path(music_path).exists()
 
-        # SFX layer: hit on the hook, whoosh leading into every cut, riser into
+        # SFX layer: hit on the hook, bubble leading into every cut, riser into
         # the final beat. Synthesized locally — skipped cleanly if unavailable,
         # or entirely opted out of via RUFUS_SFX=0.
         sfx = {}
@@ -1191,7 +1220,7 @@ def render(script: str, bg_paths: "Path | list[Path]", out_dir: Path,
         sfx_files:  list[Path] = []
         sfx_events: list[tuple[float, float]] = []
         # Each effect is weighted by the tone of the beat it introduces, so the
-        # riser into a revelation is audible and a whoosh does not compete with
+        # riser into a revelation is audible and a bubble does not compete with
         # a resolution beat's closing line. Without tones every weight is 1.0
         # and these are the exact gains the mix used before.
         def _w(beat_index: int) -> float:
@@ -1204,8 +1233,8 @@ def render(script: str, bg_paths: "Path | list[Path]", out_dir: Path,
             sfx_files.append(sfx["hit"])
             sfx_events.append((0.03, SFX_HIT_GAIN * _w(0)))
             for k, b in enumerate(boundaries):
-                sfx_files.append(sfx["whoosh"])
-                sfx_events.append((max(0.0, b - 0.18), SFX_WHOOSH_GAIN * _w(k + 1)))
+                sfx_files.append(sfx["bubble"])
+                sfx_events.append((max(0.0, b - 0.18), SFX_BUBBLE_GAIN * _w(k + 1)))
             if boundaries:
                 riser_at = max(0.5, boundaries[-1] - 1.25)
                 sfx_files.append(sfx["riser"])

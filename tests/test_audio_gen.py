@@ -128,7 +128,7 @@ def test_cluster_words_enforces_minimum_duration():
 
 
 def test_sentence_ends_skips_abbreviations():
-    """'the U.S. dollar' was counted as a sentence end — scene cuts and whoosh
+    """'the U.S. dollar' was counted as a sentence end — scene cuts and cut
     SFX landed mid-sentence. Abbreviation periods must not count."""
     import audio_gen as ag
     segs = _fake_segments([
@@ -143,26 +143,47 @@ def test_sentence_ends_skips_abbreviations():
     assert 3.0 in ends
 
 
-# ── Whoosh gain (repeated channel-owner feedback: quieter every time) ─────────
+# ── Cut-sound gain ───────────────────────────────────────────────────────────
 
-def test_whoosh_gain_default_near_subliminal(monkeypatch):
-    """Default must stay at the latest requested level (0.02) — it plays on
-    every cut (~9x/video) so any audible level compounds fast."""
+def test_bubble_gain_default_is_audible_but_small(monkeypatch):
+    """The whoosh this replaces sat at 0.02 after five rounds of feedback,
+    which was right for a sheet of filtered noise on every cut. A bubble is one
+    short rounded tone, and at 0.02 it would not be there at all — the owner
+    asked for the sound, not for a placeholder. It still plays on every cut
+    (23x in a 38-second video), so it stays well under hit and riser."""
     import importlib
     import audio_gen as ag
+    monkeypatch.delenv("RUFUS_BUBBLE_GAIN", raising=False)
     monkeypatch.delenv("RUFUS_WHOOSH_GAIN", raising=False)
     importlib.reload(ag)
-    assert ag.SFX_WHOOSH_GAIN == pytest.approx(0.02)
+    assert ag.SFX_BUBBLE_GAIN == pytest.approx(0.05)
     importlib.reload(ag)
 
 
-def test_whoosh_gain_env_override(monkeypatch):
+def test_bubble_gain_env_override(monkeypatch):
     import importlib
     import audio_gen as ag
-    monkeypatch.setenv("RUFUS_WHOOSH_GAIN", "0")
+    monkeypatch.setenv("RUFUS_BUBBLE_GAIN", "0")
     importlib.reload(ag)
     try:
-        assert ag.SFX_WHOOSH_GAIN == 0.0
+        assert ag.SFX_BUBBLE_GAIN == 0.0
+    finally:
+        monkeypatch.delenv("RUFUS_BUBBLE_GAIN", raising=False)
+        importlib.reload(ag)
+
+
+def test_the_old_whoosh_variable_still_works_and_says_so(monkeypatch, capsys):
+    """Someone who tuned RUFUS_WHOOSH_GAIN is tuning THIS layer. Ignoring
+    their setting silently would be the worst of both — so it is honoured, and
+    announced."""
+    import importlib
+    import audio_gen as ag
+    monkeypatch.delenv("RUFUS_BUBBLE_GAIN", raising=False)
+    monkeypatch.setenv("RUFUS_WHOOSH_GAIN", "0.11")
+    try:
+        importlib.reload(ag)
+        assert ag.SFX_BUBBLE_GAIN == pytest.approx(0.11)
+        assert "the whoosh is gone" in capsys.readouterr().out
     finally:
         monkeypatch.delenv("RUFUS_WHOOSH_GAIN", raising=False)
         importlib.reload(ag)

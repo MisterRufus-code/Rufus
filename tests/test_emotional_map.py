@@ -268,11 +268,11 @@ def test_a_none_plan_is_cached_too(monkeypatch):
 # ------------------------------------------------------------- sfx weighting
 
 def test_sfx_gain_is_weighted_by_the_beat_it_introduces():
-    """The riser into a revelation should be audible; a whoosh should not step
+    """The riser into a revelation should be audible; a bubble should not step
     on a resolution beat's closing line."""
     import audio_gen
 
-    base = audio_gen.SFX_WHOOSH_GAIN
+    base = audio_gen.SFX_BUBBLE_GAIN
     assert em.sfx_weight("revelation") * base > base
     assert em.sfx_weight("resolution") * base < base
 
