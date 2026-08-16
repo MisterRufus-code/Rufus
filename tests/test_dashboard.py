@@ -699,7 +699,13 @@ def test_rejection_category_counts_aggregates_correctly(client):
     assert 99.0 <= total_pct <= 101.0   # rounding tolerance
 
 
-def test_rejection_category_counts_empty():
+def test_rejection_category_counts_empty(client):
+    """`client` for the DATABASE, not the HTTP client — it points DB_FILE at a
+    tmp_path. Without it this asserted that the real rufus.db has never
+    recorded a rejection, which is true exactly once: on a fresh checkout, on
+    the first run of the suite. Any test elsewhere that writes an unisolated
+    attempt row, or simply running pytest twice, turned it red for a reason
+    that had nothing to do with the code under test."""
     assert dashboard._rejection_category_counts() == []
 
 

@@ -101,6 +101,83 @@ def _judge(prompt: str, *, phase: str = None, niche: str = None,
         return True, reason
 
 
+import re
+
+# ── groundability: can a dated, human story be written from this at all ──────
+#
+# THE FAILURE THIS ANSWERS, read off a rejection log rather than guessed at.
+# Almost every fact-gate rejection is one of two sentences:
+#
+#   "not supported by the source, which does not provide this specific figure"
+#   "MIND-READ — the script claims the government 'rigged the game'"
+#
+# Both come from the same place. The script writer is required to open on a
+# dated moment with a named person and a hard number. When the seed is a
+# StackExchange discussion — "In what ways was the Gold Confiscation Act
+# beneficial" — it contains an argument, not an event: no date, no person, no
+# figure. The writer cannot satisfy its rules from that material, so it supplies
+# the missing specifics from its own knowledge, and the fact gate correctly
+# kills the result. The gates are right, the writer is competent, and the INPUT
+# is wrong.
+#
+# So this asks the only question that predicts the outcome: does the source
+# text physically contain the raw materials — a year, a second number, and
+# proper nouns? It is deterministic, free, and runs before the judge call, so
+# a source that could never have worked costs nothing instead of a full script
+# cycle. RUFUS_SEED_TRIES then fetches the next source, which is how the chain
+# reaches Wikipedia (dense with dates and figures) instead of stopping at the
+# first discussion thread it finds.
+_YEAR_RE = re.compile(r"\b(1[0-9]{3}|20[0-9]{2})\b")
+_NUMBER_RE = re.compile(r"\b\d[\d,.]*\b")
+# Words that are capitalised for grammar or formatting rather than because they
+# name somebody. Without this, "The" and "In" at the head of every sentence read
+# as a cast of characters.
+_NOT_A_NAME = {
+    "the", "a", "an", "in", "on", "at", "by", "for", "from", "to", "of",
+    "and", "but", "or", "if", "when", "while", "after", "before", "this",
+    "that", "these", "those", "it", "he", "she", "they", "we", "you", "i",
+    "there", "here", "what", "why", "how", "who", "which", "was", "were",
+    "is", "are", "his", "her", "their", "its", "some", "many", "most",
+    "however", "although", "because", "since", "during", "under", "over",
+    "question", "answer", "edit", "update", "note", "wikipedia", "stack",
+    "exchange", "reddit", "source", "title", "content",
+}
+
+MIN_PROPER_NOUNS = 2
+
+
+def groundability(seed: dict) -> tuple[bool, str]:
+    """Whether this source physically contains what a dated story needs.
+
+    Returns (ok, reason). Never raises; an unreadable seed passes, because a
+    check that cannot read something must not be the thing that rejects it.
+    """
+    text = " ".join(str(seed.get(k) or "") for k in ("title", "content"))
+    if len(text.strip()) < 200:
+        return False, ("the source is too short to build a story on "
+                       f"({len(text.strip())} characters)")
+
+    years = set(_YEAR_RE.findall(text))
+    if not years:
+        return False, ("the source names no year, so any date in the script "
+                       "would be invented — this is where MIND-READ and "
+                       "INVENTED rejections come from")
+
+    numbers = {n for n in _NUMBER_RE.findall(text)
+               if n.replace(",", "").replace(".", "") not in years}
+    if not numbers:
+        return False, ("the source has a date but no other figure, so the "
+                       "hook's number would have to be invented")
+
+    names = {w for w in re.findall(r"\b[A-Z][a-z]{2,}\b", text)
+             if w.lower() not in _NOT_A_NAME}
+    if len(names) < MIN_PROPER_NOUNS:
+        return False, (f"the source names {len(names)} proper noun(s); a scene "
+                       f"needs people and a place, and a writer with neither "
+                       f"invents both")
+    return True, ""
+
+
 def judge_seed(seed: dict, niche_name: str, run_id: str = None) -> tuple[bool, str]:
     """Reject a research seed that's too thin/generic/off-topic to build a
     real story on, OR that has no genuine "knowledge gap" — cheaper to catch
@@ -114,6 +191,23 @@ def judge_seed(seed: dict, niche_name: str, run_id: str = None) -> tuple[bool, s
     that contradicts a viewer's likely mental model, not just a fact."""
     if not enabled():
         return True, "supervisor disabled"
+
+    # DETERMINISTIC FIRST, and free. See groundability: a source with no year,
+    # no figure and no names cannot produce a dated story, and asking a model
+    # whether it is "interesting" spends a call on a question that is already
+    # answered. Recorded in the same rejection table as the judge's own verdicts
+    # so the Failures page shows one story, not two.
+    ok, why = groundability(seed)
+    if not ok:
+        reason = f"ungroundable source: {why}"
+        try:
+            db_manager.save_attempt(
+                run_id=run_id, niche=niche_name,
+                seed_type=seed.get("type"), phase="seed_gate", attempt_n=1,
+                rejected_reason=reason, accepted=False)
+        except Exception:
+            pass
+        return False, reason
 
     stype   = seed.get("type", "")
     title   = seed.get("title", "") or ""

@@ -8,8 +8,20 @@ import pytest
 
 import supervisor as sup
 
+# A seed that REACHES the judge. It used to be two short lines, which was fine
+# while judge_seed's first act was a model call — but the deterministic
+# groundability check now runs first, and a 68-character source is refused
+# before any judge sees it. These tests are about the judge's own behaviour
+# (fail-open on a dead API, an explicit REJECT holding, the logging path), so
+# they need material that gets that far. See test_groundability below for the
+# other half.
 SEED = {"type": "reddit", "title": "Guy saved $4 a day for 30 years",
-        "content": "Retired with $1.2M on a $40k salary.", "source": "r/personalfinance"}
+        "content": "In 1994 he started putting $4 a day into an index fund on a "
+                   "$40,000 salary in Ohio. By 2024 the account held $1.2M. "
+                   "Vanguard statements he posted show 30 straight years of "
+                   "contributions, and his wife Karen kept the spreadsheet that "
+                   "tracked every deposit from the first week onward.",
+        "source": "r/personalfinance"}
 
 
 class _FakeResp:
@@ -336,3 +348,105 @@ def test_logging_failure_never_breaks_the_actual_verdict(monkeypatch, _isolated_
     ok, reason = sup.judge_seed(SEED, "finance")
     assert ok is True
     assert "fine" in reason
+
+
+# ── the input, not the writer ────────────────────────────────────────────────
+#
+# Read the fact-gate rejections as one list and they are two sentences:
+#
+#   "not supported by the source, which does not provide this specific figure"
+#   "MIND-READ — the script claims the government 'rigged the game'"
+#
+# Both come from the same place. The writer must open on a dated moment with a
+# named person and a hard number. Handed a StackExchange discussion — an
+# argument, not an event — it cannot satisfy that from the material, so it
+# supplies the specifics itself and the gate correctly kills the result. The
+# gates are right and the writer is competent; the source could never have
+# worked. Asking that question deterministically, before any model call, is
+# free.
+
+_DISCUSSION = {
+    "type": "stackexchange",
+    "title": "In what ways was the Gold Confiscation Act of 1933 beneficial",
+    "content": "I have read that the government seized gold to stabilize the "
+               "economy. Some argue this was beneficial for the country while "
+               "others say it undermined individual wealth. What are the main "
+               "arguments on either side? It seems like a complicated question "
+               "and I would like to understand the economics behind it.",
+}
+
+_EVENT = {
+    "type": "wikipedia",
+    "title": "Panic of 1893",
+    "content": "The Panic of 1893 was an economic depression in the United "
+               "States that began in February 1893. The Philadelphia and "
+               "Reading Railroad failed on February 20, 1893, followed by the "
+               "National Cordage Company. Unemployment reached 18 percent by "
+               "1894 and roughly 500 banks closed. President Grover Cleveland "
+               "repealed the Sherman Silver Purchase Act.",
+}
+
+
+def test_a_discussion_thread_is_refused_before_any_model_call():
+    ok, why = sup.groundability(_DISCUSSION)
+    assert not ok
+    assert "invented" in why
+
+
+def test_a_dated_event_passes():
+    assert sup.groundability(_EVENT) == (True, "")
+
+
+def test_a_source_with_no_year_names_the_consequence():
+    ok, why = sup.groundability(
+        {"content": "Money changed hands in the market. " * 12})
+    assert not ok
+    assert "no year" in why
+
+
+def test_a_source_with_no_people_is_refused():
+    """A writer given a place and a date but no one in it invents the cast —
+    which is where the MIND-READ rejections come from."""
+    ok, why = sup.groundability(
+        {"content": "In 1893 the rate moved from 3 percent to 18 percent. "
+                    "The rate moved again the following year, and again after "
+                    "that, and the pattern repeated for several more years "
+                    "until the series ends. " * 3})
+    assert not ok
+    assert "proper noun" in why
+
+
+def test_the_check_runs_before_the_judge(monkeypatch):
+    """Free and deterministic first: a source that could never have worked
+    must not cost a model call, let alone a script cycle."""
+    called = []
+    monkeypatch.setattr(sup, "_judge",
+                        lambda *a, **k: called.append(1) or (True, "ok"))
+    monkeypatch.setattr(sup, "enabled", lambda: True)
+    # The real attempts DB is shared; a test that writes to it changes what
+    # another test counts. (It did: test_rejection_category_counts_empty went
+    # red on rows this test had left behind.)
+    monkeypatch.setattr(sup.db_manager, "save_attempt", lambda **kw: 0)
+    ok, why = sup.judge_seed(_DISCUSSION, "money_history")
+    assert not ok
+    assert "ungroundable source" in why
+    assert not called, "no judge call should have been spent"
+
+
+def test_a_good_seed_still_reaches_the_judge(monkeypatch):
+    called = []
+    monkeypatch.setattr(sup, "_judge",
+                        lambda *a, **k: (called.append(1), (True, "ok"))[1])
+    monkeypatch.setattr(sup, "enabled", lambda: True)
+    monkeypatch.setattr(sup.db_manager, "save_attempt", lambda **kw: 0)
+    ok, _ = sup.judge_seed(_EVENT, "money_history")
+    assert ok and called
+
+
+def test_an_unreadable_seed_is_not_rejected_by_this():
+    """A check that cannot read something must not be the thing that rejects
+    it — fail-open, like every other optional stage here."""
+    ok, _ = sup.groundability({"title": None, "content": None})
+    assert ok is False  # too short is a real, readable verdict
+    long_junk = {"content": "\x00" * 400}
+    assert isinstance(sup.groundability(long_junk), tuple)
