@@ -100,3 +100,67 @@ def test_run_qc_missing_file_is_critical():
     res = run_qc(Path("/nonexistent/video.mp4"))
     assert res["ok"] is False
     assert any("not found" in c for c in res["critical"])
+
+
+# ── the last gate before upload ─────────────────────────────────────────────
+
+def test_a_short_is_judged_exactly_as_before():
+    """This gate decides whether a finished render ships. Nothing about the
+    channel that exists may move."""
+    import importlib
+    import qc_check
+    importlib.reload(qc_check)
+    assert (qc_check.REQ_W, qc_check.REQ_H) == (1080, 1920)
+    assert (qc_check.MIN_DUR, qc_check.MAX_DUR) == (10.0, 180.0)
+    assert (qc_check.IDEAL_MIN, qc_check.IDEAL_MAX) == (25.0, 60.0)
+
+
+def test_long_form_is_not_failed_for_being_the_shape_it_was_asked_for(monkeypatch):
+    """REQ_W/REQ_H were 1080x1920, hard-coded, and this is the LAST thing that
+    runs before upload — so every long-form render would have been flagged
+    critical, 'wrong resolution', for being exactly the resolution the format
+    profile told it to be."""
+    import importlib
+    import qc_check
+    import video_format
+    monkeypatch.setenv("RUFUS_FORMAT", "long")
+    importlib.reload(video_format)
+    importlib.reload(qc_check)
+    try:
+        assert (qc_check.REQ_W, qc_check.REQ_H) == (1920, 1080)
+        info = {"width": 1920, "height": 1080, "fps": 30.0, "duration": 540.0,
+                "has_video": True, "has_audio": True}
+        critical, _warnings = qc_check._evaluate(info, size_bytes=40_000_000)
+        assert not critical, critical
+    finally:
+        monkeypatch.delenv("RUFUS_FORMAT", raising=False)
+        importlib.reload(video_format)
+        importlib.reload(qc_check)
+
+
+def test_a_genuinely_wrong_encode_is_still_caught(monkeypatch):
+    """The check is still worth having: an encode that came out at the wrong
+    size is a real failure and looks identical in every other respect."""
+    import qc_check
+    info = {"width": 640, "height": 480, "fps": 30.0, "duration": 40.0,
+            "has_video": True, "has_audio": True}
+    critical, _warnings = qc_check._evaluate(info, size_bytes=5_000_000)
+    assert any("resolution" in c for c in critical), critical
+
+
+def test_long_form_is_not_told_every_time_that_it_is_too_long(monkeypatch):
+    """25-60s is the retention sweet spot for a VERTICAL video. A nine-minute
+    explainer is outside it by design, and a warning that fires on every
+    single run is the noise this repo has twice walked back."""
+    import importlib
+    import qc_check
+    import video_format
+    monkeypatch.setenv("RUFUS_FORMAT", "long")
+    importlib.reload(video_format)
+    importlib.reload(qc_check)
+    try:
+        assert qc_check.IDEAL_MAX > 600
+    finally:
+        monkeypatch.delenv("RUFUS_FORMAT", raising=False)
+        importlib.reload(video_format)
+        importlib.reload(qc_check)

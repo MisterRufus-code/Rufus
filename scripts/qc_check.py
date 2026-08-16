@@ -21,15 +21,29 @@ import subprocess
 import sys
 from pathlib import Path
 
-# Publishable-Short targets
-REQ_W, REQ_H     = 1080, 1920
+import video_format as _vf
+
+# What a publishable render looks like, from the active format profile.
+#
+# THE SHAPE THIS RENDER WAS ASKED FOR. Hard-coded as 1080x1920 until a second
+# format existed — and this is the last gate before upload, so a long-form
+# render would have been failed here as "wrong resolution" for being exactly
+# the resolution it was told to be. The check is still worth having: it catches
+# an encode that came out at the wrong size, which is a real failure and looks
+# identical in every other respect.
+REQ_W, REQ_H     = _vf.dimensions()
 # Outside this = broken render. Per-FORMAT: the Shorts cap is 3 minutes, and
 # a nine-minute explainer is not a broken render — it is the other format
 # doing exactly what it was asked to. One ceiling cannot mean both.
-import video_format as _vf
 MIN_DUR, MAX_DUR = _vf.get("qc_min_s", 10.0), _vf.get("qc_max_s", 180.0)
-IDEAL_MIN, IDEAL_MAX = 25.0, 60.0  # retention sweet spot — outside is a warning
-MIN_BYTES        = 1_000_000       # <1MB at 1080×1920 means the encode died
+# The retention sweet spot, and a WARNING rather than a failure. It is a
+# Shorts number: 25-60s is where a vertical video holds, and a nine-minute
+# explainer is outside it by design, so long-form takes its own band from the
+# profile rather than being told every time that it is too long to retain.
+IDEAL_MIN, IDEAL_MAX = ((25.0, 60.0) if not _vf.is_long()
+                        else (_vf.get("qc_min_s", 240.0),
+                              _vf.get("qc_max_s", 1500.0)))
+MIN_BYTES        = 1_000_000       # <1MB at either format means the encode died
 FPS_MIN, FPS_MAX = 24.0, 61.0
 # volumedetect mean_volume sanity band (dB). Outside = mix likely broken.
 MEAN_VOL_MIN, MEAN_VOL_MAX = -33.0, -6.0
