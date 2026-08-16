@@ -117,3 +117,23 @@ def test_the_dashboard_no_longer_claims_only_its_own_runs_obey():
     src = Path(dashboard.__file__).read_text(encoding="utf-8")
     assert "needs run_scheduled.bat pointed at the same file" not in src
     assert "every way of starting a run obeys them" in " ".join(src.split())
+
+
+def test_the_ntfy_topic_is_never_echoed_into_a_log(tmp_path, monkeypatch, capsys):
+    """ntfy has no accounts — the topic string IS the authentication, and
+    anyone holding it can read every alert and push fake ones. It was printed
+    in full on every run, into the same logs that get pasted into a chat when
+    something goes wrong. WEBHOOK and TOKEN were masked because their names
+    say "secret"; this one is a secret because of what it does."""
+    f = tmp_path / "dashboard_settings.json"
+    f.write_text(json.dumps({"RUFUS_NTFY_TOPIC": "rufus-j10d4dmq5fpm1m",
+                             "RUFUS_STYLE": "stickman"}), encoding="utf-8")
+    monkeypatch.setattr(settings_store, "SETTINGS_FILE", f)
+    env: dict = {}
+    settings_store.apply(env)
+    out = capsys.readouterr().out
+    assert "rufus-j10d4dmq5fpm1m" not in out
+    assert "1 secret" in out
+    assert "RUFUS_STYLE=stickman" in out
+    # Masked in the LOG, still applied to the run.
+    assert env["RUFUS_NTFY_TOPIC"] == "rufus-j10d4dmq5fpm1m"

@@ -42,6 +42,20 @@ SETTINGS_FILE = Path(__file__).parent.parent / "config" / "dashboard_settings.js
 _ALLOWED_PREFIXES = ("RUFUS_", "SD_CLIPS", "RENDER_TIMEOUT")
 
 
+# Settings whose VALUE is a credential and must never be echoed into a log.
+# WEBHOOK and TOKEN were obvious. NTFY_TOPIC is the one that got missed: ntfy
+# has no accounts, so the topic string is the entire authentication — anyone
+# holding it can read every alert and push fake ones — and notify.py's own
+# header says so. It was being printed in full on every run, into logs that
+# get pasted into chats when something goes wrong. A secret is defined by what
+# holding it lets you do, not by whether the word "token" is in its name.
+_SECRET_MARKS = ("WEBHOOK", "TOKEN", "NTFY_TOPIC", "SECRET", "PASSWORD", "KEY")
+
+
+def _is_secret(key: str) -> bool:
+    return any(mark in key.upper() for mark in _SECRET_MARKS)
+
+
 def load() -> dict:
     """The saved settings, or {} if there are none or the file is unreadable."""
     try:
@@ -73,8 +87,8 @@ def apply(env: dict | None = None, *, announce: bool = True) -> list[str]:
             applied.append(key)
     if applied and announce:
         shown = ", ".join(f"{k}={saved[k]}" for k in applied
-                          if "WEBHOOK" not in k and "TOKEN" not in k)
-        hidden = sum(1 for k in applied if "WEBHOOK" in k or "TOKEN" in k)
+                          if not _is_secret(k))
+        hidden = sum(1 for k in applied if _is_secret(k))
         note = shown + (f" (+{hidden} secret)" if hidden else "")
         print(f"[settings] from the dashboard: {note}")
     skipped = [k for k in saved if k not in applied]
