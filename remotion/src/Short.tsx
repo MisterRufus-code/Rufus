@@ -242,8 +242,19 @@ const KenBurnsClip: React.FC<{
 // ── Animated word caption (Hormozi style: one word, spring pop) ──────────────
 const Captions: React.FC<{words: Word[]}> = ({words}) => {
   const frame = useCurrentFrame();
-  const {fps} = useVideoConfig();
+  const {fps, width, height} = useVideoConfig();
   const t = frame / fps;
+
+  // SIZED FROM THE FRAME, not from 1080x1920. fontSize 96 and paddingBottom
+  // 700 were right for a phone: big words, lifted clear of the Shorts UI that
+  // covers the bottom fifth. On a 1080-tall landscape frame the same two
+  // numbers are a caption floating 65% up the picture. The portrait ratios
+  // below reproduce 96 and 700 exactly, so nothing about the existing channel
+  // moves; landscape gets broadcast proportions instead — smaller, and near
+  // the bottom edge where no app UI has to be avoided.
+  const portrait = height >= width;
+  const fontSize = Math.round(height * (portrait ? 0.05 : 0.055));
+  const paddingBottom = Math.round(height * (portrait ? 0.3646 : 0.07));
 
   const active = words.find((w) => t >= w.start && t < w.end);
   if (!active) return null;
@@ -263,14 +274,14 @@ const Captions: React.FC<{words: Word[]}> = ({words}) => {
       style={{
         justifyContent: 'flex-end',
         alignItems: 'center',
-        paddingBottom: 700,
+        paddingBottom,
         pointerEvents: 'none',
       }}
     >
       <div
         style={{
           fontFamily,
-          fontSize: 96,
+          fontSize,
           fontWeight: 900,
           color,
           textTransform: 'uppercase',
