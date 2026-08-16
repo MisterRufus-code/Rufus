@@ -1090,6 +1090,7 @@ NAV_ITEMS = [
     ("/performance", "📈 Performance",                    "view"),
     ("/trending",   "🔥 Trending",                        "view"),
     ("/gallery",    "🖼 Gallery",                         "view"),
+    ("/insights",   "🔬 Insights",                        "view"),
     ("/logs",       "📜 Logs",                            "view"),
     ("/system",     "🖥 System",                          "system"),
     ("/settings",   "⚙ Settings",                         "settings"),
@@ -2111,6 +2112,107 @@ def settings_save():
     if bad:
         return redirect("/settings?error=" + _urlquote("Not saved: " + "; ".join(bad)))
     return redirect("/settings?msg=" + _urlquote(f"Saved {len(values)} setting(s)."))
+
+
+# ── Insights ─────────────────────────────────────────────────────────────────
+
+_SEVERITY_ORDER = {"high": 0, "medium": 1, "low": 2}
+
+
+def _severity_badge(sev: str) -> str:
+    cls = {"high": "held", "medium": "pending", "low": "ok"}.get(sev, "ok")
+    return f'<span class="badge {cls}">{_esc(sev)}</span>'
+
+
+@app.route("/insights")
+def insights_page():
+    """What keeps going wrong, measured rather than remembered.
+
+    THE PROBLEM THIS PAGE IS FOR. Every fix to this pipeline in recent memory
+    began with the owner watching a video, noticing something, and pasting a
+    log — which works, and needs a person to watch, to remember what the last
+    six runs looked like, and to be right about which of twenty things on
+    screen is the one that matters. A defect visible in one run is a bad seed;
+    the same defect in four runs of six is a code change, and only a record
+    kept across runs can tell those apart.
+
+    Everything here is computed by run_review.py from files already on disk —
+    no model, no GPU, nothing to configure.
+    """
+    auth.require("view")
+    try:
+        import run_review
+        data = run_review.patterns(limit=30)
+    except Exception as e:
+        body = (f'<a class="back" href="/">← back</a>'
+                f'<h2 style="margin-top:14px">Insights</h2>'
+                f'<div class="msg error">Review data unavailable: {_esc(str(e))}</div>')
+        return _head() + body + PAGE_TAIL
+
+    rows = data.get("rows", [])
+    if not rows:
+        body = f"""
+        <a class="back" href="/">← back</a>
+        <h2 style="margin-top:14px">Insights</h2>
+        <p class="muted">No runs measured yet. Every finished run writes its
+           own review from here on; to measure the ones already on disk, run
+           <code>python scripts/run_review.py --all</code> once.</p>
+        """
+        return _head() + body + PAGE_TAIL
+
+    # What recurs, worst first.
+    recurring = ""
+    for r in data.get("recurring", []):
+        pct = int(r["share"] * 100)
+        bar = ('<div style="height:6px;border-radius:3px;background:#2a2d34;'
+               f'overflow:hidden"><div style="height:6px;width:{pct}%;'
+               f'background:{"#ef4444" if pct >= 50 else "#eab308"}"></div></div>')
+        recurring += (f'<tr><td><code>{_esc(r["id"])}</code></td>'
+                      f'<td style="width:45%">{bar}</td>'
+                      f'<td class="muted">{r["runs"]} of {data["runs_reviewed"]} runs</td></tr>')
+    recurring_html = (f'<table><tr><th>Finding</th><th></th><th></th></tr>'
+                      f'{recurring}</table>' if recurring else
+                      '<p class="muted">Nothing recurring — every measured run '
+                      'is inside its thresholds.</p>')
+
+    # Per-run detail, newest first.
+    per_run = ""
+    for r in rows:
+        findings = sorted(r.get("findings", []),
+                          key=lambda f: _SEVERITY_ORDER.get(f.get("severity"), 3))
+        items = "".join(f'<li>{_severity_badge(f.get("severity","low"))} '
+                        f'{_esc(f["text"])}</li>' for f in findings)
+        c = r.get("clauses", {})
+        d = r.get("dominant_subject", {})
+        cuts = r.get("cuts", {})
+        summary = (f'{r.get("beats", 0)} pictures · '
+                   f'thread {int(c.get("thread_share", 0) * 100)}% · '
+                   f'setting {int(c.get("setting_share", 0) * 100)}%')
+        if d.get("word"):
+            summary += f' · most-named "{_esc(d["word"])}" {int(d.get("share", 0) * 100)}%'
+        if cuts.get("longest_hold_s"):
+            summary += f' · longest hold {cuts["longest_hold_s"]}s'
+        per_run += (
+            f'<div class="card" style="width:100%;margin-bottom:10px">'
+            f'<strong>{_esc(r.get("run_id", "?"))}</strong>'
+            f'<div class="muted" style="margin:4px 0 8px">{summary}</div>'
+            + (f'<ul style="margin:0;padding-left:18px">{items}</ul>'
+               if items else '<div class="muted">nothing out of range</div>')
+            + '</div>')
+
+    body = f"""
+    <a class="back" href="/">← back</a>
+    <h2 style="margin-top:14px">Insights</h2>
+    <p class="muted">Measured from the prompts and keyframes of the last
+       {data["runs_reviewed"]} runs. One run's numbers say a video was weak;
+       the same finding across most runs is a code change rather than a bad
+       seed.</p>
+    <h2>What keeps happening</h2>
+    {recurring_html}
+    <h2>Run by run</h2>
+    {per_run}
+    """
+    return _head() + body + PAGE_TAIL
 
 
 # ── Logs ─────────────────────────────────────────────────────────────────────

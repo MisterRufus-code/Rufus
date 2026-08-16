@@ -193,3 +193,48 @@ def test_the_environment_is_restored_after_a_test(client, monkeypatch):
 def test_the_dashboard_url_is_settable_so_alerts_can_deep_link():
     keys = {k for k, _l, _kind, _h in dashboard.SETTINGS_SCHEMA}
     assert "RUFUS_DASHBOARD_URL" in keys
+
+
+# ── insights ────────────────────────────────────────────────────────────────
+
+def test_insights_is_in_the_nav():
+    assert any(href == "/insights" for href, _l, _p in dashboard.NAV_ITEMS)
+
+
+def test_insights_says_what_to_do_when_nothing_is_measured_yet(client, monkeypatch):
+    """An empty page that does not say how to fill it is a dead end."""
+    import run_review
+    monkeypatch.setattr(run_review, "patterns", lambda limit=30: {
+        "runs_reviewed": 0, "recurring": [], "rows": []})
+    page = client.get("/insights").get_data(as_text=True)
+    assert "run_review.py --all" in page
+
+
+def test_insights_shows_recurring_findings_before_single_runs(client, monkeypatch):
+    """The whole reason to keep these across runs: four of six is a code
+    change, one of six is a bad seed."""
+    import run_review
+    monkeypatch.setattr(run_review, "patterns", lambda limit=30: {
+        "runs_reviewed": 6,
+        "recurring": [{"id": "setting_clause_everywhere", "runs": 4, "share": 0.67}],
+        "rows": [{"run_id": "20260816-a", "beats": 24,
+                  "clauses": {"thread_share": 0.33, "setting_share": 0.54},
+                  "dominant_subject": {"word": "tonic", "share": 0.25},
+                  "cuts": {"longest_hold_s": 6.4},
+                  "findings": [{"severity": "high", "text": "half the shots"}]}],
+    })
+    page = client.get("/insights").get_data(as_text=True)
+    assert page.index("What keeps happening") < page.index("Run by run")
+    assert "setting_clause_everywhere" in page
+    assert "4 of 6 runs" in page
+    assert "20260816-a" in page
+
+
+def test_a_review_failure_does_not_break_the_page(client, monkeypatch):
+    import run_review
+    def _boom(limit=30):
+        raise RuntimeError("no debug folder")
+    monkeypatch.setattr(run_review, "patterns", _boom)
+    page = client.get("/insights")
+    assert page.status_code == 200
+    assert "no debug folder" in page.get_data(as_text=True)

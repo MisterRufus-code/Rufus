@@ -1792,6 +1792,17 @@ def run(skip_upload: bool = False, niche_override: str = None, output_dir: Path 
             pass
     except Exception as e:
         print(f"           ⚠ QC skipped (non-fatal): {e}")
+
+    # MEASURE THE RUN. Free, deterministic, no model and no GPU: it reads the
+    # prompts and keyframes already on disk and writes review.json beside them.
+    # Every recent fix to this pipeline started with the owner watching a video
+    # and noticing something; these are the same observations as numbers, kept
+    # so that "this run was weak" can become "this happens in four runs of six".
+    try:
+        import run_review
+        run_review.review_and_save(script_run_id, Path(output_path))
+    except Exception as e:
+        print(f"           ⚠ review skipped (non-fatal): {e}")
     print()
 
     # WHY the OLD auto-gate would (or wouldn't) have cleared this video — still
