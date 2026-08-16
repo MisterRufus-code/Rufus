@@ -2452,13 +2452,14 @@ def advice_page():
         badge = {"high": "held", "medium": "pending", "low": "ok"}.get(
             it["severity"], "ok")
         apply_btn = ""
-        if it.get("setting") and it.get("value"):
+        if it.get("setting") and (it.get("value") or it.get("clear_label")):
+            label = it.get("clear_label") or \
+                f'Set {it["setting"]} = {it["value"]}'
             apply_btn = (
                 f'<form method="post" action="/advice/apply" style="margin-top:10px">'
                 f'<input type="hidden" name="key" value="{_esc(it["setting"])}">'
                 f'<input type="hidden" name="value" value="{_esc(it["value"])}">'
-                f'<button class="btn save" type="submit">'
-                f'Set {_esc(it["setting"])} = {_esc(it["value"])}</button></form>')
+                f'<button class="btn save" type="submit">{_esc(label)}</button></form>')
         cards += (
             f'<div class="card" style="width:100%;margin-bottom:12px">'
             f'<span class="badge {badge}">{_esc(it["severity"])}</span> '
@@ -2502,6 +2503,13 @@ def advice_apply():
         return redirect("/advice?error=" + _urlquote(
             "That suggestion is no longer current — reload and try again."))
     values = dict(_load_settings())
+    if value == "":
+        # Clearing is a real remedy now — the pipeline's own derived defaults
+        # beat most fixed values a page could suggest.
+        values.pop(key, None)
+        _save_settings(values)
+        return redirect("/advice?msg=" + _urlquote(
+            f"{key} cleared. The pipeline's own default decides it again."))
     values[key] = value
     _save_settings(values)
     return redirect("/advice?msg=" + _urlquote(

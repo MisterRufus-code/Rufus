@@ -72,13 +72,15 @@ _REMEDIES = {
     },
     "pictures_held_too_long": {
         "title": "Pictures are held too long",
-        "why": ("A still on screen for six seconds is the defect a viewer "
+        "why": ("A still on screen past five seconds stops reading as "
+                "emphasis and starts reading as a stall — the defect a viewer "
                 "feels without being able to name, and answers by swiping."),
-        "setting": "SD_CLIPS",
-        "value": "24",
-        "action": ("Raise the beat count. More frames per beat only "
-                   "re-renders the same description and does not add a cut "
-                   "the narration is aware of."),
+        "setting": None,
+        "action": ("The beat count is derived from the script and the cut "
+                   "planner now weights each shot by its tone, so a long hold "
+                   "is usually deliberate. A hold past five seconds is not: "
+                   "check whether the narration has a long stretch with no "
+                   "pause in it for a cut to land on."),
     },
     "repeated_images": {
         "title": "Several keyframes are near-identical",
@@ -100,13 +102,22 @@ _REMEDIES = {
     },
     "few_pictures": {
         "title": "Too few pictures for the length",
-        "why": ("A picture per four spoken words is roughly a cut every "
-                "second and a half; far fewer and a still sits on screen long "
-                "enough for a viewer to feel it."),
-        "setting": "SD_CLIPS",
-        "value": "24",
-        "action": ("The beat count is computed from script length unless "
-                   "SD_CLIPS overrides it."),
+        "why": ("A picture per five spoken words is roughly a two-second "
+                "shot; far fewer and a still sits on screen long enough for a "
+                "viewer to feel it."),
+        # NO LONGER "SET SD_CLIPS=24". It was, and the owner applied it — an
+        # hour after the beat count became adaptive and the cut planner
+        # started weighting shots by tone. A flat 24 overrides both, and on a
+        # ninety-word script that is more cuts than the narration has pauses
+        # to put them on, which is exactly the machine-gun run that prompted
+        # the rhythm work. Advice that undoes the last fix is worse than none.
+        "clears": "SD_CLIPS",
+        "setting": None,
+        "action": ("The beat count is computed from the script — about one "
+                   "picture per five spoken words — and the splitter stops "
+                   "before it cuts mid-phrase, because a cut with no pause "
+                   "under it has nowhere real to land. If SD_CLIPS is set, "
+                   "clearing it lets the script decide."),
     },
 }
 
@@ -147,6 +158,17 @@ def advise(patterns: dict, stats: dict | None = None,
             "setting": rem.get("setting"),
             "value": rem.get("value"),
         }
+        # A REMEDY CAN BE TO UNSET SOMETHING. The pipeline's own defaults are
+        # now better than most fixed values a page could suggest, so "stop
+        # overriding this" is a real fix and needs to be as clickable as
+        # "set it to 24" was — offered only when the override is actually
+        # there, since telling someone to clear a setting they never set is
+        # the same noise as telling them to set one they already did.
+        clears = rem.get("clears")
+        if clears and settings.get(clears):
+            item["setting"] = clears
+            item["value"] = ""
+            item["clear_label"] = f"Clear {clears} (currently {settings[clears]})"
         # ADVICE ALREADY FOLLOWED IS HISTORY, NOT ADVICE. Removing the button
         # was not enough: a live page showed "Too few pictures for the length"
         # as the top HIGH finding with "Already set to 24" tacked on the end,

@@ -60,20 +60,34 @@ def test_every_suggestion_names_what_to_do():
         assert items[0]["evidence"], fid
 
 
-def test_a_suggestion_with_a_setting_carries_the_value_to_set():
-    items = advisor.advise(_patterns(("pictures_held_too_long", 0.6)))
-    it = next(i for i in items if i["id"] == "pictures_held_too_long")
-    assert it["setting"] == "SD_CLIPS" and it["value"]
+@pytest.fixture
+def a_remedy_with_a_value(monkeypatch):
+    """A synthetic remedy carrying a setting.
+
+    Tested through a fixture rather than whichever real remedy happens to have
+    one, because that changes: SD_CLIPS=24 was the answer to two findings
+    until the beat count became adaptive, and a test pinned to it fails for
+    the right reason at the wrong time."""
+    monkeypatch.setitem(advisor._REMEDIES, "synthetic", {
+        "title": "A thing with a knob", "why": "because",
+        "action": "turn it", "setting": "SD_CLIPS", "value": "24"})
+    return "synthetic"
 
 
-def test_advice_already_followed_is_demoted_not_just_debuttoned():
+def test_a_suggestion_with_a_setting_carries_the_value_to_set(a_remedy_with_a_value):
+    items = advisor.advise(_patterns((a_remedy_with_a_value, 0.6)))
+    it = next(i for i in items if i["id"] == a_remedy_with_a_value)
+    assert it["setting"] == "SD_CLIPS" and it["value"] == "24"
+
+
+def test_advice_already_followed_is_demoted_not_just_debuttoned(a_remedy_with_a_value):
     """A live page showed "Too few pictures for the length" as the top HIGH
     finding with "Already set to 24" tacked on the end, and drove the
     readiness line with it. The measurements behind it are of runs made BEFORE
     the change — removing the button was not enough."""
-    items = advisor.advise(_patterns(("pictures_held_too_long", 1.0)),
+    items = advisor.advise(_patterns((a_remedy_with_a_value, 1.0)),
                            settings={"SD_CLIPS": "24"})
-    it = next(i for i in items if i["id"] == "pictures_held_too_long")
+    it = next(i for i in items if i["id"] == a_remedy_with_a_value)
     assert it["setting"] is None
     assert it["severity"] == "low"
     assert it["done"] is True
@@ -81,17 +95,17 @@ def test_advice_already_followed_is_demoted_not_just_debuttoned():
     assert "clears once newer runs are measured" in it["action"]
 
 
-def test_something_already_fixed_sinks_below_live_problems():
+def test_something_already_fixed_sinks_below_live_problems(a_remedy_with_a_value):
     items = advisor.advise(
-        _patterns(("pictures_held_too_long", 1.0), ("one_object_dominates", 0.5)),
+        _patterns((a_remedy_with_a_value, 1.0), ("one_object_dominates", 0.5)),
         settings={"SD_CLIPS": "24"})
-    assert items[-1]["id"] == "pictures_held_too_long"
+    assert items[-1]["id"] == a_remedy_with_a_value
 
 
-def test_readiness_ignores_what_was_already_fixed():
-    """A readiness line reading "needs work — too few pictures" when the beat
-    count was raised an hour ago is reporting the past as the present."""
-    pat = _patterns(("pictures_held_too_long", 1.0))
+def test_readiness_ignores_what_was_already_fixed(a_remedy_with_a_value):
+    """A readiness line reading "needs work" for something acted on an hour
+    ago is reporting the past as the present."""
+    pat = _patterns((a_remedy_with_a_value, 1.0))
     assert advisor.readiness(pat, {}, {})["state"] == "needs work"
     assert advisor.readiness(pat, {}, {"SD_CLIPS": "24"})["state"] == "good"
 
@@ -195,3 +209,58 @@ def test_an_unknown_key_is_refused(client):
 
 def test_advice_is_in_the_nav():
     assert any(href == "/advice" for href, _l, _p in dashboard.NAV_ITEMS)
+
+
+# ── advice that would undo the last fix ─────────────────────────────────────
+
+def test_the_beat_count_remedy_no_longer_forces_a_fixed_number():
+    """It used to say SD_CLIPS=24, and the owner applied it — an hour after
+    the beat count became adaptive and the cut planner started weighting shots
+    by tone. A flat 24 overrides both, and on a ninety-word script that is
+    more cuts than the narration has pauses to put them on, which is exactly
+    the machine-gun run the rhythm work was for."""
+    for fid in ("few_pictures", "pictures_held_too_long"):
+        assert advisor._REMEDIES[fid].get("value") != "24"
+
+
+def test_clearing_an_override_is_offered_when_one_is_set():
+    items = advisor.advise(_patterns(("few_pictures", 0.8)),
+                           settings={"SD_CLIPS": "24"})
+    it = next(i for i in items if i["id"] == "few_pictures")
+    assert it["setting"] == "SD_CLIPS"
+    assert it["value"] == ""
+    assert "Clear SD_CLIPS" in it["clear_label"]
+    assert "currently 24" in it["clear_label"]
+
+
+def test_clearing_is_not_offered_when_nothing_is_overridden():
+    """Telling someone to clear a setting they never set is the same noise as
+    telling them to set one they already did."""
+    items = advisor.advise(_patterns(("few_pictures", 0.8)), settings={})
+    it = next(i for i in items if i["id"] == "few_pictures")
+    assert it["setting"] is None
+    assert "clear_label" not in it
+
+
+def test_the_button_clears_the_setting(client, monkeypatch):
+    dashboard._save_settings({"SD_CLIPS": "24", "RUFUS_STYLE": "stickman"})
+    monkeypatch.setattr(dashboard, "_advice_now", lambda: (
+        [{"id": "few_pictures", "title": "t", "why": "w", "action": "a",
+          "severity": "high", "evidence": "e",
+          "setting": "SD_CLIPS", "value": "", "clear_label": "Clear SD_CLIPS"}],
+        {"state": "needs work", "detail": "t"}))
+    r = client.post("/advice/apply", data={"key": "SD_CLIPS", "value": ""})
+    assert "msg=" in r.headers["Location"]
+    saved = json.loads(dashboard.SETTINGS_FILE.read_text(encoding="utf-8"))
+    assert "SD_CLIPS" not in saved
+    assert saved["RUFUS_STYLE"] == "stickman", "it clears one, not all"
+
+
+def test_the_page_shows_the_clear_label(client, monkeypatch):
+    monkeypatch.setattr(dashboard, "_advice_now", lambda: (
+        [{"id": "few_pictures", "title": "t", "why": "w", "action": "a",
+          "severity": "high", "evidence": "e", "setting": "SD_CLIPS",
+          "value": "", "clear_label": "Clear SD_CLIPS (currently 24)"}],
+        {"state": "needs work", "detail": "t"}))
+    page = client.get("/advice").get_data(as_text=True)
+    assert "Clear SD_CLIPS (currently 24)" in page
