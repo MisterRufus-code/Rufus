@@ -76,11 +76,28 @@ def _clamp_title(title: str, hook: str) -> str:
     return title
 
 
+def _surface() -> str:
+    """Which YouTube surface this video is for.
+
+    A title competing in a swipe feed and a title competing in search results
+    are different jobs — the first fights for a thumb that is already moving,
+    the second for a query somebody typed. One brief cannot be right for both.
+    """
+    try:
+        import video_format
+        return ("long-form YouTube video" if video_format.is_long()
+                else "YouTube Shorts")
+    except Exception:
+        return "YouTube Shorts"
+
+
 def generate_metadata(script: str, niche_name: str, niche_cfg: dict,
                       hashtags: list[str] | None = None,
                       language: str = "en") -> dict:
     """Return {"title", "description", "tags"} — GPT-optimized, legacy on failure."""
     hashtags = hashtags or ["#Shorts"]
+    # A title written for a phone feed and a title written for a search result
+    # are different jobs; saying which one this is costs nothing.
     # The CTA and script reach the YouTube description and the pinned comment.
     # Repair only — no stripping — because `language` may legitimately be a
     # non-Latin one, and a description is not read aloud.
@@ -104,8 +121,8 @@ def generate_metadata(script: str, niche_name: str, niche_cfg: dict,
             messages=[{
                 "role": "user",
                 "content": (
-                    "You write YouTube Shorts metadata that maximizes click-through "
-                    "without clickbait.\n\n"
+                    f"You write {_surface()} metadata that maximizes "
+                    f"click-through without clickbait.\n\n"
                     f"NICHE: {niche_name} (search keywords: {keywords})\n"
                     f"SCRIPT (the video's narration):\n{script}\n\n"
                     "Rules:\n"

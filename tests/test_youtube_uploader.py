@@ -236,3 +236,42 @@ def test_tzdata_is_declared():
     from pathlib import Path as _P
     req = (_P(youtube_uploader.__file__).parent.parent / "requirements.txt")
     assert "tzdata" in req.read_text(encoding="utf-8")
+
+
+# ── a nine-minute video is not a Short, and the tag is a category ────────────
+
+def test_a_short_keeps_its_tag():
+    assert "#Shorts" in youtube_uploader._hashtags_for("money_history")
+
+
+def test_long_form_drops_the_tag_that_would_miscategorise_it(monkeypatch):
+    """Every hashtag list ends in #Shorts, and that was right while every
+    video was one. YouTube reads that tag as a declaration of FORMAT: a
+    nine-minute landscape upload carrying it is asking to be filed as
+    something it is not, shown in a feed it cannot compete in, and measured
+    against retention curves that do not apply. Invisible in the pipeline,
+    obvious in the analytics three weeks later."""
+    import importlib
+    import video_format
+    monkeypatch.setenv("RUFUS_FORMAT", "long")
+    importlib.reload(video_format)
+    tags = youtube_uploader._hashtags_for("money_history")
+    assert not any(t.lower() == "#shorts" for t in tags)
+    assert tags, "dropping the tag must not leave the video with none"
+
+
+def test_an_unknown_niche_still_gets_tags(monkeypatch):
+    assert youtube_uploader._hashtags_for("not_a_niche")
+
+
+def test_the_metadata_brief_names_the_surface(monkeypatch):
+    """A title competing in a swipe feed and a title competing in search
+    results are different jobs — the first fights for a thumb already moving,
+    the second for a query somebody typed."""
+    import importlib
+    import metadata_writer
+    import video_format
+    assert metadata_writer._surface() == "YouTube Shorts"
+    monkeypatch.setenv("RUFUS_FORMAT", "long")
+    importlib.reload(video_format)
+    assert "long-form" in metadata_writer._surface()

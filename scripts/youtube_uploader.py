@@ -169,9 +169,32 @@ def load_niche():
     return niches["niches"][active], active
 
 
+def _hashtags_for(niche_name: str) -> list[str]:
+    """The niche's hashtags, minus the one that would miscategorise the video.
+
+    EVERY LIST ENDS IN #Shorts, and that was right while every video was one.
+    YouTube reads that tag as a declaration of format: a nine-minute landscape
+    upload carrying it is asking to be filed as something it is not, shown in
+    a feed it cannot compete in, and measured against retention curves that do
+    not apply to it. The tag is not decoration, it is a category, and it is the
+    kind of mistake that is invisible in the pipeline and obvious in the
+    analytics three weeks later.
+    """
+    tags = list(NICHE_HASHTAGS.get(niche_name, ["#Shorts"]))
+    try:
+        import video_format
+        if video_format.is_long():
+            tags = [t for t in tags if t.lower() != "#shorts"]
+            if not tags:
+                tags = ["#documentary"]
+    except Exception:
+        pass
+    return tags
+
+
 def build_metadata(script: str, niche_name: str, niche_cfg: dict) -> dict:
     """GPT-optimized title/description/tags (metadata_writer), legacy on failure."""
-    hashtags = NICHE_HASHTAGS.get(niche_name, ["#Shorts"])
+    hashtags = _hashtags_for(niche_name)
     category = niche_cfg.get("youtube_category_id") or DEFAULT_CATEGORIES.get(niche_name, "22")
 
     try:
