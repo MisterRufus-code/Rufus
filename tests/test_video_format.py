@@ -139,3 +139,28 @@ def test_an_insert_never_swallows_the_frame():
     for fmt in ("short", "long"):
         p = video_format.profile(fmt)
         assert p["insert_w"] / p["width"] < 0.5, fmt
+
+
+@pytest.mark.parametrize("fmt", ["short", "long"])
+def test_inserts_stay_in_the_upper_third_of_either_frame(monkeypatch, fmt):
+    """The rule is "upper third, three staggered rows, clear of the caption
+    band", and that rule is the same whatever the frame — so unlike the
+    caption SIZE, this one really is proportional. As fixed pixels, 560 on a
+    1080-tall landscape frame is an insert parked at mid-picture."""
+    monkeypatch.setenv("RUFUS_FORMAT", fmt)
+    import audio_gen
+    importlib.reload(audio_gen)
+    assert all(0 < y < audio_gen.H / 3 for y in audio_gen.INSERT_YS)
+    assert len(set(audio_gen.INSERT_YS)) == 3, "staggered, not stacked"
+
+
+def test_the_shorts_pixels_come_back_out_exactly(monkeypatch):
+    """A refactor that moves the existing channel by a pixel is a refactor
+    that has to be explained to somebody watching the videos."""
+    monkeypatch.setenv("RUFUS_FORMAT", "short")
+    import audio_gen
+    importlib.reload(audio_gen)
+    assert audio_gen.INSERT_YS == (300, 560, 430)
+    assert (audio_gen.W, audio_gen.H) == (1080, 1920)
+    assert audio_gen.FONTSIZE == 140 and audio_gen.MARGIN_V == 600
+    assert audio_gen.MIN_SEG == 1.6

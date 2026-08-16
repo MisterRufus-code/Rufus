@@ -75,7 +75,15 @@ BAR_HEIGHT   = 14          # retention progress bar thickness (px)
 # captions. Geometry only — which pictures and when is planned elsewhere.
 INSERT_W      = _vf.get("insert_w", 460)   # per-format; see video_format
 INSERT_MARGIN = 70         # gap from the frame edge
-INSERT_YS     = (300, 560, 430)   # cycled so consecutive inserts don't stack
+# Cycled so consecutive inserts don't stack. Kept as FRACTIONS of the frame
+# height rather than the pixels they used to be: 300, 560 and 430 put every
+# insert in the upper third of a 1920-tall Short, safely above the caption
+# band — and on a 1080-tall landscape frame the same three numbers put one at
+# mid-picture. Unlike the caption size, this one really is proportional: the
+# rule is "upper third, three staggered rows", and that rule is the same
+# whatever the frame. The Shorts pixels come back out exactly.
+INSERT_Y_FRACTIONS = (300 / 1920, 560 / 1920, 430 / 1920)
+INSERT_YS     = tuple(round(f * H) for f in INSERT_Y_FRACTIONS)
 
 # RUFUS_SFX=0 drops the whole synthesized layer (hit/bubble/riser) — the
 # lever for "these effects don't belong on this channel" without touching
