@@ -459,6 +459,11 @@ SETTINGS_GROUPS = [
         ("RUFUS_DISCORD_UPLOAD", "Attach the mp4", "bool",
          "Off posts a link only. On is the default and is what makes the "
          "phone useful — the video plays in the channel."),
+        ("RUFUS_DASHBOARD_URL", "Dashboard URL", "text",
+         "Where this dashboard is reachable from your phone (a tailnet "
+         "address, a tunnel). Every Discord and ntfy alert deep-links to the "
+         "video's own page with it, so approving is two taps instead of "
+         "hunting for the row."),
         ("RUFUS_NTFY_TOPIC", "ntfy topic", "text",
          "Free phone push, no account: install the ntfy app and subscribe to "
          "a topic nobody else would guess."),
@@ -1897,6 +1902,8 @@ def settings():
       {sections}
       <div style="position:sticky;bottom:0;padding:12px 0;background:inherit">
         <button class="btn save" type="submit">Save all</button>
+        <button class="btn" type="submit" formaction="/settings/test-notify"
+                formnovalidate style="margin-left:8px">Send a test notification</button>
         <a class="muted" href="/settings?reset=1" style="margin-left:14px"
            onclick="return confirm('Clear every override and go back to pipeline defaults?')">
            reset everything to defaults</a>
@@ -2019,6 +2026,63 @@ def settings_users_link():
             link = f"{auth._base_url()}/?token={u['token']}"
             return redirect(f"/settings/users?link={_urlquote(link)}&name={_urlquote(name)}")
     return redirect("/settings/users?error=" + _urlquote("No such user."))
+
+
+@app.route("/settings/test-notify", methods=["POST"])
+def settings_test_notify():
+    """Send one real notification, now, with the settings as saved.
+
+    WHY A BUTTON AND NOT A DOCUMENTED CHECK. The only other way to learn
+    whether the webhook works is to run a video and wait — twenty-five minutes
+    on this hardware — and a webhook URL is exactly the kind of value that is
+    wrong in a way nothing reveals until then: a trailing space, a copied
+    "Copy Webhook URL" that grabbed the channel link instead, a webhook deleted
+    on the Discord side months ago.
+
+    Tests what is ON SCREEN, not what is on disk. The button sits inside the
+    settings form, so the fields come with it — someone who pastes a webhook
+    and reaches for "test" before "save" is testing the webhook they just
+    pasted, which is the only reading of that click that is not a trap.
+    Falls back to the saved value for any field left empty.
+    """
+    auth.require("settings")
+    _require_localhost()
+    saved = dict(_load_settings())
+    for key in SETTINGS_KINDS:
+        posted = request.form.get(key, "").strip()
+        if posted:
+            saved[key] = posted
+    old = {k: os.environ.get(k) for k in saved}
+    os.environ.update(saved)
+    try:
+        import importlib
+        import notify
+        importlib.reload(notify)
+        backends = notify.configured()
+        if not backends:
+            return redirect("/settings?error=" + _urlquote(
+                "Nothing to test — no Discord webhook and no ntfy topic is "
+                "set. Fill one in and save first."))
+        ok = notify.send(
+            "Rufus: test notification",
+            "If you are reading this, the dashboard can reach you. Finished "
+            "videos will arrive here with their score, their hold reason and "
+            "the video itself.",
+            url=notify._dashboard_url(), priority="normal")
+        msg = (f"Sent via {', '.join(backends)} — check the channel."
+               if ok else
+               f"{', '.join(backends)} configured but the send failed. The "
+               f"usual cause is a webhook that was deleted or copied wrong; "
+               f"the Logs page has the reason.")
+        return redirect(f"/settings?{'msg' if ok else 'error'}=" + _urlquote(msg))
+    except Exception as e:
+        return redirect("/settings?error=" + _urlquote(f"Test failed: {e}"))
+    finally:
+        for k, v in old.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
 
 
 @app.route("/settings/save", methods=["POST"])

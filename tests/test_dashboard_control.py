@@ -133,3 +133,63 @@ def test_a_long_log_is_tailed_and_says_so():
 
 def test_logs_are_in_the_nav():
     assert any(href == "/logs" for href, _label, _perm in dashboard.NAV_ITEMS)
+
+
+# ── proving the notification works without a 25-minute run ──────────────────
+
+def test_a_test_notification_can_be_sent_from_the_form(client, monkeypatch):
+    """A webhook is exactly the kind of value that is wrong in a way nothing
+    reveals until a run finishes: a trailing space, a channel link copied
+    instead of the webhook, a webhook deleted months ago."""
+    sent = {}
+
+    import notify
+
+    def _fake_send(title, body, *, url=None, priority="normal"):
+        sent["title"] = title
+        return True
+
+    monkeypatch.setattr(notify, "configured", lambda: ["discord"])
+    monkeypatch.setattr(notify, "send", _fake_send)
+    monkeypatch.setattr(notify, "_dashboard_url", lambda: "")
+    monkeypatch.setattr("importlib.reload", lambda m: m)
+
+    r = client.post("/settings/test-notify",
+                    data={"RUFUS_DISCORD_WEBHOOK": "https://discord/api/x"})
+    assert "msg=" in r.headers["Location"]
+    assert "test" in sent.get("title", "").lower()
+
+
+def test_testing_with_nothing_configured_says_so(client, monkeypatch):
+    import notify
+    monkeypatch.setattr(notify, "configured", lambda: [])
+    monkeypatch.setattr("importlib.reload", lambda m: m)
+    r = client.post("/settings/test-notify", data={})
+    assert "error=" in r.headers["Location"]
+
+
+def test_the_test_uses_what_is_on_screen_not_only_what_is_saved(client):
+    """The button sits inside the settings form, so someone who pastes a
+    webhook and reaches for "test" before "save" tests the one they pasted."""
+    src = Path(dashboard.__file__).read_text(encoding="utf-8")
+    block = src.split('def settings_test_notify')[1].split("@app.route")[0]
+    assert "request.form.get(key" in block
+
+
+def test_the_environment_is_restored_after_a_test(client, monkeypatch):
+    """The test layers settings onto os.environ to match what a run sees. This
+    Flask process outlives the test, so leaving them set would silently change
+    every later launch."""
+    import os
+    monkeypatch.delenv("RUFUS_DISCORD_WEBHOOK", raising=False)
+    import notify
+    monkeypatch.setattr(notify, "configured", lambda: [])
+    monkeypatch.setattr("importlib.reload", lambda m: m)
+    client.post("/settings/test-notify",
+                data={"RUFUS_DISCORD_WEBHOOK": "https://leak/me"})
+    assert os.environ.get("RUFUS_DISCORD_WEBHOOK") is None
+
+
+def test_the_dashboard_url_is_settable_so_alerts_can_deep_link():
+    keys = {k for k, _l, _kind, _h in dashboard.SETTINGS_SCHEMA}
+    assert "RUFUS_DASHBOARD_URL" in keys
