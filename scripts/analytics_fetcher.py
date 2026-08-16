@@ -181,6 +181,13 @@ def _fetch_channel(channel) -> list[dict]:
 
 
 if __name__ == "__main__":
+    # Saved settings first — this runs from a scheduled task, so without them
+    # the daily digest is assembled and then posted nowhere. See settings_store.
+    try:
+        import settings_store
+        settings_store.apply()
+    except Exception as e:
+        print(f"[analytics] saved settings not read ({e})")
     import argparse
     ap = argparse.ArgumentParser()
     ap.add_argument("--channel", help="Fetch one channel (default: all enabled)")

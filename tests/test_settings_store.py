@@ -137,3 +137,30 @@ def test_the_ntfy_topic_is_never_echoed_into_a_log(tmp_path, monkeypatch, capsys
     assert "RUFUS_STYLE=stickman" in out
     # Masked in the LOG, still applied to the run.
     assert env["RUFUS_NTFY_TOPIC"] == "rufus-j10d4dmq5fpm1m"
+
+
+# ── every standalone entry point has to read the file ────────────────────────
+
+def test_the_entry_points_that_notify_read_the_saved_settings():
+    """main.py applied the settings and nothing else did, so a topic saved
+    from the dashboard was live for every real run and absent from three
+    processes that send notifications:
+
+      notify.py    the one command whose job is to answer "is this
+                   configured" — it printed "No backend configured" at
+                   somebody who had just configured it.
+      watchdog.py  started by a scheduled task with a bare environment. Its
+                   "the dashboard died" alert had nowhere to go, which is the
+                   exact failure the watchdog exists to prevent, arriving by
+                   another route.
+      analytics_fetcher.py  same, for the daily digest.
+
+    A settings page obeyed by some processes and not others teaches the owner
+    to distrust the form — this repo's own words, written when the gap was
+    between launchers rather than between entry points.
+    """
+    root = Path(settings_store.__file__).parent
+    for name in ("notify.py", "watchdog.py", "analytics_fetcher.py"):
+        text = (root / name).read_text(encoding="utf-8")
+        assert "settings_store" in text, name
+        assert "settings_store.apply()" in text, name

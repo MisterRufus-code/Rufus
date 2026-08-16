@@ -360,6 +360,19 @@ if __name__ == "__main__":
     # Manual sanity check for whichever backend(s) are configured — confirms
     # a webhook/token actually works before trusting it to alert on a real
     # crash at 3am. `python scripts/notify.py`.
+    #
+    # THE SAVED SETTINGS FIRST, and this is not a nicety. main.py applies them
+    # at startup and nothing else did, so a topic saved from the dashboard was
+    # live for every real run and invisible to the one command whose entire
+    # job is to answer "is this configured". It printed "No backend configured"
+    # at somebody who had just configured it — a test that disagrees with the
+    # thing it tests is worse than no test, because it sends you to fix
+    # something that was never broken.
+    try:
+        import settings_store
+        settings_store.apply()
+    except Exception as e:
+        print(f"[notify] saved settings not read ({e})")
     backends = configured()
     if not backends:
         print("No backend configured — set RUFUS_DISCORD_WEBHOOK, "

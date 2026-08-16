@@ -218,6 +218,18 @@ def _supervise(name: str, alive, start, state: dict, grace_s: float,
 
 
 def main() -> int:
+    # The dashboard's saved settings, for the same reason main.py reads them:
+    # this process is started by a scheduled task with a bare environment, so
+    # without this the ntfy topic and the Discord webhook saved from the
+    # settings page are simply absent here. Every restart alert would be
+    # written to a log nobody is reading — which is the precise situation this
+    # file exists to prevent, arriving by a different route.
+    try:
+        import settings_store
+        settings_store.apply()
+    except Exception as e:
+        _say(f"saved settings not read ({e})")
+
     interval = _interval()
     watch_comfy = _comfy_enabled()
     _say(f"polling every {interval}s "
