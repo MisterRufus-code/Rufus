@@ -501,7 +501,7 @@ def _split_beats(script: str, max_scenes: int = 10, min_words: int = 3,
     while grow and len(beats) < max_scenes:
         cut = _best_clause_split(beats, min_words + 1)
         if cut is None:
-            cut = _best_word_split(beats, _MIN_BEAT_WORDS)
+            cut = _best_word_split(beats, _MIN_WORD_SPLIT_WORDS)
         if cut is None:
             break
         i, left, right = cut
@@ -516,6 +516,15 @@ def _split_beats(script: str, max_scenes: int = 10, min_words: int = 3,
 # preference below could never apply and "But most found the / goldfields far
 # harsher" was the only answer available.
 _MIN_BEAT_WORDS = 3
+
+# A WORD SPLIT NEEDS MORE ROOM THAN A CLAUSE SPLIT, and this is the difference
+# that fixed the machine-gun run. A clause split lands on a comma or a dash —
+# a pause the narration already takes — so the renderer has somewhere real to
+# put the cut. A word split lands mid-phrase, where there is no pause at all,
+# so the cut falls back to the timer; and a three-word fragment is about 1.1
+# seconds at this channel's pace, under the 1.6s a shot needs to read as one.
+# Five words is roughly 1.9 seconds, which holds.
+_MIN_WORD_SPLIT_WORDS = 5
 
 
 # Where a sentence may be broken into two pictures. Strong punctuation only:
@@ -543,10 +552,13 @@ def _target_beats(script: str) -> int:
     over it. It is more BEATS, because a beat is what gets its own storyboard
     shot, its own prompt and its own cut.
 
-    One picture per ~4 spoken words, which at this channel's narration pace is
-    a cut every 1.5 seconds or so. Floor of 10 keeps a very short script from
-    becoming a slideshow of three; ceiling of 30 is where the storyboard call
-    starts losing the thread and the GPU bill stops being worth it.
+    One picture per ~5 spoken words, which at this channel's narration pace is
+    a shot of roughly two seconds. Four words was the first attempt and it was
+    too fast: a real 24-picture run put thirteen of its shots on the renderer's
+    minimum-length floor, because the beat count asked for more cuts than the
+    narration had pauses to put them on. Floor of 10 keeps a very short script
+    from becoming a slideshow of three; ceiling of 30 is where the storyboard
+    call starts losing the thread and the GPU bill stops being worth it.
 
     SD_CLIPS overrides, and is still the dial to reach for.
     """
@@ -556,7 +568,7 @@ def _target_beats(script: str) -> int:
             return max(1, int(override))
         except ValueError:
             print(f"[beats] SD_CLIPS={override!r} is not a number — ignoring")
-    return max(10, min(30, round(len(script.split()) / 4.0)))
+    return max(10, min(30, round(len(script.split()) / 5.0)))
 
 
 def _best_clause_split(beats: list[str], min_words: int):

@@ -126,7 +126,13 @@ SFX_RISER_GAIN  = float(os.environ.get("RUFUS_RISER_GAIN", "0.28"))   # riser le
 FIRST_CUT_MIN = 2.0        # hook cut window — research: pattern interrupt by ~3s
 FIRST_CUT_MAX = 4.2
 SNAP_WINDOW   = 2.0        # max distance a cut may move to land on a sentence end
-MIN_SEG       = 1.2        # minimum clip duration after planning
+# MINIMUM SHOT LENGTH. Raised from 1.2s after a real 24-picture run came out
+# machine-gun: thirteen of its twenty-four shots sat EXACTLY on this floor
+# (6.3s, 7.5s, 8.7s — 1.2 apart to the frame), which is not an edit, it is a
+# clamp. The planner had more pictures than the narration had pauses and spent
+# the remainder at the minimum. Below about 1.5s a picture reads as a flash
+# rather than a shot, so the floor now sits where a shot starts being one.
+MIN_SEG       = 1.6
 
 WHITE = "&H00FFFFFF"
 GREEN = "&H0000FF00"
@@ -589,17 +595,71 @@ def _clause_ends(segments) -> list[float]:
     return ends
 
 
-def _plan_cuts(sentence_ends: list[float], audio_dur: float, n: int) -> list[float]:
+def _max_shots(audio_dur: float) -> int:
+    """The most shots this audio can hold without any of them being a flash.
+
+    ASKING FOR MORE PICTURES THAN THE NARRATION CAN CARRY is what produced the
+    machine-gun run: the beat count is decided from the script's word count
+    before the voice exists, and if the finished audio is shorter than that
+    assumed, every surplus cut lands on the minimum. Better to render fewer
+    pictures than to show them all too briefly to register.
+    """
+    if audio_dur <= 0:
+        return 1
+    return max(1, int(audio_dur // MIN_SEG))
+
+
+def _tone_grid(first: float, total: float, n: int,
+               tones: list[str] | None) -> list[float]:
+    """Where each remaining cut wants to be, before snapping to a pause.
+
+    An EVEN grid gives every beat the same length whatever it carries, so the
+    number, the turn and the line that lets it sit all pass at the rate of "and
+    then this happened" — which a viewer reads as a slideshow however good the
+    pictures are. Each beat's share of the remaining time is instead weighted
+    by its tone (see emotional_map.hold_weight), so the reveal breathes and the
+    connective tissue does not.
+
+    No tones, or the wrong number of them, gives exactly the even grid this
+    replaced — the weighting is an improvement on the rhythm, never a
+    requirement for having one.
+    """
+    span = total - first
+    if n <= 1 or span <= 0:
+        return []
+    weights = [1.0] * (n - 1)
+    if tones and len(tones) >= n:
+        try:
+            import emotional_map
+            # Beat 0 ends at `first`, so the weights that matter here are the
+            # ones for beats 1..n-1.
+            weights = [emotional_map.hold_weight(t) for t in tones[1:n]]
+        except Exception:
+            weights = [1.0] * (n - 1)
+    scale = span / sum(weights)
+    grid, at = [], first
+    for w in weights[:-1]:
+        at += w * scale
+        grid.append(at)
+    return grid
+
+
+def _plan_cuts(sentence_ends: list[float], audio_dur: float, n: int,
+               tones: list[str] | None = None) -> list[float]:
     """Choose n-1 cut timestamps that land on sentence boundaries.
 
     - Cut 1 lands in [FIRST_CUT_MIN, FIRST_CUT_MAX]s: a quick scene change right
       after the hook (the pattern interrupt that resets swipe-away attention).
-    - Remaining cuts snap to the nearest sentence end within SNAP_WINDOW of an
-      equal-spacing grid, so scene changes happen where the narration breathes.
+    - Remaining cuts snap to the nearest sentence end within SNAP_WINDOW of a
+      TONE-WEIGHTED grid, so scene changes happen where the narration breathes
+      and the beats that carry the story get longer to do it in.
     - Monotonic with MIN_SEG spacing; falls back to the grid where no sentence
       end is close enough.
     """
     if n <= 1 or audio_dur <= 0:
+        return []
+    n = min(n, _max_shots(audio_dur))
+    if n <= 1:
         return []
 
     usable = sorted(e for e in sentence_ends if 1.0 < e < audio_dur - 1.0)
@@ -613,9 +673,8 @@ def _plan_cuts(sentence_ends: list[float], audio_dur: float, n: int) -> list[flo
     # n-grid — the hook cut moved, so the rest must rebalance) and snap each to
     # the nearest unused sentence end within SNAP_WINDOW.
     cuts: list[float] = [first]
-    for j in range(1, n - 1):
-        target = first + (audio_dur - first) * j / (n - 1)
-        near   = [e for e in usable if abs(e - target) <= SNAP_WINDOW and e not in cuts]
+    for target in _tone_grid(first, audio_dur, n, tones):
+        near = [e for e in usable if abs(e - target) <= SNAP_WINDOW and e not in cuts]
         cuts.append(min(near, key=lambda e: abs(e - target)) if near else target)
 
     # Sanitize: strictly increasing, MIN_SEG apart, inside the timeline
@@ -1161,7 +1220,7 @@ def render(script: str, bg_paths: "Path | list[Path]", out_dir: Path,
         _snap_points = _sentence_ends(segments)
         if n > len(_snap_points) + 1:
             _snap_points = sorted(set(_snap_points) | set(_clause_ends(segments)))
-        boundaries = _plan_cuts(_snap_points, audio_dur, n)
+        boundaries = _plan_cuts(_snap_points, audio_dur, n, plan_tones)
         n = len(boundaries) + 1 if boundaries else 1
         bg_paths = bg_paths[:n]
         if n < n_supplied:

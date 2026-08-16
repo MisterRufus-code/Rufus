@@ -31,12 +31,32 @@ _REAL = ("In 1849, James Marshall knelt by the American River, California, "
 
 # ── how many ────────────────────────────────────────────────────────────────
 
-def test_a_real_script_becomes_about_twenty_pictures(monkeypatch):
-    """Ten sentences used to mean ten pictures, whatever anyone set."""
+def test_a_real_script_becomes_a_dozen_or_more_pictures(monkeypatch):
+    """Ten sentences used to mean ten pictures, whatever anyone set.
+
+    The count asked for is one per ~5 spoken words; what comes back is fewer,
+    and deliberately so — the splitter stops before it starts cutting
+    mid-phrase, because a cut with no pause under it has nowhere real to land.
+    Asking for 18 and getting 13 good ones is the trade, and it is the right
+    way round: the first version asked for 24 and a live run put thirteen of
+    its shots on the renderer's minimum-length floor."""
     monkeypatch.delenv("SD_CLIPS", raising=False)
     target = main._target_beats(_REAL)
-    assert 18 <= target <= 26, target
-    assert len(main._split_beats(_REAL, max_scenes=target, grow=True)) == target
+    assert 15 <= target <= 22, target
+    got = main._split_beats(_REAL, max_scenes=target, grow=True)
+    assert 12 <= len(got) <= target, len(got)
+
+
+def test_no_beat_is_too_short_to_hold_a_shot(monkeypatch):
+    """A three-word fragment is about 1.1s of narration, under the 1.6s a
+    picture needs to read as a shot rather than a flash. Whole short SENTENCES
+    are fine — they have a real pause either side."""
+    monkeypatch.delenv("SD_CLIPS", raising=False)
+    got = main._split_beats(_REAL, max_scenes=main._target_beats(_REAL), grow=True)
+    for b in got:
+        words = len(b.split())
+        ends_sentence = b.rstrip().endswith((".", "?", "!"))
+        assert words >= main._MIN_WORD_SPLIT_WORDS or ends_sentence, b
 
 
 def test_sd_clips_still_overrides(monkeypatch):
@@ -71,7 +91,7 @@ def test_max_scenes_is_still_only_a_ceiling_by_default():
     script = ("First sentence here now. Second sentence follows it. "
               "Third one closes the whole thing.")
     assert len(main._split_beats(script, max_scenes=10)) == 3
-    assert len(main._split_beats(script, max_scenes=10, grow=True)) > 3
+    assert len(main._split_beats(script, max_scenes=10, grow=True)) >= 3
 
 
 # ── where the cut lands ─────────────────────────────────────────────────────

@@ -140,6 +140,36 @@ def sfx_weight(tone: object) -> float:
     return _SFX_WEIGHT[normalise(tone)]
 
 
+# tone → how long this beat's PICTURE should hold, relative to an even share.
+#
+# WHY THE SHOTS SHOULD NOT BE EQUAL LENGTH. The cut planner divided the
+# timeline evenly and snapped to the nearest pause, which gives every beat the
+# same duration whatever it carries — so the number, the turn and the line that
+# lets it sit all flash past at the same rate as "and then this happened". A
+# viewer reads an even rhythm as a slideshow no matter how good the pictures
+# are. These are deliberately mild: this is a fast-cut channel, and the point
+# is that the reveal breathes and the connective tissue does not, not that the
+# edit lurches.
+_HOLD_WEIGHT: dict[str, float] = {
+    "revelation": 1.45,   # the turn. Let it land before moving on.
+    "weight":     1.30,   # consequence. The beat a viewer feels.
+    "resolution": 1.25,   # the closing line, given room to sit.
+    "tension":    1.05,   # slightly held — dread is a held frame.
+    "curiosity":  0.85,   # the question is asked quickly, then answered.
+    "neutral":    0.85,   # information. Say it and move.
+}
+
+
+def hold_weight(tone: object) -> float:
+    """How long a beat of this tone should hold, relative to an even share.
+
+    1.0 is exactly the even grid the planner used before. Everything else is
+    time borrowed from the connective beats and given to the ones that carry
+    the story.
+    """
+    return _HOLD_WEIGHT[normalise(tone)]
+
+
 def pause_after(tone: object) -> float:
     """Extra silence after a beat of this tone, in seconds. 0.0 for neutral."""
     return _PAUSE_AFTER[normalise(tone)]
