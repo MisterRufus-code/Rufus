@@ -238,3 +238,55 @@ def test_a_review_failure_does_not_break_the_page(client, monkeypatch):
     page = client.get("/insights")
     assert page.status_code == 200
     assert "no debug folder" in page.get_data(as_text=True)
+
+
+# ── the look ────────────────────────────────────────────────────────────────
+
+def test_colours_are_defined_once_as_tokens():
+    """The old stylesheet hardcoded #171a21 and #2a2d34 across a dozen rules
+    and patched light mode with a dozen one-off media queries, so every new
+    component had to remember to bring its own override — and the ones that
+    forgot were unreadable on a white page."""
+    style = dashboard.PAGE_STYLE
+    assert "--surface:" in style and "--border:" in style and "--accent:" in style
+    # The light palette is a redefinition of the same tokens, not a second set
+    # of rules.
+    light = style.split("prefers-color-scheme: light")[1][:400]
+    assert "--bg:" in light and "--surface:" in light
+
+
+def test_no_component_hardcodes_the_dark_surface_colour():
+    """A hardcoded dark background on a light page is the exact bug this
+    replaced: the log viewer rendered a near-black block on white."""
+    src = Path(dashboard.__file__).read_text(encoding="utf-8")
+    body = src.split("</style></head><body>", 1)[1]
+    for literal in ("#171a21", "#0b0d12", "#2a2d34"):
+        assert literal not in body, literal
+
+
+def test_the_review_queue_is_usable_from_a_phone():
+    """The owner reviews from a phone; the default 10px tap target is not
+    enough for approve/reject."""
+    style = dashboard.PAGE_STYLE
+    mobile = style.split("max-width: 760px")[-1]
+    assert ".btn { padding: 12px" in mobile
+
+
+def test_the_front_page_leads_with_what_to_change(client, monkeypatch):
+    """The page opened on a topic box, which assumes the answer to "what now"
+    is always "make another video" — and when most recent runs share a defect,
+    another video is precisely the wrong move."""
+    monkeypatch.setattr(dashboard, "_advice_now", lambda: (
+        [{"title": "Pictures are held too long", "severity": "high"},
+         {"title": "second thing", "severity": "medium"}],
+        {"state": "needs work", "detail": "Pictures are held too long"}))
+    page = client.get("/").get_data(as_text=True)
+    assert page.index("Pictures are held too long") < page.index("Make a video about")
+    assert "and 1 more" in page
+
+
+def test_a_broken_advisor_never_breaks_the_front_page(client, monkeypatch):
+    def _boom():
+        raise RuntimeError("nope")
+    monkeypatch.setattr(dashboard, "_advice_now", _boom)
+    assert client.get("/").status_code == 200

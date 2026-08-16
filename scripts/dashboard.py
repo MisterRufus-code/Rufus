@@ -987,96 +987,172 @@ PAGE_STYLE = """<!doctype html><html><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Rufus Dashboard</title>
 <style>
-  :root { color-scheme: dark light; }
-  body { font-family: -apple-system, Segoe UI, Roboto, sans-serif; margin: 0;
-         background: #0f1115; color: #e5e7eb; }
-  @media (prefers-color-scheme: light) { body { background: #f7f7f8; color: #1a1a1a; } }
-  header { padding: 16px 24px; border-bottom: 1px solid #2a2d34; }
+  /* ONE PALETTE, DEFINED ONCE. The previous stylesheet hardcoded #171a21 and
+     #2a2d34 in a dozen rules and patched light mode with a dozen more
+     one-off media queries — so every new component had to remember to bring
+     its own light-mode override, and the ones that forgot (the log viewer's
+     dark pre block on a white page) were unreadable. Tokens make the default
+     correct instead of remembered. */
+  :root {
+    color-scheme: dark light;
+    --bg:      #0f1115;
+    --surface: #171a21;
+    --raised:  #1d212a;
+    --border:  #2a2d34;
+    --text:    #e5e7eb;
+    --dim:     #9ca3af;
+    --accent:  #3b82f6;
+    --ok:      #22c55e;
+    --warn:    #eab308;
+    --bad:     #ef4444;
+    --radius:  10px;
+    --shadow:  0 1px 2px rgba(0,0,0,.28);
+  }
+  @media (prefers-color-scheme: light) {
+    :root {
+      --bg: #f6f7f9; --surface: #ffffff; --raised: #ffffff;
+      --border: #e3e6ea; --text: #14171c; --dim: #5f6672;
+      --shadow: 0 1px 2px rgba(16,24,40,.06), 0 1px 3px rgba(16,24,40,.08);
+    }
+  }
+
+  * { box-sizing: border-box; }
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+         Helvetica, Arial, sans-serif; margin: 0; background: var(--bg);
+         color: var(--text); -webkit-font-smoothing: antialiased; }
+  a { color: var(--accent); }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px;
+                   border-radius: 4px; }
+
+  header { position: sticky; top: 0; z-index: 20; padding: 12px 24px;
+           background: color-mix(in srgb, var(--bg) 88%, transparent);
+           backdrop-filter: saturate(180%) blur(10px);
+           border-bottom: 1px solid var(--border);
+           display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
   header a { color: inherit; text-decoration: none; }
-  main { padding: 20px 24px; max-width: 1100px; margin: 0 auto; }
-  h1 { font-size: 20px; margin: 0; }
-  h2 { font-size: 15px; color: #9ca3af; text-transform: uppercase;
-       letter-spacing: 0.05em; margin: 28px 0 10px; }
+  main { padding: 22px 24px 60px; max-width: 1140px; margin: 0 auto; }
+  h1 { font-size: 18px; margin: 0; letter-spacing: -0.01em; }
+  h2 { font-size: 12px; color: var(--dim); text-transform: uppercase;
+       letter-spacing: 0.08em; margin: 30px 0 10px; font-weight: 700; }
+
   .cards { display: flex; gap: 12px; flex-wrap: wrap; }
-  .card { background: #171a21; border: 1px solid #2a2d34; border-radius: 10px;
-          padding: 14px 18px; min-width: 120px; }
-  @media (prefers-color-scheme: light) { .card { background: #fff; border-color: #e5e7eb; } }
-  .card .num { font-size: 26px; font-weight: 700; }
-  .card .label { font-size: 12px; color: #9ca3af; }
-  table { width: 100%; border-collapse: collapse; margin-top: 6px; }
-  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid #2a2d34; font-size: 14px; }
-  @media (prefers-color-scheme: light) { th, td { border-color: #e5e7eb; } }
-  th { color: #9ca3af; font-weight: 600; font-size: 12px; text-transform: uppercase; }
-  tr:hover td { background: rgba(59,130,246,0.06); }
+  .card { background: var(--surface); border: 1px solid var(--border);
+          border-radius: var(--radius); padding: 14px 18px; min-width: 120px;
+          box-shadow: var(--shadow); }
+  .card .num { font-size: 26px; font-weight: 700; letter-spacing: -0.02em; }
+  .card .label { font-size: 12px; color: var(--dim); }
+
+  table { width: 100%; border-collapse: collapse; margin-top: 6px;
+          background: var(--surface); border: 1px solid var(--border);
+          border-radius: var(--radius); overflow: hidden;
+          box-shadow: var(--shadow); }
+  th, td { text-align: left; padding: 10px 12px;
+           border-bottom: 1px solid var(--border); font-size: 14px;
+           vertical-align: top; }
+  tr:last-child td { border-bottom: none; }
+  th { color: var(--dim); font-weight: 700; font-size: 11px;
+       text-transform: uppercase; letter-spacing: 0.06em; }
+  tbody tr:hover td, tr:hover td { background: color-mix(in srgb, var(--accent) 7%, transparent); }
   a.row-link { color: inherit; text-decoration: none; display: block; }
-  .badge { display: inline-block; padding: 2px 8px; border-radius: 999px;
-           font-size: 12px; font-weight: 600; }
-  .badge.ok { background: rgba(34,197,94,0.15); color: #22c55e; }
-  .badge.held { background: rgba(239,68,68,0.15); color: #ef4444; }
-  .badge.pending { background: rgba(234,179,8,0.15); color: #eab308; }
-  .muted { color: #9ca3af; font-size: 13px; }
-  .msg { padding: 10px 14px; border-radius: 8px; margin-bottom: 14px; font-size: 14px; }
-  .msg.ok { background: rgba(34,197,94,0.12); color: #22c55e; }
-  .msg.error { background: rgba(239,68,68,0.12); color: #ef4444; }
+
+  .badge { display: inline-block; padding: 2px 9px; border-radius: 999px;
+           font-size: 11px; font-weight: 700; letter-spacing: 0.02em;
+           text-transform: uppercase; }
+  .badge.ok      { background: color-mix(in srgb, var(--ok) 16%, transparent);  color: var(--ok); }
+  .badge.held    { background: color-mix(in srgb, var(--bad) 16%, transparent); color: var(--bad); }
+  .badge.pending { background: color-mix(in srgb, var(--warn) 18%, transparent);color: var(--warn); }
+
+  .muted { color: var(--dim); font-size: 13px; line-height: 1.5; }
+  code { background: color-mix(in srgb, var(--dim) 14%, transparent);
+         padding: 1px 5px; border-radius: 4px; font-size: 12px; }
+  pre { background: var(--surface); border: 1px solid var(--border);
+        border-radius: var(--radius); color: var(--text); }
+
+  .msg { padding: 11px 14px; border-radius: 8px; margin-bottom: 14px;
+         font-size: 14px; border: 1px solid transparent; }
+  .msg.ok    { background: color-mix(in srgb, var(--ok) 12%, transparent);
+               border-color: color-mix(in srgb, var(--ok) 30%, transparent); color: var(--ok); }
+  .msg.error { background: color-mix(in srgb, var(--bad) 12%, transparent);
+               border-color: color-mix(in srgb, var(--bad) 30%, transparent); color: var(--bad); }
+
   .actions { margin: 16px 0; display: flex; gap: 10px; flex-wrap: wrap; }
-  .btn { border: none; border-radius: 8px; padding: 10px 18px; font-size: 14px;
-         font-weight: 600; cursor: pointer; }
-  .btn.approve { background: #22c55e; color: #06210f; }
-  .btn.reject  { background: #ef4444; color: #2a0a0a; }
-  .btn.save    { background: #3b82f6; color: #06122a; }
-  .field { display: block; width: 100%; box-sizing: border-box; margin: 6px 0 14px;
-           padding: 8px 10px; border-radius: 6px; border: 1px solid #2a2d34;
-           background: #171a21; color: inherit; font-family: inherit; font-size: 14px; }
-  @media (prefers-color-scheme: light) { .field { background: #fff; border-color: #d1d5db; } }
-  label { font-size: 12px; color: #9ca3af; text-transform: uppercase; letter-spacing: 0.05em; }
+  .btn { border: 1px solid var(--border); background: var(--raised);
+         color: var(--text); border-radius: 8px; padding: 10px 18px;
+         font-size: 14px; font-weight: 600; cursor: pointer;
+         transition: transform .06s ease, filter .12s ease; }
+  .btn:hover { filter: brightness(1.08); }
+  .btn:active { transform: translateY(1px); }
+  .btn.approve { background: var(--ok);     color: #06210f; border-color: transparent; }
+  .btn.reject  { background: var(--bad);    color: #2a0a0a; border-color: transparent; }
+  .btn.save    { background: var(--accent); color: #06122a; border-color: transparent; }
+
+  .field { display: block; width: 100%; margin: 6px 0 14px; padding: 9px 11px;
+           border-radius: 8px; border: 1px solid var(--border);
+           background: var(--bg); color: inherit; font-family: inherit;
+           font-size: 14px; }
+  select { padding: 8px 10px; border-radius: 8px; border: 1px solid var(--border);
+           background: var(--bg); color: inherit; font: inherit; }
+  label { font-size: 11px; color: var(--dim); text-transform: uppercase;
+          letter-spacing: 0.06em; }
+
   .filters { margin: 12px 0; }
-  .filters a { margin-right: 10px; font-size: 13px; color: #3b82f6; text-decoration: none; }
-  .back { color: #3b82f6; text-decoration: none; font-size: 14px; }
-  .script { white-space: pre-wrap; font-size: 15px; line-height: 1.5;
-            background: #171a21; border: 1px solid #2a2d34; border-radius: 8px;
-            padding: 14px; }
-  @media (prefers-color-scheme: light) { .script { background: #fff; border-color: #e5e7eb; } }
+  .filters a { margin-right: 10px; font-size: 13px; text-decoration: none; }
+  .back { text-decoration: none; font-size: 14px; }
+  .script { white-space: pre-wrap; font-size: 15px; line-height: 1.6;
+            background: var(--surface); border: 1px solid var(--border);
+            border-radius: var(--radius); padding: 14px; }
   .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
-  @media (max-width: 700px) { .grid2 { grid-template-columns: 1fr; } }
+  @media (max-width: 760px) { .grid2 { grid-template-columns: 1fr; } }
   .assets a { display: inline-block; margin: 4px 8px 4px 0; font-size: 13px;
-              color: #3b82f6; text-decoration: none; }
-  .navlink { color: #9ca3af; text-decoration: none; font-size: 14px; margin-left: 16px; }
-  .navlink:hover { color: #3b82f6; }
-  .orphan { background: #171a21; border: 1px solid #2a2d34; border-radius: 8px;
-            padding: 12px 14px; margin-bottom: 10px; }
-  @media (prefers-color-scheme: light) { .orphan { background: #fff; border-color: #e5e7eb; } }
+              text-decoration: none; }
+
+  .navlink { color: var(--dim); text-decoration: none; font-size: 14px;
+             margin-left: 14px; padding: 5px 2px; border-bottom: 2px solid transparent; }
+  .navlink:hover { color: var(--accent); border-bottom-color: var(--accent); }
+
+  .orphan { background: var(--surface); border: 1px solid var(--border);
+            border-radius: 8px; padding: 12px 14px; margin-bottom: 10px; }
+
   /* Live status bar — polls /api/status, no page reload */
   #livebar { display: flex; gap: 14px; flex-wrap: wrap; align-items: center;
-             background: #171a21; border: 1px solid #2a2d34; border-radius: 10px;
-             padding: 10px 14px; margin-bottom: 16px; font-size: 13px; }
-  @media (prefers-color-scheme: light) { #livebar { background: #fff; border-color: #e5e7eb; } }
-  #livebar .dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block;
-                  margin-right: 6px; vertical-align: middle; }
-  .dot.on   { background: #22c55e; box-shadow: 0 0 0 3px rgba(34,197,94,0.15); }
-  .dot.off  { background: #ef4444; box-shadow: 0 0 0 3px rgba(239,68,68,0.15); }
-  .dot.warn { background: #eab308; box-shadow: 0 0 0 3px rgba(234,179,8,0.15); }
-  .dot.busy { background: #3b82f6; animation: pulse 1.4s ease-in-out infinite; }
+             background: var(--surface); border: 1px solid var(--border);
+             border-radius: var(--radius); padding: 10px 14px;
+             margin-bottom: 16px; font-size: 13px; box-shadow: var(--shadow); }
+  #livebar .dot { width: 9px; height: 9px; border-radius: 50%;
+                  display: inline-block; margin-right: 6px; vertical-align: middle; }
+  .dot.on   { background: var(--ok);     box-shadow: 0 0 0 3px color-mix(in srgb, var(--ok) 18%, transparent); }
+  .dot.off  { background: var(--bad);    box-shadow: 0 0 0 3px color-mix(in srgb, var(--bad) 18%, transparent); }
+  .dot.warn { background: var(--warn);   box-shadow: 0 0 0 3px color-mix(in srgb, var(--warn) 18%, transparent); }
+  .dot.busy { background: var(--accent); animation: pulse 1.4s ease-in-out infinite; }
   @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.35; } }
   #livebar .item { white-space: nowrap; }
-  .progress { height: 6px; background: #2a2d34; border-radius: 999px;
+  .progress { height: 6px; background: var(--border); border-radius: 999px;
               overflow: hidden; min-width: 140px; flex: 1 1 140px; }
-  .progress > i { display: block; height: 100%; background: #3b82f6;
+  .progress > i { display: block; height: 100%; background: var(--accent);
                   border-radius: 999px; transition: width .4s ease; }
-  .whoami { float: right; font-size: 12px; color: #9ca3af; }
-  .whoami .role { background: rgba(59,130,246,0.15); color: #3b82f6; padding: 2px 8px;
-                  border-radius: 999px; font-weight: 600; margin-left: 6px; }
+
+  .whoami { margin-left: auto; font-size: 12px; color: var(--dim); }
+  .whoami .role { background: color-mix(in srgb, var(--accent) 16%, transparent);
+                  color: var(--accent); padding: 2px 8px; border-radius: 999px;
+                  font-weight: 700; margin-left: 6px; }
+
   .thumbgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
                gap: 14px; margin-top: 10px; }
-  .thumbcard { background: #171a21; border: 1px solid #2a2d34; border-radius: 10px;
-               overflow: hidden; }
-  @media (prefers-color-scheme: light) { .thumbcard { background: #fff; border-color: #e5e7eb; } }
-  .thumbcard img { width: 100%; display: block; background: #0b0d11; }
-  .thumbcard .meta { padding: 8px 10px; font-size: 12px; color: #9ca3af; }
-  @media (max-width: 700px) {
-    header { padding: 12px 14px; }
-    main { padding: 14px; }
+  .thumbcard { background: var(--surface); border: 1px solid var(--border);
+               border-radius: var(--radius); overflow: hidden;
+               box-shadow: var(--shadow); transition: transform .1s ease; }
+  .thumbcard:hover { transform: translateY(-2px); }
+  .thumbcard img { width: 100%; display: block; background: var(--bg); }
+  .thumbcard .meta { padding: 8px 10px; font-size: 12px; color: var(--dim); }
+
+  @media (max-width: 760px) {
+    header { padding: 10px 14px; }
+    main { padding: 14px 14px 48px; }
     .navlink { display: inline-block; margin: 6px 12px 0 0; }
-    .whoami { float: none; display: block; margin-top: 8px; }
+    .whoami { margin-left: 0; display: block; margin-top: 8px; }
+    /* Tap targets. The review queue is worked from a phone. */
+    .btn { padding: 12px 20px; }
+    th, td { padding: 12px 10px; }
   }
 </style></head><body>
 """
@@ -1313,8 +1389,31 @@ def index():
     else:
         reject_html = "<p class='muted'>No rejected attempts recorded yet.</p>"
 
+    # THE ONE THING TO DO NEXT, above everything else on the page. The front
+    # page opened on a topic box, which assumes the answer to "what now" is
+    # always "make another video" — and when four of the last six runs share a
+    # defect, another video is precisely the wrong move. This is the top
+    # finding from /advice, in a line, with a way through to it.
+    advice_html = ""
+    try:
+        items, ready = _advice_now()
+        tone = {"needs work": "held", "workable": "pending",
+                "good": "ok", "unmeasured": "pending"}.get(ready["state"], "pending")
+        top = (f' — <strong>{_esc(items[0]["title"])}</strong>' if items else "")
+        more = (f' <span class="muted">and {len(items) - 1} more</span>'
+                if len(items) > 1 else "")
+        advice_html = (
+            f'<div class="card" style="width:100%;margin-bottom:18px">'
+            f'<span class="badge {tone}">{_esc(ready["state"])}</span>{top}{more}'
+            f'<div class="muted" style="margin-top:6px">'
+            f'<a href="/advice">what to change →</a> · '
+            f'<a href="/insights">the measurements →</a></div></div>')
+    except Exception as e:                       # never break the front page
+        print(f"[dashboard] advice summary unavailable: {e}")
+
     body = f"""
     {_msg_banner()}
+    {advice_html}
     {topic_form}
     {filt_html}
     {cards}
@@ -1389,10 +1488,10 @@ def failures():
         for c in categories:
             bars += (f"<div style='margin:6px 0'>"
                      f"<span style='display:inline-block;width:130px'>{_esc(c['category'])}</span>"
-                     f"<span style='display:inline-block;width:200px;background:#2a2d34;"
+                     f"<span style='display:inline-block;width:200px;background:var(--border);"
                      f"border-radius:4px;overflow:hidden;vertical-align:middle'>"
                      f"<span style='display:block;height:10px;width:{c['pct']}%;"
-                     f"background:#3b82f6'></span></span> "
+                     f"background:var(--accent)'></span></span> "
                      f"<b>{c['count']}</b> <span class='muted'>({c['pct']}%)</span></div>\n")
         category_html = bars
 
@@ -2271,9 +2370,9 @@ def insights_page():
     recurring = ""
     for r in data.get("recurring", []):
         pct = int(r["share"] * 100)
-        bar = ('<div style="height:6px;border-radius:3px;background:#2a2d34;'
+        bar = ('<div style="height:6px;border-radius:3px;background:var(--border);'
                f'overflow:hidden"><div style="height:6px;width:{pct}%;'
-               f'background:{"#ef4444" if pct >= 50 else "#eab308"}"></div></div>')
+               f'background:var({"--bad" if pct >= 50 else "--warn"})"></div></div>')
         recurring += (f'<tr><td><code>{_esc(r["id"])}</code></td>'
                       f'<td style="width:45%">{bar}</td>'
                       f'<td class="muted">{r["runs"]} of {data["runs_reviewed"]} runs</td></tr>')
@@ -2393,7 +2492,7 @@ def logs_page():
 
     rows = ""
     for f in files:
-        sel = ' style="background:rgba(59,130,246,0.12)"' if f["name"] == name else ""
+        sel = ' style="background:color-mix(in srgb, var(--accent) 12%, transparent)"' if f["name"] == name else ""
         rows += (f'<tr{sel}><td><a class="row-link" href="/logs?file={_urlquote(f["name"])}">'
                  f'{_esc(f["name"])}</a></td>'
                  f'<td class="muted">{f["source"]}</td>'
@@ -2415,8 +2514,7 @@ def logs_page():
     {note}
     {table}
     <h2>{_esc(name) or "—"}</h2>
-    <pre style="background:#0b0d12;border:1px solid #2a2d34;border-radius:10px;
-                padding:14px;overflow:auto;max-height:70vh;font-size:12px;
+    <pre style="padding:14px;overflow:auto;max-height:70vh;font-size:12px;
                 line-height:1.45;white-space:pre-wrap;word-break:break-word">{_esc(text)}</pre>
     """
     return _head() + body + PAGE_TAIL
