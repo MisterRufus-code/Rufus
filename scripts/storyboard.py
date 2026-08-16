@@ -70,22 +70,62 @@ def _direction_clause() -> str:
             if text else "")
 
 
+def _brief() -> str:
+    """What kind of video this is, from the format profile.
+
+    HARD-CODED AS "a 40-second vertical documentary Short" until long-form
+    existed, and that line does real work — it is why the shots are composed
+    for a phone held upright and why the sequence is planned tight. Handed a
+    nine-minute landscape script it would have been quietly, confidently
+    wrong about both, and nothing downstream would have said so.
+    """
+    try:
+        import video_format
+        p = video_format.profile()
+        if p["id"] == "long":
+            return ("a long-form landscape explainer video, roughly nine "
+                    "minutes, watched on a large screen")
+        return "a 40-second vertical documentary Short"
+    except Exception:
+        return "a 40-second vertical documentary Short"
+
+
 def _prompt(script: str, beats: list[str], era_tags: list[str],
-            character_clause: str = "", scene: str = "") -> str:
+            character_clause: str = "", scene: str = "",
+            carry: str = "", setting: str = "", through: str = "",
+            shot_offset: int = 0, shot_total: int = 0) -> str:
+    """The storyboard brief.
+
+    The last five arguments are the SEAM, and are empty for a Short — it is
+    planned in one pass and needs none of them. A long-form script is planned
+    in windows, and a window that cannot see the room the last one built, the
+    object it is carrying, or the shot it is continuing from would start the
+    world again every twenty-four pictures.
+    """
     numbered = "\n".join(
         f"{i + 1}. [{era_tags[i] if i < len(era_tags) else 'present day'}] {b}"
         for i, b in enumerate(beats))
     return (
-        "You are the storyboard artist for a 40-second vertical documentary "
-        "Short. You are given the FINISHED narration. Your job is to plan the "
-        "pictures as ONE CONTINUOUS SEQUENCE, not to illustrate each sentence "
-        "on its own.\n\n"
+        f"You are the storyboard artist for {_brief()}. You are given the "
+        f"FINISHED narration. Your job is to plan the pictures as ONE "
+        f"CONTINUOUS SEQUENCE, not to illustrate each sentence on its own.\n\n"
         f"FULL SCRIPT (read it all before you draw anything):\n{script}\n\n"
         + (f"THE MOMENT THIS SCRIPT WAS BUILT ON:\n{scene}\n"
            "That moment is the anchor for the whole sequence. Whichever beat "
            "lands on it gets the strongest, most literal shot in the video, and "
            "the `setting` below should be the place it happens in. Everything "
            "else is that place before, during or after.\n\n" if scene else "")
+        + (f"YOU ARE PLANNING SHOTS {shot_offset + 1}–"
+           f"{shot_offset + len(beats)} OF {shot_total}. Everything before "
+           f"them is already drawn and cannot be changed; plan only these, "
+           f"and continue what is already there rather than starting the "
+           f"world again.\n"
+           if shot_total and shot_total > len(beats) else "")
+        + (f"THE PLACE THE SEQUENCE ALREADY LIVES IN — keep it, do not "
+           f"re-invent it:\n{setting}\n" if setting else "")
+        + (f"THE OBJECT THE SEQUENCE IS CARRYING: {through}\n" if through else "")
+        + (f"THE SHOT IMMEDIATELY BEFORE YOURS:\n{carry}\n"
+           f"Your first shot continues from that one.\n\n" if carry else "")
         + f"THE {len(beats)} SHOTS, with the era each one is set in:\n{numbered}\n\n"
         "WHAT MAKES THIS A STORYBOARD AND NOT A SLIDESHOW:\n"
         "1. SHOW THE LITERAL THING THE LINE NAMES. If the line says the coin "
@@ -1046,6 +1086,40 @@ def _character(niche: str | None) -> tuple[str, str]:
         return "", ""
 
 
+# ONE CALL CANNOT PLAN A HUNDRED AND FIFTY SHOTS. At Shorts length the whole
+# sequence fits in one reply and that is the point — the model sees every shot
+# at once, which is what makes it a storyboard rather than fourteen
+# illustrations. A nine-minute script has ten times the beats, and asking for
+# them in one reply hits the token ceiling and returns a truncated list, which
+# _clean correctly rejects as a wrong shot count. The whole storyboard would
+# then silently fall back to per-beat prompts: the exact failure this module
+# was written to end, returning through the back door on the longer format.
+#
+# So long-form is planned in CHUNKS, each one carrying the setting, the
+# through-line and the last shot of the chunk before it — the same continuity
+# the single call gets for free, passed explicitly across the seam.
+CHUNK_BEATS = 24
+
+
+def _chunks(beats: list[str], size: int) -> list[tuple[int, list[str]]]:
+    """(offset, beats) windows, never leaving a runt at the end.
+
+    A final chunk of two shots gets a storyboard call that cannot see enough
+    of the story to place them, so a short tail is folded into the chunk
+    before it instead.
+    """
+    if len(beats) <= size:
+        return [(0, beats)]
+    out: list[tuple[int, list[str]]] = []
+    i = 0
+    while i < len(beats):
+        rest = len(beats) - i
+        take = size if rest >= size + size // 3 else rest
+        out.append((i, beats[i:i + take]))
+        i += take
+    return out
+
+
 def plan(script: str, beats: list[str], era_tags: list[str] | None = None,
          character_clause: str = "", niche: str | None = None,
          scene: str = "") -> list[str] | None:
@@ -1070,16 +1144,44 @@ def plan(script: str, beats: list[str], era_tags: list[str] | None = None,
         import llm
         llm.announce()
         client = llm.client(key)
-        resp = client.chat.completions.create(
-            model=_model(),
-            messages=[{"role": "user",
-                       "content": _prompt(script, beats, era_tags,
-                                          character_clause, scene)}],  # noqa: E501
-            temperature=0.8, max_tokens=2000, timeout=120,
-            response_format={"type": "json_object"},
-        )
-        raw = json.loads(resp.choices[0].message.content or "{}")
-        visuals = _clean(raw, len(beats), beats)
+
+        windows = _chunks(beats, CHUNK_BEATS)
+        if len(windows) > 1:
+            print(f"[storyboard] {len(beats)} shots — planning in "
+                  f"{len(windows)} passes of up to {CHUNK_BEATS}")
+        visuals: list[str] | None = []
+        raw: dict = {}
+        carry = ""          # the last shot of the previous window
+        for offset, window in windows:
+            tags = era_tags[offset:offset + len(window)]
+            prompt = _prompt(script, window, tags, character_clause, scene,
+                             carry=carry,
+                             setting=str(raw.get("setting") or "").strip(),
+                             through=str(raw.get("through_line") or "").strip(),
+                             shot_offset=offset, shot_total=len(beats))
+            resp = client.chat.completions.create(
+                model=_model(),
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.8, max_tokens=2000, timeout=120,
+                response_format={"type": "json_object"},
+            )
+            part = json.loads(resp.choices[0].message.content or "{}")
+            got = _clean(part, len(window), window)
+            if got is None:
+                print(f"[storyboard] pass {offset // CHUNK_BEATS + 1} did not "
+                      f"validate — using per-beat prompts for the whole run")
+                visuals = None
+                break
+            # THE FIRST WINDOW OWNS THE SETTING AND THE THREAD. Letting each
+            # pass name its own would give a nine-minute video six unrelated
+            # rooms, which is the failure this module exists to prevent,
+            # arriving one level up.
+            if not raw:
+                raw = part
+            visuals.extend(got)
+            carry = got[-1]
+        if visuals is not None and len(visuals) != len(beats):
+            visuals = None
         if visuals:
             # BEFORE the thread and the setting are pinned in. Those clauses
             # are text this pipeline appends, not pictures the storyboard

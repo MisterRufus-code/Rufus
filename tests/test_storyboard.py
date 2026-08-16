@@ -992,3 +992,83 @@ def test_the_style_keeps_people_simple_and_draws_the_animals():
                         "styles.json").read_text(encoding="utf-8"))["stickman"]
     assert "ANIMALS AND OBJECTS ARE DRAWN PROPERLY" in style
     assert "stick-figure" in style
+
+
+# ── a hundred and fifty shots do not fit in one reply ────────────────────────
+#
+# At Shorts length the whole sequence fits in one call and that is the POINT —
+# the model sees every shot at once, which is what makes it a storyboard
+# rather than fourteen illustrations. A nine-minute script has ten times the
+# beats; asking for them in one reply hits the token ceiling and returns a
+# truncated list, which _clean correctly rejects as the wrong shot count. The
+# storyboard would then fall back to per-beat prompts — the exact failure this
+# module was written to end, returning through the back door on the longer
+# format.
+
+def test_a_short_is_still_planned_in_one_pass():
+    """Nothing about the existing channel may move."""
+    assert storyboard._chunks(list(range(14)), 24) == [(0, list(range(14)))]
+
+
+def test_a_long_script_is_split():
+    windows = storyboard._chunks(list(range(150)), 24)
+    assert len(windows) > 1
+    assert sum(len(w) for _, w in windows) == 150
+    offsets = [o for o, _ in windows]
+    assert offsets == sorted(offsets)
+
+
+def test_no_window_is_a_runt():
+    """A final chunk of two shots gets a call that cannot see enough of the
+    story to place them, so a short tail folds into the window before it."""
+    for n in range(25, 130):
+        windows = storyboard._chunks(list(range(n)), 24)
+        assert all(len(w) >= 8 for _, w in windows), (n, [len(w) for _, w in windows])
+
+
+def test_every_beat_is_planned_exactly_once():
+    for n in (14, 25, 60, 150):
+        windows = storyboard._chunks(list(range(n)), 24)
+        seen = [b for _, w in windows for b in w]
+        assert seen == list(range(n)), n
+
+
+# ── the seam ─────────────────────────────────────────────────────────────────
+
+def test_a_later_window_is_told_what_already_exists():
+    """A window that cannot see the room the last one built, the object it is
+    carrying, or the shot it continues from would start the world again every
+    twenty-four pictures."""
+    p = storyboard._prompt("s", ["a", "b"], [], carry="A hand on the counter.",
+                           setting="A low stone hall, one high window",
+                           through="one coin, thinning",
+                           shot_offset=24, shot_total=150)
+    assert "SHOTS 25–26 OF 150" in p
+    assert "A low stone hall" in p
+    assert "one coin, thinning" in p
+    assert "A hand on the counter." in p
+    assert "continues from that one" in p
+
+
+def test_a_short_carries_no_seam_text():
+    """It is planned in one pass and needs none of it; a Short whose prompt
+    said "you are planning shots 1-14 of 14" would be answering a question
+    nobody asked."""
+    p = storyboard._prompt("s", ["a", "b"], [])
+    assert "OF 0" not in p
+    assert "already drawn" not in p
+    assert "THE SHOT IMMEDIATELY BEFORE YOURS" not in p
+
+
+def test_the_brief_follows_the_format(monkeypatch):
+    """Hard-coded as "a 40-second vertical documentary Short" until long-form
+    existed, and that line does real work — it is why shots are composed for a
+    phone held upright. Handed a nine-minute landscape script it would have
+    been quietly, confidently wrong."""
+    import importlib
+    import video_format
+    assert "40-second vertical" in storyboard._brief()
+    monkeypatch.setenv("RUFUS_FORMAT", "long")
+    importlib.reload(video_format)
+    assert "landscape" in storyboard._brief()
+    assert "nine minutes" in storyboard._brief()
