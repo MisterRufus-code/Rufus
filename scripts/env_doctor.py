@@ -1,0 +1,178 @@
+#!/usr/bin/env python3
+"""
+env_doctor.py — every environment variable this pipeline reads, found by
+reading the code rather than by remembering.
+
+WHY A GENERATOR AND NOT A DOCUMENT. There are 124 of them and 60 were written
+down nowhere. A hand-maintained list of 124 things is a list that is wrong
+within a month — the previous attempt is the proof, since the ones missing
+from it are exactly the ones added most recently. This finds them the only way
+that stays true: by parsing every `os.environ.get` in scripts/.
+
+    python scripts/env_doctor.py            # the full reference
+    python scripts/env_doctor.py --check    # what is set but unread, and
+                                            # what is read but undocumented
+    python scripts/env_doctor.py --markdown # docs/ENVIRONMENT.md
+
+WHAT THIS IS FOR, concretely. The owner's own report: seven `$env:` lines
+before every run, one of them wrong in a way nothing surfaced until the video
+came out wrong. A variable set from memory that no module reads — a typo, a
+rename, a flag from an experiment two months ago — looks identical to one that
+works. `--check` is the answer to "is this actually doing anything".
+"""
+
+import os
+import re
+import sys
+from collections import defaultdict
+from pathlib import Path
+
+ROOT = Path(__file__).parent.parent
+SCRIPTS = ROOT / "scripts"
+
+# The names this pipeline owns. Anything else in the environment belongs to
+# Python, the OS or another tool and is none of our business.
+_OWNED = re.compile(r"^(RUFUS_[A-Z0-9_]+|SD_CLIPS|RENDER_TIMEOUT)$")
+
+_GET = re.compile(
+    r"""environ\.get\(\s*["'](?P<name>[A-Z][A-Z0-9_]*)["']"""
+    r"""\s*(?:,\s*(?P<default>"[^"]*"|'[^']*'))?""")
+_INDEX = re.compile(r"""environ\[\s*["'](?P<name>[A-Z][A-Z0-9_]*)["']""")
+
+
+def scan() -> dict[str, dict]:
+    """{name: {"files": [...], "default": str}} for everything the code reads."""
+    found: dict[str, dict] = defaultdict(lambda: {"files": set(), "default": ""})
+    for f in sorted(SCRIPTS.glob("*.py")):
+        if f.name == Path(__file__).name:
+            continue
+        try:
+            text = f.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        for m in _GET.finditer(text):
+            name = m.group("name")
+            if not _OWNED.match(name):
+                continue
+            found[name]["files"].add(f.name)
+            if m.group("default") and not found[name]["default"]:
+                found[name]["default"] = m.group("default").strip("\"'")
+        for m in _INDEX.finditer(text):
+            name = m.group("name")
+            if _OWNED.match(name):
+                found[name]["files"].add(f.name)
+    return {k: {"files": sorted(v["files"]), "default": v["default"]}
+            for k, v in sorted(found.items())}
+
+
+def documented() -> set[str]:
+    """Names mentioned in the prose docs or offered by the settings page."""
+    text = ""
+    for name in ("README.md", "AGENTS.md", "docs/ENVIRONMENT.md"):
+        try:
+            text += (ROOT / name).read_text(encoding="utf-8")
+        except OSError:
+            pass
+    try:
+        import dashboard
+        text += " ".join(k for k, *_ in dashboard.SETTINGS_SCHEMA)
+    except Exception:
+        pass
+    return {n for n in scan() if n in text}
+
+
+def unread(env: dict | None = None) -> list[str]:
+    """Variables SET in the environment that no module reads.
+
+    The most useful thing this file does. A typo, a rename, or a flag from an
+    experiment two months ago sets a variable that looks exactly like one that
+    works — nothing errors, nothing warns, and the run behaves as though it
+    were never set, which it effectively was not.
+    """
+    env = os.environ if env is None else env
+    known = set(scan())
+    return sorted(k for k in env if _OWNED.match(k) and k not in known)
+
+
+def report() -> str:
+    rows = scan()
+    doc = documented()
+    out = [f"{len(rows)} environment variables are read by scripts/.",
+           f"{len(rows) - len(doc)} of them are documented nowhere.", ""]
+    by_file: dict[str, list[str]] = defaultdict(list)
+    for name, info in rows.items():
+        by_file[info["files"][0]].append(name)
+    for f in sorted(by_file):
+        out.append(f"{f}")
+        for name in by_file[f]:
+            info = rows[name]
+            mark = " " if name in doc else "!"
+            dflt = f"  (default {info['default']})" if info["default"] else ""
+            more = (f"  +{len(info['files']) - 1} more readers"
+                    if len(info["files"]) > 1 else "")
+            out.append(f"  {mark} {name}{dflt}{more}")
+        out.append("")
+    out.append("! = read by the code, described in no document and offered by "
+               "no settings page.")
+    return "\n".join(out)
+
+
+def markdown() -> str:
+    rows = scan()
+    doc = documented()
+    out = ["# Environment variables",
+           "",
+           "Generated by `python scripts/env_doctor.py --markdown`. Do not "
+           "edit by hand — there are more than a hundred of these and a "
+           "hand-kept list is wrong within a month.",
+           "",
+           f"{len(rows)} variables, {len(rows) - len(doc)} of them described "
+           f"nowhere else.",
+           "",
+           "`python scripts/env_doctor.py --check` reports variables you have "
+           "SET that nothing reads — a typo or a renamed flag looks exactly "
+           "like one that works.",
+           "",
+           "| Variable | Default | Read by |",
+           "| --- | --- | --- |"]
+    for name, info in rows.items():
+        readers = ", ".join(f"`{f}`" for f in info["files"][:3])
+        if len(info["files"]) > 3:
+            readers += f" +{len(info['files']) - 3}"
+        dflt = f"`{info['default']}`" if info["default"] else "—"
+        out.append(f"| `{name}` | {dflt} | {readers} |")
+    return "\n".join(out) + "\n"
+
+
+def main() -> None:
+    argv = sys.argv[1:]
+    if "--markdown" in argv:
+        target = ROOT / "docs" / "ENVIRONMENT.md"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(markdown(), encoding="utf-8")
+        print(f"wrote {target.relative_to(ROOT)}")
+        return
+    if "--check" in argv:
+        stray = unread()
+        if stray:
+            print("Set in this environment, read by nothing:")
+            for k in stray:
+                print(f"  {k}={os.environ[k]}")
+            print("\nA renamed or mistyped flag looks exactly like one that "
+                  "works. Nothing errors; the run behaves as though it were "
+                  "never set.")
+        else:
+            print("Every Rufus variable set here is read by something.")
+        rows, doc = scan(), documented()
+        missing = [n for n in rows if n not in doc]
+        if missing:
+            print(f"\n{len(missing)} variable(s) read by the code and "
+                  f"documented nowhere:")
+            for n in missing:
+                print(f"  {n}")
+        return
+    print(report())
+
+
+if __name__ == "__main__":
+    main()

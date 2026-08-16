@@ -340,3 +340,19 @@ def test_a_genuine_stall_is_still_reported(tmp_path, monkeypatch):
         {"duration": 40.0, "cuts": [3.0, 9.5, 16.0, 22.0]}), encoding="utf-8")
     m = run_review.review("r1", video)
     assert any(f["id"] == "pictures_held_too_long" for f in m["findings"])
+
+
+def test_all_really_means_all(tmp_path, monkeypatch):
+    """--all measured sixty of the owner's eighty-six runs and said nothing
+    about the other twenty-six. A silent cap is the one thing this repo treats
+    as always a bug."""
+    for i in range(65):
+        (tmp_path / f"run{i:03d}").mkdir()
+    monkeypatch.setattr(run_review.paths, "debug_root", lambda: tmp_path)
+    assert len(run_review.all_run_ids()) == 60, "the dashboard's cap still holds"
+    assert len(run_review.all_run_ids(limit=None)) == 65
+
+    src = Path(run_review.__file__).read_text(encoding="utf-8")
+    # The last mention of --all is the branch that acts on it; the first is
+    # the line that strips it out of argv.
+    assert "all_run_ids(limit=None)" in src.rsplit('"--all"', 1)[1]

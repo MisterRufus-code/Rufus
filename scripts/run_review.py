@@ -108,14 +108,20 @@ def latest_run_id() -> str:
     return max(runs, key=lambda d: d.stat().st_mtime).name
 
 
-def all_run_ids(limit: int = 60) -> list[str]:
-    """Run folders, newest first."""
+def all_run_ids(limit: int | None = 60) -> list[str]:
+    """Run folders, newest first. `limit=None` means every one of them.
+
+    The cap exists so the dashboard's pages stay quick on a machine with
+    hundreds of runs. It does NOT belong on `--all`, which measured sixty of
+    the owner's eighty-six and said nothing about the other twenty-six — a
+    silent cap, which is the one thing this repo treats as always a bug.
+    """
     try:
         runs = [d for d in paths.debug_root().iterdir() if d.is_dir()]
     except OSError:
         return []
     runs.sort(key=lambda d: d.stat().st_mtime, reverse=True)
-    return [d.name for d in runs[:limit]]
+    return [d.name for d in (runs if limit is None else runs[:limit])]
 
 
 def _read_prompts(d: Path) -> list[str]:
@@ -506,7 +512,7 @@ def patterns(limit: int = 20) -> dict:
 def main() -> None:
     args = [a for a in sys.argv[1:] if a != "--all"]
     if "--all" in sys.argv[1:]:
-        ids = all_run_ids()
+        ids = all_run_ids(limit=None)
         for rid in ids:
             review_and_save(rid)
         # Aggregate over what was just measured, not over a smaller default —

@@ -2042,6 +2042,21 @@ if __name__ == "__main__":
     except Exception as e:
         print(f"[settings] not applied (non-fatal): {e}")
 
+    # A VARIABLE NOTHING READS LOOKS EXACTLY LIKE ONE THAT WORKS. The owner's
+    # own account: seven `$env:` lines before a run, one of them wrong, and
+    # nothing surfaces it until the finished video is wrong. RUFUS_STILS_ONLY
+    # sets cleanly, errors nowhere, and the run behaves as though it were
+    # never typed — which it effectively was not. One scan of the code at
+    # startup turns twenty-five minutes of wasted GPU into one line.
+    try:
+        import env_doctor
+        for stray in env_doctor.unread():
+            print(f"[env] ⚠ {stray}={os.environ[stray]} is set but NOTHING "
+                  f"reads it — check the spelling "
+                  f"(python scripts/env_doctor.py --check)")
+    except Exception as e:
+        print(f"[env] check skipped (non-fatal): {e}")
+
     parser = argparse.ArgumentParser(description="Rufus pipeline runner")
     parser.add_argument("--skip-upload", action="store_true", help="Render only, skip YouTube upload")
     parser.add_argument("--niche",       type=str,            help="Override niche (e.g. finance, motivation, mindset)")
