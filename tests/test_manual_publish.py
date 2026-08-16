@@ -136,3 +136,60 @@ def test_a_channel_with_nothing_published_is_told_plainly(client, db):
 
 def test_tracking_is_in_the_nav():
     assert any(href == "/tracking" for href, _l, _p in dashboard.NAV_ITEMS)
+
+
+# ── closing the loop from the page ──────────────────────────────────────────
+
+def test_the_page_can_start_a_fetch(client, db, monkeypatch):
+    """Both halves of the loop needed a script run by hand and knowledge that
+    they existed — the same gap the settings page had."""
+    started = {}
+
+    class _P:
+        def __init__(self, *a, **k):
+            started["cmd"] = a[0]
+
+    monkeypatch.setattr(dashboard.subprocess, "Popen", _P)
+    r = client.post("/tracking/fetch")
+    assert "msg=" in r.headers["Location"]
+    joined = " ".join(started["cmd"])
+    assert "analytics_fetcher" in joined and "feedback_analyzer" in joined
+
+
+def test_the_fetch_runs_out_of_process(client, db, monkeypatch):
+    """This Flask app is single-threaded on purpose; a YouTube round-trip per
+    video would freeze every other page for its duration."""
+    src = Path(dashboard.__file__).read_text(encoding="utf-8")
+    block = src.split("def tracking_fetch")[1].split("@app.route")[0]
+    assert "Popen" in block
+
+
+def test_the_first_fetch_is_honest_about_needing_a_browser(client, db, monkeypatch):
+    monkeypatch.setattr(dashboard.subprocess, "Popen", lambda *a, **k: None)
+    r = client.post("/tracking/fetch")
+    assert "sign-in" in r.headers["Location"] or "sign" in r.headers["Location"]
+
+
+def test_it_says_how_far_off_the_learning_threshold_is(client, db):
+    """feedback_analyzer refuses to draw conclusions from fewer than three
+    measured videos. An empty section that does not say why looks broken."""
+    a = db.save_video("money_history", "a", "s", "/tmp/a.mp4")
+    db.mark_published(a, "dQw4w9WgXcQ")
+    db.save_metrics(a, views=10, watch_pct=30.0, ctr=0.0, likes=1)
+    page = client.get("/tracking").get_data(as_text=True)
+    assert "there is 1" in page
+    assert "guess about what works" in page
+
+
+def test_learned_hooks_are_shown_when_they_exist(client, db, monkeypatch):
+    monkeypatch.setattr(dashboard, "_learnings", lambda channel=None: {
+        "winning_hooks": ["The coin that broke a kingdom"],
+        "losing_hooks": ["A brief history of money"]})
+    page = client.get("/tracking").get_data(as_text=True)
+    assert "The coin that broke a kingdom" in page
+    assert "A brief history of money" in page
+    assert "the loop actually closing" in page
+
+
+def test_a_missing_learnings_file_is_not_an_error(db):
+    assert dashboard._learnings("nope-not-a-channel") == {}

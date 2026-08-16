@@ -2253,6 +2253,51 @@ def mark_published(video_id: int):
         "and its views start feeding the hook learning."))
 
 
+@app.route("/tracking/fetch", methods=["POST"])
+def tracking_fetch():
+    """Pull view counts, then re-derive what the channel has learned.
+
+    RUN AS A SEPARATE PROCESS, like a video run, for the same reason: this
+    Flask app is single-threaded on purpose, and a YouTube round-trip for
+    every tracked video would freeze every other page for its duration.
+
+    The FIRST fetch on a machine needs a browser — Google's OAuth consent —
+    and analytics_fetcher already says so in as many words when it cannot get
+    one. That message goes to the log this writes, which is why the button
+    points at the Logs page rather than claiming success.
+    """
+    auth.require("approve")
+    _require_localhost()
+    log_dir = ROOT / "logs"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    log_path = log_dir / f"analytics_{int(time.time())}.log"
+    code = ("import sys; sys.path.insert(0, 'scripts');"
+            "import analytics_fetcher, feedback_analyzer;"
+            "analytics_fetcher.fetch_analytics();"
+            "feedback_analyzer.analyze()")
+    try:
+        with open(log_path, "wb") as logf:
+            subprocess.Popen([sys.executable, "-u", "-c", code], cwd=str(ROOT),
+                             stdout=logf, stderr=subprocess.STDOUT,
+                             stdin=subprocess.DEVNULL, env=os.environ.copy())
+    except Exception as e:
+        return redirect("/tracking?error=" + _urlquote(f"Could not start: {e}"))
+    return redirect("/tracking?msg=" + _urlquote(
+        f"Fetching. Watch {log_path.name} on the Logs page — the first fetch "
+        f"on this machine needs a Google sign-in in a browser, and the log "
+        f"says so if it cannot get one."))
+
+
+def _learnings(channel: str | None = None) -> dict:
+    """What the channel has learned from its own view counts, or {}."""
+    try:
+        import channel_config
+        ch = channel_config.load_channel(channel)
+        return json.loads(ch.learnings_path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
 @app.route("/tracking")
 def tracking_page():
     """How much of the feedback loop is real, and what is missing from it.
@@ -2296,9 +2341,43 @@ def tracking_page():
                 'any by hand, open the video and paste its link — that is the '
                 'row it is missing.</div>')
 
+    # feedback_analyzer refuses to draw conclusions from fewer than three
+    # measured videos, and saying so beats an empty section that looks broken.
+    measured = len(live) - len(untracked)
+    learned = _learnings(channel)
+    if learned.get("winning_hooks"):
+        rows_l = "".join(f"<li>{_esc(h)}</li>" for h in learned["winning_hooks"][:5])
+        rows_bad = "".join(f"<li>{_esc(h)}</li>" for h in learned.get("losing_hooks", [])[:5])
+        learn_html = (f'<h2>What the views have taught this channel</h2>'
+                      f'<div class="grid2"><div><p class="muted">Hooks that '
+                      f'performed</p><ul>{rows_l}</ul></div>'
+                      f'<div><p class="muted">Hooks that did not</p>'
+                      f'<ul>{rows_bad}</ul></div></div>'
+                      f'<p class="muted">script_writer feeds these into the '
+                      f'hook factory, so this is the loop actually closing.</p>')
+    elif measured >= 3:
+        learn_html = ('<h2>What the views have taught this channel</h2>'
+                      '<p class="muted">Metrics exist but no learnings file yet '
+                      '— run a fetch, which re-derives it.</p>')
+    else:
+        learn_html = (f'<h2>What the views have taught this channel</h2>'
+                      f'<p class="muted">Nothing yet. Patterns are drawn from '
+                      f'three measured videos at the earliest, and there '
+                      f'{"is" if measured == 1 else "are"} {measured}. Until '
+                      f'then every quality judgement in the pipeline — the '
+                      f'hook scorer, the critic, the score threshold — is a '
+                      f'guess about what works rather than a measurement.</p>')
+
+    fetch_btn = ""
+    if auth.can("approve"):
+        fetch_btn = ('<form method="post" action="/tracking/fetch">'
+                     '<button class="btn save" type="submit">'
+                     'Fetch view counts now</button></form>')
+
     body = f"""
     <a class="back" href="/">← back</a>
     <h2 style="margin-top:14px">Tracking</h2>
+    {_msg_banner()}
     {note}
     <div class="cards">
       <div class="card"><div class="num">{len(live)}</div>
@@ -2315,6 +2394,8 @@ def tracking_page():
        <code>python scripts/analytics_fetcher.py</code> — which is also what
        feeds the hook learning, so until this middle number moves, every
        quality judgement in the pipeline is a guess about what works.</p>
+    <div class="actions">{fetch_btn}</div>
+    {learn_html}
     <h2>Published, not yet measured</h2>
     {untracked_html}
     """
