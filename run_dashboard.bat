@@ -52,6 +52,24 @@ echo ==== dashboard starting %DATE% %TIME% ==== >> logs\dashboard.log
 REM -u unbuffered: without it a crash traceback can sit in the buffer and never
 REM reach the log file, which defeats the point of redirecting it.
 "%PY%" -u scripts\dashboard.py >> logs\dashboard.log 2>&1
+set "RC=%ERRORLEVEL%"
 
-echo ==== dashboard exited (code %ERRORLEVEL%) %DATE% %TIME% ==== >> logs\dashboard.log
-exit /b %ERRORLEVEL%
+echo ==== dashboard exited (code %RC%) %DATE% %TIME% ==== >> logs\dashboard.log
+
+REM SHOW THE REASON TO WHOEVER IS STANDING HERE. Everything above goes to the
+REM log because a scheduled task has no console — but a person double-clicking
+REM this, or running it at a prompt, got a silent return to the prompt and no
+REM hint at all. That happened: the dashboard refused to start because the port
+REM was already held, said so clearly, and said it into a file nobody was
+REM reading. A launcher that exists to make failure debuggable has to put the
+REM failure where the person is.
+if not "%RC%"=="0" (
+    echo.
+    echo ==== the dashboard exited with code %RC%. Last lines of logs\dashboard.log:
+    echo.
+    powershell -NoProfile -Command "Get-Content 'logs\dashboard.log' -Tail 20" 2>nul
+    echo.
+    echo Full log: %CD%\logs\dashboard.log
+    echo.
+)
+exit /b %RC%

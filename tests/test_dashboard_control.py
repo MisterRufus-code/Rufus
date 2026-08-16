@@ -312,3 +312,20 @@ def test_the_port_check_does_not_raise_on_a_free_port():
     """It runs before Flask binds, so it must never be the thing that stops a
     working start."""
     assert dashboard._port_taken("127.0.0.1", 59999) is False
+
+
+def test_the_launcher_shows_the_reason_it_exited():
+    """Everything the dashboard prints goes to the log, because a scheduled
+    task has no console. A person running the bat at a prompt therefore got a
+    silent return and no hint at all — which happened: it refused to start
+    because the port was held, said so clearly, and said it into a file nobody
+    was reading. A launcher that exists to make failure debuggable has to put
+    the failure where the person is."""
+    bat = (Path(dashboard.__file__).parent.parent / "run_dashboard.bat")
+    text = bat.read_text(encoding="utf-8", errors="replace")
+    assert "Get-Content" in text and "-Tail" in text
+    assert 'if not "%RC%"=="0"' in text
+    # And the success path must NOT dump the log — a working start would then
+    # end with twenty lines of noise every time.
+    tail = text.split('set "RC=%ERRORLEVEL%"')[1]
+    assert tail.index('if not "%RC%"=="0"') < tail.index("Get-Content")
