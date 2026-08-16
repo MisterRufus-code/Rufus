@@ -54,9 +54,19 @@ THREAD_MARK = "Continuing from the previous shot:"
 SETTING_MARK = "Same place as the rest of the sequence:"
 BLANK_MARK = "blank and unmarked"
 
-# A held picture is the one defect a viewer feels without being able to name.
-# QC already warns past 5s; 3.5s is where a fast-cut channel starts to drag.
-LONG_HOLD_S = 3.5
+# A held picture is the one defect a viewer feels without being able to name —
+# but only when nothing chose it.
+#
+# 3.5s was right when every shot was the same length and a long one meant the
+# planner had run out of pauses. It is wrong now: the cut planner weights each
+# beat's share by its tone, so a revelation deliberately runs to about 4.4s on
+# a 38-second video and a resolution to 3.4s. Flagging those would be the
+# measurement contradicting the feature, which is the same mistake as counting
+# a beat's own sub-frames as duplicates.
+#
+# 5s is the line QC already draws, and it is the point past which a hold stops
+# reading as emphasis and starts reading as a stall.
+LONG_HOLD_S = 5.0
 
 # Below this many pictures there is no pattern to find — one prompt is
 # trivially 100% of one prompt.

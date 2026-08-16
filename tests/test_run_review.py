@@ -311,3 +311,32 @@ def test_the_all_summary_covers_everything_it_measured():
     twenty, which reads as most of the work having been discarded."""
     src = Path(run_review.__file__).read_text(encoding="utf-8")
     assert "patterns(limit=len(ids))" in src
+
+
+def test_a_deliberate_tone_hold_is_not_a_defect(tmp_path, monkeypatch):
+    """The cut planner now stretches a revelation to about 4.4s on a
+    38-second video. Reporting that as "held too long" would be the
+    measurement contradicting the feature — the same mistake as counting a
+    beat's own sub-frames as duplicates."""
+    _write_run(tmp_path, monkeypatch, ["A shot."] * 9)
+    video = tmp_path / "s.mp4"
+    # 2.2s neutrals with a 4.4s revelation in the middle: the intended shape.
+    cuts, at = [], 0.0
+    for gap in (2.2, 2.2, 2.75, 2.2, 4.4, 3.85, 2.2, 2.2):
+        at += gap
+        cuts.append(round(at, 2))
+    Path(str(video) + ".qc.json").write_text(json.dumps(
+        {"duration": round(at + 3.35, 2), "cuts": cuts}), encoding="utf-8")
+    m = run_review.review("r1", video)
+    assert not any(f["id"] == "pictures_held_too_long" for f in m["findings"]), \
+        m["cuts"]
+
+
+def test_a_genuine_stall_is_still_reported(tmp_path, monkeypatch):
+    """Past the line QC already draws, a hold stops reading as emphasis."""
+    _write_run(tmp_path, monkeypatch, ["A shot."] * 5)
+    video = tmp_path / "s.mp4"
+    Path(str(video) + ".qc.json").write_text(json.dumps(
+        {"duration": 40.0, "cuts": [3.0, 9.5, 16.0, 22.0]}), encoding="utf-8")
+    m = run_review.review("r1", video)
+    assert any(f["id"] == "pictures_held_too_long" for f in m["findings"])
