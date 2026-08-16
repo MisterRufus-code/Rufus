@@ -757,3 +757,37 @@ def test_replenish_prompt_asks_for_concepts_not_just_events(monkeypatch, tmp_pat
     prompt = captured["messages"][0]["content"].lower()
     assert "concept" in prompt
     assert "compound interest" in prompt
+
+
+# ── four situations, one empty list ──────────────────────────────────────────
+
+def test_a_missing_package_says_so_and_says_the_command(monkeypatch):
+    """The Trending page could only offer "pytrends not installed,
+    rate-limited, or nothing rising this week" — three guesses and a shrug on
+    a page whose whole job is to tell you something. One of those needs a pip
+    command, one clears by itself, one is not a problem at all."""
+    import builtins
+    real = builtins.__import__
+
+    def _no_pytrends(name, *a, **k):
+        if name.startswith("pytrends"):
+            raise ImportError("no pytrends")
+        return real(name, *a, **k)
+
+    monkeypatch.setattr(builtins, "__import__", _no_pytrends)
+    queries, reason = research.trending_queries_with_reason("money_history")
+    assert queries == []
+    assert "pip install pytrends" in reason
+
+
+def test_an_unconfigured_niche_names_the_place_to_configure_it(monkeypatch):
+    monkeypatch.setitem(research.NICHE_TREND_SEEDS, "_probe", [])
+    queries, reason = research.trending_queries_with_reason("_probe")
+    assert queries == []
+    assert "NICHE_TREND_SEEDS" in reason or "pytrends" in reason
+
+
+def test_the_list_only_caller_is_unaffected():
+    """Every existing caller treats [] as "no trend signal" and carries on;
+    the reason is additive."""
+    assert isinstance(research._trending_queries("money_history"), list)

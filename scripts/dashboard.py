@@ -2764,9 +2764,10 @@ def trending():
 
     queries: list[str] = []
     error = None
+    reason = ""
     if niche:
         try:
-            queries = research._trending_queries(niche)
+            queries, reason = research.trending_queries_with_reason(niche)
         except Exception as e:
             error = str(e)
 
@@ -2776,10 +2777,13 @@ def trending():
     if error:
         list_html = f"<p class='muted'>Trend lookup failed: {_esc(error)}</p>"
     elif not queries:
-        list_html = ("<p class='muted'>No rising queries right now for this "
-                     "niche (pytrends not installed, rate-limited, or "
-                     "nothing rising this week) — the same fail-open signal "
-                     "research.py itself falls back on.</p>")
+        # WHICH of the four, not all four. "pytrends not installed,
+        # rate-limited, or nothing rising this week" was three guesses and a
+        # shrug: one of them needs a pip command, one clears by itself, and one
+        # is not a problem at all — printed identically, so the page could not
+        # tell the owner whether to do anything.
+        list_html = (f"<p class='muted'>No rising queries for this niche: "
+                     f"{_esc(reason)}</p>")
     else:
         items = ""
         for q in queries:

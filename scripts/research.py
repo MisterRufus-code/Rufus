@@ -322,14 +322,35 @@ def _trending_queries(niche_name: str) -> list[str]:
 
     Shared core behind BOTH get_trending_context (prompt flavour) and
     fetch_trending_wikipedia (topic SELECTION), so the two can't drift apart."""
+    return trending_queries_with_reason(niche_name)[0]
+
+
+def trending_queries_with_reason(niche_name: str) -> tuple[list[str], str]:
+    """The queries, and WHY there are none when there are none.
+
+    FOUR SITUATIONS, ONE EMPTY LIST. A missing package, a niche with no trend
+    seeds, a rate-limited request and a genuinely quiet week all returned [],
+    so the Trending page could only say "pytrends not installed, rate-limited,
+    or nothing rising this week" — three guesses and a shrug, on a page whose
+    whole job is to tell you something. Only the first has a fix the owner can
+    act on (`pip install pytrends`), only the third is worth retrying, and the
+    fourth is not a problem at all. Reporting them as one sentence means the
+    one that needs a command looks exactly like the one that needs nothing.
+
+    The reason is "" when queries came back. Callers that only want the list
+    keep using _trending_queries and are unaffected.
+    """
     try:
         from pytrends.request import TrendReq
     except ImportError:
-        return []
+        return [], ("pytrends is not installed — `pip install pytrends` (it is "
+                    "in requirements-optional.txt). Runs still work: research "
+                    "falls back to its own topic chain.")
 
     seeds = NICHE_TREND_SEEDS.get(niche_name)
     if not seeds:
-        return []
+        return [], (f"no trend seeds are configured for {niche_name} — add "
+                    f"them to research.NICHE_TREND_SEEDS")
 
     try:
         pt = TrendReq(hl="en-US", tz=300, timeout=(5, 15))
@@ -359,11 +380,15 @@ def _trending_queries(niche_name: str) -> list[str]:
             if len(t_norm) > 4 and t_norm not in seen:
                 seen.add(t_norm)
                 unique.append(t.strip())
-        return unique[:5]
+        if not unique:
+            return [], ("Google Trends answered, and nothing is rising for "
+                        "these seeds this week. Nothing to fix.")
+        return unique[:5], ""
 
     except Exception as e:
         print(f"[research] pytrends failed (non-fatal): {e}")
-        return []
+        return [], (f"the Google Trends request failed: {e}. Usually rate "
+                    f"limiting — it clears on its own.")
 
 
 def get_trending_context(niche_name: str) -> str | None:
