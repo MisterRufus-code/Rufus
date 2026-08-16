@@ -58,6 +58,10 @@ BLANK_MARK = "blank and unmarked"
 # QC already warns past 5s; 3.5s is where a fast-cut channel starts to drag.
 LONG_HOLD_S = 3.5
 
+# Below this many pictures there is no pattern to find — one prompt is
+# trivially 100% of one prompt.
+MIN_PROMPTS_FOR_DOMINANCE = 5
+
 # Above this share of the prompts, one object is no longer a through-line — it
 # is what the video is about. Measured from the run the owner complained about:
 # a stack of coins in 9 of 10.
@@ -133,6 +137,20 @@ def _read_script(d: Path) -> str:
 
 
 def _keyframes(d: Path) -> list[Path]:
+    """ONE frame per beat, not every frame on disk.
+
+    In cut and i2i modes a beat is saved as 07.png, 07a.png, 07b.png — the same
+    scene a moment apart, rendered on one seed, and near-identical BY DESIGN.
+    Counting them as duplicates reported 73 near-identical pairs on a run whose
+    whole point was that the shot advances inside the beat, which is the
+    measurement contradicting the feature. Comparing the base frame of each
+    beat asks the question that was meant: do two different BEATS look the
+    same.
+    """
+    base = [p for p in d.glob("*.png")
+            if p.is_file() and re.fullmatch(r"\d+", p.stem)]
+    if base:
+        return sorted(base, key=lambda p: int(p.stem))
     return sorted(p for p in d.glob("*.png") if p.is_file())
 
 
@@ -151,16 +169,39 @@ def _clause_counts(prompts: list[str]) -> dict:
     }
 
 
-def _subject_words(prompt: str) -> set[str]:
-    """The content words of the BEAT half of a prompt.
+def _common_suffix(prompts: list[str]) -> str:
+    """The longest tail every prompt in the run shares.
 
-    Everything from the style block onward is identical in every prompt of a
-    run, so including it would make every word in it look universal. The style
-    always begins at the same sentence, and splitting there is exact where a
-    word-frequency threshold would be a guess.
+    THIS IS THE STYLE BLOCK, exactly, and finding it this way rather than by
+    matching its opening words is what makes the measurement survive a style
+    nobody has written yet. The first version split on the three style names
+    this repo ships, and the moment it met an older run using a niche's own
+    `style_suffix` the whole block leaked into the word counts — which is why a
+    real pass over fifty runs reported that nine of nine prompts were about
+    "lens" (from "no lens blur"), ten of ten about "hairstyles", and nine of
+    nine about "modern". Three confident findings, all of them a description of
+    the style suffix.
+
+    Every prompt in a run ends with the identical appended block, so the
+    longest common suffix is that block and nothing else.
     """
+    if len(prompts) < 2:
+        return ""
+    shortest = min(len(p) for p in prompts)
+    i = 0
+    while i < shortest and len({p[-(i + 1)] for p in prompts}) == 1:
+        i += 1
+    tail = prompts[0][len(prompts[0]) - i:] if i else ""
+    # Only trust it if it is long enough to be a style block rather than a
+    # coincidence of shared punctuation.
+    return tail if len(tail) > 80 else ""
+
+
+def _subject_words(prompt: str, common: str = "") -> set[str]:
+    """The content words of the BEAT half of a prompt."""
+    head = prompt[:len(prompt) - len(common)] if common and prompt.endswith(common) else prompt
     head = re.split(r"Minimalist stick-figure|Flat 2D vector|Monochrome ink",
-                    prompt, maxsplit=1)[0]
+                    head, maxsplit=1)[0]
     # Drop the appended clauses WHOLE, not just their markers. Stripping only
     # the marker left "market, cobblestone, bright" behind on thirteen prompts
     # and this metric duly reported that the video was about a market — which
@@ -184,9 +225,10 @@ def _dominant_subject(prompts: list[str]) -> dict:
     """
     if not prompts:
         return {"word": "", "prompts": 0, "share": 0.0}
+    common = _common_suffix(prompts)
     counts: Counter = Counter()
     for p in prompts:
-        counts.update(_subject_words(p))
+        counts.update(_subject_words(p, common))
     if not counts:
         return {"word": "", "prompts": 0, "share": 0.0}
     word, hits = counts.most_common(1)[0]
@@ -225,7 +267,8 @@ def _near_duplicates(frames: list[Path]) -> dict:
     still look the same are the ones a difference in a single pixel let
     through. Pillow only — no new dependency for a diagnostic.
     """
-    out = {"frames": len(frames), "near_duplicate_pairs": 0}
+    out = {"frames": len(frames), "near_duplicate_pairs": 0,
+           "duplicated_frames": 0, "duplicate_share": 0.0}
     if len(frames) < 2:
         return out
     try:
@@ -244,12 +287,21 @@ def _near_duplicates(frames: list[Path]) -> dict:
         avg = sum(px) / len(px)
         hashes.append((f.name, sum(1 << i for i, v in enumerate(px) if v > avg)))
 
+    # HOW MANY FRAMES have a twin, not how many PAIRS exist. Pairs grow with
+    # the square of the sequence, so "73 pairs" says nothing a reader can
+    # picture — five identical frames among forty is 10 pairs and five frames
+    # among fifteen is also 10, and those are very different videos.
     pairs = 0
+    twinned = set()
     for i in range(len(hashes)):
         for j in range(i + 1, len(hashes)):
             if bin(hashes[i][1] ^ hashes[j][1]).count("1") <= 5:
                 pairs += 1
+                twinned.add(i)
+                twinned.add(j)
     out["near_duplicate_pairs"] = pairs
+    out["duplicated_frames"] = len(twinned)
+    out["duplicate_share"] = round(len(twinned) / len(hashes), 3) if hashes else 0.0
     return out
 
 
@@ -280,7 +332,11 @@ def _findings(m: dict) -> list[dict]:
                      f"connecting the shots and starts repeating them."),
         })
     d = m.get("dominant_subject", {})
-    if d.get("share", 0) >= DOMINANT_SHARE and d.get("word"):
+    # A short sequence cannot evidence a pattern: one prompt is trivially 100%
+    # of one prompt, and a live pass reported "numbers appears in 1 of 1
+    # prompts" as a dominance failure on a run that produced one picture.
+    if (d.get("share", 0) >= DOMINANT_SHARE and d.get("word")
+            and m.get("beats", 0) >= MIN_PROMPTS_FOR_DOMINANCE):
         out.append({
             "id": "one_object_dominates",
             "severity": "high",
@@ -299,13 +355,14 @@ def _findings(m: dict) -> list[dict]:
                      f"beat only re-render the same description."),
         })
     dup = m.get("frames", {})
-    if dup.get("near_duplicate_pairs", 0) > 2:
+    if dup.get("duplicate_share", 0) >= 0.3 and dup.get("frames", 0) >= 5:
         out.append({
             "id": "repeated_images",
             "severity": "medium",
-            "text": (f"{dup['near_duplicate_pairs']} pairs of near-identical "
-                     f"keyframes. The freshness gate only rejects identical "
-                     f"bytes, so these got through by a pixel."),
+            "text": (f"{dup['duplicated_frames']} of {dup['frames']} beat "
+                     f"images have a near-identical twin in another beat. The "
+                     f"freshness gate only rejects identical bytes, so these "
+                     f"got through by a pixel."),
         })
     if c.get("blank_surface_share", 0) > 0.4:
         out.append({
@@ -317,15 +374,36 @@ def _findings(m: dict) -> list[dict]:
                      f"documents. They are the hardest thing for an image "
                      f"model to draw without garbling."),
         })
-    if m.get("beats") and m["beats"] < 12:
+    # MEASURED AGAINST WHAT THE SCRIPT DESERVES, not against a fixed number.
+    # The absolute version fired on 48 of 50 real runs — every one of them
+    # predates the adaptive beat count, so "only 10 pictures" was one fact
+    # about the past repeated forty-eight times. By this module's own standard
+    # that is not a finding, it is noise, and noise is what people learn to
+    # scroll past.
+    want = _deserved_beats(m.get("script_words", 0))
+    if m.get("beats") and want and m["beats"] < want * 0.7:
         out.append({
             "id": "few_pictures",
             "severity": "low",
-            "text": (f"Only {m['beats']} pictures. At ~40 seconds that is "
-                     f"three seconds a frame; the beat count is computed from "
-                     f"script length unless SD_CLIPS overrides it."),
+            "text": (f"{m['beats']} pictures for a {m['script_words']}-word "
+                     f"script. The current beat rule would give about {want} "
+                     f"— roughly one per four spoken words. SD_CLIPS overrides "
+                     f"it."),
         })
     return out
+
+
+def _deserved_beats(words: int) -> int:
+    """What main._target_beats would choose for a script this long.
+
+    Duplicated deliberately rather than imported: main.py pulls in the whole
+    pipeline, and this module's contract is that it reads finished runs with
+    nothing else loaded. The rule is one line and the comment says where the
+    original lives — main._target_beats.
+    """
+    if not words:
+        return 0
+    return max(10, min(30, round(words / 4.0)))
 
 
 def review(run_id: str, video_path: Path | None = None) -> dict:
@@ -421,7 +499,10 @@ def main() -> None:
         ids = all_run_ids()
         for rid in ids:
             review_and_save(rid)
-        p = patterns()
+        # Aggregate over what was just measured, not over a smaller default —
+        # the first pass reviewed fifty-five runs and then reported patterns
+        # across twenty, which reads as most of the work having been discarded.
+        p = patterns(limit=len(ids))
         print(f"\n{p['runs_reviewed']} run(s) reviewed")
         for r in p["recurring"]:
             print(f"  {r['runs']:>3} runs ({int(r['share']*100)}%)  {r['id']}")

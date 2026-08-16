@@ -187,3 +187,127 @@ def test_the_run_calls_the_reviewer():
     block = src.split("run_review.review_and_save")[0][-600:]
     assert "non-fatal" in src.split("run_review.review_and_save")[1][:400] or \
            "except Exception" in src.split("import run_review")[1][:400]
+
+
+# ── what the first pass over fifty real runs exposed ────────────────────────
+# Running this against the owner's whole debug folder was the first time the
+# instrument was pointed at more than one run, and it reported four things
+# about itself.
+
+OLD_NICHE_STYLE = (
+    " flat 2D vector illustration, warm sepia and antique-gold color palette, "
+    "bold clean outlines of consistent weight, simplified flat color fills "
+    "with no gradients, storybook illustration style, no photographic "
+    "texture, no film grain, no lens blur or depth of field, consistent "
+    "hairstyles across every modern figure")
+
+VARIED = ["A ship leaves a harbour at dawn.",
+          "Two merchants argue beside a weighing scale.",
+          "A child runs down a narrow alley.",
+          "A furnace glows in a dark workshop.",
+          "A queue waits outside a shuttered bank.",
+          "Rain falls on an abandoned market square.",
+          "A clerk stamps a ledger with a wooden press.",
+          "Snow settles on a silent quayside.",
+          "A lamp is lit in an upstairs window."]
+
+
+def _write_styled(tmp_path, monkeypatch, beats, style, run_id="r1", words=36):
+    d = tmp_path / run_id
+    d.mkdir(parents=True, exist_ok=True)
+    parts = [f"# run\n"]
+    for i, b in enumerate(beats, 1):
+        parts.append(f"**Beat {i}**\n\n```\n{b}{style}\n```\n\n")
+    (d / "run_report.md").write_text("".join(parts), encoding="utf-8")
+    (d / "script.txt").write_text("word " * words, encoding="utf-8")
+    monkeypatch.setattr(run_review.paths, "debug_root", lambda: tmp_path)
+    return d
+
+
+def test_a_style_suffix_is_never_the_subject(tmp_path, monkeypatch):
+    """Across fifty real runs this reported nine of nine prompts about "lens"
+    (from "no lens blur"), ten of ten about "hairstyles", nine of nine about
+    "modern" — three confident findings, all of them a description of the
+    style block. Splitting on the three style names this repo ships missed
+    every older run using a niche's own style_suffix."""
+    _write_styled(tmp_path, monkeypatch, VARIED, OLD_NICHE_STYLE)
+    m = run_review.review("r1")
+    assert m["dominant_subject"]["word"] not in ("lens", "hairstyles", "modern")
+    assert not any(f["id"] == "one_object_dominates" for f in m["findings"])
+
+
+def test_the_style_block_is_found_as_the_shared_tail():
+    """Found this way rather than by matching its opening words, so it
+    survives a style nobody has written yet.
+
+    Beats that happen to END alike would let the shared tail absorb that too,
+    which is harmless — it can only ever strip MORE boilerplate, never a word
+    unique to one shot."""
+    prompts = [b + OLD_NICHE_STYLE for b in VARIED[:3]]
+    tail = run_review._common_suffix(prompts)
+    # The shared full stop that ends every beat comes along with it. Harmless:
+    # the tail is only ever used to be REMOVED before counting words.
+    assert tail.lstrip(". ").startswith("flat 2D vector")
+    assert "lens" in tail and "hairstyles" in tail
+
+
+def test_a_shared_tail_too_short_to_be_a_style_is_ignored():
+    """Two prompts ending in the same few characters share punctuation, not a
+    style block."""
+    assert run_review._common_suffix(["A coin on a table.",
+                                      "A ship on a table."]) == ""
+
+
+def test_a_single_picture_run_cannot_report_dominance(tmp_path, monkeypatch):
+    """One prompt is trivially 100% of one prompt. A live pass reported
+    "numbers appears in 1 of 1 prompts" as a dominance failure."""
+    _write_styled(tmp_path, monkeypatch, ["Rising numbers on a chart."], "")
+    m = run_review.review("r1")
+    assert not any(f["id"] == "one_object_dominates" for f in m["findings"])
+
+
+def test_few_pictures_is_measured_against_the_script(tmp_path, monkeypatch):
+    """The absolute version fired on 48 of 50 real runs — one fact about the
+    past, repeated forty-eight times. By this module's own standard that is
+    noise, and noise is what people learn to scroll past."""
+    # A short script legitimately gets few pictures.
+    _write_styled(tmp_path, monkeypatch, VARIED, OLD_NICHE_STYLE, words=36)
+    assert not any(f["id"] == "few_pictures"
+                   for f in run_review.review("r1")["findings"])
+    # A long one with the same nine does not.
+    _write_styled(tmp_path, monkeypatch, VARIED, OLD_NICHE_STYLE,
+                  run_id="r2", words=110)
+    long_run = run_review.review("r2")
+    assert any(f["id"] == "few_pictures" for f in long_run["findings"])
+    assert "110-word" in next(f["text"] for f in long_run["findings"]
+                              if f["id"] == "few_pictures")
+
+
+def test_sub_frames_of_one_beat_are_not_duplicates(tmp_path, monkeypatch):
+    """In cut mode a beat is saved as 07.png, 07a.png, 07b.png — the same
+    scene a moment apart, on one seed, near-identical BY DESIGN. Counting them
+    reported 73 duplicate pairs on a run whose whole point was that the shot
+    advances inside the beat."""
+    d = _write_styled(tmp_path, monkeypatch, VARIED, OLD_NICHE_STYLE)
+    for i in range(1, 10):
+        for suffix in ("", "a", "b"):
+            (d / f"{i:02d}{suffix}.png").write_bytes(b"x")
+    frames = run_review._keyframes(d)
+    assert len(frames) == 9, [f.name for f in frames]
+    assert all(f.stem.isdigit() for f in frames)
+
+
+def test_duplicates_are_reported_as_frames_not_pairs():
+    """Pairs grow with the square of the sequence, so "73 pairs" says nothing
+    a reader can picture: five identical frames among forty is ten pairs, and
+    five among fifteen is also ten."""
+    src = Path(run_review.__file__).read_text(encoding="utf-8")
+    assert "duplicate_share" in src
+    assert "have a near-identical twin" in src
+
+
+def test_the_all_summary_covers_everything_it_measured():
+    """The first pass reviewed fifty-five runs and reported patterns across
+    twenty, which reads as most of the work having been discarded."""
+    src = Path(run_review.__file__).read_text(encoding="utf-8")
+    assert "patterns(limit=len(ids))" in src

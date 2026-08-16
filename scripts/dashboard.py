@@ -3041,9 +3041,40 @@ def not_found(e):
     return _head() + "<p>Not found. <a class='back' href='/'>← back</a></p>" + PAGE_TAIL, 404
 
 
+def _port_taken(host: str, port: int) -> bool:
+    """Whether something already holds the port. Best-effort."""
+    import socket
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.settimeout(0.4)
+        try:
+            return sock.connect_ex((host if host != "0.0.0.0" else "127.0.0.1",
+                                    port)) == 0
+        except OSError:
+            return False
+
+
 if __name__ == "__main__":
     host = os.environ.get("RUFUS_DASHBOARD_HOST", "127.0.0.1")
     port = int(os.environ.get("RUFUS_DASHBOARD_PORT", "8765"))
+
+    # SAY WHY, BEFORE FLASK SAYS SOMETHING ELSE. run.bat starts a dashboard of
+    # its own ("Starting Rufus dashboard..."), so the ordinary way to reach
+    # this line is with one already running — and what Flask prints then is
+    # WinError 10048 about socket addresses, which does not tell the person
+    # reading it that the thing they wanted is already open in another window.
+    # run_dashboard.bat exists specifically so a startup failure leaves a
+    # readable trace; an unreadable one is only half of that.
+    if _port_taken(host, port):
+        print(f"[dashboard] port {port} is already in use — a dashboard is "
+              f"almost certainly running already.")
+        print(f"[dashboard] Open http://localhost:{port} — that IS this "
+              f"dashboard, and it picked up the latest code when it started.")
+        print(f"[dashboard] If it is stale, close that window (or end the "
+              f"python.exe running dashboard.py) and start this again. To run "
+              f"a second one alongside it, set RUFUS_DASHBOARD_PORT to "
+              f"something else.")
+        sys.exit(3)
+
     db_manager.init_db()
     print(f"[dashboard] http://localhost:{port}  (LAN: http://<this PC's IP>:{port})")
     # threaded=False is LOAD-BEARING: approve_video mutates process env via

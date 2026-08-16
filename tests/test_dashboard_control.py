@@ -290,3 +290,25 @@ def test_a_broken_advisor_never_breaks_the_front_page(client, monkeypatch):
         raise RuntimeError("nope")
     monkeypatch.setattr(dashboard, "_advice_now", _boom)
     assert client.get("/").status_code == 200
+
+
+# ── starting up ─────────────────────────────────────────────────────────────
+
+def test_a_busy_port_is_explained_not_just_reported():
+    """run.bat starts a dashboard of its own, so the ordinary way to reach the
+    startup path is with one already running — and what Flask prints then is
+    WinError 10048 about socket addresses, which does not tell the reader that
+    the thing they wanted is already open in another window."""
+    # Whitespace-normalised: the message is a wrapped f-string, so a literal
+    # search would be asserting on where the lines happen to break.
+    src = " ".join(Path(dashboard.__file__).read_text(encoding="utf-8").split())
+    src = src.replace('" f"', "").replace('" "', "")
+    assert "already in use" in src
+    assert "that IS this dashboard" in src
+    assert "RUFUS_DASHBOARD_PORT" in src
+
+
+def test_the_port_check_does_not_raise_on_a_free_port():
+    """It runs before Flask binds, so it must never be the thing that stops a
+    working start."""
+    assert dashboard._port_taken("127.0.0.1", 59999) is False
