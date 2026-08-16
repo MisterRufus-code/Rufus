@@ -1309,7 +1309,7 @@ def _videos_table(videos: list[dict], *, previews: bool = False) -> str:
             frames = _run_keyframes(v.get("run_id"))
             if frames:
                 imgs = "".join(
-                    f'<img src="/debug/{_esc(v["run_id"])}/{_urlquote(f)}" loading="lazy" '
+                    f'<img src="/debug/{_esc(v["run_id"])}/{_urlquote(f)}?w=120" loading="lazy" '
                     f'alt="" style="width:38px;height:66px;object-fit:cover;'
                     f'border-radius:4px;margin-right:3px">'
                     for f in frames)
@@ -2722,7 +2722,7 @@ def gallery():
     for img in images:
         src = f"/debug/{_esc(img['run_id'])}/{_esc(img['image'])}"
         tiles += (f'<a href="{src}" target="_blank" style="display:inline-block;margin:4px">'
-                 f'<img src="{src}" style="width:120px;height:213px;object-fit:cover;'
+                 f'<img src="{src}?w=240" style="width:120px;height:213px;object-fit:cover;'
                  f'border-radius:6px" loading="lazy" title="{_esc(img["run_id"])}"></a>\n')
     body = f"""
     <a class="back" href="/">← back</a>
@@ -2961,7 +2961,7 @@ def video_detail(video_id):
             if p["image"]:
                 thumb = (f'<a href="/debug/{_esc(v["run_id"])}/{_esc(p["image"])}" '
                          f'target="_blank"><img src="/debug/{_esc(v["run_id"])}/'
-                         f'{_esc(p["image"])}" loading="lazy" '
+                         f'{_esc(p["image"])}?w=240" loading="lazy" '
                          f'style="width:120px;border-radius:6px;flex:0 0 auto"></a>')
             cards += (
                 f'<div style="display:flex;gap:12px;margin:10px 0;align-items:flex-start">'
@@ -3198,6 +3198,64 @@ def _preview_block(run_id: str) -> str:
     return "<h2>Preview</h2>" + "".join(parts)
 
 
+# Downscaled copies of the run keyframes, cached beside them.
+#
+# WHY. Every gallery tile, every prompt thumbnail and every run preview points
+# at the ORIGINAL 1080x1920 png and renders it into a 120px box. The browser
+# still downloads the whole thing: one live session's log shows well over a
+# hundred of those requests from a few minutes of scrolling, which on this
+# channel's keyframes is tens of megabytes to draw a strip of thumbnails. The
+# images are already lazy-loaded — that limits WHEN they are fetched, not how
+# big they are.
+_THUMB_DIR_NAME = ".thumbs"
+_THUMB_WIDTHS = (120, 240, 480)     # a fixed set: an open ?w= is a cache bomb
+
+
+def _thumb_of(folder: Path, filename: str, width: int | None) -> "Path | None":
+    """A cached downscale of one keyframe, or None to serve the original.
+
+    None on every uncertainty — an unknown width, a non-image, a Pillow that
+    is not installed, a folder that cannot be written to. The original always
+    works, so the fast path is an optimisation and never a dependency.
+    """
+    if not width or width not in _THUMB_WIDTHS:
+        return None
+    if not filename.lower().endswith((".png", ".jpg", ".jpeg")):
+        return None
+    src = (folder / filename).resolve()
+    if src.parent != folder or not src.is_file():
+        return None
+    cache = folder / _THUMB_DIR_NAME
+    out = cache / f"{width}_{src.stem}.jpg"
+    try:
+        if out.is_file() and out.stat().st_mtime >= src.stat().st_mtime:
+            return out
+        from PIL import Image
+        cache.mkdir(exist_ok=True)
+        with Image.open(src) as im:
+            im = im.convert("RGB")
+            im.thumbnail((width, width * 4), Image.LANCZOS)
+            im.save(out, "JPEG", quality=82, optimize=True)
+        return out
+    except Exception:
+        return None      # the original is always correct
+
+
+@app.route("/favicon.ico")
+def favicon():
+    """A tab icon, so every page load stops 404ing for one.
+
+    Inline SVG rather than a binary in the repo: it is nine lines, it scales,
+    and it needs no build step — the same reason the rest of this dashboard
+    has no assets directory."""
+    svg = ('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">'
+           '<rect width="32" height="32" rx="7" fill="#3b82f6"/>'
+           '<path d="M11 8h6.5a5 5 0 0 1 1.2 9.85L22 24h-4l-3-6h-1v6h-3z" '
+           'fill="#fff"/></svg>')
+    return app.response_class(svg, mimetype="image/svg+xml",
+                              headers={"Cache-Control": "public, max-age=604800"})
+
+
 @app.route("/debug/<run_id>/<path:filename>")
 def debug_file(run_id, filename):
     """Read-only static file serving for ONE run's debug folder — the real
@@ -3210,6 +3268,10 @@ def debug_file(run_id, filename):
     folder = (DEBUG_ROOT / run_id).resolve()
     if folder.parent != DEBUG_ROOT.resolve() or not folder.is_dir():
         abort(404)
+    small = _thumb_of(folder, filename, request.args.get("w", type=int))
+    if small is not None:
+        return send_from_directory(small.parent, small.name,
+                                   max_age=60 * 60 * 24 * 30)
     return send_from_directory(folder, filename)
 
 
