@@ -1100,3 +1100,73 @@ def test_until_good_stops_at_cost_ceiling(monkeypatch):
                         lambda *a, **k: calls.append(1) or _res(3, False, cost=0.02))
     sw.write_script_until_good("scene", seed={"content": "x"})
     assert len(calls) == 3          # 0.02+0.02+0.02 crosses 0.05, then stops
+
+
+# ── the gate knowing what the generator was never told ───────────────────────
+#
+# From a rejection log of ~200 attempts, three patterns that are this pipeline
+# arguing with itself rather than the model writing badly.
+
+def test_every_forbidden_opener_reaches_the_generator():
+    """The gate rejects all twenty-one; the prompt showed the first eight. So
+    'what if' (index 8) and 'stop' (index 14) were rules nothing had told the
+    model about, and the log has five rejections for exactly those two — each
+    a wasted candidate, each the model obeying what it was given while
+    breaking what it was not."""
+    import script_writer as sw
+    hs = sw._standards()["hook"]
+    prompt = sw._hook_factory_prompt_for_test() if hasattr(
+        sw, "_hook_factory_prompt_for_test") else None
+    # Built the same way _hook_factory builds it.
+    shown = ", ".join(f"'{x}'" for x in hs["forbidden_openers"])
+    for bad in ("what if", "stop", "imagine", "breaking:"):
+        assert f"'{bad}'" in shown, bad
+    assert len(hs["forbidden_openers"]) >= 20
+
+
+def test_the_hook_examples_carry_no_figures():
+    """'2,000 years ago, Seneca described your anxiety exactly.' was an
+    EXAMPLE, and the model copied its number: '2,000 years ago, Rome faced
+    inflation', '2,000 years later, inflation still haunts us', 'Inflation has
+    shaped economies for over 2,300 years' — all rejected as invented figures
+    that came from this prompt rather than any source. An example is a shape;
+    the moment it contains a concrete figure it is a suggestion, and the
+    grounding gate sits downstream of the suggestion."""
+    import re
+    from pathlib import Path as _P
+    import script_writer as sw
+    src = _P(sw.__file__).read_text(encoding="utf-8")
+    block = src.split("attack the source from a DIFFERENT angle")[1]
+    block = block.split("Output FORMAT")[0]
+    # Strip the numbered list markers ("1. Number-first"), which are structure.
+    body = re.sub(r"^\s*\"?\d+\.\s", " ", block, flags=re.MULTILINE)
+    stray = re.findall(r"\b\d[\d,.]*\b", body)
+    assert not stray, f"figures in the hook examples leak into hooks: {stray}"
+
+
+def test_the_prompt_and_the_gate_read_one_corpus():
+    """The allowed-numbers list was built from the formatted seed block and
+    the gate from the raw seed content — two definitions of "the source", and
+    the writer pays: a figure the gate would accept is missing from its list,
+    so the hook that could have used it is never written."""
+    import script_writer as sw
+    seed = {"content": "The mint struck 4,300 coins in 1284.",
+            "title": "Venice and the ducat"}
+    corpus = sw.grounding_corpus(seed, "1. CONTRADICTION: it was 98.6% gold.")
+    block = sw._allowed_numbers_block(corpus)
+    for n in ("4,300", "1284", "98.6"):
+        assert n in block, n
+    # And what the list offers, the gate accepts.
+    for n in ("4,300", "1284", "98.6"):
+        assert sw._ungrounded_number(f"A hook about {n} coins.", corpus) is None, n
+
+
+def test_a_figure_outside_the_corpus_is_still_refused():
+    """The loosening must not become a hole: the whole point of the gate is
+    that a true fact the source does not contain is still an invented one for
+    this channel."""
+    import script_writer as sw
+    seed = {"content": "The mint struck coins in Venice.", "title": "The ducat"}
+    corpus = sw.grounding_corpus(seed, "1. CONTRADICTION: gold beat silver.")
+    assert sw._ungrounded_number("Bank of England issued notes since 1694.",
+                                 corpus) == "1694"

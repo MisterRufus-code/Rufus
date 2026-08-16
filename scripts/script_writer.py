@@ -651,6 +651,27 @@ def _hook_grounding_check(hook: str, source_text: str) -> str | None:
 # (2026-07-31 10:43), each one an entire wasted generation spent rewriting a
 # script that was never actually wrong. Matching the whole comma-grouped run
 # and stripping the separators is what makes the count mean what it claims.
+def grounding_corpus(seed: dict | None, analysis: str) -> str:
+    """Everything a hook's numbers may be drawn from.
+
+    ONE CORPUS, TWO READERS. The gate built this string from the full seed
+    content plus the title plus the analysis; the prompt's allowed-numbers
+    list was built from the FORMATTED seed block and the analysis. Two
+    definitions of "the source" means the list shown to the writer and the set
+    enforced against it can differ, and the writer is the one that pays: a
+    figure the gate would have accepted is missing from its list, so it never
+    uses it, and a hook it could have grounded is never written.
+
+    That is the same shape as every other defect in this file's history — the
+    checker knowing something the generator was never told.
+    """
+    return " ".join(filter(None, [
+        (seed.get("content") or "") if seed else "",
+        (seed.get("title") or "") if seed else "",
+        _strip_list_markers(analysis or ""),
+    ]))
+
+
 def _allowed_numbers_block(*sources: str) -> str:
     """The exact figures a hook may use, listed for the generator.
 
@@ -1130,9 +1151,17 @@ def _hook_factory(client: OpenAI, seed: dict, analysis: str, niche_name: str,
     hs        = std["hook"]
     seed_blk  = _seed_block(seed) if seed else ""
 
-    forbidden_str = ", ".join(f"'{x}'" for x in hs["forbidden_openers"][:8])
+    # EVERY forbidden opener, not the first eight. The gate rejects all
+    # twenty-one and the generator was shown eight, so 'what if' (index 8) and
+    # 'stop' (index 14) were rules nothing had ever told it about — five
+    # rejections in one rejection log, each one a wasted candidate, each one
+    # the model obeying instructions it was given while breaking instructions
+    # it was not. Twenty-one short strings cost nothing in a prompt; a hidden
+    # rule costs a generation every time it fires.
+    forbidden_str = ", ".join(f"'{x}'" for x in hs["forbidden_openers"])
     novelty_blk   = _novelty_block(niche_name)
-    numbers_blk   = _allowed_numbers_block(seed_blk, analysis)
+    # The SAME corpus the gate will check against — see grounding_corpus.
+    numbers_blk   = _allowed_numbers_block(grounding_corpus(seed, analysis))
 
     prompt = (
         f"{seed_blk}\n"
@@ -1152,15 +1181,27 @@ def _hook_factory(client: OpenAI, seed: dict, analysis: str, niche_name: str,
         f"- Must surface a contradiction, paradox, or pattern interrupt — not a report\n"
         f"- Must NOT start with any of: {forbidden_str}\n"
         f"- Must NOT use vague generalities — every word earns its place\n\n"
-        f"Each of the {n_hooks} hooks should attack the source from a DIFFERENT angle "
-        f"(every example below assumes its number/name IS in the source — always use "
-        f"the source's own figures, never these):\n"
+        # THE EXAMPLES CARRY NO DIGITS ANY MORE. They used to, and the model
+        # copied them: '2,000 years ago, Seneca described your anxiety
+        # exactly.' produced '2,000 years ago, Rome faced inflation', '2,000
+        # years later, inflation still haunts us', 'Inflation has shaped
+        # economies for over 2,300 years' and 'Inflation has existed for over
+        # 2,300 years' — four rejections across three different runs, every
+        # one for a number that came from this prompt rather than from any
+        # source. The same leak sent a Reddit-era '$2.4M by 38' into the hook
+        # angle of an article about the pengő. An example is a SHAPE; the
+        # instant it contains a concrete figure it becomes a suggestion, and
+        # the grounding gate is downstream of the suggestion.
+        f"Each of the {n_hooks} hooks should attack the source from a DIFFERENT angle. "
+        f"The examples below show SHAPE ONLY — they deliberately contain no "
+        f"figures, because any number you take from this prompt instead of "
+        f"from the source above is an automatic rejection:\n"
         "1. Number-first  — lead with the source's most devastating number. "
         "(the tension is in the contradiction, not the number itself)\n"
         "2. Name-first    — the source's real person/place makes it instantly credible. "
-        "(e.g. 'Buffett's worst trade made him $25B.' — the reversal IS the hook)\n"
+        "(e.g. '<investor>'s worst trade made him a fortune.' — the reversal IS the hook)\n"
         "3. Time-contrast — the source's date reveals how long the pattern has existed. "
-        "(e.g. '2,000 years ago, Seneca described your anxiety exactly.' — the gap creates the itch)\n"
+        "(e.g. '<ancient writer> described your anxiety exactly.' — the gap creates the itch)\n"
         "4. Identity hit  — names what the viewer is actually doing wrong, using the "
         "source's insight. (blame + specificity + fix)\n"
         "5. Counter-claim — the thing everyone believes that the source shows is backwards. "
@@ -1233,11 +1274,7 @@ def _hook_scorer(client: OpenAI, hooks: list[str], seed: dict, niche_name: str,
     # Full grounding corpus for the invented-number check — the whole seed
     # (not the 300-char scoring excerpt) plus the pre-analysis, since a
     # legitimate hook may cite a figure the analysis surfaced from the source.
-    grounding = " ".join(filter(None, [
-        (seed.get("content") or "") if seed else "",
-        (seed.get("title") or "") if seed else "",
-        _strip_list_markers(analysis or ""),
-    ]))
+    grounding = grounding_corpus(seed, analysis)
 
     # 1. Regex pre-filter
     survivors: list[tuple[int, str]] = []
