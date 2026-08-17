@@ -1178,3 +1178,39 @@ def test_the_prompt_teaches_the_four_words_and_the_jump():
 def test_the_json_contract_asks_for_it():
     p = storyboard._prompt("script", ["a", "b"], [])
     assert '"framing": "wide|mid|close|detail"' in p
+
+
+# ── the gallery of sixteen ───────────────────────────────────────────────────
+#
+# A real run, opened as a folder: thirteen of the sixteen shots were one to
+# three stick figures standing upright, facing the viewer, doing nothing, in
+# the same pale street. Two more were six-panel contact sheets of the same
+# figure with captions under each panel. Every one of those shots obeyed every
+# rule the brief had at the time — which is the point.
+
+def test_the_brief_demands_that_something_is_happening():
+    """"Three villagers look worried" satisfies "show the literal thing", "one
+    subject" and "the subject must change", and is a picture of nobody doing
+    anything. The brief had no rule that a shot contains an EVENT."""
+    p = _prompt()
+    assert "SOMETHING IS HAPPENING IN THE FRAME" in p
+    assert "Write the verb first" in p
+    assert "standing upright, facing the viewer, doing nothing" in p
+
+
+def test_the_brief_asks_for_a_verb_not_a_feeling():
+    """The failure mode is a person who FEELS something rather than an action
+    caught mid-movement, so the examples have to be verbs."""
+    p = _prompt()
+    for verb in ("goes over", "kicked in", "pours past", "slams", "dragged"):
+        assert verb in p, verb
+
+
+def test_the_brief_forbids_a_contact_sheet():
+    """Two shots came back as six-panel grids of the same stick figure,
+    because the line named several people and the shot was written as a list
+    of them. A list of people renders as a sheet of people."""
+    p = _prompt()
+    assert "ONE SCENE, ONE CAMERA, ONE MOMENT" in p
+    assert "never a grid" in p
+    assert "character sheet" in p

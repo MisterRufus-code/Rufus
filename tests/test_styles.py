@@ -207,3 +207,20 @@ def test_the_ink_explainer_carries_the_face_vocabulary():
     assert "must not be the same on every figure" in ink
     for feeling in ("anger", "shock", "delight", "worry"):
         assert feeling in ink, feeling
+
+
+@pytest.mark.parametrize("name", sorted(_looks()))
+def test_every_preset_bans_lettering(name):
+    """THE STRONGEST POSITION WAS EMPTY. The storyboard is told not to NAME
+    printed words, and the negative conditioning leads with "text, letters,
+    words" — and a real gallery still came back with "whole rouble payments
+    from each village" written across three panels and "Proof" on four
+    documents.
+
+    The style block is the only text that is appended to EVERY prompt byte for
+    byte, and it said nothing about lettering at all. A ban that is in two of
+    the three places is a ban that depends on which of them the workflow
+    actually applies."""
+    s = _looks()[name]
+    assert "NO LETTERING ANYWHERE IN THE FRAME" in s
+    assert "drawn BLANK" in s

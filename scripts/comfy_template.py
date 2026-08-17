@@ -343,6 +343,25 @@ def _apply_negative(g: dict, negative: str) -> bool:
     return placed
 
 
+_NEG_WARNED = False
+
+
+def _warn_if_negative_unplaced(placed: bool, negative: str) -> bool:
+    """Once per run, name the workflow that took no negative conditioning."""
+    global _NEG_WARNED
+    if placed or _NEG_WARNED:
+        return placed
+    _NEG_WARNED = True
+    print(f"[template] ⚠ the negative prompt landed NOWHERE in this workflow — "
+          f"it has no {NEG_PLACEHOLDER} placeholder and no text node wired to "
+          f"a sampler's negative input, so these {len(negative.split(','))} "
+          f"terms are doing nothing. Lettering, photo drift and extra fingers "
+          f"are suppressed from here or not at all. Add a negative "
+          f"CLIPTextEncode to the export, or put {NEG_PLACEHOLDER} in the one "
+          f"it has.")
+    return placed
+
+
 def prepare(graph: dict, *, prompt: str | None = None,
             image_name: str | None = None, seed: int | None = None,
             dims: tuple[int, int, int] | None = None,
@@ -355,7 +374,19 @@ def prepare(graph: dict, *, prompt: str | None = None,
     g = copy.deepcopy(graph)
 
     if negative:
-        _apply_negative(g, negative)
+        # SAY SO WHEN IT LANDS NOWHERE. _apply_negative needs either a
+        # RUFUS_NEGATIVE placeholder or a text node the export wired to a
+        # sampler's `negative` input. A workflow with neither — a flow-match
+        # or turbo graph that runs without CFG, or one whose single text node
+        # feeds both conditionings — takes the substitution silently and
+        # renders with no suppression at all.
+        #
+        # That is the difference between a gallery with two frames of readable
+        # lettering in it and one with none, and the owner has no way to tell
+        # which they are getting: the terms are in the log, the prompt looks
+        # right, and the render succeeds. Fail-open without fail-loud is
+        # fail-silent, which is the one rule this repo has.
+        _warn_if_negative_unplaced(_apply_negative(g, negative), negative)
 
     image_set = False
     for node in g.values():

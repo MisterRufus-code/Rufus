@@ -285,3 +285,63 @@ def test_prepare_still_prefers_length_when_present():
                "inputs": {"width": 1, "height": 2, "length": 3}}}
     out = ct.prepare(g, dims=(480, 832, 121))
     assert out["1"]["inputs"]["length"] == 121
+
+
+# ── a negative that lands nowhere ────────────────────────────────────────────
+
+def _sampler_graph(with_negative: bool):
+    """A minimal graph, with and without a text node wired to `negative`."""
+    g = {
+        "1": {"class_type": "CLIPTextEncode", "inputs": {"text": "RUFUS_PROMPT"}},
+        "3": {"class_type": "KSampler",
+              "inputs": {"positive": ["1", 0], "seed": 1}},
+        "4": {"class_type": "SaveImage", "inputs": {"images": ["3", 0]}},
+    }
+    if with_negative:
+        g["2"] = {"class_type": "CLIPTextEncode", "inputs": {"text": "blurry"}}
+        g["3"]["inputs"]["negative"] = ["2", 0]
+    return g
+
+
+def test_a_negative_that_lands_nowhere_is_loud(capsys):
+    """FAIL-OPEN WITHOUT FAIL-LOUD IS FAIL-SILENT, in the one place that
+    suppresses the most obvious AI tell. A workflow with no negative text node
+    — a turbo or flow-match graph that runs without CFG — takes the
+    substitution and renders with no suppression at all, and everything
+    downstream looks fine: the terms are in the log, the prompt is right, the
+    render succeeds. A real gallery came back with readable sentences written
+    across two of its sixteen frames while the negative led with "text,
+    letters, words"."""
+    ct._NEG_WARNED = False
+    ct.prepare(_sampler_graph(False), prompt="x", negative="text, letters")
+    out = capsys.readouterr().out
+    assert "landed NOWHERE" in out
+    assert "RUFUS_NEGATIVE" in out, "the warning has to name the fix"
+
+
+def test_a_workflow_that_takes_the_negative_says_nothing(capsys):
+    """The warning fires on a real defect or it is noise — and this is the
+    normal case."""
+    ct._NEG_WARNED = False
+    g = ct.prepare(_sampler_graph(True), prompt="x",
+                               negative="text, letters")
+    assert "text, letters" in g["2"]["inputs"]["text"]
+    assert capsys.readouterr().out == ""
+
+
+def test_the_placeholder_counts_as_landing(capsys):
+    ct._NEG_WARNED = False
+    g = dict(_sampler_graph(False))
+    g["2"] = {"class_type": "CLIPTextEncode",
+              "inputs": {"text": f"blurry, {ct.NEG_PLACEHOLDER}"}}
+    out_graph = ct.prepare(g, prompt="x", negative="text, letters")
+    assert "text, letters" in out_graph["2"]["inputs"]["text"]
+    assert capsys.readouterr().out == ""
+
+
+def test_the_warning_is_said_once_not_per_beat(capsys):
+    """A hundred and fifty identical lines is not a louder warning."""
+    ct._NEG_WARNED = False
+    for _ in range(5):
+        ct.prepare(_sampler_graph(False), prompt="x", negative="text")
+    assert capsys.readouterr().out.count("landed NOWHERE") == 1
