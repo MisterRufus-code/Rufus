@@ -444,3 +444,51 @@ def test_prompts_without_framing_are_not_reported(tmp_path, monkeypatch):
     _write_styled(tmp_path, monkeypatch, VARIED, OLD_NICHE_STYLE)
     ids = [f["id"] for f in run_review.review("r1")["findings"]]
     assert "one_distance_everywhere" not in ids
+
+
+# ── the gallery of sixteen, as a number ──────────────────────────────────────
+
+def test_a_sequence_of_portraits_is_a_finding(tmp_path, monkeypatch):
+    """THE COMPLAINT NOTHING COULD COUNT. Sixteen shots, thirteen of them one
+    to three figures standing upright facing the viewer. Every one is a
+    correct drawing of its line, so the prompts differ, the subjects differ
+    and the framing varies — every other measurement here is satisfied, and
+    the folder is still boring."""
+    prompts = [f"Wide shot: three villagers stand in the street, looking "
+               f"worried about the tax number {i}. {OLD_NICHE_STYLE}"
+               for i in range(12)]
+    _write_styled(tmp_path, monkeypatch, prompts, OLD_NICHE_STYLE)
+    found = run_review.review("r1")
+    assert found["action_share"] < 0.4
+    assert "nothing_is_happening" in [f["id"] for f in found["findings"]]
+
+
+def test_a_sequence_with_events_in_it_says_nothing(tmp_path, monkeypatch):
+    """The other half of the rule: a check that fires on a good run is the
+    noise this repo has twice had to walk back."""
+    actions = ["the table goes over and coins scatter across the floor",
+               "a hand slams the ledger shut",
+               "water pours past the mouth of the cave",
+               "two figures drag the last sack through the doorway",
+               "a clerk snatches the paper off the counter",
+               "the door is kicked in and the lamp swings",
+               "a boy runs down the lane with the bundle",
+               "the crowd shoves against the shutters"]
+    prompts = [f"Mid shot: {a}. {OLD_NICHE_STYLE}" for a in actions] * 2
+    _write_styled(tmp_path, monkeypatch, prompts, OLD_NICHE_STYLE)
+    found = run_review.review("r1")
+    assert found["action_share"] >= 0.4
+    assert "nothing_is_happening" not in [f["id"] for f in found["findings"]]
+
+
+def test_a_short_sequence_is_not_judged_on_it(tmp_path, monkeypatch):
+    """Three still shots is a choice; twelve is a gallery."""
+    prompts = [f"Wide shot: a coin sits on the counter, number {i}. "
+               f"{OLD_NICHE_STYLE}" for i in range(4)]
+    _write_styled(tmp_path, monkeypatch, prompts, OLD_NICHE_STYLE)
+    ids = [f["id"] for f in run_review.review("r1")["findings"]]
+    assert "nothing_is_happening" not in ids
+
+
+def test_the_action_share_survives_an_empty_run():
+    assert run_review._action_share([]) == 1.0

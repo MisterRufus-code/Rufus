@@ -353,6 +353,50 @@ def _near_duplicates(frames: list[Path]) -> dict:
     return out
 
 
+# Verbs that describe a body at rest. A shot built on one of these and nothing
+# else is a portrait: the figure exists, and nothing is happening to it.
+_STATIC_VERBS = {
+    "stand", "stands", "standing", "sit", "sits", "sitting", "look", "looks",
+    "looking", "watch", "watches", "watching", "face", "faces", "facing",
+    "gaze", "gazes", "gazing", "stare", "stares", "staring", "wait", "waits",
+    "waiting", "hold", "holds", "holding", "wear", "wears", "wearing",
+    "appear", "appears", "seem", "seems", "pose", "poses", "posing",
+    "gather", "gathers", "gathering", "surround", "surrounds", "surrounding",
+}
+
+# Physical things that can be caught mid-happening. Deliberately a stem list —
+# matched with an optional s/es/ed/ing tail — and deliberately incomplete: the
+# finding below is about a SHARE of the sequence, so a verb this misses costs
+# a little sensitivity and never a false alarm on its own.
+_ACTION_STEMS = (
+    "scatter", "pour", "spill", "slam", "kick", "drag", "tip", "topple",
+    "overturn", "throw", "hurl", "smash", "shatter", "break", "snap", "tear",
+    "rip", "cut", "chop", "burn", "flood", "crash", "collapse", "crack",
+    "snatch", "grab", "shove", "push", "pull", "swing", "strike", "hammer",
+    "dig", "lift", "haul", "carry", "drop", "fall", "run", "flee", "chase",
+    "climb", "leap", "jump", "stumble", "reach", "hand", "pass", "toss",
+    "pile", "stack", "sweep", "spray", "splash", "pound", "knock", "slice",
+    "count", "weigh", "stamp", "seal", "pry", "wrench", "yank", "bolt",
+    "scramble", "clutch", "shield", "duck", "recoil", "flinch", "point",
+)
+_ACTION_RE = re.compile(
+    r"\b(?:" + "|".join(_ACTION_STEMS) + r")(?:s|es|ed|ing)?\b", re.I)
+
+# Below this share of shots carrying an action, the sequence is a gallery of
+# portraits. High on purpose: a sequence has every right to hold on a still
+# object, and a check that fires on a good run is the noise this repo has
+# twice had to walk back. A real run measured 3 of 16.
+_ACTION_SHARE_MIN = 0.4
+
+
+def _action_share(prompts: list[str]) -> float:
+    """Share of shots with something physically happening in them."""
+    if not prompts:
+        return 1.0
+    acting = sum(1 for p in prompts if _ACTION_RE.search(p or ""))
+    return round(acting / len(prompts), 3)
+
+
 def _findings(m: dict) -> list[dict]:
     """The measurements that are out of range, phrased as what to do.
 
@@ -441,6 +485,29 @@ def _findings(m: dict) -> list[dict]:
                      f"differs."),
         })
 
+    # THE COMPLAINT THAT NOTHING COULD COUNT. "the pictures are not
+    # interesting" was the owner opening a folder of sixteen and seeing
+    # thirteen shots of figures standing upright facing the viewer. Every one
+    # of them was a correct drawing of its line, so nothing measured from the
+    # text could object — the prompts differ, the subjects differ, the framing
+    # varies. What they share is that nothing is happening in any of them.
+    share = m.get("action_share")
+    if share is not None and m.get("beats", 0) >= 6 and share < _ACTION_SHARE_MIN:
+        acting = round(share * m["beats"])
+        out.append({
+            "id": "nothing_is_happening",
+            "severity": "high",
+            "text": (f"Only {acting} of {m['beats']} shots have anything "
+                     f"physically happening in them — the rest are people and "
+                     f"objects at rest. A sequence of portraits is the "
+                     f"difference between a video people watch and one they "
+                     f"scroll past, and it is invisible in every other "
+                     f"measurement here because each shot is a correct drawing "
+                     f"of its own line. The storyboard brief asks for the VERB "
+                     f"first; this is what it looks like when that is not "
+                     f"landing."),
+        })
+
     want = _deserved_beats(m.get("script_words", 0))
     if m.get("beats") and want and m["beats"] < want * 0.7:
         out.append({
@@ -494,6 +561,7 @@ def review(run_id: str, video_path: Path | None = None) -> dict:
         "clauses": _clause_counts(prompts),
         "dominant_subject": _dominant_subject(prompts),
         "framing": _framing_counts(prompts),
+        "action_share": _action_share(prompts),
         "cuts": _cut_metrics(video_path),
         "frames": _near_duplicates(frames),
     }
