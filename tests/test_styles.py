@@ -258,8 +258,15 @@ def test_the_dashboard_offers_every_preset_in_the_file():
 # A style block is appended to every prompt byte for byte. An image model does
 # not read "a lion" as an illustration of a rule about animals — it reads it as
 # a noun in the prompt, and it draws it. This repo has now had the same bug
-# three times: the hook example "2,000 years ago" leaking into generated hooks,
-# the storyboard's own examples, and this.
+# three times, and the two earlier ones are pinned by their own tests:
+#
+#   tests/test_script_writer.py       the hook example "2,000 years ago"
+#                                     coming back as generated hooks
+#   tests/test_preanalysis_examples.py  the pre-analysis examples — "Still
+#                                     scared to retire", the leaky faucet,
+#                                     the envelope from the IRS
+#
+# and this is the third.
 
 _NOUNS_THAT_GOT_DRAWN = [
     "zebra", "lion", "leopard", "deer", "boulder", "bones",
