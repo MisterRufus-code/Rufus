@@ -898,6 +898,68 @@ def _finish_video(parts: list[str], total: float, eq_filter: str,
     return ";\n".join(parts)
 
 
+# Past this many characters the filtergraph goes into a file instead of onto
+# the command line.
+#
+# WHY IT HAS TO. Windows' CreateProcess takes at most 32,767 characters for the
+# WHOLE command line, and the graph is one argument. A 24-picture Short's graph
+# is about 6,000 characters and has never come close. A 150-picture nine-minute
+# render measures 44,000 — the render would have died at the last step of the
+# night, after every image was drawn and the voice was recorded, with a
+# Windows error about a filename being too long that names nothing in the
+# pipeline. The GPU hour is spent by then.
+#
+# 8,000 keeps every Short on the exact command line it uses today: same
+# argument, same graph, byte-identical output. -filter_complex_script has been
+# in ffmpeg since 2013 and reads the identical syntax, so nothing about the
+# graph itself changes when it moves.
+_FILTER_ARG_MAX = 8000
+
+
+def _filter_complex_args(fc: str, out: Path) -> list[str]:
+    """`-filter_complex <graph>`, or `-filter_complex_script <file>` if long.
+
+    The file sits beside the output and is left there deliberately: when a
+    render fails, the graph IS the diagnosis, and a forty-thousand-character
+    argument is not something anyone can read out of a traceback.
+    """
+    if len(fc) <= _FILTER_ARG_MAX:
+        return ["-filter_complex", fc]
+    path = Path(str(out) + ".filtergraph.txt")
+    try:
+        path.write_text(fc, encoding="utf-8")
+    except OSError as e:
+        # Fail-open, and loud: the long command line may still work on this
+        # platform, and dying here would fail a render that could have run.
+        print(f"[audio] could not write the filtergraph to {path.name} ({e}) — "
+              f"passing {len(fc)} characters on the command line instead")
+        return ["-filter_complex", fc]
+    print(f"[audio] filtergraph is {len(fc)} characters — passing it as "
+          f"{path.name} (a command line cannot hold that on Windows)")
+    return ["-filter_complex_script", str(path)]
+
+
+# CreateProcess' own ceiling is 32,767 characters for the whole command line,
+# and there is no partial failure: at 32,768 nothing runs. This warns with room
+# left, because the thing it is warning about arrives after an hour of GPU.
+_CMDLINE_WARN = 30_000
+
+
+def _warn_if_command_is_too_long(cmd: list[str]) -> int:
+    """Character count of the assembled command, warning if it is near the
+    Windows ceiling. One input is ~90 characters, so 150 beats and 60 inserts
+    is already 20,000 before anything else."""
+    size = sum(len(a) + 3 for a in cmd)
+    if size > _CMDLINE_WARN:
+        inputs = sum(1 for a in cmd if a == "-i")
+        print(f"[audio] ⚠ the ffmpeg command is {size} characters across "
+              f"{inputs} inputs, and Windows stops at 32767. If this render "
+              f"fails with a filename-too-long error, that is why — fewer "
+              f"pictures (SD_CLIPS) or fewer inserts (RUFUS_INSERT_MAX) is "
+              f"the lever.")
+    return size
+
+
 def _video_filter_complex(input_lengths: list[float], boundaries: list[float],
                           total: float, over_w: int, over_h: int, pad_y: int,
                           eq_filter: str, ass_esc: str, fonts_dir_esc: str,
@@ -1419,7 +1481,7 @@ def render(script: str, bg_paths: "Path | list[Path]", out_dir: Path,
                     # silently stops appearing.
                     c += ["-loop", "1", "-framerate", str(FPS),
                           "-t", f"{audio_dur + 0.5:.3f}", "-i", str(pic)]
-            c += ["-filter_complex", fc, "-map", "[vout]", "-map", "[aout]"]
+            c += _filter_complex_args(fc, out) + ["-map", "[vout]", "-map", "[aout]"]
             c += [
                 "-t", f"{audio_dur:.3f}",
                 *_video_encoder_args(),
@@ -1427,6 +1489,7 @@ def render(script: str, bg_paths: "Path | list[Path]", out_dir: Path,
                 "-r", str(FPS), "-pix_fmt", "yuv420p",
                 str(out),
             ]
+            _warn_if_command_is_too_long(c)
             return c
 
         def _xfade_fc(with_inserts: bool) -> str:

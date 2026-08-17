@@ -1,6 +1,9 @@
 """Tests for audio_gen.py – timestamp formatting and word clustering."""
 
+from pathlib import Path
 from types import SimpleNamespace
+
+import audio_gen
 
 import pytest
 
@@ -225,3 +228,75 @@ def test_whisper_cpu_load_no_retry_when_first_attempt_works(monkeypatch):
     monkeypatch.setattr(ag, "WhisperModel", FakeModel)
     ag._load_whisper_cpu("small")
     assert calls == [False]
+
+
+# ── a nine-minute filtergraph does not fit on a command line ─────────────────
+
+def test_a_shorts_graph_still_goes_on_the_command_line(tmp_path):
+    """Byte-identical to what ships today: same argument, same graph. A
+    24-picture Short's graph is about 6,000 characters and has never come
+    close to a limit."""
+    args = audio_gen._filter_complex_args("[0:v]null[vout]", tmp_path / "o.mp4")
+    assert args[0] == "-filter_complex"
+    assert args[1] == "[0:v]null[vout]"
+
+
+def test_a_long_graph_moves_into_a_file(tmp_path):
+    """Windows' CreateProcess takes 32,767 characters for the WHOLE command
+    line, and the graph is one argument. A 150-picture render's graph measures
+    about 44,000 — the render would have died at the last step of the night,
+    after every image was drawn and the voice recorded, with an error about a
+    filename being too long that names nothing in the pipeline."""
+    out = tmp_path / "video.mp4"
+    graph = "x" * (audio_gen._FILTER_ARG_MAX + 1)
+    args = audio_gen._filter_complex_args(graph, out)
+    assert args[0] == "-filter_complex_script"
+    written = Path(args[1])
+    assert written.read_text(encoding="utf-8") == graph
+    assert written.name.startswith("video.mp4"), "kept beside the render it made"
+
+
+def test_the_graph_file_survives_the_render_for_diagnosis(tmp_path):
+    """When a render fails the graph IS the diagnosis, and forty thousand
+    characters is not something anyone reads out of a traceback."""
+    out = tmp_path / "video.mp4"
+    audio_gen._filter_complex_args("y" * 9000, out)
+    assert (tmp_path / "video.mp4.filtergraph.txt").exists()
+
+
+def test_an_unwritable_directory_does_not_fail_the_render(tmp_path, capsys):
+    """Fail-open: the long command line may still work on this platform, and
+    dying here would fail a render that could have run."""
+    args = audio_gen._filter_complex_args(
+        "z" * 9000, tmp_path / "nope" / "deep" / "video.mp4")
+    assert args[0] == "-filter_complex"
+    assert "could not write the filtergraph" in capsys.readouterr().out
+
+
+def test_the_real_long_form_graph_is_over_the_line(monkeypatch):
+    """The measurement this is all based on, kept as a test so the number is
+    not a memory: 150 clips at nine minutes."""
+    monkeypatch.setenv("RUFUS_FORMAT", "long")
+    import importlib
+    importlib.reload(audio_gen)
+    n, dur = 150, 540.0
+    bounds = [round(i * dur / n, 3) for i in range(1, n)]
+    lens = audio_gen._xfade_input_lengths(bounds, dur)
+    fc = audio_gen._video_filter_complex(
+        lens, bounds, dur, 2112, 1188, 54, "eq=contrast=1.1", "a.ass",
+        "fonts", "#FFC53D", grades=["eq=contrast=1.1"] * n)
+    assert len(fc) > 32_767, len(fc)
+    assert len(fc) > audio_gen._FILTER_ARG_MAX
+
+
+def test_a_command_near_the_windows_ceiling_says_so(capsys):
+    cmd = ["ffmpeg"] + ["-i", "x" * 200] * 200
+    size = audio_gen._warn_if_command_is_too_long(cmd)
+    assert size > audio_gen._CMDLINE_WARN
+    out = capsys.readouterr().out
+    assert "32767" in out and "SD_CLIPS" in out
+
+
+def test_an_ordinary_command_says_nothing(capsys):
+    audio_gen._warn_if_command_is_too_long(["ffmpeg", "-i", "a.mp4", "out.mp4"])
+    assert capsys.readouterr().out == ""
