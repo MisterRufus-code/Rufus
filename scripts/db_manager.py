@@ -319,8 +319,14 @@ def rising(min_outperformance: float = 2.0, days: int = 14,
     Latest-per-video rather than every sighting, because a video seen eight
     times would otherwise crowd out seven others it is not better than.
     """
+    # MAX(id) AND NOT MAX(seen_at). SQLite's bare-column rule picks the row
+    # belonging to the max, which is what makes "the latest sighting" work at
+    # all — but seen_at has one-second resolution, so two passes in the same
+    # second TIE and the row chosen is then arbitrary. A test that recorded a
+    # video at 4,000 views and again at 40,000 got the 4,000 back. id is a
+    # rowid: monotonic, and it cannot tie.
     q = ("SELECT video_id, channel_title, title, views, outperformance, "
-         "       MAX(seen_at) AS seen_at, COUNT(*) AS sightings "
+         "       seen_at, COUNT(*) AS sightings, MAX(id) "
          "FROM scout_observations "
          "WHERE seen_at >= datetime('now', ?) AND outperformance >= ? "
          "GROUP BY video_id ORDER BY outperformance DESC LIMIT ?")
@@ -328,11 +334,29 @@ def rising(min_outperformance: float = 2.0, days: int = 14,
         rows = c.execute(q, (f"-{int(days)} days", float(min_outperformance),
                              int(limit))).fetchall()
     cols = ["video_id", "channel_title", "title", "views", "outperformance",
-            "seen_at", "sightings"]
-    return [dict(zip(cols, r)) for r in rows]
+            "seen_at", "sightings", "_max_id"]
+    return [{k: v for k, v in zip(cols, r) if k != "_max_id"} for r in rows]
 
 
 # ── Proposals ────────────────────────────────────────────────────────────────
+
+def recent_titles(limit: int = 200, channel: str | None = None) -> list[str]:
+    """What this channel has already made, as titles/hooks.
+
+    For the scout's duplicate check, which needs a cheap list of subjects
+    rather than the full rows every other reader here wants.
+    """
+    q = ("SELECT COALESCE(NULLIF(title,''), script_hook) FROM videos "
+         "WHERE COALESCE(NULLIF(title,''), script_hook) IS NOT NULL")
+    args: list = []
+    if channel:
+        q += " AND channel = ?"
+        args.append(channel)
+    q += " ORDER BY id DESC LIMIT ?"
+    args.append(int(limit))
+    with _conn() as c:
+        return [r[0] for r in c.execute(q, args).fetchall() if r[0]]
+
 
 def save_proposal(*, channel: str, niche: str, topic: str, hook: str,
                   script: str, score: int, evidence: str,

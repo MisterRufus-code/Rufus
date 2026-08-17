@@ -121,13 +121,16 @@ def _made_titles(limit: int = 200) -> list[str]:
     out: list[str] = []
     try:
         import db_manager
-        for v in db_manager.get_recent_videos(limit=limit):
-            out.append(v.get("title") or v.get("script_hook") or "")
-        for p in db_manager.proposals(status=None, limit=limit):
-            out.append(p.get("topic") or "")
+        out += db_manager.recent_titles(limit=limit)
+        out += [p.get("topic") or ""
+                for p in db_manager.proposals(status=None, limit=limit)]
     except Exception as e:
-        print(f"[scout] could not read what has been made ({e}) — "
-              f"treating everything as new, which risks a duplicate")
+        # LOUD, because failing open here means "nothing has been made", and
+        # that is not a degraded answer — it is the wrong one. The scout would
+        # propose the same idea every pass and each one would look correct.
+        print(f"[scout] ⚠ could not read what has already been made ({e}) — "
+              f"every candidate will look new, so this pass may well propose "
+              f"a duplicate")
     return [t for t in out if t]
 
 
