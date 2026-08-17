@@ -174,7 +174,9 @@ def test_the_ink_explainer_keeps_the_stick_figures():
     ink = STYLES["ink_explainer"]
     assert "PEOPLE ARE STICK FIGURES and stay that way" in ink
     assert "ANIMALS AND OBJECTS ARE DRAWN PROPERLY" in ink
-    assert "keeps its spots" in ink
+    # The RULE, not the leopard that used to illustrate it — see
+    # test_no_preset_names_a_specific_thing_to_draw for why the leopard went.
+    assert "keeps its true shape, its real proportions" in ink
 
 
 def test_the_ink_explainer_is_not_the_stickman_either():
@@ -240,3 +242,66 @@ def test_the_dashboard_offers_every_preset_in_the_file():
         f"picker and styles.json disagree: "
         f"only in file {set(_looks()) - offered}, "
         f"only in picker {offered - set(_looks())}")
+
+
+# ── an example inside a style block is not an example ────────────────────────
+#
+# THE LION. A gallery of sixty stills for a video about Bear Stearns and the
+# 2008 crisis had a lion in it, repeatedly, and every frame was set in a grassy
+# riverside village with bones scattered on the ground. None of that came from
+# the script or the storyboard. It came from here:
+#
+#   "a zebra has its stripes and mane, A LION its mane and tail tuft"
+#   "...rooftops, ship masts, machinery, crates, BONES AND STONES scattered
+#    in the dirt"
+#
+# A style block is appended to every prompt byte for byte. An image model does
+# not read "a lion" as an illustration of a rule about animals — it reads it as
+# a noun in the prompt, and it draws it. This repo has now had the same bug
+# three times: the hook example "2,000 years ago" leaking into generated hooks,
+# the storyboard's own examples, and this.
+
+_NOUNS_THAT_GOT_DRAWN = [
+    "zebra", "lion", "leopard", "deer", "boulder", "bones",
+    "ship masts", "market stalls", "river bank", "cave mouth",
+]
+
+
+@pytest.mark.parametrize("name", sorted(_looks()))
+def test_no_preset_names_a_specific_thing_to_draw(name):
+    """The rule may be stated; the things may not be listed. "An animal keeps
+    its real markings" is a rule. "A lion its mane and tail tuft" is a lion in
+    every frame of every video on this channel."""
+    s = _looks()[name].lower()
+    named = [n for n in _NOUNS_THAT_GOT_DRAWN if n in s]
+    assert not named, (
+        f"{name} names {named} — appended to every prompt, that is not an "
+        f"example, it is a subject")
+
+
+@pytest.mark.parametrize("name", sorted(_looks()))
+def test_the_rule_the_examples_were_illustrating_survives(name):
+    """The fix must not throw out the instruction with the nouns. Every preset
+    still has to say to build the place — deleting the list and leaving nothing
+    would bring back the white-void bug the clause exists to stop."""
+    s = _looks()[name]
+    assert "BUILD THE WHOLE" in s
+    assert "four to eight things" in s
+
+
+def test_the_scene_comes_from_the_shot_and_not_from_the_style():
+    """Four presets already said only "the four to eight things that say where
+    this is" and stopped, and their galleries were not full of somebody else's
+    scenery. The three that listed nouns now say where the nouns come from."""
+    for name in ("stickman", "ink_woodcut", "ink_explainer"):
+        assert "from the shot's own description and from nothing else" in \
+            STYLES[name], name
+
+
+def test_stickman_still_says_animals_are_drawn_properly():
+    """The contrast IS the style — stick people, real animals — and it has to
+    survive losing the zebra and the lion that illustrated it."""
+    s = STYLES["stickman"]
+    assert "ANIMALS AND OBJECTS ARE DRAWN PROPERLY" in s
+    assert "true shape, proportions and markings" in s
+    assert "stay simple stick figures" in s
