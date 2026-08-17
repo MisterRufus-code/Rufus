@@ -391,3 +391,37 @@ def test_the_tsx_agrees_with_the_profile_about_the_two_devices():
         landscape = p["width"] > p["height"]
         assert p["retention_bar"] is not landscape, fmt
         assert p["caption_upper"] is not landscape, fmt
+
+
+def test_every_module_still_imports_under_either_format():
+    """The cheapest guard against the next profile field.
+
+    Most readers pull their number at IMPORT time — `MAX_DUR = _vf.get(...)`
+    at module scope — so a key that does not exist, or a typo in one, is an
+    exception thrown before the pipeline does anything at all. Under `short`
+    it would be caught by the whole suite; under `long` nothing else here
+    imports the alternative renderers at all.
+
+    A subprocess because importing sixty modules in-process would leave a
+    Flask app and several caches behind for whatever test ran next.
+    """
+    import subprocess
+    scripts = Path(__file__).parent.parent / "scripts"
+    code = (
+        "import importlib, pathlib, sys\n"
+        f"sys.path.insert(0, {str(scripts)!r})\n"
+        "bad = []\n"
+        f"for f in sorted(pathlib.Path({str(scripts)!r}).glob('*.py')):\n"
+        "    try:\n"
+        "        importlib.import_module(f.stem)\n"
+        "    except Exception as e:\n"
+        "        bad.append(f'{f.name}: {type(e).__name__}: {e}')\n"
+        "print('\\n'.join(bad))\n"
+    )
+    for fmt in ("short", "long"):
+        import os
+        env = {**os.environ, "RUFUS_FORMAT": fmt}
+        r = subprocess.run([sys.executable, "-c", code], capture_output=True,
+                           text=True, timeout=300, env=env)
+        assert r.returncode == 0, r.stderr[-2000:]
+        assert not r.stdout.strip(), f"{fmt}:\n{r.stdout}"
