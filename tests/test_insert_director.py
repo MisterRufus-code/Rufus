@@ -351,3 +351,73 @@ def test_the_layer_is_off_unless_asked_for(monkeypatch):
     for off in ("0", "false", "no", "off", "", "nonsense"):
         monkeypatch.setenv("RUFUS_INSERTS", off)
         assert ins.enabled() is False, off
+
+
+# ── the cap that emptied the last seven minutes ──────────────────────────────
+
+def _long_words(n: int, step: float = 0.4):
+    """A spoken word stream long enough to be a nine-minute script."""
+    nouns = ["coin", "palace", "ledger", "train", "bank", "furnace", "crown"]
+    return [{"text": nouns[i % len(nouns)] if i % 3 == 0 else f"word{i}",
+             "start": round(i * step, 3), "end": round(i * step + 0.3, 3)}
+            for i in range(n)]
+
+
+def test_the_ceiling_is_a_density_not_a_count(monkeypatch):
+    monkeypatch.delenv("RUFUS_INSERT_MAX", raising=False)
+    monkeypatch.setenv("RUFUS_FORMAT", "short")
+    assert ins._limit() == 28
+    monkeypatch.setenv("RUFUS_FORMAT", "long")
+    assert ins._limit() == 60
+
+
+def test_the_env_override_still_wins(monkeypatch):
+    monkeypatch.setenv("RUFUS_FORMAT", "long")
+    monkeypatch.setenv("RUFUS_INSERT_MAX", "5")
+    assert ins._limit() == 5
+
+
+def test_thinning_spreads_instead_of_truncating():
+    """Candidates arrive in time order, so cutting the list at the limit keeps
+    the earliest ones — the whole video on a Short, and the first ninety
+    seconds of a nine-minute one with nothing after it."""
+    items = [{"at": float(i)} for i in range(300)]
+    out = ins._thin(items, 60)
+    assert len(out) == 60
+    assert out[0]["at"] == 0.0
+    assert out[-1]["at"] > 280, "the last insert is near the end of the video"
+    assert [i["at"] for i in out] == sorted(i["at"] for i in out)
+
+
+def test_a_short_is_never_thinned():
+    items = [{"at": float(i)} for i in range(9)]
+    assert ins._thin(items, 28) is items
+
+
+def test_a_long_script_gets_pictures_all_the_way_through(monkeypatch):
+    monkeypatch.setenv("RUFUS_INSERTS", "1")
+    monkeypatch.setenv("RUFUS_FORMAT", "long")
+    monkeypatch.delenv("RUFUS_INSERT_MAX", raising=False)
+    words = _long_words(1350)
+    script = " ".join(w["text"] for w in words)
+    out = ins.plan(script, words)
+    assert out, "a 1,350-word script should produce inserts"
+    span = words[-1]["start"]
+    assert out[-1]["at"] > span * 0.6, (
+        f"last insert at {out[-1]['at']:.0f}s of {span:.0f}s — the tail of the "
+        f"video has none")
+
+
+def test_phrase_mode_tiles_the_whole_narration_not_just_the_opening(monkeypatch):
+    monkeypatch.setenv("RUFUS_INSERTS", "1")
+    monkeypatch.setenv("RUFUS_FORMAT", "long")
+    monkeypatch.delenv("RUFUS_INSERT_MAX", raising=False)
+    words = _long_words(1350)
+    out = ins.plan_phrases(" ".join(w["text"] for w in words), words)
+    span = words[-1]["start"]
+    assert len(out) <= 60
+    assert out[-1]["at"] > span * 0.6
+    # Thinned BEFORE the holds were computed, so each picture still reaches the
+    # next one rather than flashing and leaving a gap.
+    assert all(b["at"] - a["at"] - a["hold"] < 0.05
+               for a, b in zip(out, out[1:]))

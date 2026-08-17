@@ -98,6 +98,13 @@ PROFILES: dict[str, dict] = {
         "retention_bar": True,
         # The word-synced insert cutaway, on a 1080-wide frame.
         "insert_w": 460,
+        # And how many of them one video may hold. A ceiling, not a target —
+        # the script's own vocabulary is what actually limits it.
+        "insert_max": 28,
+        # How many times one noun may get its own picture. Once, because a
+        # Short that says "coin" twice would land the second picture four
+        # seconds after the first.
+        "insert_repeat": 1,
     },
     "long": {
         "id": "long",
@@ -163,6 +170,15 @@ PROFILES: dict[str, dict] = {
         # Proportionally smaller on a wider frame: 460 of 1080 is 43% of the
         # width and would swallow a landscape shot.
         "insert_w": 520,
+        # A picture every ~9 seconds across nine minutes. Not 28 scaled by the
+        # length ratio, which would be 378 and hours of GPU on top of the 150
+        # beats — this is the density an explainer actually holds, and each one
+        # is still a real render.
+        "insert_max": 60,
+        # Three, spread across the occurrences rather than the first three —
+        # the same noun said at 0:20 and again at 7:00 is the through-line, and
+        # a picture only at its first mention is not one.
+        "insert_repeat": 3,
     },
 }
 

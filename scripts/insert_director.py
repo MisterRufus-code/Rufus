@@ -26,7 +26,7 @@ insert_director "<script>"` prints the plan for a real script.
 
 Env:
   RUFUS_INSERTS        0 (default) — 1 turns the whole layer on
-  RUFUS_INSERT_MAX     28  most inserts in one video
+  RUFUS_INSERT_MAX     most inserts in one video (per-format: 28 / 60)
   RUFUS_INSERT_GAP     0.45 minimum seconds between two inserts
   RUFUS_INSERT_HOLD    0.70 seconds an insert stays on screen
   RUFUS_INSERT_REPEAT  1    times one noun may be shown (raise for density)
@@ -58,6 +58,63 @@ import storyboard  # noqa: E402  — reuse its concrete-noun vocabulary
 DEFAULT_MAX = 28
 DEFAULT_GAP = 0.45
 DEFAULT_HOLD = 0.70
+
+
+def _limit() -> int:
+    """The ceiling on inserts for this video. Per-format, because it is a
+    DENSITY: 28 across forty seconds is a picture every second and a half, and
+    the same 28 across nine minutes is a picture every nineteen — spent
+    entirely in the first two minutes, because the candidates arrive in time
+    order. See _thin for the other half of that.
+
+    RUFUS_INSERT_MAX still overrides, and still means the same thing.
+    """
+    raw = str(_cfg("RUFUS_INSERT_MAX", "")).strip()
+    if raw:
+        try:
+            return max(1, int(float(raw)))
+        except ValueError:
+            pass
+    try:
+        import video_format
+        return int(video_format.get("insert_max", DEFAULT_MAX))
+    except Exception:
+        return DEFAULT_MAX
+
+
+def _repeat() -> int:
+    """How many times one noun may get its own picture.
+
+    One is right for forty seconds: a Short says "coin" twice and the second
+    picture would land four seconds after the first. Across nine minutes the
+    same noun is said a dozen times, minutes apart, and showing it once means
+    the through-line the storyboard builds in words has a picture only at its
+    first mention.
+    """
+    try:
+        import video_format
+        return int(video_format.get("insert_repeat", 1))
+    except Exception:
+        return 1
+
+
+def _thin(out: list, limit: int) -> list:
+    """At most `limit` inserts, SPREAD rather than truncated.
+
+    The candidates are in time order, so cutting the list at the limit keeps
+    the earliest ones — which on a forty-second video is the whole video and on
+    a nine-minute one is the first ninety seconds, with seven and a half
+    minutes after it carrying none. Nobody would ship that on purpose and
+    nothing downstream can see it: every insert in the list is correct.
+
+    Same reasoning as vision_review's frame sample. A Short is under the limit
+    in practice, so this changes nothing there.
+    """
+    if limit <= 0 or len(out) <= limit:
+        return out
+    step = len(out) / float(limit)
+    return [out[min(len(out) - 1, int(i * step))] for i in range(limit)]
+
 
 # Nouns worth a picture but too abstract for _content_words to keep, and nouns
 # it keeps that are not worth interrupting the video for. The first list is
@@ -359,7 +416,7 @@ def plan(script: str, words: list[dict], style: str = "") -> list[dict]:
     """
     if not enabled():
         return []
-    limit = int(_cfg("RUFUS_INSERT_MAX", DEFAULT_MAX))
+    limit = _limit()
     gap = _cfg("RUFUS_INSERT_GAP", DEFAULT_GAP)
     hold = _cfg("RUFUS_INSERT_HOLD", DEFAULT_HOLD)
 
@@ -369,10 +426,16 @@ def plan(script: str, words: list[dict], style: str = "") -> list[dict]:
     # measured on a real script, ten out of fifty-one words. Showing the same
     # coin again when the narration says "coin" again is not a duplicate; it is
     # the through-line the storyboard already tries to build in words.
-    per_word = max(1, int(_cfg("RUFUS_INSERT_REPEAT", 1)))
+    per_word = max(1, int(_cfg("RUFUS_INSERT_REPEAT", _repeat())))
     candidates: list[tuple[float, str]] = []
     for noun in insert_words(script):
-        for at in spoken.get(noun, [])[:per_word]:
+        # SPREAD, not the first N. Taking occurrences in order is right when
+        # the whole video is forty seconds and every occurrence is "early". Over
+        # nine minutes a common noun is said a dozen times, and the first three
+        # are all in the opening minute — so the noun's pictures would cluster
+        # there and the second half would carry none of it. Same thinning as
+        # the ceiling below, one noun at a time.
+        for at in _thin(spoken.get(noun, []), per_word):
             candidates.append((at, noun))
     candidates.sort()
 
@@ -396,9 +459,7 @@ def plan(script: str, words: list[dict], style: str = "") -> list[dict]:
             "prompt": insert_prompt(noun, style),
         })
         last = at
-        if len(out) >= limit:
-            break
-    return out
+    return _thin(out, limit)
 
 
 def _with_style(base: str, style: str) -> str:
@@ -538,7 +599,7 @@ def plan_phrases(script: str, words: list[dict], style: str = "") -> list[dict]:
     if not enabled():
         return []
     per = max(1, int(_cfg("RUFUS_PHRASE_WORDS", 4)))
-    limit = int(_cfg("RUFUS_INSERT_MAX", DEFAULT_MAX))
+    limit = _limit()
     hold = _cfg("RUFUS_INSERT_HOLD", DEFAULT_HOLD)
 
     timed = []
@@ -575,6 +636,13 @@ def plan_phrases(script: str, words: list[dict], style: str = "") -> list[dict]:
         else:
             groups.append(current)
 
+    # THINNED BEFORE THE HOLDS ARE COMPUTED, not after. Each picture holds
+    # until the next one starts, which is what makes them TILE the narration —
+    # thinning afterwards would leave every surviving picture with the hold of
+    # a neighbour that is no longer there, and the tiling would become a
+    # flicker with gaps.
+    groups = _thin(groups, limit)
+
     out: list[dict] = []
     for gi, chunk in enumerate(groups):
         at = round(chunk[0][0], 3)
@@ -593,8 +661,6 @@ def plan_phrases(script: str, words: list[dict], style: str = "") -> list[dict]:
             "prompt": phrase_prompt(phrase, style),
             "phrase": phrase,
         })
-        if len(out) >= limit:
-            break
     return out
 
 
