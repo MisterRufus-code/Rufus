@@ -146,7 +146,17 @@ def _bubble_gain() -> float:
 
 
 SFX_BUBBLE_GAIN = _bubble_gain()   # bubble into each cut
-SFX_RISER_GAIN  = float(os.environ.get("RUFUS_RISER_GAIN", "0.28"))   # riser leading into the final beat (once)
+# SECOND ROUND OF THE SAME FEEDBACK, and the number is the point of the
+# comment. 0.55 → 0.28 was the first halving, described above. "We need to
+# lower the swoosh volume at the end" is the same note again about the same
+# sound, so: 0.28 → 0.14.
+#
+# What that means in the finished video, because this gain is never heard on
+# its own: it is multiplied by the tone weight of the beat it introduces
+# (emotional_map._SFX_WEIGHT), so the real range moves from 0.20–0.35 to
+# 0.10–0.175. The loudest case is a revelation, which is exactly the ending
+# most of these videos have.
+SFX_RISER_GAIN  = float(os.environ.get("RUFUS_RISER_GAIN", "0.14"))   # riser leading into the final beat (once)
 
 # Cut planning
 FIRST_CUT_MIN = 2.0        # hook cut window — research: pattern interrupt by ~3s

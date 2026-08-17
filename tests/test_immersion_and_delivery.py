@@ -105,12 +105,20 @@ def test_hit_and_riser_gains_are_env_tunable(monkeypatch):
 def test_hit_and_riser_defaults_were_actually_lowered():
     """Regression guard: these were flagged as too loud/jarring at their old
     defaults (0.90 and 0.55) — the fix must not just add a lever nobody uses
-    by default, the DEFAULT itself had to come down."""
+    by default, the DEFAULT itself had to come down.
+
+    THE RISER HAS NOW BEEN HALVED TWICE, 0.55 → 0.28 → 0.14, on the same note
+    both times ("the swoosh at the end is too loud"). A `< 0.55` bound was
+    satisfied by every one of those values, so it could not tell the second
+    round from the first and would not have noticed a silent drift back up.
+    The value the owner actually asked for is pinned instead: changing it
+    should require saying so, which is what this line makes happen.
+    """
     import importlib
     import audio_gen
     importlib.reload(audio_gen)
     assert audio_gen.SFX_HIT_GAIN < 0.90
-    assert audio_gen.SFX_RISER_GAIN < 0.55
+    assert audio_gen.SFX_RISER_GAIN == pytest.approx(0.14)
 
 
 def test_the_cut_sound_is_still_the_quietest_layer():
