@@ -152,3 +152,38 @@ def test_the_renderer_only_reaches_for_clause_ends_when_it_needs_them():
     """Sentence ends are the better boundary; clauses are the top-up."""
     src = Path(__import__("audio_gen").__file__).read_text(encoding="utf-8")
     assert "if n > len(_snap_points) + 1:" in src
+
+
+# ── a setting that was right for one format and survives into the other ──────
+
+def test_a_shorts_sized_override_on_long_form_is_loud(monkeypatch, capsys):
+    """SD_CLIPS is set once in the dashboard and then forgotten. 24 is a
+    sensible Short; the same 24 over a nine-minute script is one picture held
+    for twenty-two seconds, which is a slideshow with narration."""
+    monkeypatch.setenv("RUFUS_FORMAT", "long")
+    monkeypatch.setenv("SD_CLIPS", "24")
+    import main
+    script = " ".join(["word"] * 1350)
+    assert main._target_beats(script) == 24, "the override still wins"
+    out = capsys.readouterr().out
+    assert "SD_CLIPS=24" in out
+    assert "every 22s" in out
+    assert "150" in out, "it should say what the format asked for"
+
+
+def test_the_same_override_on_a_short_says_nothing(monkeypatch, capsys):
+    """24 pictures for a 105-word Short is what the setting is FOR. A warning
+    here would fire on the owner's every run, which is the noise this repo has
+    twice had to walk back."""
+    monkeypatch.setenv("RUFUS_FORMAT", "short")
+    monkeypatch.setenv("SD_CLIPS", "24")
+    import main
+    assert main._target_beats(" ".join(["word"] * 105)) == 24
+    assert "⚠" not in capsys.readouterr().out
+
+
+def test_a_deliberate_low_count_is_still_obeyed(monkeypatch, capsys):
+    monkeypatch.setenv("RUFUS_FORMAT", "long")
+    monkeypatch.setenv("SD_CLIPS", "3")
+    import main
+    assert main._target_beats(" ".join(["word"] * 1350)) == 3

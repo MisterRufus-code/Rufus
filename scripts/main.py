@@ -562,18 +562,37 @@ def _target_beats(script: str) -> int:
 
     SD_CLIPS overrides, and is still the dial to reach for.
     """
+    import video_format
     override = os.environ.get("SD_CLIPS", "").strip()
     if override:
         try:
-            return max(1, int(override))
+            n = max(1, int(override))
         except ValueError:
             print(f"[beats] SD_CLIPS={override!r} is not a number — ignoring")
+        else:
+            # A SETTING THAT WAS RIGHT FOR ONE FORMAT AND SURVIVES INTO THE
+            # OTHER. SD_CLIPS is set once, in the dashboard, and then forgotten
+            # — 24 is a sensible Short and the same 24 over a nine-minute
+            # script is one picture held for twenty-two seconds, which is a
+            # slideshow with narration. The override still wins, because it is
+            # the dial the owner reaches for and second-guessing it is how a
+            # setting stops meaning anything. It just no longer does it
+            # quietly, and the warning is in seconds-per-picture rather than in
+            # counts, because that is the number you can picture.
+            want = video_format.target_beats(len(script.split()))
+            if n < want / 2:
+                # ~150 words a minute is this channel's narration pace — the
+                # same figure the long-form profile's word counts come from.
+                secs = (len(script.split()) / 2.5) / n
+                print(f"[beats] ⚠ SD_CLIPS={n} on a {len(script.split())}-word "
+                      f"script is one picture every {secs:.0f}s. This format "
+                      f"asks for {want}. Clear SD_CLIPS in Settings to use it.")
+            return n
     # THE NUMBERS COME FROM THE FORMAT NOW. One picture per five spoken words,
     # floor 10, ceiling 30 is what a 40-second Short wants; a nine-minute
     # explainer wants one per nine and a ceiling of 220. Those are the same
     # rule with different constants, so the constants moved to
     # video_format.PROFILES and this reads them.
-    import video_format
     return video_format.target_beats(len(script.split()))
 
 
