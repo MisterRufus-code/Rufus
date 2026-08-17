@@ -1913,9 +1913,32 @@ def run(skip_upload: bool = False, niche_override: str = None, output_dir: Path 
             print(f"           thumbnail: {thumb_path.name}")
         except Exception as e:
             print(f"           ⚠ thumbnail generation skipped: {e}")
+        # CHAPTERS, from the audio that actually shipped. Built here rather
+        # than inside build_metadata because this is the only scope holding
+        # both halves: the writer's surviving section titles and the renderer's
+        # word timings. Long-form only, and an empty list on anything unusual —
+        # see chapters.py for why a partial list is worse than none.
+        chapter_lines = ""
+        try:
+            import audio_gen as _agw
+            import chapters as _ch
+            if _ch.enabled():
+                _titles = (result or {}).get("section_titles") or []
+                _words  = list(getattr(_agw, "LAST_WORDS", []) or [])
+                _marks  = _ch.build(script, _words, _titles)
+                chapter_lines = _ch.as_lines(_marks)
+                if _marks:
+                    print(f"           chapters: {len(_marks)} "
+                          f"({_ch._stamp(_marks[-1][0])} last)")
+                else:
+                    print("           chapters: none — the sections could not "
+                          "be located in the spoken audio")
+        except Exception as e:
+            print(f"           ⚠ chapters skipped: {e}")
         try:
             from youtube_uploader import build_metadata
-            meta = build_metadata(script, active, niche_cfg)
+            meta = build_metadata(script, active, niche_cfg,
+                                  chapters=chapter_lines)
         except Exception as e:
             print(f"           ⚠ metadata generation skipped: {e}")
 

@@ -120,7 +120,10 @@ def _outline_prompt(seed_block: str, analysis: str, niche: str,
         f' "turn_line": "<the event that breaks it, one short sentence>",\n'
         f' "thesis": "<the negation-then-correction, one or two sentences>",\n'
         f' "promise": "<the counted promise, one sentence>",\n'
-        f' "sections": [{{"title": "<3-6 words, for you not the viewer>",\n'
+        f' "sections": [{{"title": "<3-6 words. This is the CHAPTER NAME the '
+        f'viewer reads in the description and on the scrubber, so make it '
+        f'concrete and specific to this section — and do not give away the '
+        f'section\'s own answer>",\n'
         f'   "pays": "<which piece of the promise this pays>",\n'
         f'   "fact": "<the fact from the source, quoted closely>",\n'
         f'   "hinge": "<the line that opens this section from the last>",\n'
@@ -398,6 +401,7 @@ def write(seed: dict | None, analysis: str, niche: str,
 
     body: list[str] = []
     used_facts: list[str] = []
+    kept_titles: list[str] = []
     for i, s in enumerate(outline["sections"]):
         prompt = _section_prompt(outline, i, per, _tail(body[-1]) if body else "",
                                  used_facts, seed_block)
@@ -432,6 +436,7 @@ def write(seed: dict | None, analysis: str, niche: str,
                 break
         body.append(text.strip())
         used_facts.append(s["fact"])
+        kept_titles.append(s.get("title") or "")
         print(f"[longform] section {i + 1}/{len(outline['sections'])}: "
               f"{len(text.split())} words")
 
@@ -469,6 +474,12 @@ def write(seed: dict | None, analysis: str, niche: str,
         "outline": outline,
         "words": words,
         "sections": len(body),
+        # THE TITLES THAT SURVIVED, in the order they appear in the script.
+        # Not outline["sections"] — a section that came back too short is
+        # skipped, and a chapter list built from the PLAN would name the
+        # skipped one and put every timestamp after it against the wrong
+        # paragraph.
+        "section_titles": kept_titles,
         "format": "long",
         "score": score,
         "fact_ok": fact_ok,

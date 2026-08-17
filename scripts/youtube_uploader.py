@@ -192,8 +192,15 @@ def _hashtags_for(niche_name: str) -> list[str]:
     return tags
 
 
-def build_metadata(script: str, niche_name: str, niche_cfg: dict) -> dict:
-    """GPT-optimized title/description/tags (metadata_writer), legacy on failure."""
+def build_metadata(script: str, niche_name: str, niche_cfg: dict,
+                   chapters: str = "") -> dict:
+    """GPT-optimized title/description/tags (metadata_writer), legacy on failure.
+
+    `chapters` is the already-formatted timestamp block, or "" — see
+    chapters.py. It goes in ABOVE the hashtags and the CTA because YouTube
+    reads the list from the description text and a viewer skimming for what is
+    inside should not have to scroll past a wall of tags to find it.
+    """
     hashtags = _hashtags_for(niche_name)
     category = niche_cfg.get("youtube_category_id") or DEFAULT_CATEGORIES.get(niche_name, "22")
 
@@ -208,6 +215,20 @@ def build_metadata(script: str, niche_name: str, niche_cfg: dict) -> dict:
             "description": f"{script}\n\n{' '.join(hashtags)}\n\n{niche_cfg.get('cta', '')}",
             "tags":        [t.lstrip("#") for t in hashtags],
         }
+
+    if chapters:
+        # After the opening paragraph, before everything else. Not at the very
+        # top — the first two lines of a description are what search and the
+        # watch page show, and spending them on "0:00 Intro" throws away the
+        # copy metadata_writer wrote to earn the click. Not at the bottom
+        # either, under the hashtags, where nobody scrolls. The rule YouTube
+        # actually enforces is about the first TIMESTAMP being 0:00, not the
+        # first line. Guarded so a re-run cannot stack two copies.
+        desc = str(meta.get("description") or "")
+        if "0:00 " not in desc:
+            opening, sep, rest = desc.partition("\n\n")
+            meta["description"] = (f"{opening}\n\n{chapters}\n\n{rest}".strip()
+                                   if sep else f"{desc}\n\n{chapters}".strip())
 
     meta["categoryId"] = category
     return meta

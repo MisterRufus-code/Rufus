@@ -195,6 +195,14 @@ DEFAULT_ACCENT = "#FFD23F"   # warm gold — used when a niche has no accent_col
 # not a result anyone renders from.
 LAST_CUTS: list[float] = []
 
+# The word stream of the voice that actually shipped, as (start_seconds, word).
+# Same reasoning as LAST_CUTS, and the same shape of consumer: chapters.py
+# finds each section's real start in here rather than dividing the runtime by
+# the number of sections. It has to be the RENDERED audio, not the script — a
+# TTS engine that drops or merges a word makes every estimate after it late,
+# and a chapter mark thirty seconds off is a promise the video breaks.
+LAST_WORDS: list[tuple[float, str]] = []
+
 
 # ── Font bootstrap ───────────────────────────────────────────────────────────────
 
@@ -1270,6 +1278,10 @@ def render(script: str, bg_paths: "Path | list[Path]", out_dir: Path,
         # from the finished mp4, and a run that quietly held one picture for
         # nine seconds is exactly what nobody notices until a viewer swipes.
         globals()["LAST_CUTS"] = list(boundaries)
+        globals()["LAST_WORDS"] = [
+            (float(w.start), w.word.strip())
+            for seg in segments for w in seg.words if w.word.strip()
+        ]
 
         lens_xfade  = _xfade_input_lengths(boundaries, audio_dur)
         lens_concat = _concat_input_lengths(boundaries, audio_dur)

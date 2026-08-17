@@ -142,6 +142,13 @@ def render(script: str, bg_paths: "Path | list[Path]", out_dir: Path,
             {"text": text, "start": round(start, 3), "end": round(end, 3)}
             for start, end, text in audio_gen._cluster_words(segments, audio_dur)
         ]
+        # The word stream for chapters, published from whichever renderer ran —
+        # a description whose timestamps depend on which engine drew the frames
+        # would be a bug that only shows up on half the runs.
+        audio_gen.LAST_WORDS = [
+            (float(w.start), w.word.strip())
+            for seg in segments for w in seg.words if w.word.strip()
+        ]
 
         print("[3/4] Staging assets…")
         # Self-hosted caption font: reuse the Anton ttf the FFmpeg path downloads.
