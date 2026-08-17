@@ -97,3 +97,89 @@ def test_the_presets_are_reachable_by_name():
     presets = comfy_client.style_presets()
     for name in _looks():
         assert name in presets
+
+
+# ── the two gallery bugs, for every preset and not just the one that had them ──
+#
+# Both were found by the owner opening a folder of sixty stills. They were
+# fixed in `stickman` because that is the preset that was running, and the
+# tests above pin them there — but the clauses that caused them are the kind
+# any new preset would reach for, and the next gallery costs another night of
+# the 3090.
+
+@pytest.mark.parametrize("name", sorted(_looks()))
+def test_no_preset_paints_the_scene_out(name):
+    """THE WHITE-VOID BUG. "on a pure white background" overrode every
+    storyboard that had carefully built a room, in every frame."""
+    s = _looks()[name].lower()
+    assert "pure white background" not in s
+    assert "blank background" not in s
+    assert "white void" not in s
+
+
+@pytest.mark.parametrize("name", sorted(_looks()))
+def test_no_preset_makes_the_background_fainter_instead_of_simpler(name):
+    """THE BEIGE GALLERY. "drawn thinner and paler than the foreground" gave
+    sixty stills where only the figure looked finished. A background is
+    quieter because it is simpler and further away, not because it is washed
+    out — and every preset now says which."""
+    s = _looks()[name].lower()
+    assert "paler than the foreground" not in s
+    assert "because it is simpler" in s
+
+
+@pytest.mark.parametrize("name", sorted(_looks()))
+def test_every_preset_builds_a_place_and_keeps_it(name):
+    """A style is appended to every prompt byte for byte, so a preset that
+    says nothing about the background lets the model decide — and the model
+    decides blank paper. ink_woodcut was the one preset with no scene clause
+    at all, because the shared one is written for flat colour and an engraving
+    has none."""
+    s = _looks()[name]
+    assert "BUILD THE WHOLE" in s, "no scene instruction at all"
+    assert "same horizon height" in s, "the place has to persist across shots"
+    assert "reads instantly at thumbnail size" in s.lower()
+
+
+@pytest.mark.parametrize("name", sorted(_looks()))
+def test_every_preset_forbids_the_photographic_tells(name):
+    """The stills model's default is a photograph. Whatever the medium, the
+    same four words are what make a drawing stop looking drawn."""
+    s = _looks()[name].lower()
+    for banned in ("no gradients", "no depth of field", "no film grain"):
+        assert banned in s, banned
+
+
+# ── the ink explainer look ───────────────────────────────────────────────────
+
+def test_the_ink_explainer_is_not_the_woodcut():
+    """Both are ink and they are different channels. The woodcut is an 1890s
+    newspaper engraving — monochrome, dense, anatomical. The explainer is a
+    notebook page: a fine nib, hatched tone, and one or two muted washes on
+    the thing the shot is about."""
+    ink = STYLES["ink_explainer"]
+    wood = STYLES["ink_woodcut"]
+    # Stated as what each one IS, not as words the other must avoid: the
+    # explainer's own text says "not a printed engraving", and a test that
+    # searched for the word would fail on the sentence drawing the very
+    # distinction it is checking.
+    assert "off-white paper" in ink and "muted washes" in ink
+    assert "19th-century" in wood and "no colour" in wood.lower()
+    assert "no grey fills, no gradients" in ink.lower()
+
+
+def test_the_ink_explainer_draws_people_rather_than_stick_figures():
+    """The difference from `stickman`, which is the question this preset was
+    added to answer. Same channel, same scripts, a different hand."""
+    ink = STYLES["ink_explainer"]
+    assert "PEOPLE ARE DRAWN PROPERLY rather than as stick figures" in ink
+    assert "stick-figure" not in ink.lower().replace("stick figures", "")
+
+
+def test_the_ink_explainer_carries_the_face_vocabulary():
+    """The lesson from the ten mild smiles: naming a feeling is not enough,
+    the model needs the geometry."""
+    ink = STYLES["ink_explainer"]
+    assert "must not be the same on every figure" in ink
+    for feeling in ("anger", "shock", "delight", "worry"):
+        assert feeling in ink, feeling
