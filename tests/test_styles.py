@@ -154,26 +154,50 @@ def test_every_preset_forbids_the_photographic_tells(name):
 
 def test_the_ink_explainer_is_not_the_woodcut():
     """Both are ink and they are different channels. The woodcut is an 1890s
-    newspaper engraving — monochrome, dense, anatomical. The explainer is a
-    notebook page: a fine nib, hatched tone, and one or two muted washes on
-    the thing the shot is about."""
+    newspaper engraving — monochrome, dense, anatomical, printed. The explainer
+    is a sketchbook page that gets fully painted: marker colour over a wobbling
+    ink line, and the weather is half the picture."""
     ink = STYLES["ink_explainer"]
     wood = STYLES["ink_woodcut"]
-    # Stated as what each one IS, not as words the other must avoid: the
-    # explainer's own text says "not a printed engraving", and a test that
-    # searched for the word would fail on the sentence drawing the very
-    # distinction it is checking.
-    assert "off-white paper" in ink and "muted washes" in ink
     assert "19th-century" in wood and "no colour" in wood.lower()
-    assert "no grey fills, no gradients" in ink.lower()
+    assert "FULLY PAINTED" in ink and "CARRIES THE WEATHER" in ink
 
 
-def test_the_ink_explainer_draws_people_rather_than_stick_figures():
-    """The difference from `stickman`, which is the question this preset was
-    added to answer. Same channel, same scripts, a different hand."""
+def test_the_ink_explainer_keeps_the_stick_figures():
+    """WRITTEN FROM THE WRONG GUESS FIRST. This preset was added with people
+    "drawn properly rather than as stick figures", which is what an ink
+    explainer sounds like. The reference frames say otherwise: the people ARE
+    stick figures — white oval head, dot eyes, drawn brows, a scribble of hair
+    — and the animals beside them are drawn in full, spots and proportions and
+    all. That contrast is the style, and getting it backwards would have
+    produced a different channel."""
     ink = STYLES["ink_explainer"]
-    assert "PEOPLE ARE DRAWN PROPERLY rather than as stick figures" in ink
-    assert "stick-figure" not in ink.lower().replace("stick figures", "")
+    assert "PEOPLE ARE STICK FIGURES and stay that way" in ink
+    assert "ANIMALS AND OBJECTS ARE DRAWN PROPERLY" in ink
+    assert "keeps its spots" in ink
+
+
+def test_the_ink_explainer_is_not_the_stickman_either():
+    """The two share their figures and differ in the hand. stickman is thin,
+    clean line art of uniform weight with flat unshaded fills — a poster.
+    This wobbles, varies its weight, scribbles its shading and paints the
+    weather across the frame."""
+    ink = STYLES["ink_explainer"]
+    stick = STYLES["stickman"]
+    assert "VARYING weight" in ink and "wobbles" in ink
+    assert "SHADING IS SCRIBBLED" in ink
+    assert "uniform weight" in stick and "uniform weight" not in ink
+    assert "flat unshaded colour fills" in stick
+    assert "scribbled texture rather than with flat colour" in ink
+
+
+def test_the_ink_explainer_gives_the_frame_one_temperature():
+    """The reference frames carry their mood in the colour of the whole
+    picture, not in the subject: a storm is grey-blue edge to edge and a fire
+    is warm ochre on the cave wall behind it."""
+    ink = STYLES["ink_explainer"]
+    assert "THE WHOLE FRAME CARRIES ONE TEMPERATURE" in ink
+    assert "same temperature" in ink, "and it persists across a sequence"
 
 
 def test_the_ink_explainer_carries_the_face_vocabulary():
