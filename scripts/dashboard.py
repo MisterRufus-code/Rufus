@@ -1257,6 +1257,7 @@ NAV_ITEMS = [
     ("/generate",   "▶ Make a video",                     "generate"),
     ("/thumbnails", "🎨 Thumbnails",                      "thumbnail"),
     ("/styles",     "🎨 Style",                           "settings"),
+    ("/scout",      "🛰 Scout",                           "view"),
     ("/bench",      "🔬 Workflow bench",                  "settings"),
     ("/failures",   "⚠ Failures &amp; rejected attempts", "view"),
     ("/performance", "📈 Performance",                    "view"),
@@ -2422,6 +2423,136 @@ def styles_use():
     _save_settings(values)
     os.environ["RUFUS_STYLE"] = sid
     return redirect("/styles?msg=" + _urlquote(f"Next run renders in {sid}."))
+
+
+# ── The scout ────────────────────────────────────────────────────────────────
+
+@app.route("/scout")
+def scout_page():
+    """What the agent noticed, and what it wants to make about it.
+
+    EVERY PROPOSAL SHOWS ITS EVIDENCE, and that is the whole difference between
+    reviewing an agent's work and rubber-stamping it. "Make a video about the
+    Panic of 1893" is an instruction. "Neighbour published this, it did 9x
+    their own median, and this channel has not covered it" is something a
+    person can disagree with.
+
+    The scout never renders. Approving one starts an ordinary run on that
+    topic, through every gate any other video goes through.
+    """
+    auth.require("view")
+    try:
+        import db_manager as dbm
+        pending = dbm.proposals(status="pending", limit=30)
+        decided = [p for p in dbm.proposals(status=None, limit=40)
+                   if p["status"] != "pending"][:10]
+        watching = dbm.rising(limit=8)
+    except Exception as e:
+        body = (f'<a class="back" href="/">← back</a><h2 style="margin-top:14px">'
+                f'Scout</h2><div class="msg error">{_esc(str(e))}</div>')
+        return _head() + body + PAGE_TAIL
+
+    cards = ""
+    for p in pending:
+        buttons = ""
+        if auth.can("generate"):
+            buttons = (
+                f'<form method="post" action="/scout/{p["id"]}/approve" '
+                f'style="display:inline"><button class="btn save" '
+                f'type="submit">Make this</button></form> '
+                f'<form method="post" action="/scout/{p["id"]}/reject" '
+                f'style="display:inline"><button type="submit">Not this'
+                f'</button></form>')
+        cards += (
+            f'<div class="card" style="width:100%;margin-bottom:12px">'
+            f'<div style="display:flex;justify-content:space-between;gap:12px">'
+            f'<strong>{_esc(p["topic"] or "—")}</strong>'
+            f'<span class="muted">{p["score"]}/10 · ${p["cost_usd"]:.3f}</span>'
+            f'</div>'
+            f'<p class="muted" style="margin:6px 0">{_esc(p["evidence"] or "")}</p>'
+            f'<details><summary class="muted">the script it wrote</summary>'
+            f'<pre style="white-space:pre-wrap;font-size:13px">'
+            f'{_esc(p["script"] or "")}</pre></details>'
+            f'<div style="margin-top:10px">{buttons}</div></div>')
+
+    if not pending:
+        cards = ('<p class="muted">Nothing waiting. The scout proposes when a '
+                 'watched channel publishes something that beat its own median '
+                 'and this channel has not covered it — a quiet week is a real '
+                 'answer, not a failure.</p>')
+
+    seen = ""
+    for w in watching:
+        seen += (f'<tr><td>{_esc(w["channel_title"] or "")}</td>'
+                 f'<td>{_esc((w["title"] or "")[:70])}</td>'
+                 f'<td class="muted">{w["outperformance"]:.1f}x</td>'
+                 f'<td class="muted">{w["views"]:,}</td>'
+                 f'<td class="muted">{w["sightings"]}</td></tr>')
+    seen_html = (f'<h2>What it is watching</h2><table><tr><th>Channel</th>'
+                 f'<th>Video</th><th>vs their median</th><th>Views</th>'
+                 f'<th>Seen</th></tr>{seen}</table>' if seen else "")
+
+    old = ""
+    for p in decided:
+        old += (f'<tr><td>{_esc((p["topic"] or "")[:60])}</td>'
+                f'<td class="muted">{_esc(p["status"])}</td>'
+                f'<td class="muted">{_esc(p["decided_at"] or "")}</td></tr>')
+    old_html = (f'<h2>Already decided</h2><table><tr><th>Topic</th>'
+                f'<th></th><th>When</th></tr>{old}</table>' if old else "")
+
+    body = f"""
+    <a class="back" href="/">← back</a>
+    <h2 style="margin-top:14px">Scout</h2>
+    {_msg_banner()}
+    <p class="muted">Watches the channels in <code>config/competitors.json</code>,
+       scores every video against <em>its own channel's median</em> — 20k views
+       on a channel that averages 3k is the interesting one, not 50k on a
+       channel that averages 200k — and proposes what to make. It writes
+       scripts and stops there; approving one starts a normal run.</p>
+    {cards}
+    {seen_html}
+    {old_html}
+    """
+    return _head() + body + PAGE_TAIL
+
+
+@app.route("/scout/<int:proposal_id>/approve", methods=["POST"])
+def scout_approve(proposal_id: int):
+    """Approve a proposal → an ordinary run on its topic.
+
+    Reuses the same launch path as /request-topic rather than growing a second
+    one: a scout-approved video must go through every gate any other video goes
+    through, and the surest way to guarantee that is for it to BE the same
+    path.
+    """
+    auth.require("generate")
+    try:
+        import db_manager as dbm
+        row = next((p for p in dbm.proposals(status="pending", limit=200)
+                    if p["id"] == proposal_id), None)
+        if not row:
+            return redirect("/scout?error=" + _urlquote(
+                "that proposal is not pending — already decided?"))
+        if not dbm.decide_proposal(proposal_id, "approved"):
+            return redirect("/scout?error=" + _urlquote("could not record it"))
+        _, log_path = _launch_run(topic=row["topic"], channel=row["channel"])
+    except Exception as e:
+        return redirect("/scout?error=" + _urlquote(f"could not start: {e}"))
+    return redirect("/scout?msg=" + _urlquote(
+        f'Making "{row["topic"]}" — it lands in the review queue like any '
+        f'other video. Log: logs/{log_path.name}'))
+
+
+@app.route("/scout/<int:proposal_id>/reject", methods=["POST"])
+def scout_reject(proposal_id: int):
+    """Rejected proposals stay in the table on purpose — they are what stops
+    the scout proposing the same idea again next pass."""
+    auth.require("generate")
+    import db_manager as dbm
+    if not dbm.decide_proposal(proposal_id, "rejected"):
+        return redirect("/scout?error=" + _urlquote("already decided"))
+    return redirect("/scout?msg=" + _urlquote(
+        "Rejected — it will not be proposed again."))
 
 
 # ── The workflow bench ───────────────────────────────────────────────────────

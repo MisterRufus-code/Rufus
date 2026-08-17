@@ -1341,3 +1341,82 @@ def test_the_privacy_setting_is_offered_and_explains_the_trade():
                      if k == "RUFUS_PRIVACY")
     assert "next peak hour" in help_text
     assert "tzdata" in help_text, "the thing that silently breaks scheduling"
+
+
+# ── the scout ────────────────────────────────────────────────────────────────
+
+def test_scout_page_is_honest_about_an_empty_queue(client):
+    """A quiet week is a real answer. An empty page that looks broken would
+    make the owner go looking for a bug that is not there."""
+    page = client.get("/scout").get_data(as_text=True)
+    assert "Scout" in page
+    assert "a quiet week is a real answer" in page
+
+
+def test_a_proposal_shows_the_evidence_that_chose_it(client):
+    """THE DIFFERENCE BETWEEN REVIEWING AN AGENT AND RUBBER-STAMPING IT. "Make
+    a video about the Panic of 1893" is an instruction. "Neighbour published
+    this, it did 9x their own median, and we have not covered it" is something
+    a person can disagree with."""
+    db_manager.save_proposal(
+        channel="main_en", niche="money_history", topic="The Panic of 1893",
+        hook="A hook", script="The script itself", score=9,
+        evidence="Neighbour published X · 90,000 views — 9.0x that channel's "
+                 "own median", cost_usd=0.05)
+    page = client.get("/scout").get_data(as_text=True)
+    assert "The Panic of 1893" in page
+    assert "9.0x that channel" in page
+    assert "The script itself" in page
+    assert "9/10" in page
+
+
+def test_approving_a_proposal_starts_an_ordinary_run(client, monkeypatch):
+    """A scout-approved video must go through every gate any other video goes
+    through, and the surest way to guarantee that is for it to be the same
+    path."""
+    launched = {}
+
+    def fake_launch(*, niche=None, topic=None, channel=None):
+        launched.update(topic=topic, channel=channel)
+        return (None, Path("logs/x.log"))
+
+    monkeypatch.setattr(dashboard, "_launch_run", fake_launch)
+    pid = db_manager.save_proposal(
+        channel="main_en", niche="money_history", topic="The Panic of 1893",
+        hook="h", script="s", score=9, evidence="e")
+    r = client.post(f"/scout/{pid}/approve", follow_redirects=False)
+    assert r.status_code in (301, 302)
+    assert launched == {"topic": "The Panic of 1893", "channel": "main_en"}
+    assert db_manager.proposals(status="approved")[0]["id"] == pid
+
+
+def test_a_proposal_cannot_be_approved_twice(client, monkeypatch):
+    """Two clicks on a phone with a slow connection must not make two videos."""
+    calls = []
+    monkeypatch.setattr(dashboard, "_launch_run",
+                        lambda **kw: calls.append(kw) or (None, Path("l.log")))
+    pid = db_manager.save_proposal(channel="c", niche="n", topic="t", hook="h",
+                                   script="s", score=9, evidence="e")
+    client.post(f"/scout/{pid}/approve")
+    client.post(f"/scout/{pid}/approve")
+    assert len(calls) == 1
+
+
+def test_rejecting_keeps_the_row(client):
+    """Rejected proposals are what stop the scout proposing the same idea
+    again next pass — deleting them would make it forget."""
+    pid = db_manager.save_proposal(channel="c", niche="n", topic="Tulips",
+                                   hook="h", script="s", score=9, evidence="e")
+    client.post(f"/scout/{pid}/reject")
+    assert db_manager.proposals(status="rejected")[0]["topic"] == "Tulips"
+    assert db_manager.proposals(status="pending") == []
+
+
+def test_the_page_shows_what_it_is_watching(client):
+    db_manager.record_observations([{
+        "video_id": "v1", "channel_id": "c", "channel_title": "Neighbour",
+        "title": "How Money Broke", "published_at": "", "views": 90_000,
+        "channel_median": 10_000, "outperformance": 9.0}])
+    page = client.get("/scout").get_data(as_text=True)
+    assert "Neighbour" in page and "How Money Broke" in page
+    assert "9.0x" in page
