@@ -145,3 +145,51 @@ def test_set_upload_status_transitions(isolated_db):
     with isolated_db._conn() as c:
         row = c.execute("SELECT upload_status FROM videos WHERE id=?", (vid,)).fetchone()
     assert row[0] == "rejected"
+
+
+# ── waiting to go live ───────────────────────────────────────────────────────
+
+def test_a_scheduled_video_is_findable(tmp_path, monkeypatch):
+    """A scheduled upload looked identical, from every page in the dashboard,
+    to one that is private forever — and that difference is the whole question
+    of whether the channel is publishing."""
+    monkeypatch.setattr(db_manager, "DB_FILE", tmp_path / "t.db")
+    db_manager.init_db()
+    vid = db_manager.save_video(niche="money_history", script_hook="h",
+                                scene_desc="s", video_file="v.mp4", score=9)
+    db_manager.set_publish_at(vid, "2099-01-01T12:00:00Z")
+    rows = db_manager.scheduled()
+    assert [r["id"] for r in rows] == [vid]
+    assert rows[0]["publish_at"] == "2099-01-01T12:00:00Z"
+
+
+def test_a_publish_time_that_has_passed_is_not_still_waiting(tmp_path, monkeypatch):
+    monkeypatch.setattr(db_manager, "DB_FILE", tmp_path / "t.db")
+    db_manager.init_db()
+    vid = db_manager.save_video(niche="money_history", script_hook="h",
+                                scene_desc="s", video_file="v.mp4", score=9)
+    db_manager.set_publish_at(vid, "2000-01-01T12:00:00Z")
+    assert db_manager.scheduled() == []
+
+
+def test_a_public_upload_carries_no_publish_time(tmp_path, monkeypatch):
+    """publishAt is only valid on a private upload — YouTube's rule, not ours
+    — so empty is the honest answer for a public one, not a missing row."""
+    monkeypatch.setattr(db_manager, "DB_FILE", tmp_path / "t.db")
+    db_manager.init_db()
+    vid = db_manager.save_video(niche="money_history", script_hook="h",
+                                scene_desc="s", video_file="v.mp4", score=9)
+    db_manager.set_publish_at(vid, "")
+    assert db_manager.scheduled() == []
+
+
+def test_the_soonest_is_first(tmp_path, monkeypatch):
+    monkeypatch.setattr(db_manager, "DB_FILE", tmp_path / "t.db")
+    db_manager.init_db()
+    ids = []
+    for when in ("2099-03-01T12:00:00Z", "2099-01-01T12:00:00Z"):
+        v = db_manager.save_video(niche="n", script_hook="h", scene_desc="s",
+                                  video_file="v.mp4", score=9)
+        db_manager.set_publish_at(v, when)
+        ids.append(v)
+    assert [r["id"] for r in db_manager.scheduled()] == [ids[1], ids[0]]

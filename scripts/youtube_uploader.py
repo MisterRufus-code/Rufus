@@ -55,6 +55,10 @@ DEFAULT_CATEGORIES = {
 
 PEAK_HOURS_ET = [8, 12, 17, 20]  # US Eastern hours
 
+# The publishAt of the most recent upload, or "" when it went up visible.
+# See the note where it is set: a fact about the upload, not a return value.
+LAST_PUBLISH_AT = ""
+
 NICHE_HASHTAGS = {
     "finance":              ["#finance", "#investing", "#wealth", "#money", "#stockmarket", "#Shorts"],
     "motivation":           ["#motivation", "#mindset", "#grind", "#discipline", "#success", "#Shorts"],
@@ -319,6 +323,14 @@ def upload(video_path: Path, script: str, thumbnail_path: Path = None,
                               channel.upload.get("timezone"))
         if when:
             status["publishAt"] = when
+
+    # WHEN THIS ONE GOES LIVE, for whoever writes the row afterwards. A module
+    # global rather than a third return value because upload()'s signature is
+    # shared by main.py and the dashboard's approve, and this is a fact about
+    # the upload rather than a result anyone renders from — the same reasoning
+    # as audio_gen.LAST_CUTS. "" means it is already visible (public/unlisted)
+    # or it is private with no schedule.
+    globals()["LAST_PUBLISH_AT"] = status.get("publishAt", "")
 
     print(f"[youtube] channel: {channel.id}")
     print(f"[youtube] uploading: {video_path.name}")

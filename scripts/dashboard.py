@@ -483,6 +483,13 @@ SETTINGS_GROUPS = [
         ("RUFUS_NTFY_TOPIC", "ntfy topic", "text",
          "Free phone push, no account: install the ntfy app and subscribe to "
          "a topic nobody else would guess."),
+        ("RUFUS_PRIVACY", "When it goes live", "select:public,private,unlisted",
+         "public puts an approved video up immediately. private schedules it "
+         "for the next peak hour instead — YouTube publishes it itself, and "
+         "the Tracking page lists what is waiting. Scheduling is only "
+         "possible on a private upload; that is YouTube's rule. On Windows it "
+         "also needs the tzdata package, without which there is no schedule "
+         "and the video stays private until you publish it by hand."),
         ("RUFUS_MIN_UPLOAD_SCORE", "Hold below score", "number",
          "Nothing auto-uploads regardless; this decides what the review queue "
          "flags as held."),
@@ -2807,6 +2814,35 @@ def tracking_page():
                      '<button class="btn save" type="submit">'
                      'Fetch view counts now</button></form>')
 
+    # WAITING TO GO LIVE. An upload that went up private with a publishAt is
+    # indistinguishable, from every other page here, from one that is private
+    # forever — and that difference is the whole question of whether the
+    # channel is publishing. It was invisible until there was a column for it.
+    try:
+        waiting = db_manager.scheduled(channel)
+    except Exception:
+        waiting = []
+    if waiting:
+        sched_rows = ""
+        for v in waiting:
+            sched_rows += (
+                f'<tr><td><a class="row-link" href="/video/{v["id"]}">'
+                f'{_esc((v.get("title") or v.get("script_hook") or "—")[:70])}'
+                f'</a></td>'
+                f'<td class="muted">{_esc(v.get("publish_at") or "")} UTC</td>'
+                f'<td class="muted">{_esc(v.get("niche") or "")}</td>'
+                f'<td>' + (f'<a href="https://youtu.be/{_esc(v["youtube_id"])}" '
+                           f'target="_blank" rel="noopener">watch</a>'
+                           if v.get("youtube_id") else "") + '</td></tr>')
+        sched_html = (f'<h2>Waiting to go live</h2>'
+                      f'<p class="muted">Uploaded private with a publish time. '
+                      f'YouTube makes these public itself — nothing here has '
+                      f'to run at that moment.</p>'
+                      f'<table><tr><th>Video</th><th>Goes live</th>'
+                      f'<th>Niche</th><th></th></tr>{sched_rows}</table>')
+    else:
+        sched_html = ""
+
     body = f"""
     <a class="back" href="/">← back</a>
     <h2 style="margin-top:14px">Tracking</h2>
@@ -2828,6 +2864,7 @@ def tracking_page():
        feeds the hook learning, so until this middle number moves, every
        quality judgement in the pipeline is a guess about what works.</p>
     <div class="actions">{fetch_btn}</div>
+    {sched_html}
     {learn_html}
     <h2>Published, not yet measured</h2>
     {untracked_html}
@@ -3547,13 +3584,16 @@ def approve_video(video_id):
     try:
         db_manager.update_youtube_id(video_id, yt_id)
         db_manager.set_upload_status(video_id, "approved")
+        db_manager.set_publish_at(video_id, getattr(yt_mod, "LAST_PUBLISH_AT", ""))
     except Exception as db_err:
         return _redirect_detail(
             video_id,
             error=(f"UPLOADED OK ({yt_url}) but the status update failed "
                    f"({db_err}). Do NOT re-approve — it's already live. Fix "
                    f"the DB row manually if needed."))
-    msg = f"Uploaded: {yt_url}"
+    when = getattr(yt_mod, "LAST_PUBLISH_AT", "")
+    msg = (f"Uploaded, live at {when} UTC: {yt_url}" if when
+           else f"Uploaded: {yt_url}")
     if extra:
         msg += "  |  " + "; ".join(extra)
     try:

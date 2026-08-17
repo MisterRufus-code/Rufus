@@ -79,6 +79,11 @@ def init_db():
             # (the source-citation comment posted after upload) was thrown
             # away at save time. seed_url is the real link.
             "ALTER TABLE videos ADD COLUMN seed_url TEXT",
+            # When YouTube will make it visible, for an upload that went up
+            # private with a publishAt. Empty for everything else. Without it
+            # a scheduled video is indistinguishable from one that is private
+            # forever, which is the state the owner was actually in.
+            "ALTER TABLE videos ADD COLUMN publish_at TEXT",
         ):
             try:
                 c.execute(ddl)
@@ -204,6 +209,40 @@ def save_attempt(*, run_id: str, niche: str, seed_type: str, phase: str,
 def update_youtube_id(video_id: int, youtube_id: str):
     with _conn() as c:
         c.execute("UPDATE videos SET youtube_id=? WHERE id=?", (youtube_id, video_id))
+
+
+def set_publish_at(video_id: int, when: str):
+    """Record when YouTube will make this video visible. "" = already visible.
+
+    Only an upload that went up PRIVATE carries a publishAt — that is
+    YouTube's own rule, not ours — so this is empty for a public or unlisted
+    one, and empty is the honest answer rather than a missing row.
+    """
+    with _conn() as c:
+        c.execute("UPDATE videos SET publish_at=? WHERE id=?",
+                  (when or "", video_id))
+
+
+def scheduled(channel: str | None = None) -> list[dict]:
+    """Videos with a publish time still in the future, soonest first.
+
+    The list nobody could see. A scheduled upload looks identical to one that
+    is private forever from every page in this dashboard, and the difference
+    is the whole question of whether the channel is publishing.
+    """
+    q = ("SELECT id, title, script_hook, youtube_id, publish_at, niche, channel "
+         "FROM videos WHERE publish_at IS NOT NULL AND publish_at != '' "
+         "AND publish_at > strftime('%Y-%m-%dT%H:%M:%SZ','now')")
+    args: list = []
+    if channel:
+        q += " AND channel = ?"
+        args.append(channel)
+    q += " ORDER BY publish_at ASC"
+    with _conn() as c:
+        rows = c.execute(q, args).fetchall()
+    cols = ["id", "title", "script_hook", "youtube_id", "publish_at",
+            "niche", "channel"]
+    return [dict(zip(cols, r)) for r in rows]
 
 
 def update_title(video_id: int, title: str):

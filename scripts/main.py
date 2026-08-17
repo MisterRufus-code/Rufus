@@ -2066,8 +2066,12 @@ def run(skip_upload: bool = False, niche_override: str = None, output_dir: Path 
             if db_id and yt_id:
                 try:
                     update_youtube_id(db_id, yt_id)
-                    from db_manager import set_upload_status
+                    from db_manager import set_publish_at, set_upload_status
                     set_upload_status(db_id, "approved")
+                    # Empty unless it went up private with a schedule — see
+                    # youtube_uploader.LAST_PUBLISH_AT.
+                    import youtube_uploader as _yt
+                    set_publish_at(db_id, getattr(_yt, "LAST_PUBLISH_AT", ""))
                 except Exception as e:
                     print(f"           ⚠ DB youtube_id update failed (video IS uploaded): {e}")
         except Exception as e:

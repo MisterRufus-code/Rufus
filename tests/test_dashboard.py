@@ -1308,3 +1308,36 @@ def test_the_bench_lists_what_is_wrong_with_an_export(client, monkeypatch):
     page = client.get("/bench").get_data(as_text=True)
     assert "unusable" in page
     assert "Export (API)" in page
+
+
+def test_tracking_lists_what_is_waiting_to_go_live(client):
+    """Uploaded private with a publish time, which YouTube acts on by itself.
+    Until there was a column for it this was indistinguishable from a video
+    that is private forever."""
+    vid = db_manager.save_video(niche="money_history", script_hook="A hook",
+                                scene_desc="s", video_file="v.mp4", score=9,
+                                youtube_id="abcdefghijk", title="The panic")
+    db_manager.set_publish_at(vid, "2099-01-01T12:00:00Z")
+    page = client.get("/tracking").get_data(as_text=True)
+    assert "Waiting to go live" in page
+    assert "2099-01-01T12:00:00Z" in page
+    assert "The panic" in page
+
+
+def test_tracking_says_nothing_about_scheduling_when_nothing_is_scheduled(client):
+    """An empty section that looks broken is worse than no section."""
+    db_manager.save_video(niche="money_history", script_hook="A hook",
+                          scene_desc="s", video_file="v.mp4", score=9)
+    page = client.get("/tracking").get_data(as_text=True)
+    assert "Waiting to go live" not in page
+
+
+def test_the_privacy_setting_is_offered_and_explains_the_trade():
+    """Scheduling is only possible on a private upload — YouTube's rule — so
+    the two are one control, not two switches that can disagree."""
+    kind = dashboard.SETTINGS_KINDS["RUFUS_PRIVACY"]
+    assert kind == "select:public,private,unlisted"
+    help_text = next(h for k, _l, _k, h in dashboard.SETTINGS_SCHEMA
+                     if k == "RUFUS_PRIVACY")
+    assert "next peak hour" in help_text
+    assert "tzdata" in help_text, "the thing that silently breaks scheduling"

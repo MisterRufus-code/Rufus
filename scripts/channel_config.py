@@ -41,10 +41,40 @@ LEGACY_ID = "main_en"
 DEFAULT_UPLOAD = {
     "videos_per_day": 2,
     "min_score":      8,
-    "privacy":        "private",     # security invariant: private by default
+    # PUBLIC, and this was `private` until the owner asked for it to change.
+    # The old default was not really "keep it hidden" — an upload marked
+    # private also carried a publishAt of the next peak hour, so YouTube
+    # published it anyway, just later. What it actually did was make
+    # publishing depend on the timezone database resolving, and on Windows
+    # that database is a pip package nobody had installed: the schedule
+    # silently degraded to no publishAt at all, and finished videos sat
+    # private forever.
+    #
+    # Nothing here uploads on its own. main.py needs RUFUS_AUTO_UPLOAD=1 and a
+    # score over the bar; the dashboard needs a human to press approve. So
+    # "public" is what happens when somebody has already decided to publish.
+    # Set it back per-channel in channels.json, or from the dashboard.
+    "privacy":        "public",
     "peak_hours":     [8, 12, 17, 20],
     "timezone":       "America/New_York",
 }
+
+# The dashboard writes this; it overrides whatever the channel config says.
+# One vocabulary, not two: the values are YouTube's own privacyStatus, and
+# scheduling is a property of `private` because publishAt is only valid there.
+PRIVACY_VALUES = ("public", "private", "unlisted")
+
+
+def _privacy_override() -> str:
+    # The name is written out rather than held in a constant so env_doctor's
+    # scanner can see it: a setting missing from docs/ENVIRONMENT.md is a
+    # setting nobody finds.
+    raw = os.environ.get("RUFUS_PRIVACY", "").strip().lower()
+    if raw and raw not in PRIVACY_VALUES:
+        print(f"[channel] RUFUS_PRIVACY={raw!r} is not one of "
+              f"{', '.join(PRIVACY_VALUES)} — ignoring it")
+        return ""
+    return raw
 
 
 @dataclass
@@ -108,11 +138,15 @@ class Channel:
 def _synthesize_legacy() -> Channel:
     """Pre-channels.json install → behave exactly like the original single channel."""
     data = json.loads(NICHES_FILE.read_text(encoding="utf-8"))
+    upload = dict(DEFAULT_UPLOAD)
+    if _privacy_override():
+        upload["privacy"] = _privacy_override()
     return Channel(
         id=LEGACY_ID,
         display_name="Main (legacy single-channel)",
         niches=list(data.get("niches", {}).keys()),
         schedule=list(data.get("schedule", []) or [data.get("active", "finance")]),
+        upload=upload,
         legacy=True,
     )
 
@@ -142,6 +176,11 @@ def load_channel(channel_id: str | None = None) -> Channel:
     raw    = channels[cid]
     upload = dict(DEFAULT_UPLOAD)
     upload.update(raw.get("upload", {}))
+    # The dashboard's choice wins over the file, the same way every other
+    # RUFUS_* setting does — otherwise the button appears to do nothing on a
+    # box that has a channels.json.
+    if _privacy_override():
+        upload["privacy"] = _privacy_override()
     return Channel(
         id=cid,
         display_name=raw.get("display_name", cid),
