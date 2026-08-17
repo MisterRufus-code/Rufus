@@ -425,3 +425,56 @@ def test_every_module_still_imports_under_either_format():
                            text=True, timeout=300, env=env)
         assert r.returncode == 0, r.stderr[-2000:]
         assert not r.stdout.strip(), f"{fmt}:\n{r.stdout}"
+
+
+# ── the profile cannot ask for a video that cannot be cut ────────────────────
+
+# This channel's narration pace, and the figure the long-form word counts were
+# derived from: ~150 words a minute.
+WORDS_PER_SECOND = 2.5
+
+
+def test_the_pictures_a_script_earns_fit_in_the_time_it_takes_to_say_it():
+    """Every picture is a GPU render, and the cut planner will not place one
+    below min_seg_s. Ask for more pictures than the narration has room for and
+    the extras are rendered, paid for, and then dropped with a one-line
+    warning — an hour of a 3090's evening for frames nobody sees.
+
+    The arithmetic is the profile's own, so it can be checked without running
+    anything: at words_max, do target_beats pictures at min_seg_s each still
+    fit inside the seconds that many words takes to speak?
+    """
+    for fmt in ("short", "long"):
+        p = video_format.profile(fmt)
+        for words in (p["words_min"], p["words_max"]):
+            beats = video_format.target_beats(words, fmt)
+            need = beats * p["min_seg_s"]
+            have = words / WORDS_PER_SECOND
+            assert need <= have, (
+                f"{fmt} at {words} words: {beats} pictures need {need:.0f}s of "
+                f"video and the narration is {have:.0f}s long")
+
+
+def test_the_beat_ceiling_fits_inside_the_render_ceiling():
+    """The other end of the same sum: beats_max pictures at the floor length
+    must still be a video the clamp will not cut."""
+    for fmt in ("short", "long"):
+        p = video_format.profile(fmt)
+        assert p["beats_max"] * p["min_seg_s"] <= p["render_max_s"], fmt
+
+
+def test_a_full_length_script_really_does_cut_into_that_many_pictures(monkeypatch):
+    """The arithmetic above, run through the actual planner. 150 pictures over
+    nine minutes is the shape long-form asks for, and a planner that quietly
+    returned ninety would mean sixty rendered images going in the bin."""
+    monkeypatch.setenv("RUFUS_FORMAT", "long")
+    import audio_gen
+    importlib.reload(audio_gen)
+    duration = 1350 / WORDS_PER_SECOND
+    # A sentence every ~15 words, which is ordinary narration prose.
+    ends = [round(i * 6.0, 2) for i in range(1, int(duration / 6.0))]
+    n = video_format.target_beats(1350, "long")
+    cuts = audio_gen._plan_cuts(ends, duration, n, ["neutral"] * n)
+    assert len(cuts) >= n - 1, f"{len(cuts)} cuts for {n} pictures"
+    marks = [0.0] + cuts + [duration]
+    assert min(b - a for a, b in zip(marks, marks[1:])) >= audio_gen.MIN_SEG - 0.01
