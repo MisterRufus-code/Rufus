@@ -53,3 +53,48 @@ def test_stills_only_cuts_between_stills_rather_than_holding_one():
     assert "STILLS-ONLY MEANS CUT, NOT HOLD" in src
     assert 'beat_mode = "cut"' in src
     assert "RUFUS_BEAT_MOTION=kenburns" in src, "the way back must be named"
+
+
+# ── an explicit 1 is not the same integer as no answer ───────────────────────
+#
+# THE SETTINGS FILE THAT PROVED IT. config/dashboard_settings.json held neither
+# SD_CLIPS nor RUFUS_FRAMES_PER_BEAT, and run_dashboard.bat sets
+# RUFUS_STILLS_ONLY=1 — which the dashboard's child process inherits, because
+# saved settings LAYER ON TOP of the environment rather than replacing it. So
+# every dashboard-launched run took the auto-`cut` branch and rewrote 1 to 3,
+# and a gallery of sixty stills came back in near-identical threes.
+#
+# The fix the owner would reach for first is the dashboard's own "Stills per
+# beat" field, set to 1. That wrote RUFUS_FRAMES_PER_BEAT=1 — indistinguishable
+# from unset at the branch that reads it — so the run still auto-selected
+# `cut`, still rewrote it to 3, and still printed that it was cutting between
+# stills. The comment three lines above that branch had promised for months
+# that "an explicit RUFUS_BEAT_MOTION or RUFUS_FRAMES_PER_BEAT still wins".
+#
+# A default and a decision cannot be the same value. That is the whole bug.
+
+def test_setting_one_still_a_beat_is_not_read_as_having_set_nothing(monkeypatch):
+    monkeypatch.delenv("RUFUS_FRAMES_PER_BEAT", raising=False)
+    assert cc._frames_per_beat_was_asked_for() is False
+    monkeypatch.setenv("RUFUS_FRAMES_PER_BEAT", "1")
+    assert cc._frames_per_beat_was_asked_for() is True
+    assert cc._frames_per_beat() == 1, "the number itself must not change"
+
+
+def test_an_empty_setting_is_not_a_decision(monkeypatch):
+    """The dashboard writes "" for a field the owner cleared, and clearing a
+    field is how you ask for the default back — not how you pin it to 1."""
+    for blank in ("", "   "):
+        monkeypatch.setenv("RUFUS_FRAMES_PER_BEAT", blank)
+        assert cc._frames_per_beat_was_asked_for() is False, repr(blank)
+
+
+def test_the_auto_cut_branch_defers_to_an_explicit_number():
+    """Auto-selection may fill a gap; it may not overrule an answer. The
+    branch has to consult the "was this asked for" question, or the two cases
+    collapse back into one integer."""
+    src = Path(cc.__file__).read_text(encoding="utf-8")
+    branch = src.split("STILLS-ONLY MEANS CUT, NOT HOLD", 1)[1][:1600]
+    assert "_frames_per_beat_was_asked_for()" in branch, (
+        "the stills-only auto-cut can still overwrite an explicit "
+        "RUFUS_FRAMES_PER_BEAT=1")

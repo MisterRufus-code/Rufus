@@ -181,6 +181,21 @@ def _frames_per_beat() -> int:
         return 1
 
 
+def _frames_per_beat_was_asked_for() -> bool:
+    """Did someone actually SET the number, or is 1 just the default?
+
+    These are the same integer and they are not the same instruction. The
+    stills-only branch below auto-selects `cut` when nothing was asked for,
+    and `cut` rewrites 1 to 3 — so a run that reads RUFUS_FRAMES_PER_BEAT=1
+    and one that reads nothing at all both ended up at three stills a beat.
+    The owner set the dashboard's "Stills per beat" to 1 to stop the
+    near-identical triplets and got triplets, with the log still saying it
+    was cutting between stills. A setting that reports as honoured and is not
+    is worse than one that is missing, because the missing one gets added.
+    """
+    return os.environ.get("RUFUS_FRAMES_PER_BEAT", "").strip() != ""
+
+
 # How a beat moves. One selector instead of four interacting flags, because
 # these are alternatives, not layers:
 #   i2v      motion model per still (Wan/Hunyuan/LTX/SVD). Best-looking real
@@ -1308,7 +1323,8 @@ def generate_clips(queries: list[str], n: int = 4,
     # Only when nothing else was asked for: an explicit RUFUS_BEAT_MOTION or
     # RUFUS_FRAMES_PER_BEAT still wins, and RUFUS_BEAT_MOTION=kenburns is how
     # to ask for the old one-still-per-beat behaviour back.
-    if not beat_mode and frames_per_beat == 1:
+    if (not beat_mode and frames_per_beat == 1
+            and not _frames_per_beat_was_asked_for()):
         try:
             import svd_client
             if svd_client._stills_only():
