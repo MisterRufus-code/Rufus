@@ -540,16 +540,59 @@ def _cluster_words(segments, audio_dur: float):
         yield start, end, text.upper() if CAPTION_UPPER else text
 
 
-def _is_highlight(text: str) -> bool:
-    """Accent-color a caption if it carries a number/$/% or an opinion word."""
+# Above this share of the script, the director's emphasis list is not emphasis.
+# Its own brief says so — "a beat where every word is emphasised has no
+# emphasis" — but a model asked for up to four words a beat will sometimes
+# return four every time, and 96 accented words out of 110 is a green video.
+_EMPHASIS_MAX_SHARE = 0.2
+
+
+def emphasis_words(plan: dict | None, script_words: int) -> set[str]:
+    """The words the edit director chose for the captions to hit hardest.
+
+    IT WAS ASKING FOR THESE AND THROWING THEM AWAY. The director's brief names
+    the field exactly — "0-3 words per beat that the CAPTION should hit
+    hardest, the figure, the name, the reversal" — and nothing read it back,
+    so every run paid for the judgement and then coloured its captions from a
+    regex that knows about digits and a list of opinion words. The regex is
+    still there and still right about "$4 billion"; this adds the words only a
+    reader of the sentence could pick.
+    """
+    if not isinstance(plan, dict):
+        return set()
+    out: set[str] = set()
+    for beat in plan.get("beats") or []:
+        for w in (beat or {}).get("emphasis") or []:
+            token = re.sub(r"[^A-Z']", "", str(w).upper())
+            if token:
+                out.add(token)
+    if script_words and len(out) / float(script_words) > _EMPHASIS_MAX_SHARE:
+        print(f"[grade] the director marked {len(out)} of {script_words} words "
+              f"for emphasis — that is a colour, not an accent, so the "
+              f"captions keep their own highlighting")
+        return set()
+    return out
+
+
+def _is_highlight(text: str, emphasis: set[str] | None = None) -> bool:
+    """Accent-color a caption if it carries a number/$/%, an opinion word, or a
+    word the edit director marked."""
     if _HIGHLIGHT_RE.search(text):
         return True
     stripped = re.sub(r"[^A-Z']", "", text.upper())
-    return stripped in _opinion_words()
+    if stripped in _opinion_words():
+        return True
+    if not emphasis:
+        return False
+    # A caption may be one word or a phrase; either hits if any word in it was
+    # marked.
+    return any(re.sub(r"[^A-Z']", "", w.upper()) in emphasis
+               for w in text.split())
 
 
 def build_ass(segments, ass_path: Path, audio_dur: float,
-              font_name: str = "Arial", accent: str = GREEN) -> None:
+              font_name: str = "Arial", accent: str = GREEN,
+              emphasis: set[str] | None = None) -> None:
     header = (
         "[Script Info]\n"
         "ScriptType: v4.00+\n"
@@ -567,10 +610,11 @@ def build_ass(segments, ass_path: Path, audio_dur: float,
     )
     lines = []
     for start, end, text in _cluster_words(segments, audio_dur):
-        c = accent if _is_highlight(text) else WHITE
+        hot = _is_highlight(text, emphasis)
+        c = accent if hot else WHITE
         # Staggered pop: highlights (numbers/$/%/opinion words) get the biggest
         # fastest pop to punch emphasis; regular words get a subtler scale.
-        if _is_highlight(text):
+        if hot:
             scale_start, pop_ms = 138, 45   # biggest pop, fastest — maximum emphasis
         elif text[:1].upper() in "TKPBDGFVS":  # strong consonant onset = punch
             scale_start, pop_ms = 122, 62
@@ -1275,6 +1319,7 @@ def render(script: str, bg_paths: "Path | list[Path]", out_dir: Path,
     # clip count, missing edit_director's memo, and grading the video against a
     # second plan the narration never heard.
     plan_tones: list[str] = []
+    plan_emphasis: set[str] = set()
     try:
         import emotional_map
         import edit_director
@@ -1283,6 +1328,7 @@ def render(script: str, bg_paths: "Path | list[Path]", out_dir: Path,
         _plan  = edit_director.direct(_beats) if _beats else None
         if _plan is not None:
             plan_tones = emotional_map.tones_from_plan(_plan, len(_beats))
+            plan_emphasis = emphasis_words(_plan, len(script.split()))
     except Exception as e:
         print(f"[grade] emotional map unavailable (non-fatal): {e}")
 
@@ -1320,7 +1366,8 @@ def render(script: str, bg_paths: "Path | list[Path]", out_dir: Path,
             print(f"      ⚠ audio is only {audio_dur:.1f}s (target ≥{MIN_DUR:.0f}s)")
 
         print("[3/4] Building subtitles…")
-        build_ass(segments, ass, audio_dur, font_name=font_name, accent=accent_ass)
+        build_ass(segments, ass, audio_dur, font_name=font_name,
+                  accent=accent_ass, emphasis=plan_emphasis)
 
         # Sentence-aligned cut plan — scene changes land where narration breathes
         n_supplied = n

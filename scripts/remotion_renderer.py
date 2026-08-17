@@ -229,6 +229,12 @@ def render(script: str, bg_paths: "Path | list[Path]", out_dir: Path,
             "width": _fmt.dimensions()[0],
             "height": _fmt.dimensions()[1],
             "edit":              edit,
+            # The words the director marked, resolved the same way the FFmpeg
+            # path resolves them — including the share guard, so a plan that
+            # marks half the script does not turn the captions green in one
+            # renderer and leave them white in the other.
+            "emphasis":          sorted(audio_gen.emphasis_words(
+                edit, len(script.split()))),
             "inserts":           inserts or None,
         }
         props_file = job_dir / "props.json"

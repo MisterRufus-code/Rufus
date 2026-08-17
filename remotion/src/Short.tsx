@@ -76,6 +76,9 @@ export type ShortProps = {
   words: Word[];
   durationInSeconds: number;
   edit?: EditPlan | null; // per-beat direction; null = use the default cycle
+  // Words the edit director marked for the captions to hit hardest.
+  // Empty or absent = the regex highlighting this always had.
+  emphasis?: string[] | null;
   inserts?: Insert[] | null; // word-synced cutaways; absent = the old look
   width?: number; // from video_format; absent = the vertical default
   height?: number;
@@ -240,7 +243,10 @@ const KenBurnsClip: React.FC<{
 };
 
 // ── Animated word caption (Hormozi style: one word, spring pop) ──────────────
-const Captions: React.FC<{words: Word[]}> = ({words}) => {
+const Captions: React.FC<{words: Word[]; emphasis?: string[] | null}> = ({
+  words,
+  emphasis,
+}) => {
   const frame = useCurrentFrame();
   const {fps, width, height} = useVideoConfig();
   const t = frame / fps;
@@ -267,7 +273,16 @@ const Captions: React.FC<{words: Word[]}> = ({words}) => {
     durationInFrames: 8,
   });
   const scale = interpolate(pop, [0, 1], [1.32, 1]);
-  const color = HIGHLIGHT.test(active.text) ? '#00FF44' : '#FFFFFF';
+  // The same three tests the FFmpeg path applies, in the same order: a figure,
+  // then the words the edit director marked. Both renderers ship this channel,
+  // and captions accented on one and not the other is a difference that only
+  // shows up to whoever watches both.
+  const marked =
+    !!emphasis?.length &&
+    active.text
+      .split(/\s+/)
+      .some((w) => emphasis.includes(w.replace(/[^A-Za-z']/g, '').toUpperCase()));
+  const color = HIGHLIGHT.test(active.text) || marked ? '#00FF44' : '#FFFFFF';
 
   return (
     <AbsoluteFill
@@ -358,6 +373,7 @@ export const Short: React.FC<ShortProps> = ({
   music,
   words,
   edit,
+  emphasis,
   inserts,
 }) => {
   const frame = useCurrentFrame();
@@ -419,7 +435,7 @@ export const Short: React.FC<ShortProps> = ({
 
       {inserts && inserts.length ? <InsertLayer inserts={inserts} job={job} /> : null}
 
-      <Captions words={words} />
+      <Captions words={words} emphasis={emphasis} />
       <ProgressBar />
       <EdgeFade />
 

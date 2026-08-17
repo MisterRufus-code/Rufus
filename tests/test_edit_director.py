@@ -279,3 +279,60 @@ def test_the_editor_is_told_which_video_it_is_cutting(monkeypatch):
     assert "nine-minute" in edit_director._prompt(["x"])
     monkeypatch.setenv("RUFUS_FORMAT", "short")
     assert "40-second vertical" in edit_director._prompt(["x"])
+
+
+# ── the field it asked for and threw away ────────────────────────────────────
+
+def test_the_emphasis_words_reach_the_captions():
+    """The brief names this field exactly — "0-3 words per beat that the
+    CAPTION should hit hardest, the figure, the name, the reversal" — and
+    nothing read it back. Every run paid for the judgement and then coloured
+    its captions from a regex that knows about digits."""
+    import audio_gen
+    plan = {"peak_beat": 1, "beats": [
+        {"n": 1, "motion": "hold_still", "intensity": "normal",
+         "tone": "revelation", "emphasis": ["vanished", "overnight"]},
+        {"n": 2, "motion": "push_in", "intensity": "normal",
+         "tone": "neutral", "emphasis": []},
+    ]}
+    words = audio_gen.emphasis_words(plan, 110)
+    assert words == {"VANISHED", "OVERNIGHT"}
+    assert audio_gen._is_highlight("VANISHED", words)
+    assert audio_gen._is_highlight("their jobs vanished", words), "phrase caption"
+    assert not audio_gen._is_highlight("QUIETLY", words)
+
+
+def test_a_plan_that_marks_everything_marks_nothing(capsys):
+    """The director's own brief says a beat where every word is emphasised has
+    no emphasis. A model asked for up to four a beat will sometimes return four
+    every time, and 96 accented words out of 110 is a green video."""
+    import audio_gen
+    # Distinct ALPHABETIC words: the tokeniser strips digits, so "word1a" and
+    # "word2a" would collapse into one and the fixture would be testing
+    # nothing.
+    letters = "abcdefghijklmnopqrstuvwx"
+    plan = {"peak_beat": 1, "beats": [
+        {"n": i + 1, "motion": "push_in", "intensity": "normal",
+         "tone": "neutral",
+         "emphasis": [f"{c}{suffix}" for suffix in ("one", "two", "three", "four")]}
+        for i, c in enumerate(letters)
+    ]}
+    assert audio_gen.emphasis_words(plan, 110) == set()
+    assert "that is a colour, not an accent" in capsys.readouterr().out
+
+
+def test_no_plan_leaves_the_captions_exactly_as_they_were():
+    import audio_gen
+    assert audio_gen.emphasis_words(None, 110) == set()
+    assert audio_gen._is_highlight("ORDINARY", set()) is False
+    assert audio_gen._is_highlight("$4 BILLION", set()) is True
+
+
+def test_both_renderers_accent_the_same_words():
+    """Captions accented on one renderer and not the other is a difference
+    that only shows up to whoever watches both."""
+    root = Path(__file__).parent.parent
+    py = (root / "scripts" / "remotion_renderer.py").read_text(encoding="utf-8")
+    tsx = (root / "remotion" / "src" / "Short.tsx").read_text(encoding="utf-8")
+    assert "audio_gen.emphasis_words(" in py, "the share guard runs for both"
+    assert "emphasis={emphasis}" in tsx
