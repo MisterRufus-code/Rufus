@@ -549,3 +549,62 @@ def test_google_callback_refuses_unverified_email(client, tmp_path, monkeypatch)
 
     r = client.get(f"/auth/google/callback?state={state}&code=anything")
     assert r.status_code == 302 and "/login" in r.headers["Location"]
+
+
+# ── replacing a leaked link ──────────────────────────────────────────────────
+#
+# THE LINK IS THE PASSWORD, and passwords get out — pasted into a chat,
+# screenshotted, read aloud out of a config file. So replacing one has to be
+# possible, and until `rotate` existed it was not, for exactly the person whose
+# link is worth the most.
+#
+# The documented path was revoke-then-add: `_cmd_add` said so in its own error
+# text. That path runs straight into revoke_user's last-owner guard, which is
+# correct and should stay — refusing to delete the only owner is what stops you
+# locking yourself out. But it meant the owner's answer to "my link leaked" was
+# to hand-edit config/users.json.
+#
+# Rotating in place never touches the guard: the owner does not stop being an
+# owner for even one instant, so there is nothing to refuse.
+
+def test_rotating_issues_a_new_token_and_kills_the_old_one(users_file):
+    user = auth.rotate_token("dani")
+    assert user is not None
+    assert user["token"] != OWNER_TOKEN
+    assert auth.user_for_token(OWNER_TOKEN) is None, "the leaked link still works"
+    assert auth.user_for_token(user["token"])["name"] == "dani"
+
+
+def test_rotating_keeps_the_name_and_the_role(users_file):
+    """A rotation is not a demotion. If this dropped the role the owner would
+    rotate a leaked link and lock themselves out of /settings — the same
+    failure the last-owner guard exists to prevent, arrived at sideways."""
+    user = auth.rotate_token("dani")
+    assert user["name"] == "dani"
+    assert user["role"] == "owner"
+
+
+def test_the_last_owner_can_rotate_even_though_they_cannot_be_revoked(users_file):
+    """The whole reason this exists. Both statements must hold at once."""
+    assert auth.revoke_user("dani") == "last_owner"
+    assert auth.rotate_token("dani") is not None
+
+
+def test_rotating_leaves_everyone_else_alone(users_file):
+    auth.rotate_token("dani")
+    assert auth.user_for_token(PARTNER_TOKEN)["name"] == "james"
+    assert auth.user_for_token(VIEWER_TOKEN)["name"] == "guest"
+
+
+def test_rotating_an_unknown_name_is_none_not_a_new_user(users_file):
+    assert auth.rotate_token("nobody") is None
+    assert len(auth._load_users()) == 3
+
+
+def test_the_cli_offers_rotate(users_file, capsys):
+    assert auth.main(["rotate", "dani"]) == 0
+    out = capsys.readouterr().out
+    assert "Sign-in link:" in out
+    assert OWNER_TOKEN not in out
+    auth.main(["nonsense"])
+    assert "rotate" in capsys.readouterr().out, "an undiscoverable command"

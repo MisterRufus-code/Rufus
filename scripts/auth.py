@@ -33,6 +33,7 @@ SETUP
     python scripts/auth.py add james --role partner --google james@gmail.com
     python scripts/auth.py list
     python scripts/auth.py link james             # reprint a link without rotating the token
+    python scripts/auth.py rotate owner           # NEW token, same user — for a leaked link
     python scripts/auth.py revoke james
 
 Each command prints the sign-in URL to hand to that person. The token IS the
@@ -164,6 +165,30 @@ def add_user(name: str, role_name: str, *, google_email: str | None = None) -> d
     users.append(user)
     _save_users(users)
     return user
+
+
+def rotate_token(name: str) -> dict | None:
+    """Issue a NEW token for an existing user, keeping their name and role.
+
+    THE PATH THAT DID NOT EXIST. A sign-in link is the credential — it gets
+    pasted into a chat, screenshotted, or read out of a config file, and then
+    it has to be replaced. `_cmd_add`'s own error text said how: revoke, then
+    add. For every user but one that works. For the LAST OWNER it cannot:
+    revoke_user refuses them by design, so the person whose link is most
+    valuable to leak was the one person who could not replace theirs without
+    hand-editing config/users.json.
+
+    Rotating in place sidesteps that entirely — the owner never stops being
+    an owner, so the guard never has anything to refuse. Old link dead, new
+    link printed, one command.
+    """
+    users = _load_users()
+    for u in users:
+        if u.get("name") == name:
+            u["token"] = _new_token()
+            _save_users(users)
+            return u
+    return None
 
 
 def revoke_user(name: str) -> str:
@@ -430,7 +455,9 @@ def _cmd_add(name: str, role_name: str, google_email: str | None = None) -> int:
         msg = str(e)
         if "already exists" in msg:
             msg += (f" `link {name}` reprints their existing sign-in link, "
-                    f"or `revoke {name}` then `add` to issue a new token.")
+                    f"or `rotate {name}` issues a new token and kills the old "
+                    f"one — which is what you want for a leaked link, and "
+                    f"works for the last owner, who cannot be revoked.")
         print(msg)
         return 1
     print(f"Added '{name}' as {role_name}.")
@@ -468,6 +495,16 @@ def _cmd_list() -> int:
         perms = ", ".join(sorted(ROLE_PERMISSIONS.get(u.get("role", ""), set()))) or "(unknown role)"
         via = f"google:{u['google_email']}" if u.get("google_email") else "token link"
         print(f"  {u.get('name'):<16} {u.get('role'):<10} {via:<28} {perms}")
+    return 0
+
+
+def _cmd_rotate(name: str) -> int:
+    user = rotate_token(name)
+    if user is None:
+        print(f"No user named '{name}'.")
+        return 1
+    print(f"Rotated '{name}'. Their OLD link stopped working just now.")
+    _print_signin(user)
     return 0
 
 
@@ -512,12 +549,18 @@ def main(argv: list[str]) -> int:
             print("usage: auth.py link <name>")
             return 1
         return _cmd_link(argv[1])
+    if cmd == "rotate":
+        if len(argv) < 2:
+            print("usage: auth.py rotate <name>")
+            return 1
+        return _cmd_rotate(argv[1])
     if cmd == "revoke":
         if len(argv) < 2:
             print("usage: auth.py revoke <name>")
             return 1
         return _cmd_revoke(argv[1])
-    print(f"Unknown command '{cmd}'. Try: init | add | list | link | revoke")
+    print(f"Unknown command '{cmd}'. Try: init | add | list | link | rotate "
+          f"| revoke")
     return 1
 
 
