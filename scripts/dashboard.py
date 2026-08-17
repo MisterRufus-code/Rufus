@@ -478,10 +478,12 @@ SETTINGS_GROUPS = [
          "Off posts a link only. On is the default and is what makes the "
          "phone useful — the video plays in the channel."),
         ("RUFUS_DASHBOARD_URL", "Dashboard URL", "text",
-         "Where this dashboard is reachable from your phone (a tailnet "
-         "address, a tunnel). Every Discord and ntfy alert deep-links to the "
-         "video's own page with it, so approving is two taps instead of "
-         "hunting for the row."),
+         "The ADDRESS ONLY — https://host.tailnet.ts.net, no ?token= on the "
+         "end. Every Discord and ntfy alert deep-links to the video's own "
+         "page with it, so a token pasted here gets posted into that chat "
+         "channel several times a day. Anything after ? is stripped and "
+         "warned about for that reason. Sign-in links come from "
+         "scripts/auth.py, not from here."),
         ("RUFUS_NTFY_TOPIC", "ntfy topic", "text",
          "Free phone push, no account: install the ntfy app and subscribe to "
          "a topic nobody else would guess."),

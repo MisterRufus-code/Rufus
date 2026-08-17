@@ -405,6 +405,52 @@ def _new_token() -> str:
 DASHBOARD_URL_FILE = ROOT / "config" / "dashboard_url.txt"
 
 
+
+# A BASE URL IS A PLACE, NOT A CREDENTIAL.
+#
+# HOW THE OWNER'S TOKEN GOT LOOSE. auth.py prints a sign-in link and says to
+# save it. The dashboard then offers a setting called "Dashboard URL" whose
+# help text reads "where this dashboard is reachable from your phone". The
+# saved link IS that, so it gets pasted in — and it carries ?token=<owner> on
+# the end of it.
+#
+# Two things then happen, both silent:
+#
+#   1. notify.py deep-links every Discord and ntfy alert with this value, so
+#      the owner token is posted into a chat channel several times a day.
+#      Anyone who can read that channel can sign in as owner.
+#   2. auth.py appends "/?token=<new>" to it, so the link printed by `rotate`
+#      is  .../?token=OLD/?token=NEW  — malformed, and still carrying the old
+#      token it was supposed to replace.
+#
+# Stripping is right rather than merely defensive: there is no legitimate
+# query string on this setting, so anything after ? is either a mistake or a
+# credential, and both should be dropped. It says so once per process, because
+# a silent fix here leaves the owner believing a token is in use that is not.
+_URL_CREDENTIAL_WARNED = False
+
+
+def _base_url_without_credentials(raw: str, who: str) -> str:
+    """`raw` with any query string or fragment removed."""
+    global _URL_CREDENTIAL_WARNED
+    url = (raw or "").strip()
+    if not url:
+        return ""
+    cut = min((url.find(c) for c in "?#" if c in url), default=-1)
+    if cut < 0:
+        return url.rstrip("/")
+    tail = url[cut:]
+    if not _URL_CREDENTIAL_WARNED:
+        _URL_CREDENTIAL_WARNED = True
+        print(f"[{who}] RUFUS_DASHBOARD_URL has {'a TOKEN' if 'token=' in tail.lower() else 'a query string'} "
+              f"on the end of it. Ignoring everything from '{tail[0]}'. This "
+              f"setting is the address only — a token here is mailed out with "
+              f"every Discord and ntfy alert. Set it to the bare origin, e.g. "
+              f"https://host.tailnet.ts.net, and rotate any token that was in "
+              f"it (python scripts/auth.py rotate <name>).")
+    return url[:cut].rstrip("/")
+
+
 def _base_url() -> str:
     """Where to send someone to sign in.
 
@@ -415,11 +461,13 @@ def _base_url() -> str:
     that where an env var doesn't), then localhost as the last resort for a
     single-PC setup with no remote access configured at all.
     """
-    env = os.environ.get("RUFUS_DASHBOARD_URL", "").strip().rstrip("/")
+    env = _base_url_without_credentials(
+        os.environ.get("RUFUS_DASHBOARD_URL", ""), "auth")
     if env:
         return env
     try:
-        saved = DASHBOARD_URL_FILE.read_text(encoding="utf-8").strip().rstrip("/")
+        saved = _base_url_without_credentials(
+            DASHBOARD_URL_FILE.read_text(encoding="utf-8"), "auth")
         if saved:
             return saved
     except OSError:

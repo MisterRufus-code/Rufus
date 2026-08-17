@@ -608,3 +608,67 @@ def test_the_cli_offers_rotate(users_file, capsys):
     assert OWNER_TOKEN not in out
     auth.main(["nonsense"])
     assert "rotate" in capsys.readouterr().out, "an undiscoverable command"
+
+
+# ── the setting that mailed the owner's token to a chat channel ──────────────
+#
+# The leak had a mechanism, and it was a UI one. auth.py prints a sign-in link
+# and says to save it. The dashboard offers a text setting called "Dashboard
+# URL" described as "where this dashboard is reachable from your phone". The
+# saved link is exactly that, so it gets pasted in — with ?token=<owner> on it.
+#
+# Nothing stripped it, so notify.py deep-linked every Discord and ntfy alert
+# with the owner's credential several times a day, and auth.py appended a
+# SECOND ?token= when printing a rotated link, producing a URL that carried the
+# old token and did not work.
+
+def test_a_token_in_the_dashboard_url_is_stripped(monkeypatch, capsys):
+    monkeypatch.setenv("RUFUS_DASHBOARD_URL",
+                       "https://rufus.tail635959.ts.net/?token=leaked")
+    auth._URL_CREDENTIAL_WARNED = False
+    assert auth._base_url() == "https://rufus.tail635959.ts.net"
+    said = capsys.readouterr().out
+    assert "TOKEN" in said
+    assert "rotate" in said, "it has to say the leaked one is still live"
+
+
+def test_a_rotated_link_is_not_two_tokens_deep(monkeypatch, users_file):
+    """The bug as the owner would have met it: rotate, copy the printed link,
+    and find it does not sign you in."""
+    monkeypatch.setenv("RUFUS_DASHBOARD_URL",
+                       "https://rufus.tail635959.ts.net/?token=old")
+    auth._URL_CREDENTIAL_WARNED = False
+    user = auth.rotate_token("dani")
+    link = f"{auth._base_url()}/?token={user['token']}"
+    assert link.count("token=") == 1, link
+    assert "old" not in link
+
+
+def test_a_clean_url_is_left_exactly_alone(monkeypatch, capsys):
+    monkeypatch.setenv("RUFUS_DASHBOARD_URL", "https://rufus.tail635959.ts.net")
+    auth._URL_CREDENTIAL_WARNED = False
+    assert auth._base_url() == "https://rufus.tail635959.ts.net"
+    assert capsys.readouterr().out == "", "a check that fires on a correct setup is noise"
+
+
+def test_the_warning_is_said_once_not_per_call(monkeypatch, capsys):
+    """notify calls this per notification. A per-call print would bury it."""
+    monkeypatch.setenv("RUFUS_DASHBOARD_URL", "https://x.ts.net/?token=t")
+    auth._URL_CREDENTIAL_WARNED = False
+    for _ in range(5):
+        auth._base_url()
+    assert capsys.readouterr().out.count("RUFUS_DASHBOARD_URL") == 1
+
+
+def test_notify_strips_it_the_same_way_auth_does(monkeypatch):
+    """A HAND-COPY, because notify.py imports os/Path/requests and nothing
+    else on purpose — importing auth would drag flask into every notification.
+    Two copies of a rule need a test asserting they still agree, or the one
+    that drifts is the one nobody notices is wrong."""
+    import notify
+    for raw in ("https://a.ts.net/?token=x", "https://a.ts.net#frag",
+                "https://a.ts.net/", "https://a.ts.net", "", "   "):
+        auth._URL_CREDENTIAL_WARNED = True      # silence both
+        notify._URL_CREDENTIAL_WARNED = True
+        assert (auth._base_url_without_credentials(raw, "auth")
+                == notify._base_url_without_credentials(raw, "notify")), raw
