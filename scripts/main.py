@@ -1949,6 +1949,12 @@ def run(skip_upload: bool = False, niche_override: str = None, output_dir: Path 
                 if _marks:
                     print(f"           chapters: {len(_marks)} "
                           f"({_ch._stamp(_marks[-1][0])} last)")
+                elif not _titles:
+                    # The long writer fell back, so this script has no sections
+                    # to name. Saying they could not be located would send
+                    # somebody looking for a matching bug that is not there.
+                    print("           chapters: none — this script was not "
+                          "written in sections")
                 else:
                     print("           chapters: none — the sections could not "
                           "be located in the spoken audio")

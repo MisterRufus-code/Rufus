@@ -69,12 +69,16 @@ def _limit() -> int:
 
     RUFUS_INSERT_MAX still overrides, and still means the same thing.
     """
-    raw = str(_cfg("RUFUS_INSERT_MAX", "")).strip()
+    # Read directly rather than through _cfg: _cfg needs a numeric default and
+    # the default here is "whatever the profile says", which is not a number
+    # until the profile has been asked.
+    raw = os.environ.get("RUFUS_INSERT_MAX", "").strip()
     if raw:
         try:
             return max(1, int(float(raw)))
         except ValueError:
-            pass
+            print(f"[inserts] RUFUS_INSERT_MAX={raw!r} is not a number — "
+                  f"using the format's own ceiling")
     try:
         import video_format
         return int(video_format.get("insert_max", DEFAULT_MAX))
