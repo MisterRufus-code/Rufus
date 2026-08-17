@@ -284,19 +284,51 @@ def test_few_pictures_is_measured_against_the_script(tmp_path, monkeypatch):
 
 
 def test_the_analyzer_measures_against_the_rule_the_pipeline_uses(monkeypatch):
-    """_deserved_beats is a hand-copy of main._target_beats, and a hand-copy
+    """_deserved_beats WAS a hand-copy of main._target_beats, and a hand-copy
     drifts. It did: the pipeline moved to one picture per five spoken words the
     same day the cut rhythm was fixed, this copy stayed on four, and for sixty
     measured runs the analyzer reported videos as short of a target nothing was
     aiming at any more. That is the measurement contradicting the feature — the
     thing this module exists to catch — so the agreement is asserted, not
-    remembered."""
+    remembered. Both now read video_format, which makes the drift impossible
+    rather than merely detected."""
     import main
     monkeypatch.delenv("SD_CLIPS", raising=False)
     for words in (0, 12, 36, 92, 110, 200, 400):
         script = "word " * words
         assert run_review._deserved_beats(words) == (
             main._target_beats(script) if words else 0), words
+
+
+def test_the_analyzer_is_not_blind_on_the_format_it_did_not_grow_up_on(monkeypatch):
+    """The quiet direction of the same failure. With the Shorts constants
+    baked in, a 1,350-word script capped the answer at 30 — so a nine-minute
+    run that rendered twenty-four pictures, one every twenty-two seconds,
+    measured as generous. The analyzer would have been blind exactly where the
+    defect is likeliest."""
+    monkeypatch.setenv("RUFUS_FORMAT", "long")
+    import importlib
+    import video_format
+    importlib.reload(video_format)
+    importlib.reload(run_review)
+    assert run_review._deserved_beats(1350) == 150
+    assert 24 < run_review._deserved_beats(1350) * 0.7
+
+
+def test_a_five_second_hold_is_a_stall_in_one_format_and_a_shot_in_the_other(monkeypatch):
+    """qc_check and run_review each held 5.0 with a comment saying it matched
+    the other. It did — and a warning on every ordinary shot of an explainer
+    is one nobody reads twice."""
+    import importlib
+    import qc_check
+    import video_format
+    for fmt, hold in (("short", 5.0), ("long", 9.0)):
+        monkeypatch.setenv("RUFUS_FORMAT", fmt)
+        importlib.reload(video_format)
+        importlib.reload(qc_check)
+        importlib.reload(run_review)
+        assert run_review.LONG_HOLD_S == hold, fmt
+        assert qc_check.MAX_STATIC_RUN == hold, fmt
 
 
 def test_sub_frames_of_one_beat_are_not_duplicates(tmp_path, monkeypatch):

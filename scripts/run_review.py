@@ -65,8 +65,12 @@ BLANK_MARK = "blank and unmarked"
 # a beat's own sub-frames as duplicates.
 #
 # 5s is the line QC already draws, and it is the point past which a hold stops
-# reading as emphasis and starts reading as a stall.
-LONG_HOLD_S = 5.0
+# reading as emphasis and starts reading as a stall — for a Short. Both modules
+# held the number 5.0 with a comment each saying it matched the other, which is
+# a hand-copy that happened to be true and would not have survived a format
+# whose ordinary shot is 3.6 seconds long. One source now.
+import video_format as _vf
+LONG_HOLD_S = float(_vf.get("max_hold_s", 5.0))
 
 # Below this many pictures there is no pattern to find — one prompt is
 # trivially 100% of one prompt.
@@ -444,8 +448,8 @@ def _findings(m: dict) -> list[dict]:
             "severity": "low",
             "text": (f"{m['beats']} pictures for a {m['script_words']}-word "
                      f"script. The current beat rule would give about {want} "
-                     f"— roughly one per five spoken words. SD_CLIPS overrides "
-                     f"it."),
+                     f"— roughly one per {_vf.get('words_per_picture', 5)} "
+                     f"spoken words. SD_CLIPS overrides it."),
         })
     return out
 
@@ -453,22 +457,27 @@ def _findings(m: dict) -> list[dict]:
 def _deserved_beats(words: int) -> int:
     """What main._target_beats would choose for a script this long.
 
-    Duplicated deliberately rather than imported: main.py pulls in the whole
-    pipeline, and this module's contract is that it reads finished runs with
-    nothing else loaded. The rule is one line and the comment says where the
-    original lives — main._target_beats.
+    NO LONGER A COPY. It was one, deliberately — main.py pulls in the whole
+    pipeline and this module reads finished runs with nothing else loaded — and
+    the copy cost exactly what a copy costs: main moved from four words to five
+    the same day the cut rhythm was fixed, this did not, and for a while the
+    analyzer reported runs as short of a target the pipeline had stopped aiming
+    at. The measurement contradicting the feature, which is the failure this
+    module exists to catch.
 
-    THE COST OF THAT DUPLICATION, PAID ONCE ALREADY. main._target_beats moved
-    from four words to five the same day the cut rhythm was fixed, and this
-    copy did not. For a while the analyzer was reporting runs as short of a
-    target the pipeline had stopped aiming at — the measurement contradicting
-    the feature, which is the failure this module exists to catch. The test
-    beside it now asserts the two agree, so the next divergence fails a test
-    rather than a video.
+    A second format would have done it again, in the quieter direction: the
+    Shorts constants (floor 10, ceiling 30, one per five words) applied to a
+    1,350-word script cap the answer at 30, so a nine-minute run that rendered
+    twenty-four pictures — the SD_CLIPS default, one picture every twenty-two
+    seconds — would have been measured as generous. The analyzer would have
+    been blind precisely where the defect is likeliest.
+
+    video_format is the rule itself and imports nothing but os, so reading it
+    costs none of what importing main would.
     """
     if not words:
         return 0
-    return max(10, min(30, round(words / 5.0)))
+    return _vf.target_beats(words)
 
 
 def review(run_id: str, video_path: Path | None = None) -> dict:

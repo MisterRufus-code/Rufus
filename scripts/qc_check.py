@@ -106,11 +106,13 @@ def _extract_info(probe: dict) -> dict:
     return info
 
 
-# The longest a Short may sit on one unchanging picture before it reads as a
-# slideshow. Chosen from the retention failure it describes rather than from a
-# round number: a viewer who has seen everything in the frame and is given no
-# new information is a viewer deciding whether to swipe.
-MAX_STATIC_RUN = 5.0
+# The longest this format may sit on one unchanging picture before it reads as
+# a slideshow. Chosen from the retention failure it describes rather than from
+# a round number: a viewer who has seen everything in the frame and is given no
+# new information is a viewer deciding whether to swipe. Per-format because it
+# is 2.5x the format's own average shot — five seconds is a stall in a Short
+# and an ordinary beat in an explainer.
+MAX_STATIC_RUN = _vf.get("max_hold_s", 5.0)
 
 
 def _pacing_warnings(cuts: list[float] | None, duration: float) -> list[str]:

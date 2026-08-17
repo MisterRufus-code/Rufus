@@ -62,6 +62,14 @@ PROFILES: dict[str, dict] = {
         # The cut rhythm. audio_gen.MIN_SEG — raised from 1.2 after a real
         # 24-picture run put thirteen shots on the floor.
         "min_seg_s": 1.6,
+        # The other end of the same rhythm: how long one unchanging picture may
+        # hold before it reads as a stall rather than as emphasis. Both
+        # qc_check.MAX_STATIC_RUN and run_review.LONG_HOLD_S were 5.0 with a
+        # comment in each saying it matched the other — a hand-copy that
+        # happened to be true. 5.0 is 2.5x this format's average shot (five
+        # words per picture at ~150 words a minute is two seconds), and that
+        # ratio is what the number actually means.
+        "max_hold_s": 5.0,
         # audio_gen.MAX_DUR / MIN_DUR: the renderer CLAMPS the timeline to this
         # after transcription. Not a warning — a truncation, so it is the one
         # number here that can silently throw away narration that was already
@@ -115,6 +123,10 @@ PROFILES: dict[str, dict] = {
         # Calmer than a Short by design. A 3.5s average with a 2.5s floor
         # leaves room for the cut planner to land on real pauses.
         "min_seg_s": 2.5,
+        # The same 2.5x, against this format's own 3.6s average. Five seconds
+        # here is an ordinary shot in an explainer, and a warning that fires on
+        # ordinary shots is one nobody reads twice.
+        "max_hold_s": 9.0,
         # The clamp becomes a safety net instead of a guillotine: past 25
         # minutes something has gone wrong with the narration, and below four
         # this is not the format it claims to be. Matching the QC bounds is
