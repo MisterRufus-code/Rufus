@@ -380,3 +380,31 @@ def test_the_ffmpeg_ladder_can_drop_inserts_without_losing_the_render():
     src = Path(audio_gen.__file__).read_text(encoding="utf-8")
     assert "full mix without inserts" in src
     assert "insert(s) dropped" in src
+
+
+# ── captions are for reading, the planner is not reading them ────────────────
+
+def test_caption_cards_are_useless_to_the_insert_planner(monkeypatch):
+    """The failure this pins. The planner looks up ONE noun and needs the
+    second it was spoken; a caption card holding four words matches nothing it
+    asks for, so the whole layer plans zero inserts — silently, and on one
+    renderer only."""
+    import insert_director as ins
+    monkeypatch.setenv("RUFUS_INSERTS", "1")
+    cards = [{"text": "the palace held a", "start": 0.0, "end": 1.6},
+             {"text": "coin of solid gold", "start": 1.6, "end": 3.2}]
+    spoken = [{"text": w, "start": i * 0.4, "end": i * 0.4 + 0.3}
+              for i, w in enumerate("the palace held a coin of solid gold".split())]
+    script = "The palace held a coin of solid gold."
+    assert ins.plan(script, cards) == []
+    assert ins.plan(script, spoken), "the same script, one word per entry"
+
+
+def test_the_remotion_path_plans_from_the_raw_stream():
+    """Both renderers build their own `spoken` list for this reason. Remotion
+    reused its caption list, which was correct only while a caption was one
+    word — the moment long-form grouped them into phrases it would have
+    stopped planning inserts and said nothing."""
+    src = (Path(__file__).parent.parent / "scripts" / "remotion_renderer.py").read_text(encoding="utf-8")
+    assert "plan_for(script, spoken," in src
+    assert "plan_for(script, words," not in src

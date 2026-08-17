@@ -142,13 +142,22 @@ def render(script: str, bg_paths: "Path | list[Path]", out_dir: Path,
             {"text": text, "start": round(start, 3), "end": round(end, 3)}
             for start, end, text in audio_gen._cluster_words(segments, audio_dur)
         ]
+        # AND THE RAW STREAM, KEPT SEPARATELY. The captions above are grouped
+        # and cased for READING — four words to a card in long-form. The insert
+        # planner is not reading them: it looks up one noun at a time and needs
+        # the second that noun was spoken, so handing it caption cards would
+        # find "the palace held a" where it looked for "palace" and plan
+        # nothing at all, silently, on this renderer only.
+        spoken = [
+            {"text": w.word.strip(), "start": round(w.start, 3),
+             "end": round(w.end, 3)}
+            for seg in segments for w in seg.words
+            if w.word.strip() and w.start < audio_dur
+        ]
         # The word stream for chapters, published from whichever renderer ran —
         # a description whose timestamps depend on which engine drew the frames
         # would be a bug that only shows up on half the runs.
-        audio_gen.LAST_WORDS = [
-            (float(w.start), w.word.strip())
-            for seg in segments for w in seg.words if w.word.strip()
-        ]
+        audio_gen.LAST_WORDS = [(w["start"], w["text"]) for w in spoken]
 
         print("[3/4] Staging assets…")
         # Self-hosted caption font: reuse the Anton ttf the FFmpeg path downloads.
@@ -198,7 +207,7 @@ def render(script: str, bg_paths: "Path | list[Path]", out_dir: Path,
         try:
             import insert_director
             if insert_director.enabled():
-                planned = insert_director.plan_for(script, words, _insert_style())
+                planned = insert_director.plan_for(script, spoken, _insert_style())
                 if planned:
                     print(insert_director.describe(planned))
                     import comfy_client
