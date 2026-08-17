@@ -106,6 +106,48 @@ def init_db():
                 fetched_at TEXT    DEFAULT (datetime('now'))
             )
         """)
+        # WHAT THE SCOUT SAW, and the reason it is a table rather than a
+        # longer prompt. "Research for days" is not a model thinking for
+        # hours — it is the same competitor video seen on three consecutive
+        # passes with its views climbing, which is a different fact from the
+        # same video seen once. Only a store that survives between passes can
+        # tell those apart.
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS scout_observations (
+                id             INTEGER PRIMARY KEY AUTOINCREMENT,
+                seen_at        TEXT DEFAULT (datetime('now')),
+                video_id       TEXT,
+                channel_id     TEXT,
+                channel_title  TEXT,
+                title          TEXT,
+                published_at   TEXT,
+                views          INTEGER DEFAULT 0,
+                channel_median INTEGER DEFAULT 0,
+                outperformance REAL    DEFAULT 0
+            )
+        """)
+        c.execute("CREATE INDEX IF NOT EXISTS idx_obs_video "
+                  "ON scout_observations(video_id, seen_at)")
+        # A PROPOSAL IS NOT A VIDEO. A script is cents and seconds; a render is
+        # hours of the 3090. The scout writes here and stops, a human approves,
+        # and only then does a normal run render it — which is what makes being
+        # wrong cheap enough to allow.
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS proposals (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                created_at  TEXT DEFAULT (datetime('now')),
+                channel     TEXT,
+                niche       TEXT,
+                topic       TEXT,
+                hook        TEXT,
+                script      TEXT,
+                score       INTEGER DEFAULT 0,
+                evidence    TEXT,
+                status      TEXT DEFAULT 'pending',
+                decided_at  TEXT,
+                cost_usd    REAL DEFAULT 0
+            )
+        """)
         c.execute("""
             CREATE TABLE IF NOT EXISTS script_attempts (
                 id                INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -243,6 +285,111 @@ def scheduled(channel: str | None = None) -> list[dict]:
     cols = ["id", "title", "script_hook", "youtube_id", "publish_at",
             "niche", "channel"]
     return [dict(zip(cols, r)) for r in rows]
+
+
+# ── The scout's memory ───────────────────────────────────────────────────────
+
+def record_observations(videos: list[dict]) -> int:
+    """Append this pass's competitor observations. Returns how many landed.
+
+    APPEND, never update. The same video seen on Monday at 4,000 views and on
+    Thursday at 40,000 is the observation worth having, and an UPDATE would
+    throw the first half of it away — which is the whole difference between a
+    scout that accumulates and one that only ever knows about today.
+    """
+    if not videos:
+        return 0
+    rows = [(v.get("video_id", ""), v.get("channel_id", ""),
+             v.get("channel_title", ""), v.get("title", ""),
+             v.get("published_at", ""), int(v.get("views", 0) or 0),
+             int(v.get("channel_median", 0) or 0),
+             float(v.get("outperformance", 0) or 0)) for v in videos]
+    with _conn() as c:
+        c.executemany(
+            "INSERT INTO scout_observations (video_id, channel_id, "
+            "channel_title, title, published_at, views, channel_median, "
+            "outperformance) VALUES (?,?,?,?,?,?,?,?)", rows)
+    return len(rows)
+
+
+def rising(min_outperformance: float = 2.0, days: int = 14,
+           limit: int = 20) -> list[dict]:
+    """The strongest recent observations, one row per video (its latest).
+
+    Latest-per-video rather than every sighting, because a video seen eight
+    times would otherwise crowd out seven others it is not better than.
+    """
+    q = ("SELECT video_id, channel_title, title, views, outperformance, "
+         "       MAX(seen_at) AS seen_at, COUNT(*) AS sightings "
+         "FROM scout_observations "
+         "WHERE seen_at >= datetime('now', ?) AND outperformance >= ? "
+         "GROUP BY video_id ORDER BY outperformance DESC LIMIT ?")
+    with _conn() as c:
+        rows = c.execute(q, (f"-{int(days)} days", float(min_outperformance),
+                             int(limit))).fetchall()
+    cols = ["video_id", "channel_title", "title", "views", "outperformance",
+            "seen_at", "sightings"]
+    return [dict(zip(cols, r)) for r in rows]
+
+
+# ── Proposals ────────────────────────────────────────────────────────────────
+
+def save_proposal(*, channel: str, niche: str, topic: str, hook: str,
+                  script: str, score: int, evidence: str,
+                  cost_usd: float = 0.0) -> int:
+    with _conn() as c:
+        cur = c.execute(
+            "INSERT INTO proposals (channel, niche, topic, hook, script, "
+            "score, evidence, cost_usd) VALUES (?,?,?,?,?,?,?,?)",
+            (channel, niche, topic, hook, script, int(score), evidence,
+             float(cost_usd)))
+        return cur.lastrowid
+
+
+def proposals(status: str | None = "pending", limit: int = 50) -> list[dict]:
+    q = ("SELECT id, created_at, channel, niche, topic, hook, script, score, "
+         "evidence, status, decided_at, cost_usd FROM proposals")
+    args: list = []
+    if status:
+        q += " WHERE status = ?"
+        args.append(status)
+    q += " ORDER BY id DESC LIMIT ?"
+    args.append(int(limit))
+    with _conn() as c:
+        rows = c.execute(q, args).fetchall()
+    cols = ["id", "created_at", "channel", "niche", "topic", "hook", "script",
+            "score", "evidence", "status", "decided_at", "cost_usd"]
+    return [dict(zip(cols, r)) for r in rows]
+
+
+def pending_proposal_count(channel: str | None = None) -> int:
+    q = "SELECT COUNT(*) FROM proposals WHERE status='pending'"
+    args: list = []
+    if channel:
+        q += " AND channel = ?"
+        args.append(channel)
+    with _conn() as c:
+        return int(c.execute(q, args).fetchone()[0])
+
+
+def decide_proposal(proposal_id: int, status: str) -> bool:
+    """'approved' or 'rejected'. False if the id is unknown."""
+    if status not in ("approved", "rejected"):
+        return False
+    with _conn() as c:
+        cur = c.execute(
+            "UPDATE proposals SET status=?, decided_at=datetime('now') "
+            "WHERE id=? AND status='pending'", (status, int(proposal_id)))
+        return cur.rowcount > 0
+
+
+def proposal_cost_today() -> float:
+    """What the scout has spent on prose today, for the daily ceiling."""
+    with _conn() as c:
+        row = c.execute(
+            "SELECT COALESCE(SUM(cost_usd), 0) FROM proposals "
+            "WHERE date(created_at) = date('now')").fetchone()
+    return float(row[0] or 0.0)
 
 
 def update_title(video_id: int, title: str):

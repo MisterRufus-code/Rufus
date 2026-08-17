@@ -55,6 +55,8 @@ import time
 from contextlib import contextmanager
 from pathlib import Path
 
+import console
+console.force_utf8()   # the dashboard prints ✓/✗ too — see console.py
 import paths
 from urllib.parse import quote as _urlquote
 
@@ -615,6 +617,13 @@ def _launch_run(*, niche: str | None = None, topic: str | None = None,
         cmd += ["--channel", channel]
     env = os.environ.copy()
     env.update(_load_settings())
+    # THE CHILD'S STDOUT IS A FILE, so Python has no console to ask and falls
+    # back to the system ANSI code page — cp1255 here, which has no ✗ and no
+    # em-dash. A real run died mid-report on exactly that. The .bat launchers
+    # set these; a dashboard-launched run inherits whatever started the
+    # dashboard, which is not guaranteed to be one of them.
+    env.setdefault("PYTHONUTF8", "1")
+    env.setdefault("PYTHONIOENCODING", "utf-8")
     log_dir = ROOT / "logs"
     log_dir.mkdir(parents=True, exist_ok=True)
     log_path = log_dir / f"dashboard_run_{int(time.time())}.log"

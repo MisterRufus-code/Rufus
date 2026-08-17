@@ -28,6 +28,8 @@ import sys
 import time
 from pathlib import Path
 
+import console
+console.force_utf8()   # before ANY print — see console.py for the crash
 import paths
 import run_progress
 

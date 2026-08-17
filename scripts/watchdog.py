@@ -46,6 +46,9 @@ import requests
 ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(Path(__file__).parent))
 
+import console
+console.force_utf8()   # ✓/✗ must never kill a run — see console.py
+
 # A restart that immediately dies restarts forever and buries the real error in
 # a loop. After this many consecutive failures the watchdog stops trying that
 # service and says so — a loud stop beats a silent spin.

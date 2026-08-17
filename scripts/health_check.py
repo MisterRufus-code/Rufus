@@ -18,6 +18,9 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
+
+import console
+console.force_utf8()   # ✓/✗ must never kill a run — see console.py
 import paths  # noqa: E402  (after the path insert, like every sibling script)
 
 ROOT        = Path(__file__).parent.parent

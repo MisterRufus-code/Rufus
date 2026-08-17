@@ -33,6 +33,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 
+import console
+console.force_utf8()   # ✓/✗ must never kill a run — see console.py
+
 import requests  # noqa: E402
 
 import comfy_template  # noqa: E402
