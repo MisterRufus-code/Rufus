@@ -111,15 +111,17 @@ def test_an_empty_channel_list_says_so(tmp_path, monkeypatch, capsys):
     f.write_text(json.dumps({"channels": []}), encoding="utf-8")
     monkeypatch.setattr(competitors, "COMPETITORS_FILE", f)
     assert competitors.channels() == []
-    assert "no channels" in capsys.readouterr().out
+    assert "no real channels" in capsys.readouterr().out
 
 
 def test_the_channel_list_is_read(tmp_path, monkeypatch):
     f = tmp_path / "competitors.json"
-    f.write_text(json.dumps({"channels": ["UCaaa", " UCbbb ", ""]}),
+    f.write_text(json.dumps({"channels": ["UC_x5XG1OV2P6uZZ5FSM9Ttw",
+                                          " UCBJycsmduvYEL83R_U4JriQ ", ""]}),
                  encoding="utf-8")
     monkeypatch.setattr(competitors, "COMPETITORS_FILE", f)
-    assert competitors.channels() == ["UCaaa", "UCbbb"]
+    assert competitors.channels() == ["UC_x5XG1OV2P6uZZ5FSM9Ttw",
+                                      "UCBJycsmduvYEL83R_U4JriQ"]
 
 
 def test_the_example_is_a_real_example():
@@ -163,3 +165,41 @@ def test_a_full_pass_scores_what_it_found(monkeypatch):
     got = competitors.observe()
     assert len(got) == 6
     assert max(v["outperformance"] for v in got) == 5.0
+
+
+def test_the_examples_own_placeholders_are_recognised(tmp_path, monkeypatch, capsys):
+    """THE FIRST REAL RUN. competitors.json was copied from the example and
+    still held UCxxxx.../UCyyyy..., so each cost an API call to discover and
+    came back as "no such channel" — which reads like the channels were
+    deleted rather than never entered."""
+    f = tmp_path / "competitors.json"
+    f.write_text(json.dumps({"channels": ["UCxxxxxxxxxxxxxxxxxxxxxx",
+                                          "UCyyyyyyyyyyyyyyyyyyyyyy"]}),
+                 encoding="utf-8")
+    monkeypatch.setattr(competitors, "COMPETITORS_FILE", f)
+    assert competitors.channels() == []
+    out = capsys.readouterr().out
+    assert "2 placeholder id(s)" in out
+    assert "no real channels" in out
+
+
+def test_a_half_filled_file_keeps_the_real_ones(tmp_path, monkeypatch, capsys):
+    f = tmp_path / "competitors.json"
+    f.write_text(json.dumps({"channels": ["UCxxxxxxxxxxxxxxxxxxxxxx",
+                                          "UC_x5XG1OV2P6uZZ5FSM9Ttw"]}),
+                 encoding="utf-8")
+    monkeypatch.setattr(competitors, "COMPETITORS_FILE", f)
+    assert competitors.channels() == ["UC_x5XG1OV2P6uZZ5FSM9Ttw"]
+    assert "1 placeholder id(s)" in capsys.readouterr().out
+
+
+def test_a_real_channel_id_is_never_mistaken_for_a_placeholder():
+    """The check is "every character after UC is the same one", which no real
+    24-character id is. A false positive here would silently drop a channel
+    the owner chose."""
+    for real in ("UC_x5XG1OV2P6uZZ5FSM9Ttw", "UCBJycsmduvYEL83R_U4JriQ",
+                 "UCsXVk37bltHxD1rDPwtNM8Q"):
+        assert not competitors._is_placeholder(real), real
+    for fake in ("UCxxxxxxxxxxxxxxxxxxxxxx", "UCyyyyyyyyyyyyyyyyyyyyyy",
+                 "UC0000000000000000000000"):
+        assert competitors._is_placeholder(fake), fake

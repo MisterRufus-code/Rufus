@@ -317,3 +317,45 @@ def test_scout_only_reads_keys_the_writer_actually_returns():
     assert "hook" not in documented, (
         "if the writer now returns a hook, scout.py should use it instead of "
         "deriving one from the first line")
+
+
+# ── three situations, three messages ─────────────────────────────────────────
+#
+# The first real run said "a quiet week is a real answer" when the truth was
+# that competitors.json still held the example's placeholders and nothing had
+# been looked at at all. On a four-hourly schedule that writes the same false
+# sentence into the log six times a day while the owner reasonably concludes
+# their competitors are not publishing anything good.
+
+def test_observing_nothing_is_not_reported_as_a_quiet_week(db, monkeypatch):
+    """A pass that observed nothing has learned nothing. Saying otherwise
+    reports a conclusion about the competitors when the truth is about the
+    configuration — and a configuration problem reported as a content
+    conclusion is worse than an error, because an error gets fixed."""
+    _unblocked(monkeypatch)
+    monkeypatch.setattr(scout, "observe_and_remember", lambda: 0)
+    out = scout.pass_once()
+    assert "quiet week" not in out["skipped"]
+    assert "nothing was observed at all" in out["skipped"]
+    assert "[competitors] lines above" in out["skipped"]
+
+
+def test_observing_plenty_and_finding_nothing_still_is_a_quiet_week(db, monkeypatch):
+    """The message that was right, kept — and now it means what it says,
+    because it can only be reached when something was actually looked at."""
+    _unblocked(monkeypatch)
+    monkeypatch.setattr(scout, "observe_and_remember", lambda: 40)
+    out = scout.pass_once()
+    assert "40 video(s) observed" in out["skipped"]
+    assert "quiet week is a real answer" in out["skipped"]
+
+
+def test_the_two_messages_cannot_both_be_right(db, monkeypatch):
+    """They are the same branch. The bug was that one sentence served both, so
+    the guard is that they are never the same sentence."""
+    _unblocked(monkeypatch)
+    monkeypatch.setattr(scout, "observe_and_remember", lambda: 0)
+    nothing = scout.pass_once()["skipped"]
+    monkeypatch.setattr(scout, "observe_and_remember", lambda: 40)
+    quiet = scout.pass_once()["skipped"]
+    assert nothing != quiet

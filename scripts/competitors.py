@@ -63,6 +63,27 @@ MIN_FOR_BASELINE = 5
 OUTPERFORMANCE = 2.0
 
 
+def _is_placeholder(channel_id: str) -> bool:
+    """An id straight out of competitors.json.example.
+
+    Copying the example and not filling it in is the likeliest first-run state
+    there is, and without this it costs an API call each to discover and comes
+    back as "no such channel" — which reads like the channels were deleted
+    rather than never entered.
+
+    DELIBERATELY NARROW: a real id's full 24-character length AND every
+    character after the UC being the same one. The first draft checked only
+    the repeated character and started rejecting short ids in test fixtures —
+    which are not real ids either, but they are not the example's placeholder,
+    and a check that quietly drops a channel the owner chose would be a worse
+    bug than the one it fixes. "This cannot be a channel id" is a different
+    question and not one this needs to answer.
+    """
+    if len(channel_id) != 24 or channel_id[:2].upper() != "UC":
+        return False
+    return len(set(channel_id[2:].lower())) == 1
+
+
 def channels() -> list[str]:
     """The channel ids to watch. [] with a reason when there are none."""
     if not COMPETITORS_FILE.exists():
@@ -74,9 +95,16 @@ def channels() -> list[str]:
     except (OSError, json.JSONDecodeError, ValueError) as e:
         print(f"[competitors] {COMPETITORS_FILE.name} is unreadable ({e})")
         return []
-    out = [str(c).strip() for c in (raw.get("channels") or []) if str(c).strip()]
+    listed = [str(c).strip() for c in (raw.get("channels") or []) if str(c).strip()]
+    out = [c for c in listed if not _is_placeholder(c)]
+    if len(out) < len(listed):
+        print(f"[competitors] {COMPETITORS_FILE.name} still has "
+              f"{len(listed) - len(out)} placeholder id(s) from the example in "
+              f"it — replace them with real channel ids (they start with UC "
+              f"and are 24 characters)")
     if not out:
-        print(f"[competitors] {COMPETITORS_FILE.name} has no channels in it")
+        print(f"[competitors] {COMPETITORS_FILE.name} has no real channels in "
+              f"it, so there is nothing to watch")
     return out
 
 

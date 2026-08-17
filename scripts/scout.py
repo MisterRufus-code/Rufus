@@ -251,8 +251,24 @@ def pass_once(dry_run: bool = False) -> dict:
 
     candidates = db_manager.rising(min_outperformance=OUTPERFORMANCE)
     if not candidates:
-        out["skipped"] = ("nothing is outperforming its own channel right now "
-                          "— a quiet week is a real answer")
+        # TWO DIFFERENT FACTS, AND THEY WERE ONE MESSAGE. A pass that observed
+        # nothing has learned nothing, and calling that "a quiet week" reports
+        # a conclusion about the competitors when the truth is about the
+        # configuration. On a four-hourly schedule that writes the same false
+        # sentence into the log six times a day while the owner reasonably
+        # concludes their competitors are not publishing anything good.
+        #
+        # This is research.trending_queries_with_reason's bug, one layer up:
+        # four situations, one empty list, and a page whose whole job is to
+        # tell you something offering three guesses and a shrug.
+        if not out["observed"]:
+            out["skipped"] = ("nothing was observed at all, so there is "
+                              "nothing to say about what is rising — the "
+                              "[competitors] lines above say why")
+        else:
+            out["skipped"] = (f"{out['observed']} video(s) observed and none "
+                              f"beat its own channel's median — a quiet week "
+                              f"is a real answer")
         print(f"[scout] {out['skipped']}")
         return out
 
@@ -323,5 +339,15 @@ def pass_once(dry_run: bool = False) -> dict:
 
 if __name__ == "__main__":
     args = sys.argv[1:]
+    # --once is accepted and does nothing, on purpose: one pass IS the only
+    # behaviour, the schedule does the repeating, and the flag is already
+    # written into schedule_scout.ps1's help and this module's docstring. A
+    # flag that errors on someone who followed the instructions is worse than
+    # one that is redundant.
+    unknown = [a for a in args if a not in ("--dry-run", "--once")]
+    if unknown:
+        print(f"[scout] unknown option(s): {' '.join(unknown)} — "
+              f"only --once and --dry-run are understood")
+        raise SystemExit(2)
     print(json.dumps(pass_once(dry_run="--dry-run" in args), indent=2,
                      default=str))
