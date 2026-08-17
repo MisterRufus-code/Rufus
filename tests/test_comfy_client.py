@@ -1402,3 +1402,126 @@ def test_the_crop_warning_is_said_once_not_per_frame(monkeypatch, capsys):
 def test_a_zero_sized_image_does_not_divide_by_zero():
     c._crop_warned = False
     assert c._warn_if_mostly_cropped(0, 0) == 0.0
+
+
+# ── the re-roll a person does by hand ────────────────────────────────────────
+#
+# The loop was always there — MAX_DUP_RETRIES attempts, a fresh seed each time
+# — and the only thing that could reject a frame was a perceptual-duplicate
+# check. A six-panel contact sheet is not a duplicate of anything, so it was
+# accepted on the first try and shipped.
+
+def _gate_run(monkeypatch, tmp_path, verdicts, prompts=("the table goes over",),
+              duplicate=False):
+    """Run generate_clips with the gate answering `verdicts` in order."""
+    import frame_gate
+    seen_prompts = []
+    calls = {"n": 0}
+
+    def fake_check(path, prompt="", client=None):
+        i = min(calls["n"], len(verdicts) - 1)
+        calls["n"] += 1
+        return verdicts[i]
+
+    def fake_render(prompt, seed, client_id, niche=None, px=None):
+        seen_prompts.append(prompt)
+        return b"PNG"
+
+    monkeypatch.setattr(frame_gate, "enabled", lambda: True)
+    monkeypatch.setattr(frame_gate, "check", fake_check)
+    monkeypatch.setenv("RUFUS_DEBUG_RUN_ID", f"gate_{len(verdicts)}")
+    monkeypatch.setattr(c.paths, "debug_root", lambda: tmp_path)
+
+    with patch.object(c, "is_available", return_value=True), \
+         patch.object(c, "_stills_template", return_value=_dummy_tpl()), \
+         patch.object(c, "_render_image", side_effect=fake_render), \
+         patch.object(c, "_fit_to_frame",
+                      lambda b, p: p.write_bytes(b"i" * 25_000) or True), \
+         patch.object(c, "_avg_hash", return_value=1 if duplicate else None), \
+         patch.object(c, "_is_duplicate", return_value=duplicate), \
+         patch.object(c, "_animate_to_clip",
+                      lambda *a, **k: a[1].write_bytes(b"x" * 60_000) or True):
+        clips = c.generate_clips(list(prompts), n=len(prompts))
+    return clips, seen_prompts
+
+
+def test_a_rejected_frame_is_rendered_again(monkeypatch, tmp_path):
+    ok = (True, "", "")
+    bad = (False, "contact_sheet", "3x2 interior gutters")
+    _, prompts = _gate_run(monkeypatch, tmp_path, [bad, ok])
+    assert len(prompts) == 2, "the rejection did not cost a re-render"
+
+
+def test_the_re_roll_is_told_what_was_wrong(monkeypatch, tmp_path):
+    """A re-roll with the same prompt and a new seed IS the same prompt. The
+    hint is the only thing that makes the second attempt different in the way
+    that matters."""
+    bad = (False, "contact_sheet", "3x2 interior gutters")
+    _, prompts = _gate_run(monkeypatch, tmp_path, [bad, (True, "", "")])
+    assert "never a grid" in prompts[1]
+    assert "never a grid" not in prompts[0], "the first attempt is the storyboard's"
+
+
+def test_a_frame_that_never_passes_is_kept_and_said_out_loud(monkeypatch, tmp_path, capsys):
+    """Skipping would shift every later clip one beat earlier than its
+    narration, which is far worse than one weak picture — the same argument
+    the duplicate path already makes."""
+    bad = (False, "lettering", "the word Proof")
+    clips, prompts = _gate_run(monkeypatch, tmp_path, [bad])
+    out = capsys.readouterr().out
+    assert len(clips) == 1, "the beat still got a picture"
+    assert "still lettering after" in out
+    assert len(prompts) == 1 + c.GATE_RETRIES, "the whole budget was spent"
+
+
+def test_the_gate_does_not_starve_the_duplicate_check(monkeypatch, tmp_path):
+    """FOUND BY THIS TEST. The duplicate check re-rolled while
+    `retry < MAX_DUP_RETRIES`, and `retry` is the loop index — which the gate's
+    own rejections have already spent. Two gate re-rolls left the duplicate
+    check with no attempts, so a run with the gate on quietly stopped
+    de-duplicating. It compares against the attempts remaining now, and with
+    the gate off that is the same number it always was."""
+    from sd_client import MAX_DUP_RETRIES
+    bad = (False, "blank_frame", "94% of the frame is bare paper")
+    _, prompts = _gate_run(monkeypatch, tmp_path, [bad], duplicate=True)
+    assert len(prompts) == 1 + c.GATE_RETRIES + MAX_DUP_RETRIES
+
+
+def test_the_gate_writes_what_it_rejected(monkeypatch, tmp_path):
+    """The gate has to be judgeable by a number, or the only way to know
+    whether it helped is to open the folder again."""
+    import json as _json
+    bad = (False, "contact_sheet", "3x2 interior gutters")
+    _gate_run(monkeypatch, tmp_path, [bad, (True, "", "")])
+    written = _json.loads(
+        (tmp_path / "gate_2" / "gate.json").read_text(encoding="utf-8"))
+    assert written["frames"] == 1
+    assert written["rejects"][0]["reason"] == "contact_sheet"
+
+
+def test_with_the_gate_off_nothing_changes(monkeypatch, tmp_path):
+    """The shipping channel renders exactly as it did — one attempt per frame,
+    the storyboard's own prompt, no gate.json."""
+    import frame_gate
+    monkeypatch.setattr(frame_gate, "enabled", lambda: False)
+    seen = []
+
+    def fake_render(prompt, seed, client_id, niche=None, px=None):
+        seen.append(prompt)
+        return b"PNG"
+
+    monkeypatch.setenv("RUFUS_DEBUG_RUN_ID", "gate_off")
+    monkeypatch.setattr(c.paths, "debug_root", lambda: tmp_path)
+    with patch.object(c, "is_available", return_value=True), \
+         patch.object(c, "_stills_template", return_value=_dummy_tpl()), \
+         patch.object(c, "_render_image", side_effect=fake_render), \
+         patch.object(c, "_fit_to_frame",
+                      lambda b, p: p.write_bytes(b"i" * 25_000) or True), \
+         patch.object(c, "_avg_hash", return_value=None), \
+         patch.object(c, "_animate_to_clip",
+                      lambda *a, **k: a[1].write_bytes(b"x" * 60_000) or True):
+        c.generate_clips(["a quiet street"], n=1)
+
+    assert len(seen) == 1, "one attempt per frame, exactly as before"
+    assert seen[0].startswith("a quiet street")
+    assert not (tmp_path / "gate_off" / "gate.json").exists()

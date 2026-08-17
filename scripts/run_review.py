@@ -128,6 +128,28 @@ def all_run_ids(limit: int | None = 60) -> list[str]:
     return [d.name for d in (runs if limit is None else runs[:limit])]
 
 
+def _gate_rejects(d: Path) -> dict:
+    """What frame_gate rejected in this run, from gate.json. {} if it was off.
+
+    An empty `rejects` list and a missing file mean different things — the
+    first is "the gate ran and found nothing", the second is "the gate was not
+    on" — so they are not collapsed here.
+    """
+    try:
+        raw = json.loads((d / "gate.json").read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, ValueError):
+        return {}
+    if not isinstance(raw, dict):
+        return {}
+    rejects = raw.get("rejects") or []
+    counts: dict[str, int] = {}
+    for r in rejects:
+        if isinstance(r, dict) and r.get("reason"):
+            counts[r["reason"]] = counts.get(r["reason"], 0) + 1
+    return {"rejects": len(rejects), "frames": int(raw.get("frames") or 0),
+            "by_reason": counts}
+
+
 def _read_prompts(d: Path) -> list[str]:
     """The beat prompts, from run_report.md.
 
@@ -508,6 +530,29 @@ def _findings(m: dict) -> list[dict]:
                      f"landing."),
         })
 
+    # WHAT THE GATE COULD NOT FIX. A rejection that was re-rolled away is the
+    # gate working and needs no report. A frame that was still failing when its
+    # budget ran out shipped in the video, so it is the one to look at — and if
+    # a lot of them did, the gate is arguing with the model rather than
+    # correcting it, which is a checkpoint problem and not a threshold one.
+    g = m.get("gate") or {}
+    kept = g.get("rejects", 0)
+    if kept and g.get("frames"):
+        share = kept / g["frames"]
+        worst = ", ".join(f"{k} ×{v}" for k, v in
+                          sorted(g.get("by_reason", {}).items(),
+                                 key=lambda kv: -kv[1]))
+        out.append({
+            "id": "frames_shipped_that_failed_the_gate",
+            "severity": "high" if share > 0.25 else "medium",
+            "text": (f"{kept} of {g['frames']} frames were still failing when "
+                     f"their re-roll budget ran out and shipped anyway "
+                     f"({worst}). Past a quarter of a run this is the model "
+                     f"answering the same way every time rather than a bad "
+                     f"seed, and the lever is the checkpoint or the style "
+                     f"block, not more re-rolls."),
+        })
+
     want = _deserved_beats(m.get("script_words", 0))
     if m.get("beats") and want and m["beats"] < want * 0.7:
         out.append({
@@ -562,6 +607,7 @@ def review(run_id: str, video_path: Path | None = None) -> dict:
         "dominant_subject": _dominant_subject(prompts),
         "framing": _framing_counts(prompts),
         "action_share": _action_share(prompts),
+        "gate": _gate_rejects(d),
         "cuts": _cut_metrics(video_path),
         "frames": _near_duplicates(frames),
     }

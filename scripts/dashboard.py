@@ -400,9 +400,16 @@ SETTINGS_FILE = ROOT / "config" / "dashboard_settings.json"
 #   number             free text, validated as a number on save
 SETTINGS_GROUPS = [
     ("Look", "How the pictures are drawn.", [
-        ("RUFUS_STYLE", "Style preset", "select:stickman,flat_vector,ink_woodcut",
+        # EVERY PRESET IN THE FILE, not the three that existed when this list
+        # was written. A look the picker cannot offer is a look nobody uses —
+        # the tests below build the same list from config/styles.json, so the
+        # two cannot drift again.
+        ("RUFUS_STYLE", "Style preset",
+         "select:stickman,ink_explainer,flat_vector,ink_woodcut,paper_cut,"
+         "chalkboard,retro_print,storybook",
          "Named look from config/styles.json, appended to every image prompt "
-         "byte for byte. Leave at (default) to use the niche's own style_suffix."),
+         "byte for byte. Leave at (default) to use the niche's own style_suffix. "
+         "Render one of each on the Style page before choosing."),
         ("RUFUS_STILLS_DETAIL", "Style override (literal)", "text",
          "A style block written out in full. Beats the preset above — for a "
          "one-off experiment that does not deserve a name yet."),
@@ -422,6 +429,15 @@ SETTINGS_GROUPS = [
         ("RUFUS_FRAMES_PER_BEAT", "Stills per beat", "number",
          "Only in cut/i2i mode. Six is the most the progression arc has steps "
          "for; beyond that raise the beat count instead."),
+        ("RUFUS_FRAME_GATE", "Re-roll bad frames", "bool",
+         "Render a picture again when it comes back as a grid of panels or as "
+         "a subject on blank paper, the way you would by hand. Costs a "
+         "re-render each time it fires; up to two per picture."),
+        ("RUFUS_VISION_GATE", "Ask a vision model too", "bool",
+         "With the above: show every frame to a local vision model and re-roll "
+         "the ones that do not match their prompt or that came back with "
+         "lettering in them. Seconds per frame, and it wants the card ComfyUI "
+         "is using."),
     ]),
     ("Word-synced inserts", "Small pictures that pop in on the word.", [
         ("RUFUS_INSERTS", "Insert layer", "bool",

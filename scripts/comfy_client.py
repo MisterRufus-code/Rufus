@@ -45,6 +45,7 @@ import time
 import uuid
 from pathlib import Path
 
+import frame_gate
 import paths
 import video_format as _vf
 
@@ -140,6 +141,13 @@ def _fit_to_frame(img_bytes: bytes, out_path: Path) -> bool:
 POLL_INTERVAL = 1.5    # seconds between /history polls
 GEN_TIMEOUT   = 300    # max seconds to wait for one image (~20-30s on a 3090)
 GEN_ERROR_BACKOFF = 3.0  # pause before resubmitting after a submit/generation failure
+
+# Extra attempts a clip gets when frame_gate rejects it, ON TOP of the
+# duplicate budget. Two, for the same reason MAX_DUP_RETRIES is two: a third
+# re-roll of a prompt the model keeps answering the same way is GPU time spent
+# on a disagreement, and the run has a hundred and fifty other pictures to
+# draw. With the gate off this is not spent at all.
+GATE_RETRIES = 2
 
 # Cross-run visual freshness: perceptual hashes of images accepted in RECENT
 # runs are persisted and pre-seeded into the dup check, so a new image that
@@ -1531,6 +1539,10 @@ def generate_clips(queries: list[str], n: int = 4,
     anchor_png: Path | None = None    # previous beat's RAW model output
     anchor_hash: int | None = None
 
+    # Every rejection this run, so the gate can be judged by a number instead
+    # of by opening the folder again — which is the loop it exists to close.
+    gate_rejects: list[dict] = []
+
     stills: list[tuple[int, list[Path], str]] = []   # (beat index, png paths, prompt)
     for i, prompt in enumerate(prompts):
         print(f"[comfy] {i+1}/{len(prompts)}: {prompt}")
@@ -1538,8 +1550,15 @@ def generate_clips(queries: list[str], n: int = 4,
         accepted = False
         accepted_raw: bytes | None = None
         accepted_hash: int | None = None
+        # The gate's own budget, so a frame rejected twice on quality and once
+        # as a duplicate is not silently starved of attempts. With the gate off
+        # the range below is exactly what it has always been.
+        gate_tries = 0
+        gate_hints: list[str] = []
+        attempts = MAX_DUP_RETRIES + 1 + (GATE_RETRIES
+                                          if frame_gate.enabled() else 0)
 
-        for retry in range(MAX_DUP_RETRIES + 1):
+        for retry in range(attempts):
             # %(2**31) keeps the seed in range for any backend; offset per clip/retry.
             seed  = (master_seed + i + 1000 * retry) % (2**31 - 1)
             # Only the first attempt chains. A retry means the chained result
@@ -1555,7 +1574,14 @@ def generate_clips(queries: list[str], n: int = 4,
                     print(f"[comfy] clip {i+1} continued from clip {i}: "
                           f"{shot_chain.carried(prompt)}")
             if img_bytes is None:
-                img_bytes = _render_image(prompt, seed, client_id, niche=niche)
+                # The gate's notes ride on the prompt for the attempts that
+                # follow a rejection, and only those — the first attempt of
+                # every clip is the prompt the storyboard wrote.
+                attempt_prompt = prompt
+                if gate_hints:
+                    attempt_prompt = f"{prompt} {' '.join(gate_hints)}"
+                img_bytes = _render_image(attempt_prompt, seed, client_id,
+                                          niche=niche)
             if not img_bytes:
                 # A hard generation error (vs. a plain duplicate) is often a
                 # transient GPU/model-loading hiccup on the ComfyUI side —
@@ -1566,6 +1592,36 @@ def generate_clips(queries: list[str], n: int = 4,
 
             if not _fit_to_frame(img_bytes, png_path):  # → exactly 1080×1920
                 continue
+
+            # THE RE-ROLL A PERSON DOES BY HAND. Until this, the only thing
+            # that could reject a frame was the duplicate check below — so a
+            # six-panel contact sheet, or a figure on blank paper, or a picture
+            # that does not show what its prompt asked for, was accepted on the
+            # first attempt. Rejecting here reuses the retry this loop already
+            # runs, with the seed it already offsets.
+            gate_failed = ""
+            if frame_gate.enabled():
+                gate_ok, gate_why, gate_detail = frame_gate.check(
+                    png_path, prompt=prompt)
+                # CHECKED EVEN ON THE LAST ATTEMPT, when there is no re-roll
+                # left to spend. Otherwise the final frame of every exhausted
+                # clip is unexamined, and the run cannot tell "it failed three
+                # times" from "the third one was fine".
+                if not gate_ok:
+                    gate_failed = gate_why
+                if not gate_ok and gate_tries < GATE_RETRIES:
+                    gate_tries += 1
+                    # SAY WHAT WAS WRONG. A re-roll with the same prompt and a
+                    # new seed is the same prompt; the hint is what makes the
+                    # next attempt different in the way that matters.
+                    hint = frame_gate.retry_hint(gate_why, gate_detail)
+                    if hint:
+                        gate_hints.append(hint)
+                    print(f"[gate] clip {i+1}: {gate_why} "
+                          f"({gate_detail}) → re-rolling")
+                    gate_rejects.append({"clip": i + 1, "reason": gate_why,
+                                         "detail": gate_detail})
+                    continue
 
             h = _avg_hash(png_path)
             if chained and h is not None and anchor_hash is not None \
@@ -1579,11 +1635,27 @@ def generate_clips(queries: list[str], n: int = 4,
             # check above is its gate, so the near-dup gate would only undo it.
             is_dup = (h is not None and not chained
                       and _is_duplicate(h, accepted_hashes, n_prior))
-            if is_dup and retry < MAX_DUP_RETRIES:
+            # AGAINST THE ATTEMPTS LEFT, not against MAX_DUP_RETRIES. `retry`
+            # is the loop index, and the gate's rejections have already spent
+            # some of it — comparing to the duplicate constant would let two
+            # gate re-rolls starve the duplicate check of its own budget, which
+            # is the starvation the gate's separate counter exists to prevent.
+            # With the gate off, attempts - 1 IS MAX_DUP_RETRIES.
+            if is_dup and retry < attempts - 1:
                 print(f"[comfy] dup on clip {i+1} → regen (retry {retry+1})")
                 continue
             if is_dup:
                 print(f"[comfy] clip {i+1} still near-dup after retries — keeping")
+            if gate_failed:
+                # KEPT, NOT SKIPPED, for the same reason the duplicate path
+                # keeps one: clip lists are positional, and dropping a frame
+                # would make every later picture narrate the wrong sentence.
+                # But a frame that is still failing after its whole budget is
+                # the one to go and look at, so it says so.
+                print(f"[comfy] ⚠ clip {i+1} is still {gate_failed} after "
+                      f"{gate_tries} re-roll(s) — keeping it anyway")
+                gate_rejects.append({"clip": i + 1, "reason": gate_failed,
+                                     "detail": "kept after the budget ran out"})
             if h is not None:
                 accepted_hashes.append(h)
             accepted = True
@@ -1672,6 +1744,21 @@ def generate_clips(queries: list[str], n: int = 4,
                 print(f"[comfy] debug-save failed for clip {i+1}: {e}")
 
         stills.append((i, beat_frames, prompt))
+
+    # THE GATE'S OWN RECORD, beside the frames it judged. Written whenever the
+    # gate ran, including with nothing to report — an empty list is the useful
+    # answer ("it ran and found nothing") and a missing file is not.
+    if frame_gate.enabled():
+        try:
+            (debug_dir / "gate.json").write_text(
+                json.dumps({"rejects": gate_rejects,
+                            "frames": len(prompts)}, indent=2),
+                encoding="utf-8")
+            if gate_rejects:
+                print(f"[gate] {len(gate_rejects)} rejection(s) across "
+                      f"{len(prompts)} frame(s) — see {debug_dir.name}/gate.json")
+        except OSError as e:
+            print(f"[gate] could not write gate.json ({e})")
 
     # ── Phase 2: animate every still ────────────────────────────────────────
     # Two phases instead of image→animate per clip: interleaving forced

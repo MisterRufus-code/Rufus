@@ -492,3 +492,51 @@ def test_a_short_sequence_is_not_judged_on_it(tmp_path, monkeypatch):
 
 def test_the_action_share_survives_an_empty_run():
     assert run_review._action_share([]) == 1.0
+
+
+# ── what the gate could not fix ──────────────────────────────────────────────
+
+def test_frames_that_shipped_still_failing_are_reported(tmp_path, monkeypatch):
+    """A rejection that was re-rolled away is the gate working and needs no
+    report. A frame still failing when its budget ran out went into the video,
+    so it is the one to go and look at."""
+    _write_run(tmp_path, monkeypatch, ["A shot."] * 12)
+    (tmp_path / "r1" / "gate.json").write_text(json.dumps({
+        "frames": 12,
+        "rejects": [{"clip": 3, "reason": "contact_sheet", "detail": "kept"},
+                    {"clip": 7, "reason": "lettering", "detail": "kept"},
+                    {"clip": 9, "reason": "contact_sheet", "detail": "kept"}],
+    }), encoding="utf-8")
+    m = run_review.review("r1")
+    assert m["gate"]["rejects"] == 3
+    assert m["gate"]["by_reason"]["contact_sheet"] == 2
+    f = next(f for f in m["findings"]
+             if f["id"] == "frames_shipped_that_failed_the_gate")
+    assert "contact_sheet ×2" in f["text"]
+
+
+def test_a_run_with_the_gate_off_reports_nothing_about_it(tmp_path, monkeypatch):
+    """A missing gate.json means the gate was not on, which is not a finding.
+    An empty rejects list means it ran and found nothing — also not a finding,
+    and deliberately a different fact."""
+    _write_run(tmp_path, monkeypatch, ["A shot."] * 12)
+    m = run_review.review("r1")
+    assert m["gate"] == {}
+    assert not any(f["id"] == "frames_shipped_that_failed_the_gate"
+                   for f in m["findings"])
+
+
+def test_a_clean_gate_run_is_not_a_finding(tmp_path, monkeypatch):
+    _write_run(tmp_path, monkeypatch, ["A shot."] * 12)
+    (tmp_path / "r1" / "gate.json").write_text(
+        json.dumps({"frames": 12, "rejects": []}), encoding="utf-8")
+    m = run_review.review("r1")
+    assert m["gate"]["rejects"] == 0
+    assert not any(f["id"] == "frames_shipped_that_failed_the_gate"
+                   for f in m["findings"])
+
+
+def test_a_corrupt_gate_file_is_not_an_error(tmp_path, monkeypatch):
+    _write_run(tmp_path, monkeypatch, ["A shot."] * 12)
+    (tmp_path / "r1" / "gate.json").write_text("{not json", encoding="utf-8")
+    assert run_review.review("r1")["gate"] == {}

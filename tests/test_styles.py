@@ -224,3 +224,19 @@ def test_every_preset_bans_lettering(name):
     s = _looks()[name]
     assert "NO LETTERING ANYWHERE IN THE FRAME" in s
     assert "drawn BLANK" in s
+
+
+def test_the_dashboard_offers_every_preset_in_the_file():
+    """A look the picker cannot offer is a look nobody uses. The select was
+    written when there were three presets and stayed that way through five
+    more — including the one added because the owner asked for it."""
+    import re
+    src = (ROOT / "scripts" / "dashboard.py").read_text(encoding="utf-8")
+    block = src.split('("RUFUS_STYLE", "Style preset",', 1)[1][:400]
+    m = re.search(r'"select:([a-z_,\s"]+?)"?,\s*\n?\s*"Named look', block)
+    assert m, "could not find the RUFUS_STYLE picker"
+    offered = {x for x in re.split(r'[,\s"]+', m.group(1)) if x}
+    assert offered == set(_looks()), (
+        f"picker and styles.json disagree: "
+        f"only in file {set(_looks()) - offered}, "
+        f"only in picker {offered - set(_looks())}")
