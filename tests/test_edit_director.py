@@ -198,3 +198,84 @@ def test_renderer_passes_the_plan_in_props():
     src = (Path(__file__).parent.parent / "scripts" / "remotion_renderer.py").read_text()
     assert '"edit":' in src
     assert "edit_director.direct(beats)" in src
+
+
+# ── a hundred and fifty beats do not fit in one reply ────────────────────────
+
+class _FakeClient:
+    """Records every call and answers each batch with a valid plan."""
+
+    def __init__(self):
+        self.calls = []
+        outer = self
+
+        class _Completions:
+            @staticmethod
+            def create(**kw):
+                outer.calls.append(kw)
+                asked = kw["messages"][0]["content"]
+                # The prompt says "Exactly N entries" — answer with N.
+                n = int(asked.rsplit("Exactly ", 1)[1].split(" ")[0])
+                body = json.dumps({
+                    "peak_beat": 2,
+                    "beats": [{"n": i + 1, "motion": "hold_still",
+                               "intensity": "normal", "tone": "neutral",
+                               "emphasis": []} for i in range(n)],
+                })
+                msg = type("M", (), {"content": body})()
+                return type("R", (), {"choices": [type("C", (), {"message": msg})()]})()
+
+        self.chat = type("Chat", (), {"completions": _Completions})()
+
+
+def test_the_token_budget_grows_with_the_beat_count():
+    """700 was the flat cap, and 700 tokens is about twenty entries. At
+    fourteen beats it was comfortable; at a hundred and fifty it is a reply cut
+    off mid-array, which fails the length check and throws the whole plan
+    away — leaving a nine-minute video on the mechanical cycle with every beat
+    graded neutral."""
+    assert edit_director._budget(14) < edit_director._budget(150)
+    assert edit_director._budget(24) > 700
+
+
+def test_a_short_still_asks_once(monkeypatch):
+    client = _FakeClient()
+    plan = edit_director._ask(client, ["a", "b"], 0, 2, None)
+    assert plan is not None and len(client.calls) == 1
+
+
+def test_a_long_run_is_asked_for_in_batches():
+    client = _FakeClient()
+    beats = [f"beat {i}" for i in range(150)]
+    merged = []
+    peak = None
+    for start in range(0, len(beats), edit_director.CHUNK_BEATS):
+        batch = beats[start:start + edit_director.CHUNK_BEATS]
+        got = edit_director._ask(client, batch, start, len(beats), peak)
+        assert got is not None, start
+        peak = peak or got["peak_beat"] + start
+        merged.extend({**b, "n": start + i + 1} for i, b in enumerate(got["beats"]))
+    assert len(merged) == 150
+    assert [b["n"] for b in merged] == list(range(1, 151))
+
+
+def test_a_batch_in_the_middle_knows_it_is_the_middle():
+    """An editor handed beats 49-72 with no idea where they sit opens every
+    batch like an opening and closes every batch like an ending."""
+    p = edit_director._prompt(["x", "y"], offset=48, total=150, peak=75)
+    assert "beats 49-50 of 150" in p
+    assert "turns at beat 75" in p
+    assert "Exactly 2 entries, n from 49 to 50" in p
+
+
+def test_a_single_batch_run_says_nothing_about_batches():
+    p = edit_director._prompt(["x", "y"])
+    assert "of 2" not in p
+    assert "Exactly 2 entries, n from 1 to 2" in p
+
+
+def test_the_editor_is_told_which_video_it_is_cutting(monkeypatch):
+    monkeypatch.setenv("RUFUS_FORMAT", "long")
+    assert "nine-minute" in edit_director._prompt(["x"])
+    monkeypatch.setenv("RUFUS_FORMAT", "short")
+    assert "40-second vertical" in edit_director._prompt(["x"])

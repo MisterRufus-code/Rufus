@@ -63,14 +63,47 @@ def _model() -> str:
     return os.environ.get("RUFUS_DIRECTOR_MODEL", MODEL_DEFAULT).strip() or MODEL_DEFAULT
 
 
-def _prompt(beats: list[str]) -> str:
-    numbered = "\n".join(f"{i + 1}. {b}" for i, b in enumerate(beats))
+def _surface() -> str:
+    """What the editor is cutting. A forty-second vertical Short and a
+    nine-minute landscape explainer are different jobs, and an editor told the
+    wrong one makes every choice for the wrong video — this is the frame the
+    whole prompt hangs off."""
+    try:
+        import video_format
+        return ("nine-minute landscape documentary explainer"
+                if video_format.is_long() else
+                "40-second vertical documentary Short")
+    except Exception:
+        return "40-second vertical documentary Short"
+
+
+def _prompt(beats: list[str], offset: int = 0, total: int = 0,
+            peak: int | None = None) -> str:
+    """The brief for one batch of beats.
+
+    `offset`/`total` place the batch inside the video: a hundred and fifty
+    beats do not fit in one reply, and an editor handed beats 49-72 with no
+    idea where they sit will open every batch like an opening and close every
+    batch like an ending.
+    """
+    numbered = "\n".join(f"{offset + i + 1}. {b}" for i, b in enumerate(beats))
+    total = total or len(beats)
+    where = ""
+    if total > len(beats):
+        where = (f"These are beats {offset + 1}-{offset + len(beats)} of "
+                 f"{total}. Only the first batch opens the video and only the "
+                 f"last one closes it; a batch in the middle is the middle.\n")
+        if peak:
+            where += (f"The story turns at beat {peak}, which you have already "
+                      f"decided — build toward it or live after it "
+                      f"accordingly.\n")
     return (
-        "You are the editor of a 40-second vertical documentary Short. The "
+        f"You are the editor of a {_surface()}. The "
         "narration is already recorded and the cut points are already fixed by "
         "the voice — you are NOT setting timing. For each beat you decide how "
         "the picture MOVES while that line is spoken, and which words carry "
         "it.\n\n"
+        + where +
         f"BEATS:\n{numbered}\n\n"
         f"MOTIONS you may use (exact strings): {', '.join(MOTIONS)}\n"
         f"INTENSITY: {', '.join(INTENSITIES)}\n\n"
@@ -106,7 +139,8 @@ def _prompt(beats: list[str]) -> str:
         '{"peak_beat": <the beat number where the story turns>,\n'
         ' "beats": [{"n": 1, "motion": "...", "intensity": "...", '
         '"tone": "...", "emphasis": ["..."]}, ...]}\n'
-        f"Exactly {len(beats)} entries, n from 1 to {len(beats)}."
+        f"Exactly {len(beats)} entries, n from {offset + 1} to "
+        f"{offset + len(beats)}."
     )
 
 
@@ -174,6 +208,48 @@ def direct(beats: list[str]) -> dict | None:
     return plan
 
 
+# Beats per model call. The reply is one JSON object holding every beat, and
+# 700 tokens - the flat cap this used to send - is about twenty entries. At
+# fourteen beats that was comfortable; at a hundred and fifty it is a reply cut
+# off mid-array, which fails _clean's length check and throws away the whole
+# plan. A nine-minute video would then have rendered with the mechanical motion
+# cycle and every beat graded neutral, and the only sign would have been one
+# line saying the reply didn't validate.
+#
+# 24 for the same reason storyboard uses 24: past that a single call starts
+# losing the thread of its own list.
+CHUNK_BEATS = 24
+# Per entry, measured against real replies: n, motion, intensity, tone and up
+# to four emphasis words is ~35 tokens, plus the object's own scaffolding.
+TOKENS_PER_BEAT = 45
+TOKENS_FLOOR = 300
+
+
+def _budget(n: int) -> int:
+    return TOKENS_FLOOR + TOKENS_PER_BEAT * n
+
+
+def _ask(client, beats: list[str], offset: int, total: int,
+         peak: int | None) -> dict | None:
+    """One call, one batch. Cleaned, or None — the caller refuses the lot."""
+    resp = client.chat.completions.create(
+        model=_model(),
+        messages=[{"role": "user",
+                   "content": _prompt(beats, offset, total, peak)}],
+        temperature=0.7, max_tokens=_budget(len(beats)), timeout=120,
+        response_format={"type": "json_object"},
+    )
+    raw = json.loads(resp.choices[0].message.content or "{}")
+    # The model numbers its entries globally because the prompt asked it to;
+    # _clean checks 1..n locally, so renumber before validating rather than
+    # loosening the check that catches a genuinely mismatched reply.
+    if isinstance(raw.get("beats"), list):
+        for i, entry in enumerate(raw["beats"]):
+            if isinstance(entry, dict):
+                entry["n"] = i + 1
+    return _clean(raw, len(beats))
+
+
 def _direct_uncached(beats: list[str]) -> dict | None:
     try:
         from openai import OpenAI
@@ -183,13 +259,32 @@ def _direct_uncached(beats: list[str]) -> dict | None:
             key = json.loads(keys_file.read_text(encoding="utf-8")).get("openai", "")
         if not key or key.startswith("YOUR_") or key.startswith("FILL_"):
             return None
-        resp = OpenAI(api_key=key).chat.completions.create(
-            model=_model(),
-            messages=[{"role": "user", "content": _prompt(beats)}],
-            temperature=0.7, max_tokens=700, timeout=60,
-            response_format={"type": "json_object"},
-        )
-        plan = _clean(json.loads(resp.choices[0].message.content or "{}"), len(beats))
+        client = OpenAI(api_key=key)
+        total = len(beats)
+        plan = None
+        if total <= CHUNK_BEATS:
+            plan = _ask(client, beats, 0, total, None)
+        else:
+            merged: list[dict] = []
+            peak: int | None = None
+            for start in range(0, total, CHUNK_BEATS):
+                batch = beats[start:start + CHUNK_BEATS]
+                got = _ask(client, batch, start, total, peak)
+                if got is None:
+                    # ALL OR NOTHING, deliberately, and for the same reason
+                    # _clean is strict: a plan covering the first ninety beats
+                    # and not the rest is the director working on some of the
+                    # video, which looks like a bug in the renderer rather than
+                    # a failed call.
+                    print(f"[director] the batch at beat {start + 1} of "
+                          f"{total} didn't validate — using the default cycle")
+                    return None
+                if peak is None:
+                    peak = got["peak_beat"] + start
+                for i, entry in enumerate(got["beats"]):
+                    merged.append({**entry, "n": start + i + 1})
+            if merged:
+                plan = {"peak_beat": peak or (total + 1) // 2, "beats": merged}
     except Exception as e:
         print(f"[director] skipped (non-fatal): {e}")
         return None
@@ -197,7 +292,11 @@ def _direct_uncached(beats: list[str]) -> dict | None:
     if plan is None:
         print("[director] reply didn't validate — using the default cycle")
         return None
-    moves = ", ".join(b["motion"] for b in plan["beats"])
+    # The full list is the point at fourteen beats and a wall at a hundred and
+    # fifty, where it buries every other line of the run log.
+    motions = [b["motion"] for b in plan["beats"]]
+    moves = (", ".join(motions) if len(motions) <= 30 else
+             ", ".join(motions[:12]) + f", … ({len(motions)} beats)")
     print(f"[director] peak at beat {plan['peak_beat']} — {moves}")
     print(f"[director] tones: "
           f"{emotional_map.describe([b['tone'] for b in plan['beats']])}")
