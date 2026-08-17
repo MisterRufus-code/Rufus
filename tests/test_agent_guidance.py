@@ -103,3 +103,25 @@ def test_direction_md_exists_and_carries_its_marker():
 def test_adding_another_llm_stage_is_documented_as_the_wrong_reflex():
     text = re.sub(r"\s+", " ", AGENTS.read_text(encoding="utf-8"))
     assert "Adding another LLM stage is almost never the answer" in text
+
+
+def test_the_format_rule_is_documented_with_its_evidence():
+    """Today's largest class of bug, and the one most likely to be repeated by
+    an agent who only reads one module. A rule without its evidence gets
+    'simplified' away by the next agent, so the three shapes it took have to
+    survive in the file."""
+    text = AGENTS.read_text(encoding="utf-8")
+    assert "video_format.py" in text
+    assert "1080, 1920" in text, "the literal that was in seven modules"
+    for evidence in ("measurement contradicting the feature",
+                     "loop line",
+                     "SPREAD rather than truncate"):
+        assert evidence.lower() in text.lower(), evidence
+
+
+def test_the_two_renderers_rule_is_documented():
+    """A caption rule written into one renderer is a video that looks
+    different depending on which engine drew it, and nobody watches both."""
+    text = AGENTS.read_text(encoding="utf-8")
+    assert "remotion_renderer" in text and "audio_gen" in text
+    assert "both call" in text.lower() or "one function" in text.lower()

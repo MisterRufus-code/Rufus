@@ -200,6 +200,40 @@ output.** An unknown camera motion is a plan the renderer cannot perform, so the
 whole plan is refused. An unknown tone is cosmetic, so it degrades to neutral.
 Refusing good work over a cosmetic field trades a working feature for a new one.
 
+**A number that depends on the video's shape belongs in
+`scripts/video_format.py`, never in the module that needs it.** There are two
+formats — a 40-second vertical Short and a nine-minute landscape explainer —
+and every constant that differs between them is a profile field the readers
+import. `1080, 1920` was written into seven modules before the second format
+existed, and the sweep to remove it kept finding more: the alternative image
+backends, the thumbnail composer, the manual image tool. The test file for it
+now parses every script and fails on an assignment holding both numbers, and
+imports every module under both formats to catch a profile key that does not
+exist.
+
+Three shapes of this bug, all of which have happened here:
+
+- *The measurement contradicting the feature.* `run_review` scored runs
+  against a beat rule the pipeline had stopped using, then against the Shorts
+  ceiling on a nine-minute script, where it measured 24 pictures as generous.
+- *The gate asking for what the generator was told not to produce.* The script
+  rubric disqualified any script without a Shorts loop line, capping every
+  long-form script at 4/10 — a device `longform_writer` is explicitly
+  instructed not to write.
+- *Taking the first N of something.* `insert_director` cut its candidate list
+  at 28, which is the whole video at forty seconds and the first ninety
+  seconds at nine minutes. When a limit binds, SPREAD rather than truncate;
+  the part a truncation drops is the part nobody scrolls to.
+
+**Two renderers ship this channel, and they must agree.** `audio_gen`'s FFmpeg
+path and `remotion_renderer` both produce finished videos, so a caption rule,
+a caption *casing*, an emphasis colour or a word-timing stream written into one
+of them is a video that looks different depending on which engine drew it —
+and nobody watches both. Put the decision in one function and have both call
+it. Note the shape of that fix: the captions are grouped for READING, while the
+insert planner needs one word at a time, so they are two lists built from one
+transcript, not one list used twice.
+
 ## Writing tests here
 
 Tests run with no GPU, no ComfyUI, no API keys, and no network. Mock at the HTTP
