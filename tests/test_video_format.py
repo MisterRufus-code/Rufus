@@ -315,3 +315,79 @@ def test_a_short_still_never_loops_its_bed(monkeypatch):
     importlib.reload(audio_gen)
     importlib.reload(music_gen)
     assert music_gen.BED_DUR > audio_gen.MAX_DUR
+
+
+# ── three devices that are the Shorts look, not the channel's look ───────────
+
+@pytest.mark.parametrize("fmt,words,upper,bar", [
+    ("short", 1, True, True),
+    ("long",  4, False, False),
+])
+def test_the_caption_style_is_the_formats_and_not_hormozis(monkeypatch, fmt, words, upper, bar):
+    """One ALL-CAPS word at a time with a colour sweep along the bottom is
+    three deliberate choices for a phone at arm's length. Over nine minutes
+    they are 1,350 flashes, nine minutes of shouting, and a bar sitting on top
+    of the scrubber YouTube already draws."""
+    monkeypatch.setenv("RUFUS_FORMAT", fmt)
+    import audio_gen
+    importlib.reload(audio_gen)
+    assert audio_gen.CLUSTER_SIZE == words
+    assert audio_gen.CAPTION_UPPER is upper
+    assert audio_gen.RETENTION_BAR is bar
+
+
+@pytest.mark.parametrize("fmt", ["short", "long"])
+def test_dropping_the_bar_does_not_break_the_filter_chain(monkeypatch, fmt):
+    """Every stage of an ffmpeg filtergraph hands a labelled stream to the
+    next. Removing an overlay by deleting its line removes the link as well,
+    and the render then fails with a label error rather than a missing bar."""
+    monkeypatch.setenv("RUFUS_FORMAT", fmt)
+    import audio_gen
+    importlib.reload(audio_gen)
+    parts: list[str] = ["[x]null[vcat]"]
+    audio_gen._finish_video(parts, 40.0, "eq=contrast=1.1", "a.ass",
+                            "fonts", "#FFC53D")
+    body = "\n".join(parts)
+    assert "[vg]" in body and "[vout]" in body
+    assert ("[bar]" in body) is (fmt == "short")
+
+
+@pytest.mark.parametrize("fmt,expected", [("short", "HELLO"),
+                                          ("long", "Hello there")])
+def test_the_captions_read_the_way_the_format_asked(monkeypatch, fmt, expected):
+    monkeypatch.setenv("RUFUS_FORMAT", fmt)
+    import audio_gen
+    importlib.reload(audio_gen)
+
+    class W:
+        def __init__(self, word, start, end):
+            self.word, self.start, self.end = word, start, end
+
+    class Seg:
+        words = [W("Hello", 0.0, 0.4), W("there", 0.4, 0.8)]
+
+    out = list(audio_gen._cluster_words([Seg()], 10.0))
+    assert out[0][2] == expected
+
+
+def test_both_renderers_caption_the_same_script_the_same_way():
+    """remotion_renderer built its own word list with its own .upper() until
+    the two formats made them disagree — same script, two renderers, two
+    different sets of captions, and nobody watches both."""
+    src = (Path(__file__).parent.parent / "scripts" / "remotion_renderer.py").read_text(encoding="utf-8")
+    assert "audio_gen._cluster_words" in src
+    assert ".upper()" not in src, "the casing decision belongs to one function"
+
+
+def test_the_tsx_agrees_with_the_profile_about_the_two_devices():
+    """Short.tsx reads the frame shape rather than importing the profile, so
+    this is the test the hand-copy rule asks for: the two must not be able to
+    disagree about which format gets a bar and which gets capitals."""
+    tsx = (Path(__file__).parent.parent / "remotion" / "src" / "Short.tsx").read_text(encoding="utf-8")
+    assert "if (height < width) return null;" in tsx, "landscape still draws the bar"
+    assert "textTransform: portrait ? 'uppercase' : 'none'" in tsx
+    for fmt in ("short", "long"):
+        p = video_format.profile(fmt)
+        landscape = p["width"] > p["height"]
+        assert p["retention_bar"] is not landscape, fmt
+        assert p["caption_upper"] is not landscape, fmt

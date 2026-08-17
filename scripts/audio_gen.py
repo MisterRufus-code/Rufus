@@ -68,7 +68,14 @@ FPS          = 30
 # about entirely the wrong thing.
 MAX_DUR      = float(_vf.get("render_max_s", 60.0))
 MIN_DUR      = float(_vf.get("render_min_s", 30.0))
-CLUSTER_SIZE = 1           # 1 word at a time — Hormozi style
+# Words per caption, and whether it shouts. 1 and uppercase is the Hormozi
+# Shorts style and stays exactly that for Shorts; see video_format for why a
+# nine-minute explainer takes phrases in natural case instead.
+CLUSTER_SIZE = max(1, int(_vf.get("caption_words", 1)))
+CAPTION_UPPER = bool(_vf.get("caption_upper", True))
+# The colour sweep along the bottom edge — a retention device that competes
+# with YouTube's own scrubber on anything long enough to have one.
+RETENTION_BAR = bool(_vf.get("retention_bar", True))
 
 XFADE_DUR    = 0.30        # crossfade duration between clips (seconds)
 FADE_IN      = 0.0         # fade-in duration — 0 = hard cut (top Shorts open cold)
@@ -521,7 +528,8 @@ def _cluster_words(segments, audio_dur: float):
         end = min(end, audio_dur)
         if end <= start:
             continue
-        yield start, end, " ".join(w.word.strip().upper() for w in group)
+        text = " ".join(w.word.strip() for w in group)
+        yield start, end, text.upper() if CAPTION_UPPER else text
 
 
 def _is_highlight(text: str) -> bool:
@@ -858,13 +866,19 @@ def _finish_video(parts: list[str], total: float, eq_filter: str,
         f"fade=type=out:st={fade_out_st:.3f}:d={FADE_EDGE:.3f},"
         f"{eq_filter},vignette=PI/4[vg]"
     )
-    bar_color = accent_hex.lstrip("#")
-    parts.append(
-        f"color=c=0x{bar_color}:size={W}x{BAR_HEIGHT}:rate={FPS}:duration={total:.3f}[bar];"
-        f"[vg][bar]overlay=x='-{W}+{W}*t/{total:.3f}':y={H - BAR_HEIGHT}:"
-        f"eof_action=pass,format=yuv420p[vb]"
-    )
-    last = "vb"
+    if RETENTION_BAR:
+        bar_color = accent_hex.lstrip("#")
+        parts.append(
+            f"color=c=0x{bar_color}:size={W}x{BAR_HEIGHT}:rate={FPS}:duration={total:.3f}[bar];"
+            f"[vg][bar]overlay=x='-{W}+{W}*t/{total:.3f}':y={H - BAR_HEIGHT}:"
+            f"eof_action=pass,format=yuv420p[vb]"
+        )
+        last = "vb"
+    else:
+        # The chain still has to hand a labelled stream to what follows —
+        # dropping the overlay must not drop the link.
+        parts.append("[vg]format=yuv420p[vb]")
+        last = "vb"
     if inserts:
         # Under the captions, exactly as the Remotion path stacks them: a word
         # is illustrated by the picture, never covered by it.

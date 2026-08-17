@@ -133,10 +133,14 @@ def render(script: str, bg_paths: "Path | list[Path]", out_dir: Path,
         if audio_dur < audio_gen.MIN_DUR:
             print(f"      ⚠ audio is only {audio_dur:.1f}s (target ≥{audio_gen.MIN_DUR:.0f}s)")
 
+        # THE SAME CAPTIONS THE FFMPEG PATH BUILDS. Both renderers ship the
+        # same channel, so the grouping and the casing come from one function
+        # in audio_gen rather than being written a second time here — the two
+        # producing different captions for the same script is the kind of
+        # difference nobody notices until a viewer sees both.
         words = [
-            {"text": w.word.strip().upper(), "start": round(w.start, 3), "end": round(w.end, 3)}
-            for seg in segments for w in seg.words
-            if w.word.strip() and w.start < audio_dur
+            {"text": text, "start": round(start, 3), "end": round(end, 3)}
+            for start, end, text in audio_gen._cluster_words(segments, audio_dur)
         ]
 
         print("[3/4] Staging assets…")

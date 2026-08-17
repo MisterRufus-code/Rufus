@@ -284,7 +284,12 @@ const Captions: React.FC<{words: Word[]}> = ({words}) => {
           fontSize,
           fontWeight: 900,
           color,
-          textTransform: 'uppercase',
+          // Capitals carry at phone size and read as emphasis for forty
+          // seconds. For nine minutes on a screen the viewer is sitting back
+          // from, they read as shouting — and the text arriving here is
+          // already cased by audio_gen._cluster_words, so forcing it up would
+          // overrule the decision the profile already made.
+          textTransform: portrait ? 'uppercase' : 'none',
           transform: `scale(${scale})`,
           textShadow:
             '0 0 18px rgba(0,0,0,0.9), 4px 4px 0 #000, -4px 4px 0 #000, 4px -4px 0 #000, -4px -4px 0 #000',
@@ -301,9 +306,18 @@ const Captions: React.FC<{words: Word[]}> = ({words}) => {
 };
 
 // ── Thin retention progress bar ───────────────────────────────────────────────
+//
+// A Shorts device: on a forty-second vertical video the sweep says "almost
+// done, stay". Under a nine-minute landscape video it sits directly above the
+// scrubber YouTube already draws, where it is not a retention trick but a
+// template's signature. Read off the frame shape for the same reason the
+// caption size is — the two formats are the two orientations, and a second
+// switch here could disagree with the profile. video_format's retention_bar
+// says the same thing on the Python side, and a test asserts they agree.
 const ProgressBar: React.FC = () => {
   const frame = useCurrentFrame();
-  const {durationInFrames} = useVideoConfig();
+  const {durationInFrames, width, height} = useVideoConfig();
+  if (height < width) return null;
   const pct = (frame / Math.max(1, durationInFrames - 1)) * 100;
   return (
     <div

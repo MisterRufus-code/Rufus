@@ -80,6 +80,14 @@ PROFILES: dict[str, dict] = {
         # zone, above the Shorts UI that covers the bottom fifth.
         "caption_size": 140,
         "caption_margin_v": 600,
+        # One word at a time, shouting, with a colour sweep creeping along the
+        # bottom edge. Three deliberate Shorts devices: a single word is
+        # readable at a glance while a thumb hovers, capitals carry at phone
+        # size, and the bar is the retention trick of showing how little is
+        # left. All three are why this channel's videos look like this.
+        "caption_words": 1,
+        "caption_upper": True,
+        "retention_bar": True,
         # The word-synced insert cutaway, on a 1080-wide frame.
         "insert_w": 460,
     },
@@ -130,6 +138,16 @@ PROFILES: dict[str, dict] = {
         # there is no app UI to avoid and no reason to cover the frame.
         "caption_size": 58,
         "caption_margin_v": 70,
+        # And all three are wrong here, for the same reason the size is. A
+        # word at a time is 1,350 flashes over nine minutes on a screen the
+        # viewer is sitting back from; capitals for nine minutes read as
+        # shouting rather than as emphasis; and the sweeping bar competes with
+        # the scrubber YouTube already draws under a long video, where it is
+        # not a retention trick but a template's signature. Four-word phrases
+        # in natural case are the broadcast subtitle.
+        "caption_words": 4,
+        "caption_upper": False,
+        "retention_bar": False,
         # Proportionally smaller on a wider frame: 460 of 1080 is 43% of the
         # width and would swallow a landscape shot.
         "insert_w": 520,
