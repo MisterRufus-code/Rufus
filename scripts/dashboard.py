@@ -1241,6 +1241,7 @@ NAV_ITEMS = [
     ("/generate",   "▶ Make a video",                     "generate"),
     ("/thumbnails", "🎨 Thumbnails",                      "thumbnail"),
     ("/styles",     "🎨 Style",                           "settings"),
+    ("/bench",      "🔬 Workflow bench",                  "settings"),
     ("/failures",   "⚠ Failures &amp; rejected attempts", "view"),
     ("/performance", "📈 Performance",                    "view"),
     ("/trending",   "🔥 Trending",                        "view"),
@@ -2405,6 +2406,150 @@ def styles_use():
     _save_settings(values)
     os.environ["RUFUS_STYLE"] = sid
     return redirect("/styles?msg=" + _urlquote(f"Next run renders in {sid}."))
+
+
+# ── The workflow bench ───────────────────────────────────────────────────────
+
+@app.route("/bench")
+def bench_page():
+    """One style, MANY workflows, the same scene and the same seed.
+
+    The Style page is the transpose of this one: it renders one fixed scene
+    through many STYLES and one workflow. That answers "which look do I want".
+    It cannot answer "which workflow draws it best", and that is the question
+    the pale-beige gallery raised — a style block that forbids a washed-out
+    background twice, obeyed by nobody, is not a wording problem.
+
+    A GRID AND NOT A LIST, because comparing workflows means seeing the SAME
+    probe across candidates at once. A list of twenty-four pictures is
+    twenty-four pictures; six rows of four is a decision.
+    """
+    auth.require("settings")
+    import workflow_bench as wb
+
+    data = wb.latest()
+    cands = wb.candidates()
+    busy = [c for c in _channels() if _run_in_progress(c)]
+
+    # Every candidate, whether or not it has been benched — a workflow that is
+    # sitting in the folder unvalidated is exactly the thing to know about.
+    rows = ""
+    for label, path in cands:
+        ok, problems = wb.validate(path)
+        try:
+            import comfy_template
+            graph = comfy_template.load_template(path)
+            notes = wb.advisories(graph) if graph else []
+        except Exception:
+            notes = []
+        marks = "".join(f'<li class="muted">{_esc(p)}</li>' for p in problems)
+        marks += "".join(f'<li class="muted">⚠ {_esc(n)}</li>' for n in notes)
+        rows += (f'<tr><td><strong>{_esc(label)}</strong><br>'
+                 f'<span class="muted" style="font-size:12px">{_esc(path.name)}'
+                 f'</span></td>'
+                 f'<td>{"usable" if ok else "<b>unusable</b>"}'
+                 + (f'<ul style="margin:4px 0 0;padding-left:16px">{marks}</ul>'
+                    if marks else "") + '</td></tr>')
+
+    grid = ""
+    if data.get("workflows"):
+        usable = [w for w in data["workflows"] if w.get("renders")]
+        head = "".join(
+            f'<th>{_esc(w["label"])}<br><span class="muted" '
+            f'style="font-weight:400;font-size:12px">'
+            f'{w.get("passed", 0)}/{len(data.get("probes", []))} clean · '
+            f'{w.get("mean_seconds", 0)}s avg</span></th>' for w in usable)
+        body = ""
+        for probe in data.get("probes", []):
+            cells = ""
+            for w in usable:
+                r = (w.get("renders") or {}).get(probe) or {}
+                if r.get("ok") and r.get("file"):
+                    name = _urlquote(Path(r["file"]).name)
+                    folder = _urlquote(Path(r["file"]).parent.name)
+                    verdict = ("" if r.get("gate") == "ok" else
+                               f'<div class="muted" style="font-size:12px">'
+                               f'{_esc(r.get("gate", ""))}</div>')
+                    cells += (f'<td><a href="/bench/file/{folder}/{name}" '
+                              f'target="_blank"><img '
+                              f'src="/bench/file/{folder}/{name}" loading="lazy" '
+                              f'alt="" style="width:100%;border-radius:8px">'
+                              f'</a>{verdict}</td>')
+                else:
+                    cells += '<td class="muted">—</td>'
+            body += f'<tr><td><code>{_esc(probe)}</code></td>{cells}</tr>'
+        grid = (f'<table><tr><th>probe</th>{head}</tr>{body}</table>'
+                f'<p class="muted">Rendered {_esc(data.get("stamp", ""))} at '
+                f'{data.get("width", 0)}×{data.get("height", 0)}.</p>')
+    else:
+        grid = ('<p class="muted">Nothing benched yet. Drop an API export in '
+                '<code>config/workflows/</code> and run it — the current '
+                'stills workflow is always the first column, so a candidate '
+                'is always measured against what ships today.</p>')
+
+    warn = ("" if not busy else
+            f"<div class='msg error'>A run is using the GPU "
+            f"({_esc(', '.join(busy))}) — benching now would queue behind it.</div>")
+
+    body = f"""
+    <a class="back" href="/">← back</a>
+    <h2 style="margin-top:14px">Workflow bench</h2>
+    {warn}
+    {_msg_banner()}
+    <p class="muted">The same six scenes, the same seeds, through every
+       workflow in <code>config/workflows/</code>. Each probe is a defect this
+       channel has actually shipped — a face that came back with the same mild
+       smile ten times, a background that came back beige against an explicit
+       instruction, two frames that came back as contact sheets. Change ONE
+       thing between candidates and name the file after it.</p>
+    <table><tr><th>Workflow</th><th>Ready?</th></tr>{rows}</table>
+    <form method="post" action="/bench/run" style="margin:14px 0">
+      <button class="btn save" type="submit">Render the grid</button>
+      <span class="muted" style="margin-left:10px">
+        {len(cands)} workflow(s) × {len(__import__("workflow_bench").PROBES)} probes</span>
+    </form>
+    {grid}
+    """
+    return _head() + body + PAGE_TAIL
+
+
+@app.route("/bench/file/<folder>/<name>")
+def bench_file(folder: str, name: str):
+    auth.require("view")
+    import workflow_bench as wb
+    data = wb.latest()
+    root = Path(data.get("dir") or "") / Path(folder).name
+    if not (root / Path(name).name).exists():
+        abort(404)
+    return send_from_directory(str(root), Path(name).name)
+
+
+@app.route("/bench/run", methods=["POST"])
+def bench_run():
+    """Render the grid inline, like the style previews do.
+
+    Same trade as /styles/preview: the dashboard runs threaded=False, so this
+    holds the page. It is minutes rather than seconds, so it refuses outright
+    while a video run holds the card instead of queueing behind it and looking
+    hung.
+    """
+    auth.require("settings")
+    busy = [c for c in _channels() if _run_in_progress(c)]
+    if busy:
+        return redirect("/bench?error=" + _urlquote(
+            f"A run is using the GPU ({', '.join(busy)}). The bench needs the "
+            f"same card — try again when it finishes."))
+    try:
+        import workflow_bench as wb
+        data = wb.run()
+    except Exception as e:
+        return redirect("/bench?error=" + _urlquote(f"Bench failed: {e}"))
+    if not data.get("workflows"):
+        return redirect("/bench?error=" + _urlquote(
+            "Nothing was rendered — check ComfyUI is running and that at "
+            "least one export is usable."))
+    return redirect("/bench?msg=" + _urlquote(
+        f"Benched {len(data['workflows'])} workflow(s)."))
 
 
 @app.route("/format", methods=["POST"])

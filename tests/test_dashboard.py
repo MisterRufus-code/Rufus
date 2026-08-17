@@ -1249,3 +1249,62 @@ def test_launch_run_applies_saved_settings_as_env_overrides(tmp_path, monkeypatc
 
     dashboard._launch_run(niche="finance")
     assert captured["env"]["RUFUS_STILLS_ONLY"] == "1"
+
+
+# ── the workflow bench ───────────────────────────────────────────────────────
+
+def test_bench_page_renders_with_nothing_benched_yet(client, monkeypatch):
+    """The Style page answers "which look do I want". This one answers "which
+    workflow draws it best", which is the question a gallery of pale beige
+    frames raised — a style block that forbids a washed-out background twice
+    and is obeyed by nobody is not a wording problem."""
+    import workflow_bench as wb
+    monkeypatch.setattr(wb, "latest", lambda: {})
+    page = client.get("/bench").get_data(as_text=True)
+    assert "Workflow bench" in page
+    assert "config/workflows/" in page
+    assert "measured against what ships today" in page
+
+
+def test_bench_page_shows_the_grid_when_there_is_one(client, monkeypatch, tmp_path):
+    """A GRID, not a list: comparing workflows means seeing the same probe
+    across candidates at once."""
+    import workflow_bench as wb
+    d = tmp_path / "bench" / "20260817_000000"
+    (d / "current").mkdir(parents=True)
+    (d / "current" / "face.png").write_bytes(b"PNG")
+    monkeypatch.setattr(wb, "latest", lambda: {
+        "stamp": "20260817_000000", "dir": str(d), "width": 832, "height": 1472,
+        "probes": ["face", "action"],
+        "workflows": [{"label": "current", "mean_seconds": 12.5, "passed": 1,
+                       "renders": {
+                           "face": {"ok": True, "seconds": 12.5, "gate": "ok",
+                                    "file": str(d / "current" / "face.png")},
+                           "action": {"ok": True, "seconds": 12.5,
+                                      "gate": "contact_sheet",
+                                      "file": str(d / "current" / "face.png")}}}],
+    })
+    page = client.get("/bench").get_data(as_text=True)
+    assert "face" in page and "action" in page
+    assert "1/2 clean" in page
+    assert "contact_sheet" in page, "a failed probe says why under the picture"
+
+
+def test_the_bench_refuses_while_a_run_holds_the_gpu(client, monkeypatch):
+    """Minutes of rendering behind a video run would look like a hung page."""
+    monkeypatch.setattr(dashboard, "_run_in_progress", lambda c: True)
+    r = client.post("/bench/run", follow_redirects=False)
+    assert r.status_code in (301, 302)
+    assert "using%20the%20GPU" in r.headers["Location"]
+
+
+def test_the_bench_lists_what_is_wrong_with_an_export(client, monkeypatch):
+    """A workflow sitting in the folder unvalidated is exactly the thing to
+    know about before spending twenty-four renders on it."""
+    import workflow_bench as wb
+    monkeypatch.setattr(wb, "latest", lambda: {})
+    monkeypatch.setattr(wb, "candidates",
+                        lambda: [("broken", Path("/nope/broken.json"))])
+    page = client.get("/bench").get_data(as_text=True)
+    assert "unusable" in page
+    assert "Export (API)" in page
