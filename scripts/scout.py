@@ -300,9 +300,19 @@ def pass_once(dry_run: bool = False) -> dict:
     except Exception:
         channel_id = "main_en"
 
+    # THE HOOK IS THE SCRIPT'S FIRST LINE, and is derived rather than read from
+    # the result: write_script_until_good's documented return shape has no
+    # "hook" key at all (script, run_id, score, criterion_scores,
+    # attempts_used, final_temperature, reasoning, cost_usd). Asking for one
+    # returns "" forever, and an empty column nobody displays is the kind of
+    # wrong that survives for months. This is how metadata_writer and the
+    # uploader's legacy path both get it.
+    script_text = result.get("script", "") or ""
+    hook = script_text.strip().split("\n")[0][:300]
+
     out["proposal_id"] = db_manager.save_proposal(
         channel=channel_id, niche=niche, topic=subject,
-        hook=result.get("hook", ""), script=result.get("script", ""),
+        hook=hook, script=script_text,
         score=int(result.get("score", 0) or 0),
         evidence=evidence,
         cost_usd=float(cost or 0) + float(result.get("cost_usd", 0) or 0))

@@ -266,3 +266,54 @@ def test_the_subject_falls_back_to_the_title_without_a_model(monkeypatch):
     monkeypatch.setattr(llm, "usable", lambda: False)
     assert scout.subject_of("The Panic of 1893", "money_history") == \
         "The Panic of 1893"
+
+
+def test_the_hook_is_taken_from_the_script(db, monkeypatch):
+    """write_script_until_good's documented return shape has no "hook" key —
+    script, run_id, score, criterion_scores, attempts_used, final_temperature,
+    reasoning, cost_usd. Asking for one returns "" forever, and an empty column
+    nobody displays is the kind of wrong that survives for months. The hook is
+    the script's first line, which is how metadata_writer and the uploader's
+    legacy path both get it."""
+    _unblocked(monkeypatch)
+    monkeypatch.setattr(scout, "observe_and_remember", lambda: 1)
+    db.record_observations([{
+        "video_id": "v1", "channel_id": "c", "channel_title": "N",
+        "title": "The Panic of 1893", "published_at": "", "views": 9,
+        "channel_median": 1, "outperformance": 9.0}])
+    monkeypatch.setattr(scout, "subject_of", lambda t, n: "Panic")
+
+    import research
+    import script_writer
+    monkeypatch.setattr(research, "get_seed",
+                        lambda niche, topic=None: {"content": "src"})
+    monkeypatch.setattr(script_writer, "preanalyze",
+                        lambda seed, scene="": ("a", "r1", 0.0))
+    # The REAL return shape, with no "hook" in it.
+    monkeypatch.setattr(script_writer, "write_script_until_good",
+                        lambda *a, **k: {
+                            "script": "You checked your portfolio today.\n"
+                                      "That is the problem.",
+                            "run_id": "r1", "score": 9, "criterion_scores": {},
+                            "attempts_used": 1, "final_temperature": 0.9,
+                            "reasoning": "", "cost_usd": 0.03})
+
+    scout.pass_once()
+    row = db.proposals()[0]
+    assert row["hook"] == "You checked your portfolio today."
+    assert row["script"].startswith("You checked your portfolio")
+
+
+def test_scout_only_reads_keys_the_writer_actually_returns():
+    """The class of bug this file has now caught three times in one sitting:
+    calling something that does not exist and failing open into a wrong
+    answer. Pinned against the writer's own documented shape rather than
+    against a mock, so a change there fails here."""
+    src = (Path(__file__).parent.parent / "scripts" / "script_writer.py"
+           ).read_text(encoding="utf-8")
+    shape = src.split("Return shape:")[1].split('"""')[0]
+    documented = set(__import__("re").findall(r'"(\w+)":', shape))
+    assert {"script", "score", "cost_usd"} <= documented
+    assert "hook" not in documented, (
+        "if the writer now returns a hook, scout.py should use it instead of "
+        "deriving one from the first line")
