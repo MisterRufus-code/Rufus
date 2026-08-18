@@ -485,11 +485,9 @@ def test_the_proportion_rule_says_it_holds_across_shots():
 
 def test_the_proportion_rule_did_not_displace_the_body_parts_list():
     s = _looks()["stickman"]
-    for kept in ("thin white arms that bend once at the elbow",
-                 "thin white legs that bend once at the knee",
-                 "small simple hands",
-                 "No muscle lines, no shading"):
-        assert kept in s, kept
+    for kept in ("bends once at the elbow", "bends once at the knee",
+                 "Small simple hands", "no muscle lines, no shading"):
+        assert kept.lower() in s.lower(), kept
 
 
 # ── the clause against writing was commissioning the things that carry it ────
@@ -575,7 +573,7 @@ def test_a_medium_named_after_a_book_is_not_an_object(name=None):
 
 def test_the_body_is_built_one_way_and_only_one_way():
     s = _looks()["stickman"]
-    assert "FLAT FILLED SHAPES" in s
+    assert "white fill inside the same clean black outline" in s
     assert "no filled body mass" not in s, "the contradiction is back"
     assert "one straight line for the torso" not in s
 
@@ -603,4 +601,59 @@ def test_the_anti_rendering_rules_survived_the_rewrite():
 def test_the_preset_says_not_to_mix_constructions_within_one_picture():
     """Per-frame consistency was never the complaint either — 08 has three
     figures built two different ways in the same drawing."""
-    assert "never two different constructions in one picture" in _looks()["stickman"]
+    assert "two different constructions in one picture" in _looks()["stickman"]
+
+
+# ── the overcorrection: from two bodies to no arms ───────────────────────────
+#
+# Fixing the two-constructions contradiction introduced a worse one. The
+# replacement opened "The body is a stick figure built from FLAT FILLED
+# SHAPES" and closed "Every part is white fill inside an outline", and the
+# model read the pair as licence to draw ONE filled shape. The next gallery is
+# a row of white pill-shaped figures with heads and legs and NO ARMS — the
+# arms absorbed into the torso silhouette.
+#
+# Both halves of that sentence were mine and both were true individually. The
+# missing word was SEPARATE. "Filled" answers what a limb is made of; nothing
+# answered whether it is its own shape.
+#
+# So the rule now counts the parts, says they are drawn apart with daylight
+# between them, and names the failure it is guarding against — one filled blob
+# with a head on top. The fill survives, because bare pen strokes were the
+# original bug and are not the fix for this one.
+
+def test_the_body_is_described_as_separate_parts():
+    s = _looks()["stickman"]
+    assert "FIVE SEPARATE PARTS" in s
+    assert "never merged into a single silhouette" in s
+
+
+def test_the_arms_are_required_to_be_visible():
+    """A gallery of armless figures is what happens when the block says what
+    an arm is made of and never says there has to be one."""
+    s = _looks()["stickman"]
+    assert "both arms are visible in every figure" in s
+    assert "clear of the torso" in s
+
+
+def test_the_blob_is_named_as_the_thing_to_avoid():
+    """Naming the failure is what made the other rules stick — "a wide
+    landscape with a small figure off to one side is a picture of a
+    landscape" did more than any amount of describing the right answer."""
+    assert "never one filled blob with a head on top" in _looks()["stickman"]
+
+
+def test_the_fill_survived_the_correction():
+    """Bare pen strokes were the ORIGINAL bug. Swinging back to them to cure
+    the blob would just restore the first failure — this is the third pass
+    over these two sentences and each one has to keep the last one's win."""
+    s = _looks()["stickman"]
+    assert "white fill inside the same clean black outline" in s
+    assert "not a bare pen stroke" in s
+    assert "Never two different constructions in one picture" in s
+
+
+def test_the_phrase_that_caused_the_blob_is_gone():
+    s = _looks()["stickman"]
+    assert "FLAT FILLED SHAPES" not in s
+    assert "Every part is white fill inside an outline" not in s
