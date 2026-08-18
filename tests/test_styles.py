@@ -490,3 +490,61 @@ def test_the_proportion_rule_did_not_displace_the_body_parts_list():
                  "A single thin vertical line for the neck",
                  "no filled body mass"):
         assert kept in s, kept
+
+
+# ── the clause against writing was commissioning the things that carry it ────
+#
+# THE FOURTH TIME. Every preset ended with:
+#
+#   "NO LETTERING ANYWHERE IN THE FRAME: no words, no captions, no labels, no
+#    signs, no titles, no numbers on a page or A COIN FACE. A surface that
+#    would carry writing — A BOOK, A LEDGER, A DOCUMENT, A BANNER — is drawn
+#    BLANK..."
+#
+# Five drawable objects, named, in a block appended byte for byte to every
+# prompt. The owner asked why gold coins keep appearing. They keep appearing
+# because every prompt on this channel asks for a coin. The eighteen-frame
+# sheet also carried a book lying in an empty field, a document being signed,
+# a loose sheet of paper and a chart on a stand — the whole list, drawn.
+#
+# The mechanism is the one this repo has now met four times: a style block has
+# no meta level, and CLIP has no "not". "No numbers on a coin face" is read as
+# numbers, and a coin face. The prior three were the hook example, the
+# pre-analysis examples, and the lion — and this one hid behind the word NO
+# for longer than any of them.
+#
+# The rule survives; the inventory does not. "Whatever THIS shot happens to
+# contain that would normally carry writing is drawn BLANK" says the same
+# thing and names nothing.
+
+_OBJECTS_THE_NO_LETTERING_CLAUSE_ORDERED = [
+    "a coin", "coin face", "a book", "a ledger", "a document", "a banner",
+    "on a page",
+]
+
+
+@pytest.mark.parametrize("name", sorted(_looks()))
+def test_no_preset_lists_the_things_that_carry_writing(name):
+    s = _looks()[name].lower()
+    named = [n for n in _OBJECTS_THE_NO_LETTERING_CLAUSE_ORDERED if n in s]
+    assert not named, (
+        f"{name} names {named} inside its no-lettering rule — appended to "
+        f"every prompt, a forbidden object is still an object in the prompt")
+
+
+@pytest.mark.parametrize("name", sorted(_looks()))
+def test_the_no_lettering_rule_itself_survives(name):
+    """Deleting the inventory must not delete the instruction. The lettering
+    bug it exists to stop is real and cost two galleries."""
+    s = _looks()[name]
+    assert "NO LETTERING ANYWHERE IN THE FRAME" in s
+    assert "is drawn BLANK" in s
+    assert "wordless ruled lines" in s
+
+
+def test_a_medium_named_after_a_book_is_not_an_object(name=None):
+    """storybook illustration, picture-book, sketchbook page — these describe
+    what the drawing IS, not something in it, and the check above must not
+    sweep them away with the inventory it is aimed at."""
+    joined = " ".join(_looks().values()).lower()
+    assert "storybook illustration" in joined or "picture-book" in joined
