@@ -485,10 +485,10 @@ def test_the_proportion_rule_says_it_holds_across_shots():
 
 def test_the_proportion_rule_did_not_displace_the_body_parts_list():
     s = _looks()["stickman"]
-    for kept in ("one straight line for the torso",
-                 "thin straight arms angled at the elbow",
-                 "A single thin vertical line for the neck",
-                 "no filled body mass"):
+    for kept in ("thin white arms that bend once at the elbow",
+                 "thin white legs that bend once at the knee",
+                 "small simple hands",
+                 "No muscle lines, no shading"):
         assert kept in s, kept
 
 
@@ -548,3 +548,59 @@ def test_a_medium_named_after_a_book_is_not_an_object(name=None):
     sweep them away with the inventory it is aimed at."""
     joined = " ".join(_looks().values()).lower()
     assert "storybook illustration" in joined or "picture-book" in joined
+
+
+# ── the preset was telling the model to draw two different bodies ────────────
+#
+# THE SEVENTEEN-FRAME SHEET. SCALE landed — the figures fill the frame now —
+# and what was left looked to the owner like the anatomy being wrong. It is
+# not anatomy. Two sentences in this preset asked for incompatible things:
+#
+#   "The body is stick-figure: ONE STRAIGHT LINE FOR THE TORSO ... no filled
+#    body mass, no volume."
+#   "CLOTHING is drawn as simple line-art garments with FLAT UNSHADED COLOUR
+#    FILLS INSIDE THE OUTLINES."
+#
+# A garment with a colour fill needs a shape to fill. A torso that is one line
+# has none. Frames 02 and 08 obey the first sentence and come back as bare
+# scribbled strokes; 01, 05 and 15 obey the second and come back as solid
+# white bodies wearing something. The model picked a different sentence each
+# frame, which is exactly what "the figures are a bit strange" looks like when
+# no single frame is wrong.
+#
+# The filled construction is the one the owner's own reference frames use, so
+# that is the half that stays. "No volume" survives as "no shading, no rounded
+# 3D volume" — the clause was protecting against rendering, and only got
+# entangled with body mass by being in the same list.
+
+def test_the_body_is_built_one_way_and_only_one_way():
+    s = _looks()["stickman"]
+    assert "FLAT FILLED SHAPES" in s
+    assert "no filled body mass" not in s, "the contradiction is back"
+    assert "one straight line for the torso" not in s
+
+
+def test_the_body_and_the_clothing_rule_can_both_be_obeyed():
+    """The test that would have caught this: a garment needs something to sit
+    on. If the block ever again says the torso has no fill AND that clothing
+    fills it, one of them loses at random, per frame."""
+    s = _looks()["stickman"]
+    fills_clothing = "flat unshaded colour fills inside the outlines" in s
+    denies_body = ("no filled body mass" in s or "no volume." in s
+                   or "one straight line for the torso" in s)
+    assert not (fills_clothing and denies_body)
+
+
+def test_the_anti_rendering_rules_survived_the_rewrite():
+    """Dropping "no volume" wholesale would invite soft 3D shading back, which
+    is the tell that stops a drawing looking drawn."""
+    s = _looks()["stickman"].lower()
+    for kept in ("no muscle lines", "no shading", "no rounded 3d volume",
+                 "no gradients", "no film grain"):
+        assert kept in s, kept
+
+
+def test_the_preset_says_not_to_mix_constructions_within_one_picture():
+    """Per-frame consistency was never the complaint either — 08 has three
+    figures built two different ways in the same drawing."""
+    assert "never two different constructions in one picture" in _looks()["stickman"]
