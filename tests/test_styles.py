@@ -441,3 +441,52 @@ def test_the_scale_rule_names_no_drawable_noun_in_capitals():
         for noun in ("FIGURE", "PEOPLE", "PERSON", "MAN", "WOMAN", "ANIMAL",
                      "COIN", "PAPER", "SIGN"):
             assert noun not in shout, f"{shout!r} contains a drawable noun"
+
+
+# ── how big the head is compared with the body ───────────────────────────────
+#
+# The eighteen-frame sheet had figures that were individually fine and
+# collectively not one character: 05 and 09 carry heads roughly half the
+# figure's height, 01 and 13 put tiny heads on spidery bodies. The owner read
+# it as the figures being "a bit strange", which is exactly what inconsistent
+# proportion looks like when every single frame is defensible on its own.
+#
+# The word "proportions" IS in this preset — applied to animals and objects,
+# "a real illustration with its true shape, proportions and markings". For the
+# PERSON there is a shape rule ("a perfect oval head slightly taller than
+# wide") and a parts list ("one straight line for the torso, thin straight
+# arms angled at the elbow") and no size relationship between any of them. The
+# model was free to choose, and chose again every frame.
+#
+# Same class of gap as SCALE, and the same lesson the face fix taught: naming
+# the thing is not enough, the model needs the geometry.
+
+def test_the_figure_has_a_stated_head_to_body_ratio():
+    s = _looks()["stickman"]
+    assert "PROPORTION IS FIXED" in s
+    assert "one third of the whole figure's height" in s
+
+
+def test_the_proportion_rule_covers_all_three_parts():
+    """A ratio for the head alone leaves the torso and legs free, which is
+    most of the drift."""
+    s = _looks()["stickman"]
+    for part in ("head is about", "torso line about", "legs the remaining"):
+        assert part in s, part
+
+
+def test_the_proportion_rule_says_it_holds_across_shots():
+    """Per-frame correctness was never the problem — every frame in the sheet
+    was defensible alone. Consistency between them is the thing being asked
+    for, so the block has to ask for it in those words."""
+    s = _looks()["stickman"]
+    assert "DOES NOT DRIFT BETWEEN SHOTS" in s
+
+
+def test_the_proportion_rule_did_not_displace_the_body_parts_list():
+    s = _looks()["stickman"]
+    for kept in ("one straight line for the torso",
+                 "thin straight arms angled at the elbow",
+                 "A single thin vertical line for the neck",
+                 "no filled body mass"):
+        assert kept in s, kept
