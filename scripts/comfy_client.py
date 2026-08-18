@@ -790,7 +790,23 @@ DEFAULT_STILLS_NEGATIVE = (
     "watercolor, oil painting, acrylic, pencil sketch, charcoal, engraving, "
     "airbrush, gradient shading, soft shading, ambient occlusion, bloom, "
     "lens flare, depth of field, bokeh, noise, rough texture, canvas texture, "
-    # 3. Anatomy and encoding faults, last: cheapest to fix, least distinctive.
+    # 3. LAYOUT. A 832x1472 canvas is very tall, and a model asked for a
+    #    "cartoon illustration" fills tall canvases by stacking panels — a
+    #    gallery under Z-Image-Base came back with three- and four-band
+    #    contact sheets in a third of its frames, each band a different
+    #    moment. One beat is ONE picture; a strip of four is four beats the
+    #    edit never asked for and cannot cut between.
+    #
+    #    THESE TERMS ARE NEW BECAUSE THE NEGATIVE IS NEW. Every earlier
+    #    gallery ran on z_image_turbo at CFG 1, where the negative prompt is
+    #    mathematically inert — adding words to it then would have been
+    #    cargo cult. At CFG 4 it is live, and this is the first list written
+    #    against a defect it can actually reach.
+    "comic strip, comic panels, multiple panels, split panel, split screen, "
+    "storyboard sheet, contact sheet, photo grid, collage, diptych, triptych, "
+    "tiled layout, film strip, borders between scenes, gutter lines, "
+    "picture frame, letterbox bars, "
+    # 4. Anatomy and encoding faults, last: cheapest to fix, least distinctive.
     "extra fingers, deformed hands, extra limbs, mutated face, blurry, "
     "lowres, jpeg artifacts"
 )

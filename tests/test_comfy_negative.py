@@ -196,3 +196,47 @@ def test_text_terms_still_come_first():
     import comfy_client
     neg = comfy_client.DEFAULT_STILLS_NEGATIVE
     assert neg.index("text") < neg.index("watercolor") < neg.index("extra fingers")
+
+
+# ── the layout terms, and why they are only now worth writing ────────────────
+#
+# A 832x1472 canvas is very tall, and a model asked for a "cartoon
+# illustration" fills a tall canvas by stacking panels. The first gallery
+# rendered on Z-Image-Base came back with three- and four-band contact sheets
+# in roughly a third of its frames — each band a different moment, in a
+# pipeline where one beat is supposed to be ONE picture.
+#
+# THE TIMING IS THE POINT. Every gallery before it ran on z_image_turbo at
+# CFG 1, where there is no classifier-free guidance and the negative prompt is
+# computed, wired, sent and then has no effect at all. Adding words to it then
+# would have been cargo cult — which is exactly why the fix for the pale
+# backgrounds had to be positional instead. At CFG 4 the negative is live, and
+# this is the first list in this repo written against a defect it can reach.
+
+def test_the_negative_names_the_contact_sheet():
+    import comfy_client
+    neg = comfy_client.DEFAULT_STILLS_NEGATIVE.lower()
+    for term in ("comic strip", "multiple panels", "split screen",
+                 "contact sheet", "collage", "triptych", "film strip"):
+        assert term in neg, term
+
+
+def test_the_negative_still_leads_with_lettering():
+    """Order carries weight in a negative too, and garbled words remain the
+    most obvious AI tell in a finished Short. Layout terms were appended, not
+    put in front."""
+    import comfy_client
+    neg = comfy_client.DEFAULT_STILLS_NEGATIVE
+    assert neg.index("text,") < neg.index("comic strip")
+
+
+def test_the_layout_terms_do_not_forbid_the_style_itself():
+    """`stickman` IS a cartoon illustration with flat colour and black
+    outlines. A negative that reached for "cartoon" or "illustration" or
+    "outline" to kill the panels would kill the look — the terms have to name
+    the LAYOUT, never the medium."""
+    import comfy_client
+    neg = comfy_client.DEFAULT_STILLS_NEGATIVE.lower()
+    for must_not in ("cartoon,", "illustration,", "flat colour", "line art",
+                     "black outline", "stick figure"):
+        assert must_not not in neg, must_not
