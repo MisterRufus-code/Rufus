@@ -152,7 +152,7 @@ def compare(now: dict, before: dict) -> list[str]:
 
 
 def run(style_name: str | None = None, probes: str | None = None,
-        plain: bool = False) -> int:
+        plain: bool = False, workflow: str | None = None) -> int:
     import comfy_client
     import comfy_template
     import video_format
@@ -164,7 +164,13 @@ def run(style_name: str | None = None, probes: str | None = None,
     if not label:
         return 1
 
-    template = comfy_client.STILLS_TEMPLATE
+    # --workflow so an experiment does not have to overwrite the file the
+    # channel renders from. Trying a LoRA by saving over stills_api.json and
+    # forgetting to put it back is a broken run discovered at 3am.
+    template = Path(workflow) if workflow else comfy_client.STILLS_TEMPLATE
+    if workflow and not template.is_file():
+        print(f"[probe] no such workflow: {template}")
+        return 1
     graph = comfy_template.load_template(template)
     if not graph:
         print(f"[probe] no usable workflow at {template} — export one from "
@@ -241,11 +247,13 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--probes", help="comma-separated subset, e.g. face,crowd")
     ap.add_argument("--plain", action="store_true",
                     help="render with no style block, to see what it adds")
+    ap.add_argument("--workflow", help="an API export to probe instead of "
+                                       "config/stills_api.json")
     ap.add_argument("--list", action="store_true", help="previous probe runs")
     args = ap.parse_args(argv)
     if args.list:
         return show_runs()
-    return run(args.style, args.probes, args.plain)
+    return run(args.style, args.probes, args.plain, args.workflow)
 
 
 if __name__ == "__main__":

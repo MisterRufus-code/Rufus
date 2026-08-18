@@ -169,3 +169,31 @@ def test_no_workflow_says_how_to_export_one(monkeypatch, capsys):
     assert style_probe.run() == 1
     out = capsys.readouterr().out
     assert "Export (API)" in out and "RUFUS_PROMPT" in out
+
+
+# ── probing a candidate without clobbering the live template ─────────────────
+
+def test_a_named_workflow_is_used_instead_of_the_shipping_one(monkeypatch, tmp_path, capsys):
+    """Trying a LoRA by saving over config/stills_api.json and forgetting to
+    put it back is a broken run discovered at 3am."""
+    import comfy_client, comfy_template
+    seen = {}
+    monkeypatch.setattr(comfy_template, "load_template",
+                        lambda p: seen.setdefault("path", p) and None or None)
+    monkeypatch.setattr(comfy_client, "is_available", lambda: False)
+    cand = tmp_path / "zimage-doodle.json"
+    cand.write_text("{}", encoding="utf-8")
+    style_probe.run(workflow=str(cand))
+    assert seen["path"] == cand
+
+
+def test_a_missing_workflow_is_named_not_silently_ignored(tmp_path, capsys):
+    assert style_probe.run(workflow=str(tmp_path / "nope.json")) == 1
+    assert "no such workflow" in capsys.readouterr().out
+
+
+def test_the_manifest_records_which_workflow_drew_the_pictures():
+    """Two probe runs that differ because they used different workflows, with
+    nothing on disk saying so, is the confusion this tool exists to remove."""
+    src = Path(style_probe.__file__).read_text(encoding="utf-8")
+    assert '"workflow": str(template)' in src
