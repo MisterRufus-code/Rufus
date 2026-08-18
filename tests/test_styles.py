@@ -348,6 +348,33 @@ def test_the_colour_rule_is_near_the_top_of_the_stickman_block():
         f"of the block, where the pale-background bug lived")
 
 
+def test_the_block_does_not_open_on_a_shouty_heading():
+    """THE BANKNOTE THAT SAID "BEHIND THE FIGURES".
+
+    The first attempt moved the whole scene-and-colour section to the front,
+    heading and all, so the block opened "...uniform weight. BEHIND THE
+    FIGURES, BUILD THE WHOLE PLACE." The next gallery had colour in every
+    background — the experiment worked — and one frame was a banknote with
+    BEHIND THE FIGURES printed across it in serif capitals.
+
+    Of course it was. An all-caps phrase at the head of a prompt is the
+    strongest emphasis the prompt has, "FIGURES" is a drawable noun, and the
+    model had just been handed a title. This repo keeps relearning that a
+    style block has no meta level: every word in it is a word in the prompt.
+
+    So the colour paragraph — the half that fixed the backgrounds — stays at
+    the top, and the heading goes back into the body where it reads as an
+    instruction rather than as a caption.
+    """
+    s = _looks()["stickman"]
+    opening = s[:200].upper()
+    for heading in ("BEHIND THE FIGURES", "THE FACE CARRIES", "NO LETTERING",
+                    "THE PLACE PERSISTS", "ANIMALS AND OBJECTS"):
+        assert heading not in opening, (
+            f"the block opens on {heading!r} — an all-caps heading in the "
+            f"first breath of a prompt gets drawn, not obeyed")
+
+
 def test_the_experiment_did_not_lose_a_single_rule():
     """Reordering must be a move, not an edit. Every sentence that was in the
     block before has to still be in it — a rule quietly dropped during a
