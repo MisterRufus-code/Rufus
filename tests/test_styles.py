@@ -388,3 +388,56 @@ def test_the_experiment_did_not_lose_a_single_rule():
                  "THE FACE CARRIES THE EMOTION",
                  "No gradients"):
         assert rule in s, rule
+
+
+# ── how big the people are ───────────────────────────────────────────────────
+#
+# THE FRAME OF EIGHTEEN. With Z-Image-Base at CFG 4 the colour rule and the
+# lettering rule are both obeyed — blue sky, green ground, blank paper. What
+# arrived with that obedience was a landscape: frame 01 is a vast green field
+# with one small figure in the bottom corner, and 13 and 15 put their people
+# in a quarter of the frame with three quarters of empty ground under them.
+#
+# Nothing was broken. The preset says "a ground plane filling the bottom third
+# to half of the frame, a horizon line across it, and open sky above" — a
+# landscape instruction with no subject in it — and a model that now follows
+# instructions literally drew exactly that. The block had no rule about how
+# big a person should be, so the only honest fix is to write one rather than
+# to weaken the scene rule that took three galleries to get right.
+#
+# It leads on SCALE and not on PEOPLE or FIGURES on purpose. "COLOUR" survived
+# being promoted to the head of the block because nobody can draw a colour;
+# "BEHIND THE FIGURES" came back printed across a banknote. A capitalised
+# drawable noun near the front of a prompt is a subject.
+
+def test_the_preset_says_how_big_a_person_is_in_frame():
+    s = _looks()["stickman"]
+    assert "SCALE:" in s
+    assert "half and three quarters of the frame" in s
+
+
+def test_the_scale_rule_is_in_the_half_of_the_block_that_gets_obeyed():
+    s = _looks()["stickman"]
+    assert s.index("SCALE:") < len(s) // 2
+
+
+def test_the_scale_rule_does_not_undo_the_scene_rule():
+    """The opposite failure is the white-void bug, which cost two galleries:
+    a figure with nothing behind it. Filling the frame with the subject must
+    not mean deleting the place."""
+    s = _looks()["stickman"]
+    assert "built BEHIND them, never instead of them" in s
+    assert "BUILD THE WHOLE PLACE" in s
+    assert "four to eight things" in s
+
+
+def test_the_scale_rule_names_no_drawable_noun_in_capitals():
+    """Same rule the banknote taught. Anything shouted near the front of the
+    block is a candidate for being painted."""
+    import re
+    s = _looks()["stickman"]
+    head = s[:len(s) // 2]
+    for shout in re.findall(r"\b[A-Z]{3,}(?:\s+[A-Z]{2,})*\b", head):
+        for noun in ("FIGURE", "PEOPLE", "PERSON", "MAN", "WOMAN", "ANIMAL",
+                     "COIN", "PAPER", "SIGN"):
+            assert noun not in shout, f"{shout!r} contains a drawable noun"
