@@ -882,6 +882,53 @@ def _abstract_from_inverted_index(index: dict | None) -> str:
     return " ".join(slots[i] for i in sorted(slots))
 
 
+
+# A source with no history in it cannot support a history script.
+#
+# WHAT THIS COST, MEASURED. Four consecutive scripts scored 3, 3, 4, 4 against
+# a target of 7, every one of them SPECIFICITY 0/3, every one held by the fact
+# gate. Their seeds were the most-cited OpenAlex papers on "debt", "banking",
+# "wages" and "taxation" — Berger & Ofek on diversification and firm value,
+# Leland on corporate debt and capital structure, Schneider & Enste on the
+# shadow economy, Autor on labour's share. Modern econometrics, all of it, and
+# not one historical event between them.
+#
+# The writer is told to produce money HISTORY. Handed a paper about capital
+# structure it does the only thing it can: it invents a history — Spanish
+# silver, Nixon, Weimar — and the rubric then correctly gives it 0 for using
+# no details from its source. Three full cycles burn on a premise that was
+# lost at fetch time.
+#
+# The fact gate already knew. It said so, per script, in words: "not present
+# in the provided source material". This moves that knowledge upstream to the
+# only place it can prevent the spend instead of describing it — the same
+# shape as every "the gate knew something the generator was never told" bug
+# this repo has fixed.
+#
+# DELIBERATELY LENIENT. It asks for one historical marker anywhere in the
+# title or abstract, not for a history journal: a pre-1960 year, or one of a
+# handful of period words. "The price revolution in sixteenth-century Spain"
+# passes on "century"; "we estimate diversification's effect on firm value"
+# has neither and is exactly what should be dropped.
+_HISTORY_WORD_RE = re.compile(
+    r"\b(histor\w+|century|centuries|medieval|mediaeval|ancient|antiquity|"
+    r"dynast\w+|empire|imperial|colonial|pre-?modern|early modern|"
+    r"archiv\w+|BCE?|AD\d|renaissance|reformation)\b", re.IGNORECASE)
+_HISTORY_YEAR_RE = re.compile(r"\b(1[0-9]{3}|[1-9][0-9]{2})\b")
+
+
+def _is_historical(text: str) -> bool:
+    """True if this source is about the past, not about last quarter."""
+    if not text:
+        return False
+    if _HISTORY_WORD_RE.search(text):
+        return True
+    for year in _HISTORY_YEAR_RE.findall(text):
+        if int(year) < 1960:
+            return True
+    return False
+
+
 def fetch_openalex_story(niche_name: str, used_ids: set | None = None) -> dict | None:
     """A cited paper on one of the niche's topics, as a seed.
 
@@ -924,7 +971,7 @@ def fetch_openalex_story(niche_name: str, used_ids: set | None = None) -> dict |
         print(f"[research] OpenAlex unreachable ({e})")
         return None
 
-    rejected = {"no_abstract": 0, "short": 0, "seen": 0}
+    rejected = {"no_abstract": 0, "short": 0, "seen": 0, "not history": 0}
     usable = []
     for w in works:
         # THE SAME KEY _seed_id RECORDS, or nothing is ever seen as used. The
@@ -942,6 +989,9 @@ def fetch_openalex_story(niche_name: str, used_ids: set | None = None) -> dict |
             continue
         if len(abstract) < OPENALEX_MIN_ABSTRACT:
             rejected["short"] += 1
+            continue
+        if not _is_historical(f"{w.get('display_name') or ''} {abstract}"):
+            rejected["not history"] += 1
             continue
         usable.append((w, abstract))
 

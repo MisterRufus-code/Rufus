@@ -907,3 +907,92 @@ def test_it_shares_the_niche_topics_with_stackexchange():
     import inspect
     src = inspect.getsource(research.fetch_openalex_story)
     assert "SE_TOPIC_QUERIES" in src
+
+
+# ── a source with no history in it cannot support a history script ───────────
+#
+# THE FOUR-SCRIPT SLUMP, with the numbers. IDs 90-93 scored 4, 3, 3, 4 against
+# a target of 7. Every one: SPECIFICITY 0/3, held by the fact gate, three full
+# writer cycles spent. Their seeds were the most-cited OpenAlex papers for
+# "debt", "banking", "wages" and "taxation":
+#
+#   Berger & Ofek 1995     diversification's effect on firm value
+#   Leland 1994            corporate debt values and capital structure
+#   Schneider & Enste 2000 the size of the shadow economy in 76 countries
+#   Autor et al. 2020      the fall of labour's share
+#
+# Modern econometrics, every one, and not a historical event between them.
+# OpenAlex sorts by citation count, and the most-cited paper about "debt" is
+# not about debt in 1550.
+#
+# Handed one of those, a writer told to produce money HISTORY does the only
+# thing left: it invents a history. Spanish silver, Nixon, Weimar. The rubric
+# then correctly gives it 0 for using no details from its own source, and the
+# fact gate holds it — after three cycles have been paid for.
+#
+# The fact gate already KNEW, and said so per script in words: "not present in
+# the provided source material". This check is that knowledge moved upstream
+# to where it can prevent the spend instead of describing it.
+#
+# The fifth script in the same batch scored 10/10. Its seed was Wikipedia's
+# dot-com bubble article, and it used March 10 2000, the Nasdaq, six hundred
+# percent, seventy-eight percent, Pets.com, Webvan and Cisco — because they
+# were all there to use.
+
+@pytest.mark.parametrize("abstract", [
+    "We estimate diversification's effect on firm value by imputing "
+    "stand-alone values for individual business segments.",
+    "This article examines corporate debt values and capital structure in a "
+    "unified analytical framework.",
+    "Using various methods, the size of the shadow economy in 76 countries "
+    "is estimated.",
+    "The fall of labor's share of GDP in the United States and many other "
+    "countries in recent decades.",
+])
+def test_the_four_abstracts_that_produced_the_slump_are_rejected(abstract):
+    assert research._is_historical(abstract) is False
+
+
+@pytest.mark.parametrize("abstract", [
+    "The price revolution in sixteenth-century Spain and the influx of "
+    "American silver.",
+    "German hyperinflation of 1923 and the collapse of the mark.",
+    "Coinage and debasement in the Roman empire.",
+    "A history of banking in medieval Florence.",
+    "Tribute and taxation under the Ming dynasty.",
+])
+def test_a_real_history_of_money_source_is_kept(abstract):
+    assert research._is_historical(abstract) is True
+
+
+def test_a_recent_year_alone_is_not_history():
+    """Every paper has a publication year and most abstracts mention recent
+    ones. A check that treated "since 2019" as historical would pass
+    everything and be worse than no check."""
+    assert research._is_historical("Between 2019 and 2024 firm leverage rose") is False
+
+
+def test_an_old_year_alone_is_enough():
+    """A source can be about the past without using the word "history"."""
+    assert research._is_historical("In 1923 prices doubled every few days") is True
+
+
+def test_an_empty_source_is_not_quietly_historical():
+    for empty in ("", None, "   "):
+        assert research._is_historical(empty) is False
+
+
+def test_the_openalex_path_counts_what_it_dropped_and_why():
+    """Fail-open without fail-loud is fail-silent. If this filter ever rejects
+    a whole page, the log has to say it was the history check and not the
+    network."""
+    src = Path(research.__file__).read_text(encoding="utf-8")
+    assert '"not history": 0' in src
+    assert 'rejected["not history"] += 1' in src
+
+
+def test_the_filter_reads_the_title_as_well_as_the_abstract():
+    """"A monetary history of the United States" carries its whole claim in
+    the title; an abstract full of regression tables might not repeat it."""
+    src = Path(research.__file__).read_text(encoding="utf-8")
+    assert "w.get('display_name')" in src
