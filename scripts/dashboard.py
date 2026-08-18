@@ -1267,6 +1267,7 @@ NAV_ITEMS = [
     ("/gallery",    "🖼 Gallery",                         "view"),
     ("/advice",     "💡 What to change",                  "view"),
     ("/tracking",   "📊 Tracking",                        "view"),
+    ("/history",    "🕰 History",                         "view"),
     ("/insights",   "🔬 Insights",                        "view"),
     ("/logs",       "📜 Logs",                            "view"),
     ("/system",     "🖥 System",                          "system"),
@@ -1913,6 +1914,75 @@ def system_cancel():
 # tens of minutes) so unlike _launch_run this is done INLINE and the result is
 # shown immediately. That's only safe because the app runs threaded=False and
 # a stills render is bounded — a video render here would freeze the dashboard.
+
+@app.route("/history")
+def history_page():
+    """When each video was made, when it went out, and what happened to it.
+
+    THE QUESTION THIS ANSWERS. The queue shows what is waiting and Tracking
+    shows what is performing; neither says WHEN. `upload_date` is a date with
+    no time, and it means "made" for a pipeline upload and "published" for a
+    hand-published one — so even the day it gave you was the wrong day half
+    the time. Two honest columns beat one ambiguous one.
+
+    Rows from before those columns existed show a date and no time, because
+    that is all that was recorded. Inventing 00:00 would read as midnight.
+    """
+    auth.require("view")
+    rows = db_manager.history(limit=300)
+
+    def _when(v):
+        if not v:
+            return '<span class="muted">&mdash;</span>'
+        # "2026-08-18 03:51:05" -> date on top, time under it. Old rows are a
+        # bare date and get no second line rather than a fake one.
+        parts = str(v).split(" ")
+        if len(parts) < 2:
+            return f'{_esc(parts[0])}<br><span class="muted">no time recorded</span>'
+        return f'{_esc(parts[0])}<br><strong>{_esc(parts[1][:5])}</strong>'
+
+    badge = {"approved": "ok", "pending": "pending", "rejected": "bad"}
+    trs = ""
+    for v in rows:
+        status = v.get("upload_status") or "pending"
+        link = (f'<a href="https://youtu.be/{_esc(v["youtube_id"])}" '
+                f'target="_blank" rel="noopener">&#9654; watch</a>'
+                if v.get("youtube_id") else "")
+        sched = (f'<br><span class="muted">scheduled {_esc(v["publish_at"])}</span>'
+                 if v.get("publish_at") else "")
+        why = (f'<br><span class="muted">{_esc(v["hold_reason"])}</span>'
+               if v.get("hold_reason") and status != "approved" else "")
+        trs += (
+            f'<tr>'
+            f'<td class="muted">#{v["id"]}</td>'
+            f'<td>{_when(v.get("created_at"))}</td>'
+            f'<td>{_when(v.get("uploaded_at"))}{sched}</td>'
+            f'<td><a href="/video/{v["id"]}">'
+            f'{_esc((v.get("title") or v.get("script_hook") or "")[:70])}</a></td>'
+            f'<td class="muted">{_esc(v.get("channel") or "")}</td>'
+            f'<td><span class="badge {badge.get(status, "pending")}">'
+            f'{_esc(status)}</span>{why}</td>'
+            f'<td>{link}</td>'
+            f'</tr>')
+
+    live = sum(1 for v in rows if v.get("youtube_id"))
+    timed = sum(1 for v in rows if v.get("uploaded_at"))
+    table = (f'<table><tr><th>#</th><th>Made</th><th>Went out</th>'
+             f'<th>Title</th><th>Channel</th><th>Status</th><th></th></tr>'
+             f'{trs}</table>' if trs else
+             "<p class='muted'>No videos yet.</p>")
+
+    body = f"""
+    <a class="back" href="/">&larr; back</a>
+    <h2 style="margin-top:14px">History</h2>
+    <p class="muted">{len(rows)} video(s), newest first &middot; {live} live on
+       YouTube &middot; {timed} with an exact upload time. Rows made before this
+       page existed show the date only &mdash; that is all that was recorded for
+       them, and a made-up time would be worse than a blank.</p>
+    {table}
+    """
+    return _head() + body + PAGE_TAIL
+
 
 @app.route("/thumbnails")
 def thumbnails_page():

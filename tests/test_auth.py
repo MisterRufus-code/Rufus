@@ -735,3 +735,70 @@ def test_delete_is_an_owner_permission(users_file):
     assert "delete" in auth.ROLE_PERMISSIONS["owner"]
     assert "delete" not in auth.ROLE_PERMISSIONS["partner"]
     assert "delete" not in auth.ROLE_PERMISSIONS["viewer"]
+
+
+# ── when a video was made, and when it went out ──────────────────────────────
+#
+# `upload_date` is date('now') — no time — and it carried two different
+# meanings depending on how a video reached YouTube. The pipeline's uploader
+# never touched it, so for those rows it was the day the video was GENERATED;
+# mark_published overwrote it with today, so for a hand-published row it was
+# the day it went LIVE. One column, two meanings, no way to tell which you
+# were looking at, and never an hour.
+
+def test_a_new_video_records_the_minute_it_was_made(client, tmp_path):
+    vid = db_manager.save_video(niche="finance", script_hook="h", scene_desc="s",
+                                video_file="a.mp4", score=8)
+    row = next(r for r in db_manager.history() if r["id"] == vid)
+    assert len(row["created_at"]) == len("2026-08-18 03:51:05")
+    assert row["uploaded_at"] is None, "not uploaded yet — it must not claim a time"
+
+
+def test_uploading_stamps_a_separate_time(client):
+    vid = db_manager.save_video(niche="finance", script_hook="h", scene_desc="s",
+                                video_file="a.mp4", score=8)
+    db_manager.update_youtube_id(vid, "dQw4w9WgXcQ")
+    row = next(r for r in db_manager.history() if r["id"] == vid)
+    assert row["uploaded_at"], "the upload time was not recorded"
+    assert row["created_at"], "and it must not have eaten the creation time"
+
+
+def test_a_hand_published_video_keeps_both_times(client):
+    """mark_published rewrites upload_date by design. It must not also
+    overwrite created_at, or publishing a video retroactively changes when it
+    was made."""
+    vid = db_manager.save_video(niche="finance", script_hook="h", scene_desc="s",
+                                video_file="a.mp4", score=8)
+    made = next(r for r in db_manager.history() if r["id"] == vid)["created_at"]
+    db_manager.mark_published(vid, "https://youtu.be/dQw4w9WgXcQ")
+    row = next(r for r in db_manager.history() if r["id"] == vid)
+    assert row["created_at"] == made
+    assert row["uploaded_at"]
+    assert row["youtube_id"] == "dQw4w9WgXcQ"
+
+
+def test_history_is_newest_first_and_shows_what_is_still_waiting(client):
+    a = db_manager.save_video(niche="f", script_hook="first", scene_desc="s",
+                              video_file="a.mp4", score=8)
+    b = db_manager.save_video(niche="f", script_hook="second", scene_desc="s",
+                              video_file="b.mp4", score=8)
+    ids = [r["id"] for r in db_manager.history()]
+    assert ids.index(b) < ids.index(a), "newest must come first"
+    pending = [r for r in db_manager.history() if r["uploaded_at"] is None]
+    assert {a, b} <= {r["id"] for r in pending}
+
+
+def test_the_history_page_renders(client):
+    db_manager.save_video(niche="finance", script_hook="a hook", scene_desc="s",
+                          video_file="a.mp4", score=8)
+    client.get(f"/?token={OWNER_TOKEN}")
+    r = client.get("/history")
+    assert r.status_code == 200
+    assert b"a hook" in r.data
+
+
+def test_a_viewer_can_read_the_history(client):
+    """It is a record, not a control. A partner asking when their video went
+    out should not need the owner's link."""
+    client.get(f"/?token={VIEWER_TOKEN}")
+    assert client.get("/history").status_code == 200

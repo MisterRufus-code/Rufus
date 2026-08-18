@@ -84,6 +84,26 @@ def init_db():
             # a scheduled video is indistinguishable from one that is private
             # forever, which is the state the owner was actually in.
             "ALTER TABLE videos ADD COLUMN publish_at TEXT",
+            # WHEN, TO THE MINUTE, AND WHICH OF THE TWO WHENS.
+            #
+            # `upload_date` is date('now') — no time at all — and it means two
+            # different things depending on how a video reached YouTube. The
+            # pipeline's own uploader never touches it, so for those rows it
+            # is the day the video was GENERATED. mark_published overwrites it
+            # with today, so for a hand-published row it is the day it went
+            # LIVE. One column, two meanings, and no way to tell them apart.
+            #
+            # A video generated Monday and approved Thursday is one row that
+            # answers "when?" with Monday, and the owner asking when a video
+            # went out cannot get the hour at all.
+            #
+            # So: two columns that each mean one thing, and neither is ever
+            # rewritten to mean the other. upload_date stays exactly as it is
+            # — report.py, review_recent.py and four dashboard queries filter
+            # on it with date('now', ?), and breaking those to fix a display
+            # is the wrong trade.
+            "ALTER TABLE videos ADD COLUMN created_at TEXT",
+            "ALTER TABLE videos ADD COLUMN uploaded_at TEXT",
         ):
             try:
                 c.execute(ddl)
@@ -95,6 +115,12 @@ def init_db():
         c.execute("UPDATE videos SET upload_status='approved' "
                   "WHERE youtube_id IS NOT NULL "
                   "AND (upload_status IS NULL OR upload_status='pending')")
+        # Backfill created_at from upload_date — WITHOUT inventing a time.
+        # Those rows genuinely do not have one, and "2026-08-15 00:00:00"
+        # would read as "uploaded at midnight" to anyone glancing at the
+        # column. A date with no time is the true answer for them.
+        c.execute("UPDATE videos SET created_at = upload_date "
+                  "WHERE created_at IS NULL AND upload_date IS NOT NULL")
         c.execute("""
             CREATE TABLE IF NOT EXISTS metrics (
                 id         INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -185,6 +211,19 @@ def init_db():
         c.execute("CREATE INDEX IF NOT EXISTS idx_attempts_phase   ON script_attempts(phase)")
 
 
+def _now() -> str:
+    """Local wall-clock, to the second.
+
+    LOCAL AND NOT UTC, deliberately. This timestamp exists to answer "when
+    did that video go out" for one person looking at one dashboard on the
+    machine that made it, and an owner in UTC+3 reading 00:51 for something
+    they watched render at 03:51 would file that as a bug. YouTube's own
+    publishAt stays RFC3339/UTC where the API requires it — that is a
+    different field answering a different question.
+    """
+    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+
 def save_video(niche: str, script_hook: str, scene_desc: str,
                video_file: str, youtube_id: str = None, score: int = 0,
                script_full: str = None,
@@ -211,8 +250,8 @@ def save_video(niche: str, script_hook: str, scene_desc: str,
             " run_id, score_specificity, score_hook, score_compression, "
             " score_loop, score_human, attempts_used, final_temperature, "
             " score_reasoning, title, channel, hold_reason, description, "
-            " upload_status) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            " upload_status, created_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (niche, script_hook, script_full, scene_desc,
              seed_type, seed_source, seed_content, seed_url,
              youtube_id, video_file, score,
@@ -220,7 +259,8 @@ def save_video(niche: str, script_hook: str, scene_desc: str,
              crits.get("specificity"), crits.get("hook"),
              crits.get("compression"), crits.get("loop"), crits.get("human"),
              attempts_used, final_temperature, score_reasoning,
-             title, channel, hold_reason, description, upload_status),
+             title, channel, hold_reason, description, upload_status,
+             _now()),
         )
         return cur.lastrowid
 
@@ -250,7 +290,8 @@ def save_attempt(*, run_id: str, niche: str, seed_type: str, phase: str,
 
 def update_youtube_id(video_id: int, youtube_id: str):
     with _conn() as c:
-        c.execute("UPDATE videos SET youtube_id=? WHERE id=?", (youtube_id, video_id))
+        c.execute("UPDATE videos SET youtube_id=?, uploaded_at=? WHERE id=?",
+                  (youtube_id, _now(), video_id))
 
 
 def set_publish_at(video_id: int, when: str):
@@ -491,8 +532,33 @@ def mark_published(video_id: int, youtube_id: str,
     when = published_at or datetime.now().strftime("%Y-%m-%d")
     with _conn() as c:
         c.execute("UPDATE videos SET youtube_id=?, upload_status='approved', "
-                  "upload_date=? WHERE id=?", (yt, when, video_id))
+                  "upload_date=?, uploaded_at=COALESCE(uploaded_at, ?) "
+                  "WHERE id=?", (yt, when, published_at or _now(), video_id))
     return True
+
+
+def history(limit: int = 200, channel: str | None = None) -> list[dict]:
+    """Every video, newest first, with both timestamps and how it ended up.
+
+    Ordered by when it was MADE, not when it went live: a video sitting in the
+    approval queue has no upload time at all, and ordering by a column that is
+    NULL for exactly the rows you are waiting on puts them somewhere arbitrary.
+    """
+    q = ("SELECT id, COALESCE(created_at, upload_date) AS created_at, "
+         "uploaded_at, publish_at, title, script_hook, niche, channel, "
+         "score, upload_status, youtube_id, hold_reason "
+         "FROM videos")
+    args: list = []
+    if channel:
+        q += " WHERE channel=?"
+        args.append(channel)
+    q += " ORDER BY COALESCE(created_at, upload_date) DESC, id DESC LIMIT ?"
+    args.append(limit)
+    cols = ["id", "created_at", "uploaded_at", "publish_at", "title",
+            "script_hook", "niche", "channel", "score", "upload_status",
+            "youtube_id", "hold_reason"]
+    with _conn() as c:
+        return [dict(zip(cols, r)) for r in c.execute(q, args).fetchall()]
 
 
 def published_without_metrics(channel: str | None = None) -> list[dict]:
