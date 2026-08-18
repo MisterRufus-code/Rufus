@@ -80,6 +80,12 @@ ROLE_PERMISSIONS: dict[str, set[str]] = {
         "view", "generate", "thumbnail", "download",
         "approve", "reject", "edit", "settings", "system", "cancel",
         "manage_users",   # can add/revoke OTHER users — owner-only, obviously
+        # Removing generated files. Owner-only even though `thumbnail` (make
+        # one) is shared with partner: making costs GPU seconds and is
+        # reversible by making another, deleting is neither. This module's own
+        # docstring has listed "delete" among the owner's powers since it was
+        # written; until now no permission by that name existed.
+        "delete",
     },
     # A partner can MAKE things and take them to their phone, but cannot put
     # anything on the channel or touch how the machine is configured. That

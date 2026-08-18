@@ -1939,13 +1939,24 @@ def thumbnails_page():
                 f'<input type="hidden" name="name" value="{_esc(img["name"])}">'
                 f'<button class="btn save" type="submit" style="padding:5px 10px;font-size:12px">'
                 f'🎬 Make a video from this</button></form>')
+        del_btn = ""
+        if auth.can("delete"):
+            del_btn = (
+                f'<form method="post" action="/thumbnails/delete" '
+                f'style="margin-top:6px" onsubmit="return confirm('
+                f'\'Delete this image? It also stops offering itself as a '
+                f'topic on the Make page.\');">'
+                f'<input type="hidden" name="name" value="{_esc(img["name"])}">'
+                f'<button class="btn" type="submit" '
+                f'style="padding:5px 10px;font-size:12px">🗑 Delete</button></form>')
+        when = time.strftime("%d %b %H:%M", time.localtime(img["mtime"]))
         cards += (
             f'<div class="thumbcard">'
             f'<a href="/thumbnails/file/{name}" target="_blank">'
             f'<img src="/thumbnails/file/{name}" loading="lazy" alt=""></a>'
             f'<div class="meta">{_esc(img["prompt"][:90] or img["name"])}<br>'
             f'<a href="/thumbnails/file/{name}?download=1">⬇ Save to phone</a>'
-            f' · {img["kb"]}KB{make_btn}</div></div>')
+            f' · {img["kb"]}KB · {when}{make_btn}{del_btn}</div></div>')
     gallery = (f'<div class="thumbgrid">{cards}</div>' if cards else
                "<p class='muted'>Nothing generated yet.</p>")
 
@@ -2054,6 +2065,50 @@ def thumbnails_make_video():
         return redirect(f"/thumbnails?error={_urlquote(f'Could not start the run: {e}')}")
     return redirect("/?ok=" + _urlquote(
         f'Started a video from "{match["prompt"][:60]}" — it will appear here for review when done.'))
+
+
+@app.route("/thumbnails/delete", methods=["POST"])
+def thumbnails_delete():
+    """Remove one generated image and its saved prompt.
+
+    WHY THIS IS NOT COSMETIC. /make's "Pick a look" gallery drops a stored
+    prompt straight into the topic field on click, so every image ever
+    generated stays a live, one-click suggestion for what the next video
+    should be ABOUT. A test render, a bad idea, a duplicate — each keeps
+    offering itself forever, and the only way to stop one was to reach the
+    filesystem.
+
+    The .txt sidecar goes with the .png on purpose: leaving it behind would
+    keep the prompt in the gallery's own metadata with no picture to explain
+    it, which is a worse state than either having both or having neither.
+    """
+    auth.require("delete")
+    import image_gen
+
+    name = request.form.get("name", "").strip()
+    # Matched against the listing rather than trusted as a path — this value
+    # reaches the filesystem, and unlike make-video the operation is a delete.
+    match = next((i for i in image_gen.recent_images(limit=500)
+                  if i["name"] == name), None)
+    if match is None:
+        return redirect("/thumbnails?error=" + _urlquote("No such image."))
+
+    folder = paths.thumbnails_dir().resolve()
+    png = (folder / match["name"]).resolve()
+    # Belt and braces: the listing can only yield names from this folder, but
+    # a delete that resolves outside it should never run even if that changes.
+    if png.parent != folder:
+        return redirect("/thumbnails?error=" + _urlquote("Refusing that path."))
+    removed = []
+    for f in (png, png.with_suffix(".txt")):
+        try:
+            f.unlink()
+            removed.append(f.name)
+        except FileNotFoundError:
+            pass
+        except OSError as e:
+            return redirect("/thumbnails?error=" + _urlquote(f"Could not delete: {e}"))
+    return redirect("/thumbnails?ok=" + _urlquote(f"Deleted {removed[0] if removed else name}"))
 
 
 @app.route("/thumbnails/file/<path:filename>")

@@ -672,3 +672,66 @@ def test_notify_strips_it_the_same_way_auth_does(monkeypatch):
         notify._URL_CREDENTIAL_WARNED = True
         assert (auth._base_url_without_credentials(raw, "auth")
                 == notify._base_url_without_credentials(raw, "notify")), raw
+
+
+# ── deleting a generated image ───────────────────────────────────────────────
+#
+# WHY DELETE IS NOT COSMETIC HERE. /make's "Pick a look" gallery drops a stored
+# prompt into the topic field on click, so every image ever generated stays a
+# live one-click suggestion for what the next video should be ABOUT. A test
+# render or a bad idea kept offering itself forever and the only way to stop
+# one was to reach the filesystem — which a partner on a phone cannot do, and
+# the owner should not have to.
+#
+# The permission is owner-only even though `thumbnail` (make one) is shared
+# with partner: making costs GPU seconds and is undone by making another,
+# deleting is neither.
+
+@pytest.fixture
+def thumbs(tmp_path, monkeypatch):
+    import paths
+    d = tmp_path / "thumbs"
+    d.mkdir()
+    (d / "a.png").write_bytes(b"x" * 2048)
+    (d / "a.txt").write_text("PROMPT: a cracked hourglass\nSEED: 1\n")
+    monkeypatch.setattr(paths, "thumbnails_dir", lambda: d)
+    return d
+
+
+def test_owner_can_delete_a_generated_image(client, thumbs):
+    client.get(f"/?token={OWNER_TOKEN}")
+    r = client.post("/thumbnails/delete", data={"name": "a.png"})
+    assert r.status_code == 302
+    assert not (thumbs / "a.png").exists()
+
+
+def test_the_prompt_sidecar_goes_with_the_picture(client, thumbs):
+    """Leaving the .txt keeps the prompt in the gallery's metadata with no
+    image to explain it — worse than having both or neither."""
+    client.get(f"/?token={OWNER_TOKEN}")
+    client.post("/thumbnails/delete", data={"name": "a.png"})
+    assert not (thumbs / "a.txt").exists()
+
+
+def test_a_partner_cannot_delete_the_owners_images(client, thumbs):
+    client.get(f"/?token={PARTNER_TOKEN}")
+    r = client.post("/thumbnails/delete", data={"name": "a.png"})
+    assert r.status_code in (401, 403)
+    assert (thumbs / "a.png").exists(), "a partner deleted the owner's file"
+
+
+def test_deleting_something_that_is_not_in_the_listing_is_refused(client, thumbs):
+    """The posted name reaches the filesystem, and unlike make-video this
+    operation is destructive."""
+    client.get(f"/?token={OWNER_TOKEN}")
+    for attack in ("../../etc/passwd", "..\\..\\config\\users.json", "nope.png"):
+        r = client.post("/thumbnails/delete", data={"name": attack})
+        assert r.status_code == 302, attack
+        assert "error" in r.headers["Location"], attack
+    assert (thumbs / "a.png").exists()
+
+
+def test_delete_is_an_owner_permission(users_file):
+    assert "delete" in auth.ROLE_PERMISSIONS["owner"]
+    assert "delete" not in auth.ROLE_PERMISSIONS["partner"]
+    assert "delete" not in auth.ROLE_PERMISSIONS["viewer"]
