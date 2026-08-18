@@ -312,3 +312,52 @@ def test_stickman_still_says_animals_are_drawn_properly():
     assert "ANIMALS AND OBJECTS ARE DRAWN PROPERLY" in s
     assert "true shape, proportions and markings" in s
     assert "stay simple stick figures" in s
+
+
+# ── where in the block a rule sits ───────────────────────────────────────────
+#
+# THE COMPLAINT, TWICE: every background comes back pale beige, and stickman
+# forbids exactly that IN WORDS — "never wash the background out, never draw it
+# paler or thinner than the foreground, and never leave it as bare paper".
+#
+# The first explanation was the checkpoint: z_image_turbo runs at CFG 1, so the
+# negative prompt has no effect and suppression has to come from the positive
+# one. That is true and workflow_bench.advisories says so. But it does not
+# explain why the FIGURES obey their instructions while the BACKGROUND ignores
+# its own — both are in the same positive prompt.
+#
+# What separates them is position. The block is ~3,500 characters and is
+# appended AFTER the shot description, and the colour rules used to start at
+# character 2,291 — the last third of the last thing in a prompt of roughly a
+# thousand tokens. The rules that are obeyed were the ones at the top.
+#
+# So this is a positional experiment, not a fix that is known to work: the
+# scene-and-colour paragraphs moved to just after the opening sentence.
+# stickman ONLY, deliberately — ink_explainer and the rest keep the old order
+# as the control, because two changes at once produce a result you cannot
+# explain. If the next gallery has coloured backgrounds, the same move applies
+# to the others and this comment becomes the reason. If it does not, the
+# checkpoint was the whole story after all and this should be reverted rather
+# than left as folklore.
+
+def test_the_colour_rule_is_near_the_top_of_the_stickman_block():
+    s = _looks()["stickman"]
+    at = s.index("COLOUR IS FLAT")
+    assert at < len(s) // 2, (
+        f"the colour rule is at character {at} of {len(s)} — back in the tail "
+        f"of the block, where the pale-background bug lived")
+
+
+def test_the_experiment_did_not_lose_a_single_rule():
+    """Reordering must be a move, not an edit. Every sentence that was in the
+    block before has to still be in it — a rule quietly dropped during a
+    rearrangement is indistinguishable from the bug being 'fixed'."""
+    s = _looks()["stickman"]
+    for rule in ("never leave it as bare paper",
+                 "Never wash the background out",
+                 "BUILD THE WHOLE PLACE",
+                 "THE PLACE PERSISTS",
+                 "NO LETTERING ANYWHERE IN THE FRAME",
+                 "THE FACE CARRIES THE EMOTION",
+                 "No gradients"):
+        assert rule in s, rule
