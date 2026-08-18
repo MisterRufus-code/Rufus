@@ -802,3 +802,145 @@ def test_a_viewer_can_read_the_history(client):
     out should not need the owner's link."""
     client.get(f"/?token={VIEWER_TOKEN}")
     assert client.get("/history").status_code == 200
+
+
+# ── "the dashboard is up" ────────────────────────────────────────────────────
+#
+# watchdog.py already pings when /healthz stops answering, so a crash-restart
+# is covered. Every other way this process starts was silent: a manual
+# serve.ps1 -Restart, a reboot, the logon task. The owner asked to be told.
+#
+# The downtime is the part worth sending. "Back up after 6s" is a restart you
+# did; "back up after 4h" is an afternoon nobody was watching, and only the
+# starting process can know the difference — the watchdog's own alert cannot.
+
+def _stamp(tmp_path, monkeypatch):
+    monkeypatch.setattr(dashboard, "START_STAMP", tmp_path / ".started")
+    monkeypatch.delenv("RUFUS_DASHBOARD_NOTIFY", raising=False)
+    sent = []
+    import notify
+    monkeypatch.setattr(notify, "send",
+                        lambda title, body, **kw: sent.append((title, body)) or True)
+    return sent
+
+
+def test_the_first_start_says_it_is_the_first(tmp_path, monkeypatch):
+    sent = _stamp(tmp_path, monkeypatch)
+    assert dashboard._announce_start() is True
+    assert "First start" in sent[0][1]
+
+
+def test_the_second_start_reports_how_long_it_was_down(tmp_path, monkeypatch):
+    import time as _t
+    sent = _stamp(tmp_path, monkeypatch)
+    (tmp_path / ".started").write_text(str(_t.time() - 7200), encoding="utf-8")
+    dashboard._announce_start()
+    assert "2h ago" in sent[0][1], sent[0][1]
+
+
+def test_the_stamp_is_rewritten_so_the_next_gap_is_measured_from_now(tmp_path, monkeypatch):
+    import time as _t
+    _stamp(tmp_path, monkeypatch)
+    dashboard._announce_start()
+    written = float((tmp_path / ".started").read_text(encoding="utf-8"))
+    assert abs(written - _t.time()) < 5
+
+
+def test_a_clock_that_went_backwards_does_not_invent_a_downtime(tmp_path, monkeypatch):
+    """NTP corrections and resumed VMs move the clock. "up 0s ago" would be a
+    lie told with a straight face."""
+    import time as _t
+    sent = _stamp(tmp_path, monkeypatch)
+    (tmp_path / ".started").write_text(str(_t.time() + 9999), encoding="utf-8")
+    dashboard._announce_start()
+    assert "clock moved" in sent[0][1]
+    assert "Downtime unknown" in sent[0][1]
+
+
+def test_a_corrupt_stamp_is_treated_as_no_stamp(tmp_path, monkeypatch):
+    sent = _stamp(tmp_path, monkeypatch)
+    (tmp_path / ".started").write_text("not a number", encoding="utf-8")
+    assert dashboard._announce_start() is True
+    assert "First start" in sent[0][1]
+
+
+def test_it_can_be_switched_off(tmp_path, monkeypatch):
+    sent = _stamp(tmp_path, monkeypatch)
+    monkeypatch.setenv("RUFUS_DASHBOARD_NOTIFY", "0")
+    assert dashboard._announce_start() is False
+    assert sent == []
+
+
+def test_a_broken_notifier_does_not_stop_the_dashboard_starting(tmp_path, monkeypatch, capsys):
+    """This runs on the path to app.run(). A raise here is a dashboard that
+    does not come up because the phone ping failed."""
+    monkeypatch.setattr(dashboard, "START_STAMP", tmp_path / ".started")
+    monkeypatch.delenv("RUFUS_DASHBOARD_NOTIFY", raising=False)
+    import notify
+    def _boom(*a, **k):
+        raise RuntimeError("no network")
+    monkeypatch.setattr(notify, "send", _boom)
+    assert dashboard._announce_start() is False
+    assert "start notification failed" in capsys.readouterr().out
+
+
+def test_an_unwritable_stamp_still_sends(tmp_path, monkeypatch):
+    """A read-only logs dir is a reason to lose the downtime number, not a
+    reason to lose the alert."""
+    sent = _stamp(tmp_path, monkeypatch)
+    monkeypatch.setattr(dashboard, "START_STAMP",
+                        tmp_path / "nope" / "deeper" / ".started")
+    monkeypatch.setattr(dashboard.Path, "mkdir",
+                        lambda self, **kw: (_ for _ in ()).throw(OSError("ro")))
+    assert dashboard._announce_start() is True
+    assert sent
+
+
+@pytest.mark.parametrize("secs,want", [
+    (5, "5s"), (89, "89s"), (90, "1m"), (3600, "60m"),
+    (5400, "1h"), (172800, "2d"),
+])
+def test_the_gap_reads_like_a_person_wrote_it(secs, want):
+    assert dashboard._human_gap(secs) == want
+
+
+# ── the time on the front page, not only in History ──────────────────────────
+#
+# History is the record you go and look at. The front page is the one that is
+# already open, and "which of these ran this morning" was unanswerable there:
+# it printed upload_date, a bare day, for every row.
+#
+# Both pages format the stamp through _when_cell for the ordinary reason —
+# two hand-copies of the same formatting is how one of them ends up showing
+# seconds, or a padded midnight, after somebody edits the other.
+
+def test_the_front_page_row_carries_the_time(client):
+    db_manager.save_video(niche="finance", script_hook="a fresh hook",
+                          scene_desc="s", video_file="a.mp4", score=8)
+    client.get(f"/?token={OWNER_TOKEN}")
+    page = client.get("/").data.decode("utf-8", "replace")
+    row = db_manager.history()[0]
+    assert row["created_at"][:10] in page
+    assert row["created_at"][11:16] in page, "the hour and minute never rendered"
+
+
+def test_both_pages_format_a_stamp_identically():
+    stamp = "2026-08-18 03:51:05"
+    assert "2026-08-18" in dashboard._when_cell(stamp)
+    assert "03:51" in dashboard._when_cell(stamp)
+    assert "05" not in dashboard._when_cell(stamp).split("03:51")[1], \
+        "seconds are noise in a table"
+
+
+def test_a_row_with_no_time_says_so_rather_than_showing_midnight(client):
+    """The 19 videos published before created_at existed genuinely have no
+    hour. Padding them to 00:00 would read as 'uploaded at midnight'."""
+    out = dashboard._when_cell("2026-08-15")
+    assert "no time" in out
+    assert "00:00" not in out
+
+
+def test_an_empty_stamp_is_a_dash_not_a_crash():
+    for empty in (None, "", "   "):
+        assert "&mdash;" in dashboard._when_cell(empty) or \
+               "no time" in dashboard._when_cell(empty), repr(empty)

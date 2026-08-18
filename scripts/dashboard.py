@@ -663,7 +663,8 @@ def _channels() -> list[str]:
 def _recent_videos(limit: int = 60, channel: str | None = None,
                    status: str | None = None) -> list[dict]:
     q = ("SELECT id, upload_date, niche, script_hook, title, score, "
-         "hold_reason, youtube_id, run_id, channel, upload_status FROM videos")
+         "hold_reason, youtube_id, run_id, channel, upload_status, "
+         "created_at, uploaded_at FROM videos")
     where, args = [], []
     if channel:
         where.append("channel = ?"); args.append(channel)
@@ -679,7 +680,8 @@ def _recent_videos(limit: int = 60, channel: str | None = None,
     except Exception:
         return []
     cols = ["id", "upload_date", "niche", "script_hook", "title", "score",
-            "hold_reason", "youtube_id", "run_id", "channel", "upload_status"]
+            "hold_reason", "youtube_id", "run_id", "channel", "upload_status",
+            "created_at", "uploaded_at"]
     return [dict(zip(cols, r)) for r in rows]
 
 
@@ -1012,6 +1014,24 @@ def _gallery_images(limit: int = 60) -> list[dict]:
 
 def _esc(s) -> str:
     return html.escape(str(s)) if s is not None else ""
+
+
+def _when_cell(stamp) -> str:
+    """A timestamp as date over time, for a table cell.
+
+    ONE FUNCTION FOR BOTH PAGES on purpose. The front page and /history answer
+    the same question and a hand-copy of this formatting is how one of them
+    ends up showing seconds, or a fake midnight, after somebody edits the
+    other. Rows written before created_at existed are a bare date and say so
+    rather than being padded out to look like they carry a time.
+    """
+    text = str(stamp or "").strip()
+    if not text:
+        return '<span class="muted">&mdash;</span>'
+    parts = text.split()
+    if len(parts) < 2:
+        return f'{_esc(parts[0])}<br><span class="muted">no time</span>'
+    return f'{_esc(parts[0])}<br><strong>{_esc(parts[1][:5])}</strong>'
 
 
 def _score_color(score) -> str:
@@ -1448,13 +1468,18 @@ def _videos_table(videos: list[dict], *, previews: bool = False) -> str:
                                 f'style="display:flex">{imgs}</a></td>')
             else:
                 preview_cell = '<td><span class="muted">—</span></td>'
+        went_out = (f'<br><span class="muted">out '
+                    f'{_esc(str(v["uploaded_at"]).split(" ")[-1][:5])}</span>'
+                    if v.get("uploaded_at") and " " in str(v["uploaded_at"])
+                    else "")
         rows += (f'<tr>{preview_cell}<td><a class="row-link" href="/video/{v["id"]}">'
-                 f'{_esc(v["upload_date"])}</a></td>'
+                 f'{_when_cell(v.get("created_at") or v.get("upload_date"))}'
+                 f'{went_out}</a></td>'
                  f'<td><a class="row-link" href="/video/{v["id"]}">{_esc(v["niche"])}</a></td>'
                  f'<td><a class="row-link" href="/video/{v["id"]}">{title}</a></td>'
                  f'<td>{score_html}</td><td>{_status_badge(v["upload_status"])}</td></tr>\n')
     preview_th = "<th>Preview</th>" if previews else ""
-    return (f"<table><tr>{preview_th}<th>Date</th><th>Niche</th><th>Hook / Title</th>"
+    return (f"<table><tr>{preview_th}<th>Made</th><th>Niche</th><th>Hook / Title</th>"
             f"<th>Score</th><th>Status</th></tr>{rows}</table>")
 
 
@@ -1931,15 +1956,7 @@ def history_page():
     auth.require("view")
     rows = db_manager.history(limit=300)
 
-    def _when(v):
-        if not v:
-            return '<span class="muted">&mdash;</span>'
-        # "2026-08-18 03:51:05" -> date on top, time under it. Old rows are a
-        # bare date and get no second line rather than a fake one.
-        parts = str(v).split(" ")
-        if len(parts) < 2:
-            return f'{_esc(parts[0])}<br><span class="muted">no time recorded</span>'
-        return f'{_esc(parts[0])}<br><strong>{_esc(parts[1][:5])}</strong>'
+    _when = _when_cell
 
     badge = {"approved": "ok", "pending": "pending", "rejected": "bad"}
     trs = ""
@@ -4089,6 +4106,76 @@ def _port_taken(host: str, port: int) -> bool:
             return False
 
 
+# ── "it came back up" ────────────────────────────────────────────────────────
+
+START_STAMP = paths.log_dir() / ".dashboard_started"
+
+
+def _announce_start() -> bool:
+    """Ping the owner that the dashboard is up, and how long it was not.
+
+    THE DOWNTIME IS THE POINT, and it is the one thing the watchdog's own
+    alert cannot tell you. watchdog.py already sends "service restarted" when
+    /healthz stops answering, so a crash is covered. What was not covered is
+    every other way this process starts — a manual serve.ps1 -Restart, a
+    reboot, a task that fired at logon — and, more usefully, the difference
+    between them:
+
+        back up after 6s      you just restarted it, carry on
+        back up after 4h      it was down all afternoon and nobody knew
+        first start           new machine, or the stamp was cleared
+
+    A restart the watchdog handled produces two messages, its and this one.
+    That is deliberate rather than sloppy: the pair reads as "it stopped" then
+    "it is back, it was gone 65 seconds", and the second half is the half that
+    says whether to go and look.
+
+    Never raises and never blocks the server coming up — a notification
+    failure must not be the reason the dashboard does not start.
+    """
+    if os.environ.get("RUFUS_DASHBOARD_NOTIFY", "1").strip().lower() \
+            in ("0", "false", "no", "off"):
+        return False
+    now = time.time()
+    gap = None
+    try:
+        gap = now - float(START_STAMP.read_text(encoding="utf-8").strip())
+    except (OSError, ValueError):
+        pass
+    try:
+        START_STAMP.parent.mkdir(parents=True, exist_ok=True)
+        START_STAMP.write_text(str(now), encoding="utf-8")
+    except OSError:
+        pass
+
+    if gap is None:
+        detail = "First start on this machine, or the stamp file was cleared."
+    elif gap < 0:
+        # A clock that went backwards (NTP correction, a VM resuming). Saying
+        # "up 0s ago" would be a lie with a straight face.
+        detail = "The previous start is stamped in the future — the system "\
+                 "clock moved. Downtime unknown."
+    else:
+        detail = f"Previous start was {_human_gap(gap)} ago."
+    try:
+        import notify
+        return notify.send("Rufus: dashboard is up", detail)
+    except Exception as e:
+        print(f"[dashboard] start notification failed ({e})")
+        return False
+
+
+def _human_gap(seconds: float) -> str:
+    s = int(seconds)
+    if s < 90:
+        return f"{s}s"
+    if s < 5400:
+        return f"{s // 60}m"
+    if s < 172800:
+        return f"{s // 3600}h"
+    return f"{s // 86400}d"
+
+
 if __name__ == "__main__":
     host = os.environ.get("RUFUS_DASHBOARD_HOST", "127.0.0.1")
     port = int(os.environ.get("RUFUS_DASHBOARD_PORT", "8765"))
@@ -4112,6 +4199,7 @@ if __name__ == "__main__":
         sys.exit(3)
 
     db_manager.init_db()
+    _announce_start()
     print(f"[dashboard] http://localhost:{port}  (LAN: http://<this PC's IP>:{port})")
     # threaded=False is LOAD-BEARING: approve_video mutates process env via
     # _scoped_env, which is only safe when requests are serialized. Flask 3.x
