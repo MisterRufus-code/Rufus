@@ -86,7 +86,18 @@ def _probe_duration(path: Path) -> float | None:
 
 
 def render(script: str, bg_paths: "Path | list[Path]", out_dir: Path,
-           music_path: Path | None = None) -> Path:
+           music_path: Path | None = None,
+           voice_path: Path | None = None) -> Path:
+    """Render the video. `voice_path` reuses an existing voiceover instead of
+    synthesizing a new one.
+
+    WHY REUSING THE VOICE MATTERS. A re-cut exists to change which picture is
+    on screen, not when. Synthesizing again would produce audio a few
+    milliseconds different, Whisper would time the new audio, and every cut in
+    the video would move — so "I redrew beat 7" would silently reshuffle the
+    other nine. Handed the same bytes, the transcription is the same and the
+    cuts land exactly where they did before.
+    """
     if isinstance(bg_paths, Path):
         bg_paths = [bg_paths]
     bg_paths = [Path(p) for p in bg_paths if Path(p).exists()]
@@ -113,8 +124,12 @@ def render(script: str, bg_paths: "Path | list[Path]", out_dir: Path,
     out = out_dir / f"short_{stamp}.mp4"
 
     try:
-        print("[1/4] Generating voice…")
-        audio_gen._tts(script, mp3)
+        if voice_path is not None and Path(voice_path).exists():
+            print(f"[1/4] Reusing voice ({Path(voice_path).name})…")
+            shutil.copy2(str(voice_path), str(mp3))
+        else:
+            print("[1/4] Generating voice…")
+            audio_gen._tts(script, mp3)
 
         print("[2/4] Transcribing…")
         # Go through _transcribe, never the model object directly — the

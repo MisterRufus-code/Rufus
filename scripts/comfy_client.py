@@ -1229,6 +1229,93 @@ def _insert_px() -> int:
     return max(256, (px // 64) * 64)
 
 
+# ── one beat, on its own ─────────────────────────────────────────────────────
+
+PROMPT_SIDECAR_PREFIX = "FLUX PROMPT:"
+
+
+def read_beat_prompt(txt_path) -> str:
+    """The prompt out of a run's NN.txt sidecar, or "".
+
+    The file is written as "FLUX PROMPT:\n<prompt>\n" beside every still, and
+    what it holds is the FINAL prompt — the shot description with the style
+    block already appended (see the _with_detail pass before the render loop).
+    That is the property the regenerate button rests on: rendering this text
+    verbatim reproduces the same request, and an owner who edits it gets
+    exactly what they typed rather than their words plus a second helping of
+    the style.
+    """
+    try:
+        raw = Path(txt_path).read_text(encoding="utf-8")
+    except OSError:
+        return ""
+    body = raw.split(PROMPT_SIDECAR_PREFIX, 1)[-1] if PROMPT_SIDECAR_PREFIX in raw else raw
+    return body.strip()
+
+
+def write_beat_prompt(txt_path, prompt: str) -> bool:
+    """Put an edited prompt back beside its still, in the format the run wrote.
+
+    The sidecar is the run's record of what produced the picture. Leaving it
+    stale after a hand-edited regenerate would make the debug folder lie about
+    its own contents, which is worse than not recording it at all.
+    """
+    try:
+        Path(txt_path).write_text(
+            f"{PROMPT_SIDECAR_PREFIX}\n{prompt.strip()}\n", encoding="utf-8")
+        return True
+    except OSError as e:
+        print(f"[comfy] could not update {txt_path} ({e})")
+        return False
+
+
+def render_one_beat(prompt: str, out_png, *, seed: int | None = None,
+                    niche: str | None = None) -> bool:
+    """Render exactly one still to `out_png`, at this format's frame size.
+
+    For the review page's per-beat regenerate: one picture, a fresh seed, and
+    the file overwritten in place so `review_proxy.contact_sheet` — which
+    rebuilds whenever a still is newer than the sheet — refreshes the grid on
+    its own.
+
+    Deliberately NOT part of the beat loop. That loop owns beat alignment, the
+    i2i chain, the frame gate's retries and the insert budget; reaching into it
+    to redo one index would mean teaching all of that to run for a single
+    picture. This is the same two calls the loop makes for a plain still, and
+    nothing else.
+
+    Returns False rather than raising: a failed regenerate must leave the
+    existing still exactly where it was.
+    """
+    prompt = (prompt or "").strip()
+    if not prompt:
+        print("[comfy] no prompt to render")
+        return False
+    if not is_available():
+        print(f"[comfy] ComfyUI is not reachable at {_host()}")
+        return False
+    if seed is None:
+        seed = random.randint(1, 2**31 - 1)
+    raw = _render_image(prompt, seed, uuid.uuid4().hex, niche=niche)
+    if not raw:
+        print("[comfy] no image came back — the existing still is untouched")
+        return False
+    # Written to a temp first: _fit_to_frame failing halfway through the real
+    # path would leave a truncated png where a good one used to be.
+    out_png = Path(out_png)
+    staged = out_png.with_suffix(".regen.png")
+    if not _fit_to_frame(raw, staged):
+        print("[comfy] could not fit the frame — the existing still is untouched")
+        return False
+    try:
+        staged.replace(out_png)
+    except OSError as e:
+        print(f"[comfy] could not replace {out_png.name} ({e})")
+        return False
+    print(f"[comfy] regenerated {out_png.name} (seed {seed})")
+    return True
+
+
 def render_inserts(inserts: list[dict], out_dir: Path,
                    niche: str | None = None, base_seed: int | None = None
                    ) -> list[dict]:

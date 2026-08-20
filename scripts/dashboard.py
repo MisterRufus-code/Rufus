@@ -3758,7 +3758,7 @@ def video_detail(video_id):
     {actions_html}
     {published_html}
     {edit_html}
-    {_preview_block(v['run_id'])}
+    {_preview_block(v['run_id'], v['id'])}
     <h2>Script</h2>
     <div class="script">{_esc(v['script_full'] or v['script_hook'])}</div>
     <h2>Why this score (critic reasoning)</h2>
@@ -3793,6 +3793,131 @@ def _extra_publishers() -> list[tuple[str, object]]:
         except Exception as e:
             print(f"[dashboard] TikTok publisher unavailable ({e})")
     return out
+
+
+def _launch_recut(video_id: int, v: dict):
+    """Spawn scripts/recut.py for one video. (proc, log_path).
+
+    Deliberately the same shape as _launch_run: same env layering (saved
+    settings on top of the process environment), same UTF-8 defaults for a
+    child whose stdout is a file, same log directory. A re-cut that resolved
+    the video format or the niche differently from a run would come out the
+    wrong shape, and the settings are where that is decided.
+    """
+    cmd = [sys.executable, str(ROOT / "scripts" / "recut.py"), str(video_id)]
+    env = os.environ.copy()
+    env.update(_load_settings())
+    env.setdefault("PYTHONUTF8", "1")
+    env.setdefault("PYTHONIOENCODING", "utf-8")
+    # The row's own niche wins over whatever the dashboard is currently set to.
+    # Re-cutting last week's money_history video from a machine now pointed at
+    # a different niche would fetch the wrong music and grade it wrong.
+    if v.get("niche"):
+        env["RUFUS_NICHE_OVERRIDE"] = str(v["niche"])
+    log_dir = ROOT / "logs"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    log_path = log_dir / f"recut_{video_id}_{int(time.time())}.log"
+    with open(log_path, "wb") as logf:
+        proc = subprocess.Popen(cmd, cwd=str(ROOT), stdout=logf, env=env,
+                                stderr=subprocess.STDOUT,
+                                stdin=subprocess.DEVNULL)
+    return proc, log_path
+
+
+def _run_dir(run_id: str):
+    """A run's debug folder, or None if the id does not name one.
+
+    The run_id reaches the filesystem from a form field, so it is resolved and
+    checked against DEBUG_ROOT rather than trusted — the same shape as
+    thumbnail_file and thumbnails_delete.
+    """
+    if not run_id:
+        return None
+    folder = (DEBUG_ROOT / run_id).resolve()
+    if folder.parent != DEBUG_ROOT.resolve() or not folder.is_dir():
+        return None
+    return folder
+
+
+@app.route("/video/<int:video_id>/beat/<int:beat>/regen", methods=["POST"])
+def regen_beat(video_id: int, beat: int):
+    """Redraw one beat's still, optionally from an edited prompt.
+
+    WHY ONE PICTURE AND NOT THE RUN. A gallery is usually right about most of
+    its frames and wrong about one — a contact sheet instead of a scene, a
+    figure with no arms, the wrong object. Rebuilding the video for that costs
+    thirteen minutes of GPU to change one shot, so it does not get done, and
+    the video ships with the bad frame in it.
+
+    The prompt is editable because the prompt is usually what is wrong. It is
+    written back to the sidecar so the run's own record stays true to what
+    produced the picture.
+
+    The contact sheet is not rebuilt here: review_proxy.contact_sheet already
+    regenerates whenever a still is newer than the sheet, so the next page load
+    does it.
+    """
+    auth.require("edit")
+    v = _video_detail(video_id)
+    if not v:
+        abort(404)
+    folder = _run_dir(v.get("run_id"))
+    if folder is None:
+        return _redirect_detail(video_id, error="this run has no saved frames")
+
+    png = folder / f"{beat:02d}.png"
+    txt = folder / f"{beat:02d}.txt"
+    if not png.exists():
+        return _redirect_detail(video_id, error=f"no still {beat:02d}.png in this run")
+
+    import comfy_client
+    edited = request.form.get("prompt", "").strip()
+    prompt = edited or comfy_client.read_beat_prompt(txt)
+    if not prompt:
+        return _redirect_detail(video_id, error=(
+            f"beat {beat:02d} has no saved prompt, so there is nothing to "
+            f"redraw it from — type one in and try again"))
+
+    if _run_in_progress(v.get("channel")):
+        return _redirect_detail(video_id, error=(
+            "a run is using the GPU right now — wait for it to finish"))
+
+    if not comfy_client.render_one_beat(prompt, png, niche=v.get("niche")):
+        return _redirect_detail(video_id, error=(
+            "the render failed — the existing frame is untouched. Is ComfyUI "
+            "running?"))
+    if edited:
+        comfy_client.write_beat_prompt(txt, edited)
+    return _redirect_detail(video_id, ok=(
+        f"redrew beat {beat:02d} — re-cut to put it in the video"))
+
+
+@app.route("/video/<int:video_id>/recut", methods=["POST"])
+def recut_video(video_id: int):
+    """Rebuild the mp4 from the stills that are on disk right now.
+
+    The voiceover is not regenerated and not re-transcribed, so the word
+    timings the cut is built from are the same ones the last render used —
+    which is what makes a re-cut safe: it can change which picture is on
+    screen, and it cannot move where the cuts are.
+    """
+    auth.require("edit")
+    v = _video_detail(video_id)
+    if not v:
+        abort(404)
+    if _run_in_progress(v.get("channel")):
+        return _redirect_detail(video_id, error=(
+            "a run is using the GPU right now — wait for it to finish"))
+    folder = _run_dir(v.get("run_id"))
+    if folder is None:
+        return _redirect_detail(video_id, error="this run has no saved frames")
+    try:
+        proc, log = _launch_recut(video_id, v)
+    except Exception as e:
+        return _redirect_detail(video_id, error=f"could not start the re-cut: {e}")
+    return _redirect_detail(video_id, ok=(
+        f"re-cutting — the new file replaces the old one when it finishes "
+        f"(log: {log.name})"))
 
 
 @app.route("/video/<int:video_id>/approve", methods=["POST"])
@@ -3917,7 +4042,66 @@ def edit_video(video_id):
     return _redirect_detail(video_id, ok="saved")
 
 
-def _preview_block(run_id: str) -> str:
+def _beat_controls(run_id: str, folder, video_id: int) -> str:
+    """One row per beat: the frame, its prompt, and a button to redraw it.
+
+    Folded into a <details> on purpose. The preview block exists to be ~1MB on
+    a phone on cellular; a grid of every beat with its prompt open would undo
+    that for the common case, which is looking at the contact sheet and
+    deciding yes or no. This is the drawer you open when the answer is "yes
+    except that one".
+
+    The prompt shown is the sidecar's, which is the FINAL prompt — the shot
+    description with the style block already on it. Editing it and pressing
+    Regen sends exactly what is in the box, so a hand-written prompt is not
+    silently given a second helping of the style.
+    """
+    import comfy_client
+
+    stills = sorted((f for f in folder.glob("*.png") if f.stem.isdigit()),
+                    key=lambda f: f.name)
+    if not stills:
+        return ""
+
+    rows = []
+    for png in stills:
+        n = png.stem
+        prompt = comfy_client.read_beat_prompt(folder / f"{n}.txt")
+        rows.append(
+            f'<div style="display:flex;gap:10px;padding:8px 0;'
+            f'border-top:1px solid var(--border)">'
+            f'<img src="/debug/{_esc(run_id)}/{_urlquote(png.name)}?w=120" '
+            f'loading="lazy" alt="beat {_esc(n)}" '
+            f'style="width:54px;height:96px;object-fit:cover;border-radius:4px;'
+            f'flex-shrink:0">'
+            f'<form method="post" style="flex:1;min-width:0" '
+            f'action="/video/{video_id}/beat/{int(n)}/regen">'
+            f'<div class="muted" style="font-size:12px">beat {_esc(n)}</div>'
+            f'<textarea name="prompt" rows="3" class="field" '
+            f'style="width:100%;font-size:12px;margin:4px 0">'
+            f'{_esc(prompt)}</textarea>'
+            f'<button class="btn" type="submit" '
+            f'style="padding:5px 10px;font-size:12px">Redraw this beat</button>'
+            f'</form></div>')
+
+    return (
+        f'<details style="margin-top:10px">'
+        f'<summary style="cursor:pointer">Redraw a beat '
+        f'<span class="muted">({len(stills)} frames — edit a prompt or just '
+        f'press redraw for a new roll)</span></summary>'
+        f'{"".join(rows)}'
+        f'<form method="post" action="/video/{video_id}/recut" '
+        f'style="margin-top:12px" onsubmit="return confirm('
+        f'\'Re-cut the video from the frames on disk now? The voiceover is '
+        f'reused, so the cuts stay where they are.\');">'
+        f'<button class="btn save" type="submit">Re-cut the video</button>'
+        f'<div class="muted" style="font-size:12px;margin-top:4px">'
+        f'Redrawing changes the frame on disk. The mp4 only changes when you '
+        f're-cut.</div></form>'
+        f'</details>')
+
+
+def _preview_block(run_id: str, video_id: int | None = None) -> str:
     """Hear-it-and-see-it review, sized for a phone on cellular.
 
     Before this, judging a run remotely meant downloading the 15-25MB master
@@ -3961,6 +4145,12 @@ def _preview_block(run_id: str) -> str:
             f'alt="every beat in order"></a>'
             f'<div class="muted" style="margin-top:4px">'
             f'all beats in order · {sheet.stat().st_size // 1024}KB · tap to enlarge</div>')
+
+    if video_id is not None and auth.can("edit"):
+        try:
+            parts.append(_beat_controls(run_id, folder, video_id))
+        except Exception as e:                    # never break the page
+            print(f"[dashboard] beat controls unavailable ({e})")
 
     if not parts:
         return ""

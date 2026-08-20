@@ -462,6 +462,40 @@ def update_title(video_id: int, title: str):
         c.execute("UPDATE videos SET title=? WHERE id=?", (title, video_id))
 
 
+def video_by_id(video_id: int) -> dict | None:
+    """One video row by id, or None.
+
+    _video_detail in the dashboard already does this, but it lives in a Flask
+    module that imports auth and flask — a CLI that has to pull those in to
+    read one row is a CLI that fails on a machine where the dashboard's
+    dependencies are not installed.
+    """
+    q = ("SELECT id, upload_date, created_at, uploaded_at, niche, channel, "
+         "script_hook, script_full, scene_desc, title, description, score, "
+         "run_id, video_file, youtube_id, upload_status, hold_reason, "
+         "publish_at FROM videos WHERE id=?")
+    cols = ["id", "upload_date", "created_at", "uploaded_at", "niche",
+            "channel", "script_hook", "script_full", "scene_desc", "title",
+            "description", "score", "run_id", "video_file", "youtube_id",
+            "upload_status", "hold_reason", "publish_at"]
+    with _conn() as c:
+        row = c.execute(q, (video_id,)).fetchone()
+    return dict(zip(cols, row)) if row else None
+
+
+def update_video_file(video_id: int, path: str) -> bool:
+    """Repoint a row at a newly rendered file. False if the id is unknown.
+
+    Called only AFTER a render succeeds. A row updated first would name a file
+    that does not exist yet, and the review page would 404 on a video that was
+    playing fine ten seconds earlier.
+    """
+    with _conn() as c:
+        cur = c.execute("UPDATE videos SET video_file=? WHERE id=?",
+                        (str(path), video_id))
+        return cur.rowcount > 0
+
+
 def update_metadata(video_id: int, title: str = None, description: str = None):
     """Dashboard edit form: update whichever of title/description was given."""
     sets, args = [], []
