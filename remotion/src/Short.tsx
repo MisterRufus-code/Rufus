@@ -14,6 +14,7 @@ import {
 import {continueRender, delayRender} from 'remotion';
 import {TransitionSeries, linearTiming} from '@remotion/transitions';
 import {fade} from '@remotion/transitions/fade';
+import {slide} from '@remotion/transitions/slide';
 
 // Self-hosted Anton (staged into public/fonts/ by remotion_renderer.py) — no
 // network dependency at render time. Falls back to Arial Black if missing.
@@ -422,6 +423,24 @@ export const Short: React.FC<ShortProps> = ({
 
   const framesFor = (i: number) => spanFrames?.[i] ?? evenFrames;
 
+  // ONE TRANSITION THAT IS NOT LIKE THE OTHERS.
+  //
+  // edit.peak_beat — the beat where the story turns — has been computed for
+  // every run and declared in this file's own types since the director was
+  // written, and never used. Every cut got the same 0.35s crossfade, so the
+  // turn arrived the same way the fourth piece of evidence did.
+  //
+  // The argument is the one already made in comfy_client for hero motion: one
+  // moving shot among stills reads as a deliberate accent, where the same
+  // move on every shot reads as wallpaper the viewer stops noticing by beat
+  // three. So exactly one transition differs, and it is the one into the turn.
+  //
+  // peak_beat is 1-based; transition i sits between clip i and clip i+1, and
+  // clip i+1 is beat i+2. So the transition INTO the peak is at i = peak − 2.
+  // A peak on the first beat has no transition before it and correctly
+  // matches nothing.
+  const peakTransition = edit?.peak_beat != null ? edit.peak_beat - 2 : -1;
+
   const musicVolume = music
     ? interpolate(
         frame,
@@ -461,7 +480,9 @@ export const Short: React.FC<ShortProps> = ({
               items.push(
                 <TransitionSeries.Transition
                   key={`trans-${i}`}
-                  presentation={fade()}
+                  presentation={
+                    i === peakTransition ? slide({direction: 'from-bottom'}) : fade()
+                  }
                   timing={linearTiming({durationInFrames: transFrames})}
                 />,
               );

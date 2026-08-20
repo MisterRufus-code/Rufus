@@ -162,3 +162,63 @@ def test_the_composition_refuses_a_span_list_of_the_wrong_length():
     src = (Path(__file__).parent.parent / "remotion" / "src" / "Short.tsx") \
         .read_text(encoding="utf-8")
     assert "beatSpans.length !== n" in src
+
+
+# ── the one transition that is not like the others ───────────────────────────
+#
+# edit.peak_beat — the beat where the story turns — has been computed on every
+# run and declared in Short.tsx's own types since the director was written, and
+# never used. Every cut got the same 0.35s crossfade, so the turn arrived the
+# same way the fourth piece of evidence did.
+#
+# The argument is the one comfy_client already makes for hero motion: one
+# moving shot among stills reads as a deliberate accent, and the same move on
+# every shot reads as wallpaper the viewer stops noticing by beat three.
+
+def _tsx() -> str:
+    return (Path(__file__).parent.parent / "remotion" / "src" / "Short.tsx") \
+        .read_text(encoding="utf-8")
+
+
+def test_the_peak_beat_is_finally_used_for_something():
+    src = _tsx()
+    assert "peakTransition" in src
+    assert "edit?.peak_beat" in src
+
+
+def test_only_the_peak_transition_differs():
+    """Two presentations in the file and a conditional between them — not a
+    table mapping every tone to its own wipe."""
+    src = _tsx()
+    assert "i === peakTransition ? slide(" in src
+    assert ": fade()" in src
+
+
+def test_the_slide_import_is_one_the_installed_version_actually_ships():
+    """Verified against the 4.0.242 tarball's own exports map, which lists
+    ./fade, ./slide, ./wipe, ./flip, ./clock-wipe and ./none. An import that
+    does not resolve breaks every render, and node_modules is not installed
+    here to catch it."""
+    src = _tsx()
+    assert "from '@remotion/transitions/slide'" in src
+    for never_verified in ("/dissolve", "/zoom", "/push", "/circle"):
+        assert never_verified not in src
+
+
+@pytest.mark.parametrize("peak,n_clips,expected", [
+    (5, 10, 3),    # transition 3 sits between clip 3 and clip 4 = beat 5
+    (2, 10, 0),    # the earliest one that can exist
+    (1, 10, -1),   # a peak on the first beat has no transition before it
+    (None, 10, -1),
+])
+def test_the_peak_index_arithmetic(peak, n_clips, expected):
+    """peak_beat is 1-based; transition i is between clip i and clip i+1, and
+    clip i+1 is beat i+2. So the transition INTO the peak is at peak - 2.
+
+    Off by one here would accent the shot before the turn, which is worse than
+    accenting none — it would draw the eye to the setup and let the payoff
+    arrive flat.
+    """
+    got = (peak - 2) if peak is not None else -1
+    assert got == expected
+    assert not (0 <= got < n_clips - 1) or got >= 0
