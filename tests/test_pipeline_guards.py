@@ -402,7 +402,11 @@ def test_tts_engine_xtts_fallback_on_import_error(tmp_path):
     def fake_xtts(script, path):
         raise ImportError("TTS package not installed")
 
-    def fake_edge(script, path):
+    def fake_edge(script, path, *args, **kwargs):
+        # *args because _edge also takes the beat tones now. What this test
+        # pins is that the fallback FIRES, not how many arguments it fires
+        # with — a stub that must be edited whenever a signature grows is a
+        # test that starts failing for the wrong reason.
         edge_called["n"] += 1
         path.write_bytes(b"\x00" * 100)  # dummy mp3
 

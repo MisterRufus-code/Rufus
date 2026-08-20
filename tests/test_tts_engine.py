@@ -1,4 +1,8 @@
-"""Tests for tts_engine.py — punctuation-driven pause shaping for Kokoro."""
+"""Tests for tts_engine.py — the pauses and the prosody a tone earns."""
+
+from pathlib import Path
+
+import pytest
 
 from tts_engine import _pause_seconds
 
@@ -85,3 +89,109 @@ def test_the_long_writer_separates_sections_with_blank_lines():
     import longform_writer
     src = inspect.getsource(longform_writer.write)
     assert '"\\n\\n".join([_opening(outline)] + body)' in src
+
+
+# ── the Edge backend says each beat in its own voice ─────────────────────────
+#
+# Edge is the DEFAULT backend and was the one branch handed no tone at all.
+# `synthesize(script, out, tones)` carried them; `_kokoro` received them and
+# spent them on silence; `_edge` was called with the whole script and one
+# global rate. Six tones computed per run, one delivery.
+#
+# These tests do not touch the network. They record what would have been
+# requested, because the thing worth pinning is which text was sent with which
+# prosody — not what Microsoft's voice sounds like.
+
+import tts_engine  # noqa: E402
+
+
+@pytest.fixture
+def edge_calls(monkeypatch, tmp_path):
+    """Capture (text, prosody) per request instead of synthesizing."""
+    calls = []
+
+    async def _fake(script, out_path, prosody=None):
+        calls.append((script, prosody))
+        Path(out_path).write_bytes(b"ID3" + script.encode()[:8])
+
+    monkeypatch.setattr(tts_engine, "_edge_async", _fake)
+    monkeypatch.setattr(tts_engine, "_silence_mp3", lambda s, p: False)
+    return calls
+
+
+def test_an_all_neutral_script_is_still_one_request(edge_calls, tmp_path):
+    """Per-beat costs a round trip per beat. tones_from_plan fails open to
+    all-neutral, so the common case must not start paying for nothing."""
+    tts_engine._edge("A. B. C.", tmp_path / "o.mp3",
+                     ["neutral", "neutral"], ["A.", "B."])
+    assert len(edge_calls) == 1
+    assert edge_calls[0][0] == "A. B. C."
+
+
+def test_no_tones_at_all_is_the_path_it_always_took(edge_calls, tmp_path):
+    tts_engine._edge("A. B.", tmp_path / "o.mp3")
+    assert len(edge_calls) == 1
+
+
+def test_a_mixed_script_is_said_beat_by_beat(edge_calls, tmp_path):
+    tts_engine._edge("A. B.", tmp_path / "o.mp3",
+                     ["weight", "revelation"], ["A.", "B."])
+    assert [c[0] for c in edge_calls] == ["A.", "B."]
+
+
+def test_each_beat_carries_its_own_tone(edge_calls, tmp_path):
+    """The whole point. A weight beat and a revelation beat in one video have
+    to leave with different numbers on them."""
+    tts_engine._edge("A. B.", tmp_path / "o.mp3",
+                     ["weight", "revelation"], ["A.", "B."])
+    weight, revelation = edge_calls[0][1], edge_calls[1][1]
+    assert weight != revelation
+    assert int(weight["pitch"].rstrip("Hz")) < int(revelation["pitch"].rstrip("Hz"))
+
+
+def test_the_owners_rate_setting_survives_the_split(edge_calls, tmp_path, monkeypatch):
+    """RUFUS_EDGE_RATE is +6% by default. Splitting into beats must not
+    silently reset the voice to its unmodified speed."""
+    monkeypatch.setattr(tts_engine, "EDGE_RATE", "+20%")
+    tts_engine._edge("A. B.", tmp_path / "o.mp3",
+                     ["neutral", "weight"], ["A.", "B."])
+    assert edge_calls[0][1]["rate"] == "+20%"
+
+
+@pytest.mark.parametrize("rate", ["fast", "", "20", None])
+def test_an_unparseable_rate_setting_does_not_break_the_voice(rate, monkeypatch):
+    """An owner who typed something odd into RUFUS_EDGE_RATE should get a
+    working voice at the default speed, not a failed render."""
+    monkeypatch.setattr(tts_engine, "EDGE_RATE", rate)
+    assert isinstance(tts_engine._edge_base_rate_pct(), int)
+
+
+def test_fewer_tones_than_beats_falls_back_rather_than_misaligning(edge_calls, tmp_path):
+    """A tone landing on the wrong sentence is worse than no tone at all —
+    the video would emphasise the line before the turn."""
+    tts_engine._edge("A. B. C.", tmp_path / "o.mp3",
+                     ["weight"], ["A.", "B.", "C."])
+    assert len(edge_calls) == 1
+
+
+def test_a_single_beat_is_not_worth_splitting(edge_calls, tmp_path):
+    tts_engine._edge("A.", tmp_path / "o.mp3", ["weight"], ["A."])
+    assert len(edge_calls) == 1
+
+
+def test_an_empty_beat_is_skipped_not_sent(edge_calls, tmp_path):
+    tts_engine._edge("A. B.", tmp_path / "o.mp3",
+                     ["weight", "revelation", "tension"], ["A.", "  ", "B."])
+    assert [c[0] for c in edge_calls] == ["A.", "B."]
+
+
+def test_the_beats_are_joined_into_one_file(edge_calls, tmp_path):
+    out = tmp_path / "o.mp3"
+    tts_engine._edge("A. B.", out, ["weight", "revelation"], ["A.", "B."])
+    assert out.exists() and out.stat().st_size > 0
+
+
+def test_the_per_beat_temp_files_are_cleaned_up(edge_calls, tmp_path):
+    out = tmp_path / "o.mp3"
+    tts_engine._edge("A. B.", out, ["weight", "revelation"], ["A.", "B."])
+    assert [p.name for p in tmp_path.iterdir()] == ["o.mp3"]

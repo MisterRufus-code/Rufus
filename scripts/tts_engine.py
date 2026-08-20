@@ -256,14 +256,111 @@ def _kokoro_api(script: str, out_path: Path) -> None:
 
 # ── Edge TTS ──────────────────────────────────────────────────────────────────
 
-async def _edge_async(script: str, out_path: Path) -> None:
+async def _edge_async(script: str, out_path: Path,
+                      prosody: dict | None = None) -> None:
     import edge_tts
-    comm = edge_tts.Communicate(script, EDGE_VOICE, rate=EDGE_RATE)
+    kw = dict(prosody) if prosody else {"rate": EDGE_RATE}
+    comm = edge_tts.Communicate(script, EDGE_VOICE, **kw)
     await comm.save(str(out_path))
 
 
-def _edge(script: str, out_path: Path) -> None:
-    asyncio.run(_edge_async(script, out_path))
+def _edge_base_rate_pct() -> int:
+    """RUFUS_EDGE_RATE as a plain integer, so a tone delta can be added to it.
+
+    Returns 0 rather than raising on anything unparseable: an owner who set
+    RUFUS_EDGE_RATE to "fast" should get a working voice at the default speed,
+    not a failed render.
+    """
+    try:
+        return int(EDGE_RATE.strip().rstrip("%"))
+    except (ValueError, AttributeError):
+        return 0
+
+
+def _silence_mp3(seconds: float, path: Path) -> bool:
+    """An mp3 of nothing, `seconds` long. False if ffmpeg would not make it.
+
+    Byte-wise mp3 concatenation is what joins the beats (see _elevenlabs for
+    why that works), and a gap has to be a real mp3 to take part in it.
+    """
+    if seconds <= 0:
+        return False
+    try:
+        r = subprocess.run(
+            ["ffmpeg", "-y", "-v", "error", "-f", "lavfi",
+             "-i", f"anullsrc=r=24000:cl=mono", "-t", f"{seconds:.3f}",
+             "-c:a", "libmp3lame", "-b:a", "128k", str(path)],
+            capture_output=True, text=True)
+        return r.returncode == 0 and path.exists() and path.stat().st_size > 0
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
+def _edge(script: str, out_path: Path,
+          tones: list[str] | None = None,
+          beats: list[str] | None = None) -> None:
+    """Edge TTS, one request per beat when the beats are meant to sound
+    different, one request for the whole script when they are not.
+
+    WHY THIS BRANCHES RATHER THAN ALWAYS SPLITTING. Per-beat costs one network
+    round trip per beat, and the tone list fails open to all-neutral — no edit
+    plan, a short plan, junk in the plan. Paying ten round trips to apply a
+    delta of zero would be a cost with nothing to show for it, so the
+    single-request path stays exactly as it was and is still what most runs
+    take.
+
+    NO SSML. The edge_tts library builds its own SSML and escapes the text it
+    is given, so markup passed through here is spoken aloud, character by
+    character. rate/pitch/volume per call is the supported route to the same
+    place.
+    """
+    import emotional_map
+
+    if (not beats or not tones or len(tones) < len(beats) or len(beats) < 2
+            or emotional_map.voice_is_neutral(tones[:len(beats)])):
+        asyncio.run(_edge_async(script, out_path))
+        return
+
+    base = _edge_base_rate_pct()
+    tmp = out_path.parent / f".{out_path.stem}.beats"
+    tmp.mkdir(parents=True, exist_ok=True)
+    parts: list[Path] = []
+    try:
+        for i, beat in enumerate(beats):
+            text = (beat or "").strip()
+            if not text:
+                continue
+            tone = tones[i]
+            piece = tmp / f"{i:03d}.mp3"
+            asyncio.run(_edge_async(text, piece,
+                                    emotional_map.voice(tone, base)))
+            parts.append(piece)
+            if i >= len(beats) - 1:
+                continue
+            # Punctuation earns the base gap and the tone adds to it — the
+            # same arithmetic _kokoro does, so the two backends pause alike.
+            gap = _pause_seconds(text) + _tone_pause(tone)
+            silence = tmp / f"{i:03d}.gap.mp3"
+            if _silence_mp3(gap, silence):
+                parts.append(silence)
+
+        if not parts:
+            raise RuntimeError("no beats produced audio")
+        with open(out_path, "wb") as f:
+            for piece in parts:
+                f.write(piece.read_bytes())
+        print(f"[tts] Edge: {len(beats)} beats, "
+              f"{emotional_map.describe(tones[:len(beats)])}")
+    finally:
+        for piece in parts:
+            try:
+                piece.unlink()
+            except OSError:
+                pass
+        try:
+            tmp.rmdir()
+        except OSError:
+            pass
 
 
 # ── XTTS v2 (Coqui) ─────────────────────────────────────────────────────────────
@@ -481,8 +578,14 @@ def _sanitize_for_speech(script: str) -> str:
 
 
 def synthesize(script: str, out_path: Path,
-               tones: list[str] | None = None) -> None:
+               tones: list[str] | None = None,
+               beats: list[str] | None = None) -> None:
     """Generate speech for `script` at `out_path` (mp3). Backend per RUFUS_TTS.
+
+    `tones` is one tone per beat and `beats` the text those tones describe.
+    Given both, the Edge backend says each beat at its own rate, pitch and
+    volume; given neither, or an all-neutral tone list, it says the whole
+    script in one request exactly as it always has.
 
     Every backend falls back to Edge TTS on any failure so a render never breaks
     over the voice.
@@ -498,7 +601,7 @@ def synthesize(script: str, out_path: Path,
             return
         except Exception as e:
             print(f"[tts] Kokoro-FastAPI failed ({e}) — falling back to Edge TTS")
-            _edge(script, out_path)
+            _edge(script, out_path, tones, beats)
             return
 
     if backend == "elevenlabs":
@@ -549,7 +652,7 @@ def synthesize(script: str, out_path: Path,
 
     if backend not in ("elevenlabs", "kokoro", "xtts"):
         print(f"[tts] backend: Edge TTS ({EDGE_VOICE})")
-    _edge(script, out_path)
+    _edge(script, out_path, tones, beats)
 
 
 if __name__ == "__main__":

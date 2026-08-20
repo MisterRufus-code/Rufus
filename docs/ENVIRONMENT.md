@@ -105,7 +105,7 @@ enerated by `python scripts/env_doctor.py --markdown`. Do not edit by hand — t
 | `RUFUS_STORYBOARD` | `1` | `storyboard.py` |
 | `RUFUS_STORYBOARD_MODEL` | — | `storyboard.py` |
 | `RUFUS_STORYBOARD_REPAIR` | `1` | `storyboard.py` |
-| `RUFUS_STYLE` | — | `comfy_client.py`, `dashboard.py`, `main.py` |
+| `RUFUS_STYLE` | — | `comfy_client.py`, `dashboard.py`, `main.py` +1 |
 | `RUFUS_SUPERVISOR` | `1` | `supervisor.py` |
 | `RUFUS_SVD_DIFFUSERS_MODEL` | `stabilityai/stable-video-diffusion-img2vid-xt` | `svd_client.py` |
 | `RUFUS_SVD_FPS` | `8` | `svd_client.py` |

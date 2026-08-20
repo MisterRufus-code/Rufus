@@ -639,15 +639,19 @@ def build_ass(segments, ass_path: Path, audio_dur: float,
 
 # ── TTS ──────────────────────────────────────────────────────────────────────────
 
-def _tts(script: str, mp3_path: Path, tones: list[str] | None = None) -> None:
+def _tts(script: str, mp3_path: Path, tones: list[str] | None = None,
+         beats: list[str] | None = None) -> None:
     """Generate voice via tts_engine (Edge TTS default, XTTS v2 if RUFUS_TTS=xtts).
 
-    `tones` lets the local Kokoro backend size the silence after each beat by
-    what that beat is doing, not only by its trailing punctuation. Optional
-    everywhere — without it the voice is exactly today's.
+    `tones` sizes the silence after each beat by what that beat is doing rather
+    than only by its trailing punctuation. Passed together with `beats`, the
+    Edge backend also says each beat at its own rate, pitch and volume — the
+    tone reaching the voice and not only the gaps around it.
+
+    Both optional everywhere: without them the voice is exactly today's.
     """
     import tts_engine
-    tts_engine.synthesize(script, mp3_path, tones)
+    tts_engine.synthesize(script, mp3_path, tones, beats)
 
 
 # ── Cut planning (sentence-aligned, editor-grade pacing) ─────────────────────────
@@ -1330,6 +1334,11 @@ def render(script: str, bg_paths: "Path | list[Path]", out_dir: Path,
     # second plan the narration never heard.
     plan_tones: list[str] = []
     plan_emphasis: set[str] = set()
+    # Bound out here, not inside the try: the voice call below reads it, and a
+    # failed import would otherwise leave it undefined. Today the read is
+    # guarded by `if plan_tones`, which is a short-circuit standing in for a
+    # definition — that holds until someone reorders the line.
+    _beats: list[str] = []
     try:
         import emotional_map
         import edit_director
@@ -1355,7 +1364,10 @@ def render(script: str, bg_paths: "Path | list[Path]", out_dir: Path,
 
     try:
         print("[1/4] Generating voice…")
-        _tts(script, mp3, plan_tones)
+        # _beats is the SAME split the tones were computed against a few lines
+        # up. Handing the voice a different split would put a tone on the
+        # wrong sentence, which is worse than no tone at all.
+        _tts(script, mp3, plan_tones, _beats if plan_tones else None)
         # Strip leading/trailing TTS silence BEFORE transcription — Whisper's
         # word timestamps then describe the trimmed audio, so cuts, the 0.03s
         # SFX hit, and the first caption all land on the actual first word.

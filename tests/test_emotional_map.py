@@ -400,3 +400,84 @@ def test_run_qc_still_works_without_cuts():
     import qc_check
 
     assert inspect.signature(qc_check.run_qc).parameters["cuts"].default is None
+
+
+# ── the tone finally reaching the voice ──────────────────────────────────────
+#
+# The tone already reached the picture, the music and the silence between
+# beats. It never reached the VOICE, and the reason was one sentence in
+# emotional_map that was true when it was written: "this is the only prosody
+# control a free local voice has". True of Kokoro, which has no SSML — and it
+# quietly governed the DEFAULT backend, which is Edge, and which takes a rate,
+# a pitch and a volume on every call.
+#
+# Six tones were being computed per run and the narration read all six the
+# same way. That is what "the voice sounds flat" was.
+
+def test_every_tone_has_a_voice_setting():
+    """A tone the grader knows and the voice does not is a tone that reads as
+    neutral in half the render — the exact split this change closes."""
+    for tone in em.TONES:
+        v = em.voice(tone)
+        assert set(v) == {"rate", "pitch", "volume"}, tone
+
+
+def test_neutral_is_exactly_no_change():
+    """This is what makes the change safe to ship. tones_from_plan fails open
+    to all-neutral — no plan, a short plan, junk in the plan — so a neutral
+    tone MUST synthesize what the pipeline already produces."""
+    assert em.voice("neutral") == {
+        "rate": "+0%", "pitch": "+0Hz", "volume": "+0%"}
+
+
+def test_the_base_rate_is_carried_not_replaced():
+    """RUFUS_EDGE_RATE is an owner setting. A tone is a delta ON it, not a
+    substitute for it — otherwise setting the voice faster would be silently
+    undone by every non-neutral beat."""
+    assert em.voice("neutral", 6)["rate"] == "+6%"
+    assert em.voice("weight", 6)["rate"] == "-2%"
+
+
+def test_the_units_are_the_ones_edge_wants():
+    """Pitch is Hz for Edge; rate and volume are percent. Formatting them here
+    rather than at each call site is the point — one place to get the unit
+    wrong instead of several."""
+    v = em.voice("revelation")
+    assert v["pitch"].endswith("Hz")
+    assert v["rate"].endswith("%") and v["volume"].endswith("%")
+    assert v["rate"][0] in "+-" and v["pitch"][0] in "+-"
+
+
+def test_weight_is_the_slowest_and_lowest_thing_in_the_video():
+    """The vocabulary has to mean something audible or it is decoration.
+    Consequence should not sound like an open question."""
+    weight = em.voice("weight")
+    curiosity = em.voice("curiosity")
+    assert int(weight["rate"].rstrip("%")) < int(curiosity["rate"].rstrip("%"))
+    assert int(weight["pitch"].rstrip("Hz")) < int(curiosity["pitch"].rstrip("Hz"))
+
+
+def test_revelation_is_louder_and_resolution_quieter():
+    assert int(em.voice("revelation")["volume"].rstrip("%")) > 0
+    assert int(em.voice("resolution")["volume"].rstrip("%")) < 0
+
+
+def test_an_unknown_tone_is_the_voice_we_already_ship():
+    for junk in ("dramatic", "", None, 7, ["weight"]):
+        assert em.voice(junk) == em.voice("neutral"), junk
+
+
+def test_a_wild_base_rate_cannot_produce_an_unusable_voice():
+    """RUFUS_EDGE_RATE is a free-text env var. A tone delta landing on top of
+    "+200%" must still return something a person can listen to."""
+    v = em.voice("curiosity", 200)
+    assert int(v["rate"].rstrip("%")) <= 40
+
+
+def test_an_all_neutral_run_takes_the_single_request_path():
+    """Per-beat costs one network round trip per beat. Paying that to apply a
+    delta of zero is a cost with nothing to show for it."""
+    assert em.voice_is_neutral(None) is True
+    assert em.voice_is_neutral([]) is True
+    assert em.voice_is_neutral(["neutral", "neutral"]) is True
+    assert em.voice_is_neutral(["neutral", "weight"]) is False

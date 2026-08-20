@@ -230,6 +230,79 @@ def grade_filter(tone: object, base_contrast: float = 1.1,
     return f"{eq},{grain}" if grain else eq
 
 
+
+# tone → (rate %, pitch Hz, volume %) as DELTAS on the voice's base settings.
+#
+# WHY THIS ARRIVED LAST. The tone already reached the picture, the music and
+# the silence between beats. It never reached the VOICE, and the reason is a
+# sentence in this file that was true when it was written: "this is the only
+# prosody control a free local voice has". That is true of Kokoro, which has
+# no SSML — and it quietly governed the default backend, which is Edge, and
+# which takes a rate, a pitch and a volume on every call. Six tones were being
+# computed and the narration was reading all of them the same way.
+#
+# SMALL, for the same reason the grades are small. Prosody you can consciously
+# hear is prosody that is too strong; the ear should register "he slowed down
+# there" without being able to say by how much. These are a few percent, not a
+# performance.
+#
+# NEUTRAL IS EXACTLY ZERO on all three, which is what makes this safe to ship:
+# a script whose tones are all neutral — the fail-open state of
+# tones_from_plan — synthesizes byte-for-byte what the pipeline produces
+# today.
+_VOICE: dict[str, tuple[int, int, int]] = {
+    # something is wrong: tighter and lower, the way people talk when careful
+    "tension":    (-4, -6,  -4),
+    # the question is open: a touch quicker and lifted, leaning in
+    "curiosity":  (+3, +4,   0),
+    # the turn, the number: slower and up, because this is the line that pays
+    "revelation": (-6, +8,  +6),
+    # consequence and cost: the slowest and lowest thing in the video
+    "weight":     (-8, -10, -3),
+    # let it sit: slow, soft, coming to rest
+    "resolution": (-5, -3,  -8),
+    "neutral":    (0,   0,   0),
+}
+
+# Clamped for the same reason grade_filter clamps: RUFUS_EDGE_RATE is an owner
+# setting, a tone delta lands on top of it, and "+6%" plus an unbounded delta
+# is how a voice ends up chipmunked or unintelligibly slow.
+_RATE_RANGE   = (-40, 40)
+_PITCH_RANGE  = (-40, 40)
+_VOLUME_RANGE = (-40, 40)
+
+
+def voice(tone: object, base_rate_pct: int = 0) -> dict[str, str]:
+    """Edge TTS rate/pitch/volume strings for one beat's tone.
+
+    Returned in the exact shape `edge_tts.Communicate` wants — "+6%", "-10Hz" —
+    because the alternative is every caller formatting them and one of them
+    getting the unit wrong. Pitch is Hz for Edge; rate and volume are percent.
+
+    An unknown tone degrades to NEUTRAL, which is a zero delta, which is the
+    voice the pipeline already ships.
+    """
+    rate, pitch, volume = _VOICE.get(normalise(tone), _VOICE[NEUTRAL])
+    rate = int(_clamp(base_rate_pct + rate, _RATE_RANGE))
+    pitch = int(_clamp(pitch, _PITCH_RANGE))
+    volume = int(_clamp(volume, _VOLUME_RANGE))
+    return {"rate": f"{rate:+d}%", "pitch": f"{pitch:+d}Hz",
+            "volume": f"{volume:+d}%"}
+
+
+def voice_is_neutral(tones: list[str] | None) -> bool:
+    """True when varying the voice would change nothing.
+
+    The caller uses this to take the single-request path it has always taken.
+    Synthesizing beat by beat costs one network round trip per beat, and
+    paying that to apply a delta of zero would be a cost with no picture to
+    show for it.
+    """
+    if not tones:
+        return True
+    return all(normalise(t) == NEUTRAL for t in tones)
+
+
 def tones_from_plan(plan: dict | None, n_beats: int) -> list[str]:
     """The per-beat tone list from an edit_director plan.
 
