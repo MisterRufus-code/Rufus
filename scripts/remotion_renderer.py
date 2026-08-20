@@ -204,6 +204,7 @@ def render(script: str, bg_paths: "Path | list[Path]", out_dir: Path,
         # contract; the renderer's default cycle is a working edit, just not a
         # directed one.
         edit = None
+        beats: list[str] = []
         try:
             import edit_director
             import main as _main
@@ -212,6 +213,28 @@ def render(script: str, bg_paths: "Path | list[Path]", out_dir: Path,
                 edit = edit_director.direct(beats)
         except Exception as e:
             print(f"[director] unavailable ({e}) — default motion cycle")
+
+        # WHEN EACH PICTURE IS ON SCREEN, from the word timings rather than
+        # from an even division of the runtime.
+        #
+        # Short.tsx sized every shot as ceil((total + (n-1)*trans) / n), so a
+        # beat whose sentence takes two seconds and one whose sentence takes
+        # six got the same time — the picture drifting further out of step with
+        # the voice as the video went on. The FFmpeg path never had this; its
+        # _plan_cuts snaps to sentence ends. Both renderers ship the same
+        # channel and only one of them was cutting on the voice.
+        #
+        # Only when a beat IS a clip. With several stills to a beat the two
+        # lists do not correspond, and a span list that does not line up with
+        # the clips would be worse than no span list at all.
+        beat_spans = []
+        if beats and len(beats) == len(clip_names):
+            try:
+                beat_spans = audio_gen.beat_spans(beats, spoken, audio_dur)
+            except Exception as e:
+                print(f"[cuts] beat alignment unavailable ({e}) — even shots")
+        if beat_spans:
+            print(f"[cuts] {len(beat_spans)} shot(s) cut on the narration")
 
         # WORD-SYNCED INSERTS. Planned here rather than earlier because this is
         # the first point where the FINISHED voiceover has been transcribed —
@@ -244,6 +267,9 @@ def render(script: str, bg_paths: "Path | list[Path]", out_dir: Path,
             "width": _fmt.dimensions()[0],
             "height": _fmt.dimensions()[1],
             "edit":              edit,
+            # [start, end] per clip in seconds. Absent or empty → Short.tsx
+            # divides the runtime evenly, which is what it always did.
+            "beatSpans":         beat_spans or None,
             # The words the director marked, resolved the same way the FFmpeg
             # path resolves them — including the share guard, so a plan that
             # marks half the script does not turn the captions green in one

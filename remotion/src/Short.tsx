@@ -71,6 +71,10 @@ export type ShortProps = {
   job: string;
   clips: string[]; // filenames inside public/<job>/
   clipDurations?: (number | null)[]; // seconds per clip (for looping short sources)
+  // [start, end] in seconds for each clip, from the narration's own word
+  // timings. Absent → every shot gets an equal slice of the runtime, which is
+  // what this composition always did.
+  beatSpans?: [number, number][] | null;
   voice: string; // voice mp3 filename inside public/<job>/
   music: string | null; // optional music filename inside public/<job>/
   words: Word[];
@@ -369,6 +373,7 @@ export const Short: React.FC<ShortProps> = ({
   job,
   clips,
   clipDurations,
+  beatSpans,
   voice,
   music,
   words,
@@ -382,7 +387,40 @@ export const Short: React.FC<ShortProps> = ({
   const n = Math.max(1, clips.length);
   const transFrames = Math.round(XFADE_SEC * fps);
   // TransitionSeries: total = n*seq − (n−1)*transition → solve for seq
-  const seqFrames = Math.ceil((durationInFrames + (n - 1) * transFrames) / n);
+  const evenFrames = Math.ceil((durationInFrames + (n - 1) * transFrames) / n);
+
+  // ONE SHOT PER BEAT, ON THE BEAT.
+  //
+  // Sequences in a TransitionSeries OVERLAP by the transition, so sequence i
+  // begins at Σ(d_j − trans) for j<i. To make shot i appear at t_i:
+  //
+  //     d_i = (t_{i+1} − t_i) + trans      for every shot but the last
+  //     d_last = total − t_last            so the chain ends where audio does
+  //
+  // Without spans every shot got `evenFrames`, so a two-second sentence and a
+  // six-second one were on screen the same length and the picture drifted
+  // further from the voice the longer the video ran.
+  //
+  // Guarded rather than trusted: a span list of the wrong length, or one that
+  // produces a shot too short to survive its own crossfade, falls back to the
+  // even division whole. Half-applied timing is worse than uniform timing.
+  const spanFrames: number[] | null = (() => {
+    if (!beatSpans || beatSpans.length !== n) return null;
+    const out: number[] = [];
+    for (let i = 0; i < n; i++) {
+      const [start, end] = beatSpans[i];
+      if (!(end > start)) return null;
+      const frames =
+        i === n - 1
+          ? durationInFrames - Math.round(start * fps)
+          : Math.round((beatSpans[i + 1][0] - start) * fps) + transFrames;
+      if (frames <= transFrames) return null;
+      out.push(frames);
+    }
+    return out;
+  })();
+
+  const framesFor = (i: number) => spanFrames?.[i] ?? evenFrames;
 
   const musicVolume = music
     ? interpolate(
@@ -409,11 +447,11 @@ export const Short: React.FC<ShortProps> = ({
         <TransitionSeries>
           {clips.flatMap((clip, i) => {
             const items = [
-              <TransitionSeries.Sequence key={`seq-${i}`} durationInFrames={seqFrames}>
+              <TransitionSeries.Sequence key={`seq-${i}`} durationInFrames={framesFor(i)}>
                 <KenBurnsClip
                   src={asset(clip)}
                   index={i}
-                  clipFrames={seqFrames}
+                  clipFrames={framesFor(i)}
                   sourceDurationSec={clipDurations?.[i]}
                   direction={edit?.beats?.[i]}
                 />

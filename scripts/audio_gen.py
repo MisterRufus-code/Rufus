@@ -743,6 +743,83 @@ def _tone_grid(first: float, total: float, n: int,
     return grid
 
 
+def _norm_word(w: str) -> str:
+    """A word stripped to what two transcriptions of it would agree on."""
+    return re.sub(r"[^a-z0-9']", "", (w or "").lower())
+
+
+# How far ahead to look for a beat's first word before giving up. Whisper drops
+# a filler or merges a hyphenate now and then; it does not lose eight words in
+# a row, and a wider window would start matching a word from the NEXT sentence
+# and silently shift every span after it.
+_ALIGN_WINDOW = 8
+
+
+def beat_spans(beats: list[str], spoken: list[dict],
+               audio_dur: float) -> list[tuple[float, float]]:
+    """(start, end) per beat, taken from the word timings. [] if unalignable.
+
+    WHAT THIS REPLACES. Short.tsx sizes every shot the same:
+
+        seqFrames = ceil((durationInFrames + (n-1)*transFrames) / n)
+
+    — the runtime divided evenly by the number of clips. A beat whose sentence
+    takes two seconds and a beat whose sentence takes six get identical time on
+    screen, so the picture drifts out of step with the narration and by the end
+    of the video is describing a sentence that has already been said. The
+    FFmpeg path never had this: _plan_cuts snaps to sentence ends. Both
+    renderers ship the same channel and only one of them was cutting on the
+    voice.
+
+    Beat n runs from the first word of its own sentence to the first word of
+    the next, which makes the picture change exactly when the subject does.
+
+    FAIL-OPEN AND WHOLE. Alignment is either right for every beat or abandoned
+    for all of them — a partial result would put some pictures on the voice and
+    leave the rest on the even grid, and a video that is correct for six shots
+    and wrong for four reads worse than one that is uniformly approximate.
+    Returning [] gives exactly today's render.
+    """
+    if not beats or not spoken or audio_dur <= 0:
+        return []
+
+    words = [(_norm_word(w.get("text", "")), float(w.get("start", 0.0)))
+             for w in spoken]
+    words = [w for w in words if w[0]]
+    if not words:
+        return []
+
+    starts: list[float] = []
+    cursor = 0
+    for beat in beats:
+        wanted = [x for x in (_norm_word(t) for t in str(beat).split()) if x]
+        if not wanted:
+            return []
+        found = None
+        for j in range(cursor, min(cursor + _ALIGN_WINDOW, len(words))):
+            if words[j][0] == wanted[0]:
+                found = j
+                break
+        if found is None:
+            print(f"[cuts] could not find beat {len(starts) + 1} in the "
+                  f"transcript — falling back to even shot lengths")
+            return []
+        starts.append(words[found][1])
+        cursor = found + len(wanted)
+        if cursor > len(words):
+            return []
+
+    spans: list[tuple[float, float]] = []
+    for i, start in enumerate(starts):
+        end = starts[i + 1] if i + 1 < len(starts) else float(audio_dur)
+        if end <= start:
+            print(f"[cuts] beat {i + 1} has no duration in the transcript — "
+                  f"falling back to even shot lengths")
+            return []
+        spans.append((round(start, 3), round(end, 3)))
+    return spans
+
+
 def _plan_cuts(sentence_ends: list[float], audio_dur: float, n: int,
                tones: list[str] | None = None) -> list[float]:
     """Choose n-1 cut timestamps that land on sentence boundaries.
