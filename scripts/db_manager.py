@@ -473,11 +473,16 @@ def video_by_id(video_id: int) -> dict | None:
     q = ("SELECT id, upload_date, created_at, uploaded_at, niche, channel, "
          "script_hook, script_full, scene_desc, title, description, score, "
          "run_id, video_file, youtube_id, upload_status, hold_reason, "
-         "publish_at FROM videos WHERE id=?")
+         "publish_at, seed_type, seed_source, seed_content, seed_url, "
+         "score_reasoning, score_specificity, score_hook, score_compression, "
+         "score_loop, score_human FROM videos WHERE id=?")
     cols = ["id", "upload_date", "created_at", "uploaded_at", "niche",
             "channel", "script_hook", "script_full", "scene_desc", "title",
             "description", "score", "run_id", "video_file", "youtube_id",
-            "upload_status", "hold_reason", "publish_at"]
+            "upload_status", "hold_reason", "publish_at", "seed_type",
+            "seed_source", "seed_content", "seed_url", "score_reasoning",
+            "score_specificity", "score_hook", "score_compression",
+            "score_loop", "score_human"]
     with _conn() as c:
         row = c.execute(q, (video_id,)).fetchone()
     return dict(zip(cols, row)) if row else None

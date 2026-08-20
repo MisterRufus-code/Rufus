@@ -598,7 +598,8 @@ _LAUNCHED: dict[str, subprocess.Popen] = {}
 
 
 def _launch_run(*, niche: str | None = None, topic: str | None = None,
-                channel: str | None = None) -> tuple[subprocess.Popen, Path]:
+                channel: str | None = None,
+                script_file: str | None = None) -> tuple[subprocess.Popen, Path]:
     """Fire-and-forget: a genuinely separate OS process, not an in-process
     call — this Flask app runs threaded=False (see approve_video's
     _scoped_env note), so a call that blocks for the 5-45+ minutes a video
@@ -617,6 +618,11 @@ def _launch_run(*, niche: str | None = None, topic: str | None = None,
         cmd += ["--topic", topic]
     if channel:
         cmd += ["--channel", channel]
+    if script_file:
+        # A script the owner chose in review. main.py skips its writer for
+        # this one run; everything after it — fact gate, storyboard, render —
+        # is the ordinary path.
+        cmd += ["--script", script_file]
     env = os.environ.copy()
     env.update(_load_settings())
     # THE CHILD'S STDOUT IS A FILE, so Python has no console to ask and falls
@@ -3763,6 +3769,7 @@ def video_detail(video_id):
     <div class="script">{_esc(v['script_full'] or v['script_hook'])}</div>
     <h2>Why this score (critic reasoning)</h2>
     <div class="script">{_esc(v['score_reasoning'] or '—')}</div>
+    {_rewrite_block(v)}
     <h2>Seed / source</h2>
     <p class="muted">{_esc(v['seed_type'])} · {_esc(v['seed_source'])}</p>
     <div class="script">{_esc(v['seed_content'] or '—')}</div>
@@ -3793,6 +3800,96 @@ def _extra_publishers() -> list[tuple[str, object]]:
         except Exception as e:
             print(f"[dashboard] TikTok publisher unavailable ({e})")
     return out
+
+
+@app.route("/video/<int:video_id>/rewrite", methods=["POST"])
+def rewrite_script(video_id: int):
+    """Write this video's script again, as a candidate beside the original.
+
+    Launched as a subprocess and not run here: the writer takes tens of
+    seconds of API calls, and this dashboard runs threaded=False on purpose
+    (see app.run) — doing it inline would freeze every other page for the
+    duration.
+    """
+    auth.require("edit")
+    v = _video_detail(video_id)
+    if not v:
+        abort(404)
+    if not (v.get("run_id") or "").strip():
+        return _redirect_detail(video_id, error=(
+            "this video has no run folder, so there is nowhere to keep a "
+            "candidate beside it"))
+    try:
+        cmd = [sys.executable, str(ROOT / "scripts" / "rewrite.py"), str(video_id)]
+        env = os.environ.copy()
+        env.update(_load_settings())
+        env.setdefault("PYTHONUTF8", "1")
+        env.setdefault("PYTHONIOENCODING", "utf-8")
+        if v.get("niche"):
+            env["RUFUS_NICHE_OVERRIDE"] = str(v["niche"])
+        log_dir = ROOT / "logs"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        log = log_dir / f"rewrite_{video_id}_{int(time.time())}.log"
+        with open(log, "wb") as logf:
+            subprocess.Popen(cmd, cwd=str(ROOT), stdout=logf, env=env,
+                             stderr=subprocess.STDOUT,
+                             stdin=subprocess.DEVNULL)
+    except Exception as e:
+        return _redirect_detail(video_id, error=f"could not start the rewrite: {e}")
+    return _redirect_detail(video_id, ok=(
+        "writing another script — refresh in half a minute and it will appear "
+        "under the current one"))
+
+
+@app.route("/video/<int:video_id>/use-script", methods=["POST"])
+def use_script(video_id: int):
+    """Rebuild the video from the candidate script.
+
+    This is the expensive half and it is a whole new run: voice, stills,
+    render. The candidate is handed to main.py with --script so the writer is
+    skipped — otherwise the pipeline would write a third script and the choice
+    would have meant nothing.
+    """
+    auth.require("generate")
+    v = _video_detail(video_id)
+    if not v:
+        abort(404)
+    import rewrite as rewrite_mod
+
+    cand = rewrite_mod.latest(v.get("run_id") or "")
+    if not cand or not (cand.get("script") or "").strip():
+        return _redirect_detail(video_id, error="there is no candidate script to use")
+    busy = [c for c in _channels() if _run_in_progress(c)]
+    if busy:
+        return _redirect_detail(video_id, error=(
+            f"a run is already in progress ({', '.join(busy)}) — wait for it "
+            f"to finish"))
+
+    script_file = DEBUG_ROOT / v["run_id"] / "chosen_script.txt"
+    try:
+        script_file.write_text(cand["script"].strip() + "\n", encoding="utf-8")
+    except OSError as e:
+        return _redirect_detail(video_id, error=f"could not stage the script: {e}")
+
+    try:
+        proc, log = _launch_run(niche=v.get("niche"), channel=v.get("channel"),
+                                script_file=str(script_file))
+    except Exception as e:
+        return _redirect_detail(video_id, error=f"could not start the run: {e}")
+    return redirect("/?ok=" + _urlquote(
+        "building a video from the chosen script — it appears in the queue "
+        "when it is done"))
+
+
+@app.route("/video/<int:video_id>/discard-script", methods=["POST"])
+def discard_script(video_id: int):
+    auth.require("edit")
+    v = _video_detail(video_id)
+    if not v:
+        abort(404)
+    import rewrite as rewrite_mod
+    rewrite_mod.discard(v.get("run_id") or "")
+    return _redirect_detail(video_id, ok="candidate discarded")
 
 
 def _launch_recut(video_id: int, v: dict):
@@ -4099,6 +4196,62 @@ def _beat_controls(run_id: str, folder, video_id: int) -> str:
         f'Redrawing changes the frame on disk. The mp4 only changes when you '
         f're-cut.</div></form>'
         f'</details>')
+
+
+def _rewrite_block(v: dict) -> str:
+    """The candidate script, beside the one that is live, with both rubrics.
+
+    A COMPARISON AND NOT A MEMORY TEST. The question being asked is "is this
+    one better", and answering it by scrolling up to reread the original is
+    how you end up approving whichever you read last. Both scores and both
+    critic notes are on screen at the same time.
+    """
+    if not auth.can("edit"):
+        return ""
+    run_id = (v.get("run_id") or "").strip()
+    if not run_id:
+        return ""
+    try:
+        import rewrite as rewrite_mod
+        cand = rewrite_mod.latest(run_id)
+    except Exception as e:                        # never break the page
+        print(f"[dashboard] candidate unavailable ({e})")
+        return ""
+
+    ask = (f'<form method="post" action="/video/{v["id"]}/rewrite" '
+           f'style="margin:8px 0">'
+           f'<button class="btn" type="submit">Write another script</button>'
+           f'<span class="muted" style="margin-left:8px;font-size:12px">'
+           f'same source, same seed · seconds, no GPU · pressing it again '
+           f'gives a different one</span></form>')
+    if not cand or not (cand.get("script") or "").strip():
+        return f"<h2>Another script</h2>{ask}"
+
+    crits = cand.get("criterion_scores") or {}
+    crit_line = " · ".join(f"{k} {crits[k]}/3" for k in sorted(crits)) or ""
+    return f"""<h2>Another script</h2>{ask}
+    <div class="card" style="padding:12px">
+      <div><strong>{_esc(cand.get('score', 0))}/10</strong>
+        <span class="muted">· written {_esc(cand.get('written_at', ''))}
+        · {_esc(crit_line)}</span></div>
+      <div class="script" style="margin-top:8px">{_esc(cand.get('script', ''))}</div>
+      <details style="margin-top:6px"><summary class="muted"
+        style="cursor:pointer">why this score</summary>
+        <div class="script">{_esc(cand.get('reasoning', '') or '—')}</div>
+      </details>
+      <div class="row" style="margin-top:10px">
+        <form method="post" action="/video/{v['id']}/use-script"
+              onsubmit="return confirm('Build a new video from this script? '
+              + 'That is a full run — voice, pictures, render.');">
+          <button class="btn save" type="submit">Use this one</button></form>
+        <form method="post" action="/video/{v['id']}/discard-script"
+              style="margin-left:8px">
+          <button class="btn" type="submit">Discard</button></form>
+      </div>
+      <div class="muted" style="font-size:12px;margin-top:6px">
+        Using it builds a NEW video and leaves this one exactly where it is.
+      </div>
+    </div>"""
 
 
 def _preview_block(run_id: str, video_id: int | None = None) -> str:

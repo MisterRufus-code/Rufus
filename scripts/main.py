@@ -1362,7 +1362,8 @@ def _all_scheduled_niches() -> list[str]:
 
 
 def run(skip_upload: bool = False, niche_override: str = None, output_dir: Path = None,
-        channel_id: str = None, topic: str = None, lock_wait: float = 0):
+        channel_id: str = None, topic: str = None, lock_wait: float = 0,
+        script_file: str = None):
     # Channel resolution FIRST (read-only) so the instance lock can be
     # per-channel — see _acquire_lock. Legacy installs without channels.json
     # get a synthesized "main_en" channel — behavior unchanged.
@@ -1537,7 +1538,34 @@ def run(skip_upload: bool = False, niche_override: str = None, output_dir: Path 
 
     # ── Step 4: Write script (reuses pre-analysis, no duplicate API call) ──────
     run_progress.update(4, "writing the script")
-    print("[ 4 / 7 ]  Writing script with GPT...")
+    # A SCRIPT THAT WAS ALREADY CHOSEN. rewrite.py writes a candidate for an
+    # existing video and the dashboard shows it beside the original; picking
+    # one lands here. Skipping the writer is the whole point — rewriting it
+    # again would discard the text the human just chose and hand back a third
+    # one, which is the opposite of a choice.
+    #
+    # Everything AFTER this point is unchanged, deliberately: the fact gate,
+    # the blacklist, the storyboard, the render. A supplied script is not a
+    # trusted script — it is only a script that skips being written.
+    supplied = ""
+    if script_file:
+        try:
+            supplied = Path(script_file).read_text(encoding="utf-8").strip()
+        except OSError as e:
+            print(f"           ✗ could not read {script_file}: {e}")
+            sys.exit(1)
+        if not supplied:
+            print(f"           ✗ {script_file} is empty")
+            sys.exit(1)
+        print(f"[ 4 / 7 ]  Using the supplied script "
+              f"({len(supplied.split())} words) — writer skipped")
+        result = {"script": supplied, "score": 0, "criterion_scores": {},
+                  "attempts_used": 0, "final_temperature": 0.0,
+                  "reasoning": f"supplied from {Path(script_file).name}",
+                  "cost_usd": 0.0}
+        script = supplied
+    else:
+        print("[ 4 / 7 ]  Writing script with GPT...")
     try:
         # Escalating loop, not a single pass: when a cycle fails the fact gate
         # or misses the score bar, retry with a WHOLE new hook/angle (the
@@ -1549,25 +1577,33 @@ def run(skip_upload: bool = False, niche_override: str = None, output_dir: Path 
         # one's ending in hand. Fail-open in the usual way: anything it cannot
         # finish returns None and the Shorts writer answers instead, so the
         # format switch can never leave a run with no script.
-        result = None
-        try:
-            import longform_writer
-            if longform_writer.enabled():
-                result = longform_writer.write(
-                    seed, seed_analysis or "", active,
-                    run_id=script_run_id)
-        except Exception as e:
-            print(f"[longform] skipped (non-fatal): {e}")
+        if not supplied:
             result = None
+            try:
+                import longform_writer
+                if longform_writer.enabled():
+                    result = longform_writer.write(
+                        seed, seed_analysis or "", active,
+                        run_id=script_run_id)
+            except Exception as e:
+                print(f"[longform] skipped (non-fatal): {e}")
+                result = None
 
-        if result is None:
-            result = write_script_until_good(
-                scene, seed=seed,
-                precomputed_analysis=seed_analysis or None,
-                run_id=script_run_id)
-        script = result["script"]
+            if result is None:
+                result = write_script_until_good(
+                    scene, seed=seed,
+                    precomputed_analysis=seed_analysis or None,
+                    run_id=script_run_id)
+            script = result["script"]
 
-        if check_blacklist(script):
+        if check_blacklist(script) and supplied:
+            # A HUMAN PICKED THIS TEXT. Say it duplicates an earlier video —
+            # that is worth knowing before approving the upload — but do not
+            # quietly write a third script over the one that was chosen, which
+            # is the exact substitution the --script bypass exists to prevent.
+            print("           ⚠ this script is similar to one already used — "
+                  "keeping it because it was chosen by hand")
+        elif check_blacklist(script):
             print("           ⚠ Similar script already used – regenerating...")
             try:
                 result = write_script(scene + " (make it different from previous versions)",
@@ -2181,6 +2217,7 @@ if __name__ == "__main__":
     parser.add_argument("--output-dir",  type=str,            help="Directory to write rendered mp4 files (overrides RUFUS_OUTPUT_DIR env var)")
     parser.add_argument("--channel",     type=str,            help="Channel id from config/channels.json (default: default_channel / legacy)")
     parser.add_argument("--topic",       type=str,            help="Make a video about THIS topic instead of an auto-picked one (resolved to a real Wikipedia article, e.g. --topic \"Bretton Woods\")")
+    parser.add_argument("--script",      type=str,            help="Build the video from THIS script file instead of writing one (see scripts/rewrite.py). The rest of the pipeline is unchanged, including the fact gate.")
     args = parser.parse_args()
 
     if sum(bool(x) for x in (args.niche, args.scheduled, args.rotate)) > 1:
@@ -2228,7 +2265,7 @@ if __name__ == "__main__":
         _sched_wait = float(os.environ.get("RUFUS_SCHED_LOCK_WAIT", str(3 * 3600)))
         _run_or_notify(n, skip_upload=args.skip_upload,
                       output_dir=out_dir_arg, channel_id=args.channel, topic=args.topic,
-                      lock_wait=_sched_wait)
+                      lock_wait=_sched_wait, script_file=args.script)
     else:
         _run_or_notify(args.niche, skip_upload=args.skip_upload,
-                      output_dir=out_dir_arg, channel_id=args.channel, topic=args.topic)
+                      output_dir=out_dir_arg, channel_id=args.channel, topic=args.topic, script_file=args.script)
