@@ -70,16 +70,30 @@ def test_a_process_still_alive_after_the_grace_window_is_a_start(monkeypatch,
             proc.kill()
 
 
-def test_the_exit_code_is_translated(monkeypatch, tmp_path, capsys):
-    """3 and 9009 are the two the owner will actually hit — a held port and a
-    missing venv. A bare number sends someone reading the log to a search
-    engine instead of to the fix."""
+# 9009 is deliberately absent: POSIX masks exit codes to a byte, so a child
+# raising SystemExit(9009) is seen as 49 and the case cannot be reproduced
+# through a real subprocess here. It is a Windows-only code anyway (the .bat
+# launchers' venv guard), and its mapping is covered by the table itself.
+@pytest.mark.parametrize("code,expected", [
+    (3, "already holds the port"),
+    (4, "not answering"),
+])
+def test_the_exit_code_is_translated(monkeypatch, tmp_path, capsys, code, expected):
+    """A bare number sends someone reading the log to a search engine instead
+    of to the fix.
+
+    3 AND 4 ARE DELIBERATELY DIFFERENT SENTENCES, because they need opposite
+    responses. 3 is "a healthy dashboard is already there" — leave it alone,
+    the service is up. 4 is "something holds the port and serves nothing" —
+    which is the ten-hour outage, and the only one of the two this file may
+    act on."""
     monkeypatch.setattr(watchdog, "ROOT", tmp_path)
+    monkeypatch.setattr(watchdog, "_free_the_port", lambda: False)
     monkeypatch.setattr(watchdog.subprocess, "Popen",
                         lambda *a, **k: _POPEN(
-                            [sys.executable, "-c", "raise SystemExit(3)"]))
+                            [sys.executable, "-c", f"raise SystemExit({code})"]))
     watchdog._start_dashboard()
-    assert "port already held" in capsys.readouterr().out
+    assert expected in capsys.readouterr().out
 
 
 # ── the loop ─────────────────────────────────────────────────────────────────
@@ -179,3 +193,150 @@ def test_every_line_is_timestamped(capsys):
     watchdog._say("hello")
     out = capsys.readouterr().out
     assert time.strftime("%Y-%m-%d") in out
+
+
+# ── freeing a port from a dashboard that is provably dead ──────────────────
+#
+# THE ONE THING ONLY THE WATCHDOG KNOWS. _supervise calls start() only after
+# alive() came back False, and exit code 4 means dashboard.py found the port
+# held by something that does not answer /healthz. Those two facts together say
+# the holder is dead weight — and nothing was putting them together. The
+# dashboard sat down for ten hours behind exactly that process while this file
+# retried the identical failing action every sixty seconds.
+#
+# It can now end a process, so every guard below is load-bearing.
+
+DASHBOARD_HOLDER = {"pid": 1888, "name": "python.exe",
+                    "exe": r"C:\Python311\python.exe",
+                    "cmdline": r"python.exe scripts\dashboard.py"}
+STRANGER = {"pid": 4242, "name": "python.exe",
+            "exe": r"C:\Python311\python.exe",
+            "cmdline": "python.exe train_lora.py"}
+
+
+@pytest.fixture(autouse=True)
+def _reset_clear_cooldown(monkeypatch):
+    monkeypatch.setattr(watchdog, "_LAST_PORT_CLEAR", 0.0)
+
+
+def _holder(monkeypatch, info, ended=None):
+    import port_owner
+    monkeypatch.setattr(port_owner, "holder", lambda port: info)
+    monkeypatch.setattr(port_owner, "end",
+                        lambda pid: (ended.append(pid), True)[1] if ended is not None
+                        else True)
+    return port_owner
+
+
+def test_a_stale_dashboard_on_the_port_is_ended(monkeypatch, capsys):
+    ended = []
+    _holder(monkeypatch, DASHBOARD_HOLDER, ended)
+    monkeypatch.setattr(watchdog, "_busy_reason", lambda: "")
+    monkeypatch.setattr(watchdog, "_notify", lambda *a, **k: None)
+    assert watchdog._free_the_port() is True
+    assert ended == [1888]
+
+
+def test_a_process_that_is_not_ours_is_never_ended(monkeypatch, capsys):
+    """"It took my port" is not grounds to kill something that might be the
+    owner's own work. Report it and stop."""
+    ended = []
+    _holder(monkeypatch, STRANGER, ended)
+    monkeypatch.setattr(watchdog, "_busy_reason", lambda: "")
+    monkeypatch.setattr(watchdog, "_notify", lambda *a, **k: None)
+    assert watchdog._free_the_port() is False
+    assert ended == []
+    assert "Not ending it" in capsys.readouterr().out
+
+
+def test_a_holder_that_cannot_be_identified_is_never_ended(monkeypatch):
+    ended = []
+    _holder(monkeypatch, None, ended)
+    monkeypatch.setattr(watchdog, "_busy_reason", lambda: "")
+    assert watchdog._free_the_port() is False
+    assert ended == []
+
+
+def test_a_dashboard_that_says_it_is_busy_is_left_working(monkeypatch, capsys):
+    """A YouTube upload of a 25MB file answers nothing for minutes. From
+    outside that is indistinguishable from a wedged process, and the wrong
+    guess loses the upload."""
+    ended = []
+    _holder(monkeypatch, DASHBOARD_HOLDER, ended)
+    monkeypatch.setattr(watchdog, "_busy_reason", lambda: "uploading video #7, 42s ago")
+    assert watchdog._free_the_port() is False
+    assert ended == []
+    assert "waiting rather than killing" in capsys.readouterr().out
+
+
+def test_it_will_not_end_a_second_process_in_one_cooldown(monkeypatch):
+    """A watchdog that ends a process, fails to start, and ends the next one is
+    not a supervisor — it is a loop with a body count."""
+    ended = []
+    _holder(monkeypatch, DASHBOARD_HOLDER, ended)
+    monkeypatch.setattr(watchdog, "_busy_reason", lambda: "")
+    monkeypatch.setattr(watchdog, "_notify", lambda *a, **k: None)
+    assert watchdog._free_the_port() is True
+    assert watchdog._free_the_port() is False
+    assert ended == [1888]
+
+
+def test_a_failed_kill_is_reported_as_a_failure(monkeypatch, capsys):
+    """Reporting success would have the caller start a replacement, which
+    would hit the same held port."""
+    import port_owner
+    monkeypatch.setattr(port_owner, "holder", lambda port: DASHBOARD_HOLDER)
+    monkeypatch.setattr(port_owner, "end", lambda pid: False)
+    monkeypatch.setattr(watchdog, "_busy_reason", lambda: "")
+    monkeypatch.setattr(watchdog, "_notify", lambda *a, **k: None)
+    assert watchdog._free_the_port() is False
+    assert "could not end pid 1888" in capsys.readouterr().out
+
+
+def test_only_exit_4_frees_the_port(monkeypatch, tmp_path):
+    """Exit 3 means a HEALTHY dashboard is already there. Ending that one would
+    take down a working service to start an identical one."""
+    calls = []
+    monkeypatch.setattr(watchdog, "ROOT", tmp_path)
+    monkeypatch.setattr(watchdog, "_free_the_port", lambda: calls.append(1))
+    for code in (3, 9009, 1):
+        monkeypatch.setattr(watchdog.subprocess, "Popen",
+                            lambda *a, _c=code, **k: _POPEN(
+                                [sys.executable, "-c", f"raise SystemExit({_c})"]))
+        watchdog._start_dashboard()
+    assert calls == []
+
+
+# ── the busy marker ────────────────────────────────────────────────────────
+
+def test_a_marker_left_by_a_crash_stops_protecting_the_corpse(monkeypatch, tmp_path):
+    """A marker nothing cleaned up is not a busy dashboard, it is a crashed
+    one — which is the case this whole guard stands in front of."""
+    import paths
+    monkeypatch.setattr(paths, "log_dir", lambda: tmp_path)
+    stale = time.time() - watchdog.BUSY_MARKER_MAX_S - 60
+    (tmp_path / ".dashboard_busy").write_text(f"uploading|{stale}", encoding="utf-8")
+    assert watchdog._busy_reason() == ""
+
+
+def test_a_fresh_marker_reports_what_it_is_doing(monkeypatch, tmp_path):
+    import paths
+    monkeypatch.setattr(paths, "log_dir", lambda: tmp_path)
+    (tmp_path / ".dashboard_busy").write_text(
+        f"uploading video #7|{time.time()}", encoding="utf-8")
+    assert "uploading video #7" in watchdog._busy_reason()
+
+
+def test_no_marker_at_all_is_not_busy(monkeypatch, tmp_path):
+    import paths
+    monkeypatch.setattr(paths, "log_dir", lambda: tmp_path)
+    assert watchdog._busy_reason() == ""
+
+
+def test_an_unreadable_marker_is_not_busy(monkeypatch, tmp_path):
+    """Fail toward acting, not toward paralysis: a corrupt marker must not
+    protect a wedged process forever."""
+    import paths
+    monkeypatch.setattr(paths, "log_dir", lambda: tmp_path)
+    (tmp_path / ".dashboard_busy").write_text("garbage", encoding="utf-8")
+    assert watchdog._busy_reason() == ""

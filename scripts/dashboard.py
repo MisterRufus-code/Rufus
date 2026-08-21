@@ -4485,7 +4485,7 @@ def approve_video(video_id):
         if v["niche"]:
             env_overrides["RUFUS_NICHE_OVERRIDE"] = v["niche"]
 
-        with _scoped_env(**env_overrides):
+        with _busy(f"uploading video #{video_id}"), _scoped_env(**env_overrides):
             yt_url, yt_id = yt_mod.upload(video_file, v["script_full"] or "",
                                           thumbnail_path=thumb if thumb.exists() else None,
                                           metadata=meta, source_url=v.get("seed_url") or None,
@@ -4942,6 +4942,41 @@ def _wrong_interpreter() -> str:
     return (f"running on {sys.executable}, not the repo venv at {venv} — "
             f"this interpreter may be missing packages the pipeline needs, and "
             f"no launcher started it")
+
+
+# ── "I am working, not dead" ────────────────────────────────────────────────
+
+BUSY_MARKER = paths.log_dir() / ".dashboard_busy"
+
+
+@contextmanager
+def _busy(what: str):
+    """Declare a long operation, so the watchdog waits instead of killing us.
+
+    THE WATCHDOG CAN NOW END A PROCESS, AND THAT IS ONLY SAFE IF IT CAN TELL
+    WORKING FROM DEAD. A YouTube upload of a 25MB file answers nothing for
+    minutes; from outside that is indistinguishable from a wedged process
+    holding the port, and the wrong guess loses the upload. /healthz cannot
+    answer during it and the lock is not visible from another process — a file
+    is the only channel the dashboard and the watchdog already share, which is
+    the same reasoning run_progress.py is built on.
+
+    Best-effort in both directions: a marker that cannot be written just means
+    the watchdog falls back to its other guards, and one left behind by a crash
+    ages out (BUSY_MARKER_MAX_S) rather than protecting a corpse forever.
+    """
+    try:
+        BUSY_MARKER.parent.mkdir(parents=True, exist_ok=True)
+        BUSY_MARKER.write_text(f"{what}|{time.time()}", encoding="utf-8")
+    except OSError:
+        pass
+    try:
+        yield
+    finally:
+        try:
+            BUSY_MARKER.unlink(missing_ok=True)
+        except OSError:
+            pass
 
 
 # ── "it came back up" ────────────────────────────────────────────────────────

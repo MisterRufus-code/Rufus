@@ -128,11 +128,114 @@ def _start_dashboard() -> subprocess.Popen | None:
     except subprocess.TimeoutExpired:
         _say(f"started dashboard (pid {proc.pid}) → logs/dashboard.log")
         return proc
-    hint = {3: "port already held by another process",
+    hint = {3: "a healthy dashboard already holds the port",
+            4: "the port is held by something that is not answering",
             9009: "the .venv interpreter is missing"}.get(rc, "")
     _say(f"the dashboard exited immediately (code {rc})"
          f"{' — ' + hint if hint else ''} — see logs/dashboard.log")
+    if rc == 4:
+        _free_the_port()
     return None
+
+
+# At most one of these per cooldown. A watchdog that ends a process, fails to
+# start, and ends the next one is not a supervisor, it is a loop with a body
+# count — so the clearing is rate-limited even though every individual step
+# below is guarded.
+_LAST_PORT_CLEAR = 0.0
+
+
+def _free_the_port() -> bool:
+    """End a stale dashboard squatting on the port, if we can prove that is
+    what it is.
+
+    THIS IS THE ONE THING ONLY THE WATCHDOG KNOWS. _supervise calls start()
+    only after alive() came back False, and exit code 4 means dashboard.py
+    found the port held by something that does not answer /healthz. Those two
+    facts together say the holder is dead weight — and nothing in this system
+    was putting them together. The dashboard was down for ten hours behind
+    exactly that process while this file retried the identical failing action
+    every sixty seconds and then every thirty minutes, forever.
+
+    THE GUARDS ARE THE WHOLE DESIGN. It ends a process only when the command
+    line positively names dashboard.py; an unidentified holder is reported and
+    left alone, because "it took my port" is not grounds to kill something
+    that might be the owner's own work. And it refuses while a long operation
+    is in flight, so an upload or a render is never killed for being slow.
+    """
+    global _LAST_PORT_CLEAR
+    if time.time() - _LAST_PORT_CLEAR < GIVE_UP_COOLDOWN_S:
+        _say("the port is still held, but one was already cleared recently — "
+             "not doing it again this cooldown")
+        return False
+
+    try:
+        import port_owner
+    except Exception as e:
+        _say(f"cannot identify the port holder ({e})")
+        return False
+
+    port = int(os.environ.get("RUFUS_DASHBOARD_PORT", "8765"))
+    info = port_owner.holder(port)
+    if not info:
+        _say(f"port {port} is held but the holder could not be identified — "
+             f"leaving it alone")
+        return False
+    if not port_owner.is_rufus_dashboard(info):
+        msg = (f"port {port} is held by something that is not a Rufus "
+               f"dashboard and is not answering: {port_owner.describe(info)}. "
+               f"Not ending it. Free the port, or set RUFUS_DASHBOARD_PORT.")
+        _say(msg)
+        _notify(msg)
+        return False
+
+    busy = _busy_reason()
+    if busy:
+        _say(f"port {port} is held by a dashboard that is not answering, but "
+             f"it says it is busy ({busy}) — waiting rather than killing it")
+        return False
+
+    _say(f"ending the stale dashboard holding port {port}: "
+         f"{port_owner.describe(info)}")
+    _LAST_PORT_CLEAR = time.time()
+    if not port_owner.end(info["pid"]):
+        _say(f"could not end pid {info['pid']} — it may need Administrator")
+        return False
+    _notify(f"A stale dashboard (pid {info['pid']}) was holding port {port} "
+            f"without answering. It was ended and the dashboard restarted.")
+    return True
+
+
+def _busy_reason() -> str:
+    """What the dashboard says it is in the middle of, or "".
+
+    A dashboard that is uploading a 25MB video answers nothing for minutes and
+    is not stale — it is working. Killing it there loses the upload, and this
+    file gained the ability to kill things exactly one commit before it would
+    have started doing that."""
+    try:
+        import paths
+        marker = paths.log_dir() / ".dashboard_busy"
+        raw = marker.read_text(encoding="utf-8").strip()
+    except (OSError, ValueError):
+        return ""
+    if not raw:
+        return ""
+    what, _, since = raw.partition("|")
+    try:
+        age = time.time() - float(since)
+    except ValueError:
+        return ""
+    # A marker nothing cleaned up is not a busy dashboard, it is a crashed
+    # one — which is the case this whole function stands in front of.
+    if age > BUSY_MARKER_MAX_S:
+        return ""
+    return f"{what}, {int(age)}s ago"
+
+
+# Longer than any single upload or beat render, short enough that a marker left
+# behind by a crash stops protecting the corpse.
+BUSY_MARKER_MAX_S = 20 * 60
 
 
 def _comfy_enabled() -> bool:

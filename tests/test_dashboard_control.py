@@ -972,3 +972,46 @@ def test_an_unknown_image_name_cannot_reach_the_filesystem(client, thumbs):
                     data={"name": "../../etc/passwd", "headline": "x"})
     assert r.status_code == 302
     assert "No%20such%20image" in r.headers["Location"]
+
+
+# ── "I am working, not dead" ───────────────────────────────────────────────
+
+def test_a_long_operation_declares_itself(monkeypatch, tmp_path):
+    """The watchdog can now END a process, and that is only safe if it can
+    tell working from dead. An upload of a 25MB file answers nothing for
+    minutes; from outside that is indistinguishable from a wedged process, and
+    the wrong guess loses the upload."""
+    marker = tmp_path / ".dashboard_busy"
+    monkeypatch.setattr(dashboard, "BUSY_MARKER", marker)
+    with dashboard._busy("uploading video #7"):
+        assert marker.exists()
+        assert "uploading video #7" in marker.read_text(encoding="utf-8")
+    assert not marker.exists()
+
+
+def test_the_marker_is_cleared_even_when_the_operation_fails(monkeypatch, tmp_path):
+    """A marker left behind by an exception would tell the watchdog to keep
+    waiting on a dashboard that is not doing anything."""
+    marker = tmp_path / ".dashboard_busy"
+    monkeypatch.setattr(dashboard, "BUSY_MARKER", marker)
+    with pytest.raises(RuntimeError):
+        with dashboard._busy("uploading"):
+            raise RuntimeError("upload failed")
+    assert not marker.exists()
+
+
+def test_a_marker_that_cannot_be_written_does_not_break_the_operation(monkeypatch):
+    """Best-effort in both directions: no marker just means the watchdog falls
+    back to its other guards. An upload must never fail because a status file
+    could not be written."""
+    monkeypatch.setattr(dashboard, "BUSY_MARKER", Path("/nonexistent/x/.busy"))
+    with dashboard._busy("uploading"):
+        pass
+
+
+def test_the_upload_is_what_declares_itself_busy():
+    """It is the longest thing this process does on a request thread, and the
+    one whose loss actually costs something."""
+    src = Path(dashboard.__file__).read_text(encoding="utf-8")
+    block = src.split("def approve_video", 1)[1].split("def ")[0]
+    assert "_busy(" in block
