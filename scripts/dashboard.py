@@ -51,6 +51,7 @@ import json
 import os
 import subprocess
 import sys
+import threading
 import time
 from contextlib import contextmanager
 from pathlib import Path
@@ -2281,7 +2282,7 @@ def thumbnails_page():
         cards += (
             f'<div class="thumbcard">'
             f'<a href="/thumbnails/file/{name}" target="_blank">'
-            f'<img src="/thumbnails/file/{name}" loading="lazy" alt=""></a>'
+            f'<img src="/thumbnails/file/{name}?w=480" loading="lazy" alt=""></a>'
             f'<div class="meta">{_esc(img["prompt"][:90] or img["name"])}<br>'
             f'<a href="/thumbnails/file/{name}?download=1">⬇ Save to phone</a>'
             f' · {img["kb"]}KB · {when}{make_btn}{del_btn}</div></div>')
@@ -2443,13 +2444,31 @@ def thumbnails_delete():
 def thumbnail_file(filename):
     """Serve one generated image. `?download=1` forces a Save dialog instead of
     rendering inline — the difference between looking at it on a phone and
-    actually getting it into the camera roll."""
+    actually getting it into the camera roll.
+
+    `?w=` SERVES IT AT THE SIZE IT IS SHOWN AT. This route sent the full PNG,
+    every time, with no cache header, into a 220px card. A gallery of 36
+    generated images averaging ~1MB each is ~35 MEGABYTES fetched to draw
+    postage stamps, and then fetched again on the next visit because nothing
+    told the browser it could keep them. Over the tailnet from a phone that is
+    the whole of "the dashboard is slow".
+
+    The cache this uses is not new — _thumb_of has served /debug/ keyframes
+    this way for a while. This route simply never asked it. The download link
+    deliberately does NOT pass a width: "save to phone" means the real file.
+    """
     auth.require("download")
     folder = paths.thumbnails_dir().resolve()
     if not folder.is_dir():
         abort(404)
-    return send_from_directory(folder, filename,
-                               as_attachment=request.args.get("download") == "1")
+    download = request.args.get("download") == "1"
+    if not download:
+        small = _thumb_of(folder, filename, request.args.get("w", type=int))
+        if small is not None:
+            return send_from_directory(small.parent, small.name,
+                                       max_age=_IMAGE_MAX_AGE)
+    return send_from_directory(folder, filename, as_attachment=download,
+                               max_age=None if download else _IMAGE_MAX_AGE)
 
 
 def _setting_field(key: str, kind: str, val: str) -> str:
@@ -3824,26 +3843,60 @@ def _redirect_index(ok: str = None, error: str = None):
     return redirect(url)
 
 
+# os.environ is process-wide, so two overlapping requests inside _scoped_env
+# would interleave their mutations and one upload would go out under the
+# other's channel (a real audit finding). This lock is what makes that
+# impossible.
+#
+# IT REPLACES threaded=False, WHICH WAS A MUCH LARGER CLAIM THAN THE PROBLEM.
+# "These env mutations must not overlap" was implemented as "nothing anywhere
+# in this application may overlap" — so every keyframe thumbnail, every poll of
+# /api/status and every page load queued behind a single thread, and the home
+# page's ~240 image requests were served strictly one at a time. Over the
+# tailnet from a phone that is most of what "slow" meant. One route needed
+# mutual exclusion; forty-odd routes were paying for it.
+_ENV_LOCK = threading.Lock()
+
+
 @contextmanager
 def _scoped_env(**overrides):
     """Set env vars for the duration of the block, then restore exactly what
-    was there before (including "unset" if the key didn't exist). SAFE ONLY
-    because app.run() below passes threaded=False — Flask 3.x defaults the
-    dev server to threaded=True, under which two overlapping requests would
-    interleave these mutations (audit finding: wrong-channel upload). Also,
-    mutating os.environ permanently — as a naive assignment would — leaks
-    across every later request in this long-lived process (confirmed live:
-    it leaked into an unrelated test suite run in the same process)."""
+    was there before (including "unset" if the key didn't exist).
+
+    Holds _ENV_LOCK for the whole block, so this is safe under a threaded
+    server. Mutating os.environ permanently — as a naive assignment would —
+    also leaks across every later request in this long-lived process
+    (confirmed live: it leaked into an unrelated test suite run in the same
+    process), which is what the restore is for.
+
+    The lock is held across the upload itself, not just the assignment. That
+    is deliberate: the point is that the environment READ by the upload is the
+    one this block set, and releasing early would let a second approval change
+    it underneath the first."""
+    # SNAPSHOT INSIDE THE LOCK. Reading `prev` first looks harmless and is
+    # not: a second approval blocked on acquire() would have already captured
+    # the FIRST one's override as "what was there before", and its restore
+    # would put that value back instead of unsetting the key. The variable
+    # leaks, and the next run inherits a channel nobody chose. Caught by
+    # test_two_overlapping_scoped_envs_cannot_interleave.
+    _ENV_LOCK.acquire()
     prev = {k: os.environ.get(k) for k in overrides}
     os.environ.update(overrides)
     try:
         yield
     finally:
-        for k, v in prev.items():
-            if v is None:
-                os.environ.pop(k, None)
-            else:
-                os.environ[k] = v
+        # RESTORE INSIDE THE LOCK. Releasing first would let another approval
+        # acquire it, apply its own overrides, and then have them overwritten
+        # by this block's restore — the exact interleaving the lock exists to
+        # prevent, moved four lines later.
+        try:
+            for k, v in prev.items():
+                if v is None:
+                    os.environ.pop(k, None)
+                else:
+                    os.environ[k] = v
+        finally:
+            _ENV_LOCK.release()
 
 
 def _redirect_detail(video_id: int, ok: str = None, error: str = None):
@@ -4582,6 +4635,12 @@ def _preview_block(run_id: str, video_id: int | None = None) -> str:
 _THUMB_DIR_NAME = ".thumbs"
 _THUMB_WIDTHS = (120, 240, 480)     # a fixed set: an open ?w= is a cache bomb
 
+# Rendered stills and generated images are written once and never edited, so
+# the browser may keep them indefinitely. Without this every gallery scroll
+# re-fetches megabytes it already has — and a regenerated beat still appears,
+# because comfy writes a NEW filename rather than overwriting one.
+_IMAGE_MAX_AGE = 60 * 60 * 24 * 30
+
 
 def _thumb_of(folder: Path, filename: str, width: int | None) -> "Path | None":
     """A cached downscale of one keyframe, or None to serve the original.
@@ -4643,8 +4702,10 @@ def debug_file(run_id, filename):
     small = _thumb_of(folder, filename, request.args.get("w", type=int))
     if small is not None:
         return send_from_directory(small.parent, small.name,
-                                   max_age=60 * 60 * 24 * 30)
-    return send_from_directory(folder, filename)
+                                   max_age=_IMAGE_MAX_AGE)
+    # The downscaled branch had a cache header and this one did not, so opening
+    # a frame at full size re-downloaded it on every single look.
+    return send_from_directory(folder, filename, max_age=_IMAGE_MAX_AGE)
 
 
 @app.route("/video/<int:video_id>/download")
@@ -4891,9 +4952,16 @@ if __name__ == "__main__":
     db_manager.init_db()
     _announce_start()
     print(f"[dashboard] http://localhost:{port}  (LAN: http://<this PC's IP>:{port})")
-    # threaded=False is LOAD-BEARING: approve_video mutates process env via
-    # _scoped_env, which is only safe when requests are serialized. Flask 3.x
-    # app.run() defaults threaded=True — two overlapping approvals could
-    # interleave RUFUS_CHANNEL mutations and upload a video to the WRONG
-    # channel. Single-threaded is fine for a 1-2 person review tool.
-    app.run(host=host, port=port, debug=False, threaded=False)
+    # THREADED, WITH THE ONE THING THAT NEEDED SERIALIZING SERIALIZED DIRECTLY.
+    # This was threaded=False, and the reason given was real: approve_video
+    # mutates process env through _scoped_env, and two overlapping approvals
+    # could interleave RUFUS_CHANNEL and upload a video to the wrong channel.
+    #
+    # But that is one route. Turning off threading applied its constraint to
+    # the whole application, so a page with two hundred keyframe thumbnails
+    # served them strictly one at a time, the /api/status poll on every open
+    # tab queued behind them, and the review queue on a phone over the tailnet
+    # felt broken. _scoped_env now holds _ENV_LOCK, which says exactly what is
+    # true — these env mutations must not overlap — instead of saying nothing
+    # anywhere may overlap.
+    app.run(host=host, port=port, debug=False, threaded=True)

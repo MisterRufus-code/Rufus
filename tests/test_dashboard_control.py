@@ -767,3 +767,85 @@ def test_it_is_a_notice_and_not_a_refusal():
 def test_the_interpreter_shows_up_in_the_status_api(client):
     body = client.get("/api/status").get_json()
     assert "interpreter_warning" in body
+
+
+# ── the dashboard was waiting on itself ────────────────────────────────────
+
+def test_the_gallery_asks_for_a_downscaled_image():
+    """The generated-images gallery sent the FULL png into a 220px card: 36
+    cards averaging ~1MB is ~35 megabytes fetched to draw postage stamps, and
+    fetched again next visit because nothing said it could be cached. That is
+    what "the dashboard is slow" meant on that page."""
+    src = Path(dashboard.__file__).read_text(encoding="utf-8")
+    block = src.split("def thumbnails_page", 1)[1].split("def thumbnails_generate")[0]
+    img = [ln for ln in block.splitlines() if "<img src=" in ln]
+    assert img, "no gallery image tag found"
+    assert "?w=" in img[0], "the gallery still asks for the full-size file"
+
+
+def test_the_downscale_width_must_be_one_of_a_fixed_set():
+    """An open ?w= lets anyone fill the disk with cache entries."""
+    folder = Path(dashboard.__file__).parent
+    assert dashboard._thumb_of(folder, "x.png", 137) is None
+    assert 480 in dashboard._THUMB_WIDTHS
+
+
+def test_saving_to_the_phone_still_gets_the_real_file():
+    """"Save to phone" that hands over a 480px jpg is worse than useless — the
+    whole point of the link is the actual image."""
+    src = Path(dashboard.__file__).read_text(encoding="utf-8")
+    block = src.split("def thumbnail_file", 1)[1].split("def _setting_field")[0]
+    assert "if not download:" in block, "the download path may be downscaled"
+
+
+def test_both_image_routes_tell_the_browser_it_can_keep_them(client):
+    """Rendered stills are written once and never edited. Without a cache
+    header every scroll re-fetches megabytes the browser already has."""
+    src = Path(dashboard.__file__).read_text(encoding="utf-8")
+    for name, nxt in (("def thumbnail_file", "def _setting_field"),
+                      ("def debug_file", "def download_video")):
+        block = src.split(name, 1)[1].split(nxt)[0]
+        assert "_IMAGE_MAX_AGE" in block, f"{name} sends no cache header"
+
+
+def test_the_env_mutation_is_what_is_locked_not_the_whole_server():
+    """threaded=False said "nothing anywhere may overlap" to protect ONE
+    route's env mutation, and every keyframe request in the app queued behind
+    a single thread for it. The lock says the true, smaller thing."""
+    src = Path(dashboard.__file__).read_text(encoding="utf-8")
+    block = src.split("def _scoped_env", 1)[1].split("def _redirect_detail")[0]
+    assert "_ENV_LOCK.acquire()" in block
+    assert "threaded=True" in src
+
+
+def test_the_environment_is_restored_before_the_lock_is_released():
+    """Releasing first lets another approval acquire, apply its overrides, and
+    have them overwritten by this block's restore — the exact interleaving the
+    lock exists to prevent, moved four lines later."""
+    src = Path(dashboard.__file__).read_text(encoding="utf-8")
+    block = src.split("def _scoped_env", 1)[1].split("def _redirect_detail")[0]
+    tail = block.split("finally:", 1)[1]
+    assert tail.index("os.environ") < tail.index("_ENV_LOCK.release()")
+
+
+def test_two_overlapping_scoped_envs_cannot_interleave():
+    """The property, not just the shape of the code."""
+    import threading as _t
+    seen, errors = [], []
+
+    def worker(value):
+        try:
+            with dashboard._scoped_env(RUFUS_TEST_CHANNEL=value):
+                time.sleep(0.02)
+                seen.append((value, os.environ.get("RUFUS_TEST_CHANNEL")))
+        except Exception as e:                      # pragma: no cover
+            errors.append(e)
+
+    threads = [_t.Thread(target=worker, args=(f"ch{i}",)) for i in range(6)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert not errors
+    assert all(asked == got for asked, got in seen), seen
+    assert "RUFUS_TEST_CHANNEL" not in os.environ
