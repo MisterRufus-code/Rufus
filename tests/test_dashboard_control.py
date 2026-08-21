@@ -9,6 +9,7 @@ invisible until the video comes out wrong.
 
 import json
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -442,3 +443,135 @@ def test_the_menu_needs_no_javascript_to_open():
     script fails."""
     src = Path(dashboard.__file__).read_text(encoding="utf-8")
     assert '<details class="navmore">' in src
+
+
+# ── the front page says what needs you ──────────────────────────────────────
+#
+# A FINISHED VIDEO ANNOUNCES ITSELF: it lands in the pending list with a
+# thumbnail and the count above it goes up. A run that DIED announces nothing —
+# Step 6 is what writes the `videos` row, so a run that fell over before it
+# leaves no row at all, and the front page looks exactly the way it looked
+# yesterday. The owner reads an unchanged screen as "nothing ran last night",
+# which is the opposite of what happened.
+
+def _failed(run_id="run-x", ago=120.0, **over):
+    p = {"run_id": run_id, "channel": "main_en", "status": "failed",
+         "step": 1, "total": 7, "label": "failed",
+         "detail": "no seed: every source refused",
+         "updated_at": time.time() - ago, "stale": False}
+    p.update(over)
+    return p
+
+
+def test_a_crashed_run_is_reported_on_the_front_page(client, monkeypatch):
+    monkeypatch.setattr(dashboard.run_progress, "read_all", lambda: [_failed()])
+    monkeypatch.setattr(dashboard, "_orphaned_debug_runs", lambda limit=40: [])
+    page = client.get("/").get_data(as_text=True)
+    assert "run-x" in page
+    assert "no seed: every source refused" in page
+    assert "step 1/7" in page
+
+
+def test_a_run_that_is_still_going_is_not_called_a_crash(client, monkeypatch):
+    """A live run has no `videos` row either — its debug folder is an orphan
+    right up until Step 6. Without excluding it, every visit during a run would
+    report the run in progress as a failure."""
+    live = _failed("run-live", status="running", label="writing the script")
+    monkeypatch.setattr(dashboard.run_progress, "read_all", lambda: [live])
+    monkeypatch.setattr(dashboard, "_orphaned_debug_runs", lambda limit=40: [
+        {"run_id": "run-live", "mtime": time.time(),
+         "files": [], "preview": ""}])
+    assert dashboard._recent_failures() == []
+
+
+def test_a_stalled_run_counts_even_though_it_never_said_so(monkeypatch):
+    """`stale` means the process died without reaching its finally-block, so
+    the file still claims "running" forever. That is a failure that will never
+    report itself."""
+    stuck = _failed("run-stuck", status="running", stale=True, step=5)
+    monkeypatch.setattr(dashboard.run_progress, "read_all", lambda: [stuck])
+    monkeypatch.setattr(dashboard, "_orphaned_debug_runs", lambda limit=40: [])
+    found = dashboard._recent_failures()
+    assert [f["run_id"] for f in found] == ["run-stuck"]
+    assert found[0]["stalled"] is True
+
+
+def test_a_cancelled_run_is_not_a_failure(monkeypatch):
+    """Somebody pressed stop. Reporting a person's own decision back to them as
+    a problem is how a notice area becomes something you scroll past."""
+    monkeypatch.setattr(dashboard.run_progress, "read_all",
+                        lambda: [_failed("run-c", status="cancelled")])
+    monkeypatch.setattr(dashboard, "_orphaned_debug_runs", lambda limit=40: [])
+    assert dashboard._recent_failures() == []
+
+
+def test_an_old_crash_stops_shouting(monkeypatch):
+    """A banner that is always on is a banner nobody reads."""
+    old = _failed("run-old", ago=dashboard.FAILURE_WINDOW_SECONDS + 3600)
+    monkeypatch.setattr(dashboard.run_progress, "read_all", lambda: [old])
+    monkeypatch.setattr(dashboard, "_orphaned_debug_runs", lambda limit=40: [
+        {"run_id": "run-old",
+         "mtime": time.time() - dashboard.FAILURE_WINDOW_SECONDS - 3600,
+         "files": [], "preview": ""}])
+    assert dashboard._recent_failures() == []
+
+
+def test_a_hard_kill_that_wrote_no_progress_is_still_noticed(monkeypatch):
+    """Killed hard enough that the finally-block never ran, so the only trace
+    is a debug folder with no matching row. That is the case /failures was
+    written for; the front page should not need you to go looking."""
+    monkeypatch.setattr(dashboard.run_progress, "read_all", lambda: [])
+    monkeypatch.setattr(dashboard, "_orphaned_debug_runs", lambda limit=40: [
+        {"run_id": "run-killed", "mtime": time.time() - 300,
+         "files": ["script.txt"], "preview": ""}])
+    found = dashboard._recent_failures()
+    assert [f["run_id"] for f in found] == ["run-killed"]
+
+
+def test_one_dead_run_is_reported_once(monkeypatch):
+    """Most crashes leave BOTH a failed progress file and an orphan folder.
+    Counting them separately would say two runs failed when one did."""
+    monkeypatch.setattr(dashboard.run_progress, "read_all",
+                        lambda: [_failed("run-both")])
+    monkeypatch.setattr(dashboard, "_orphaned_debug_runs", lambda limit=40: [
+        {"run_id": "run-both", "mtime": time.time() - 120,
+         "files": [], "preview": ""}])
+    assert [f["run_id"] for f in dashboard._recent_failures()] == ["run-both"]
+
+
+def test_a_quiet_week_shows_a_quiet_page(client, monkeypatch):
+    monkeypatch.setattr(dashboard.run_progress, "read_all", lambda: [])
+    monkeypatch.setattr(dashboard, "_orphaned_debug_runs", lambda limit=40: [])
+    assert dashboard._failure_notice() == ""
+
+
+def test_a_broken_failure_lookup_never_breaks_the_front_page(client, monkeypatch):
+    def _boom():
+        raise RuntimeError("nope")
+    monkeypatch.setattr(dashboard.run_progress, "read_all", _boom)
+    monkeypatch.setattr(dashboard, "_orphaned_debug_runs", _boom)
+    assert client.get("/").status_code == 200
+
+
+def test_what_needs_you_comes_before_what_you_could_make(client, monkeypatch):
+    """The topic box used to open this page, which answers "what now" with
+    "make another video" before anybody has said whether the last four are any
+    good."""
+    waiting = [{"id": 7, "score": 8, "title": "A waiting video", "script_hook": "",
+                "niche": "money_history", "upload_status": "pending",
+                "run_id": "", "created_at": "2026-08-21 09:30:00",
+                "uploaded_at": None}]
+
+    def _videos(limit=60, channel=None, status=None):
+        return waiting if status == "pending" else []
+
+    monkeypatch.setattr(dashboard, "_recent_videos", _videos)
+    page = client.get("/").get_data(as_text=True)
+    assert page.index("Awaiting your review (1)") < page.index("Make a video about")
+
+
+def test_an_empty_queue_says_so_instead_of_showing_a_bare_zero(client, monkeypatch):
+    monkeypatch.setattr(dashboard, "_recent_videos",
+                        lambda limit=60, channel=None, status=None: [])
+    page = client.get("/").get_data(as_text=True)
+    assert "Nothing is waiting on you" in page

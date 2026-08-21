@@ -799,6 +799,132 @@ def _orphaned_debug_runs(limit: int = 40) -> list[dict]:
     return orphans
 
 
+# How far back the front page looks for a run that died. Long enough that the
+# morning's screen still knows last night's scheduled run never produced
+# anything; short enough that a crash from last week is not still shouting on a
+# page that gets opened every day. A banner that is always on is a banner
+# nobody reads.
+FAILURE_WINDOW_SECONDS = 36 * 3600
+
+
+def _recent_failures(window: float = FAILURE_WINDOW_SECONDS) -> list[dict]:
+    """Runs that ended badly recently, newest first.
+
+    A FINISHED VIDEO ANNOUNCES ITSELF — it appears in the pending list with a
+    thumbnail and the count above it goes up. A run that DIED announces
+    nothing: Step 6 is what writes the `videos` row, so a run that fell over
+    before it leaves no row, the pending count is unchanged, and the front page
+    looks exactly the way it looked yesterday. The owner reads an unchanged
+    screen as "nothing ran last night" — when in fact something ran, spent
+    eleven minutes, and died in Step 1 with no seed.
+
+    Two sources, because they catch different deaths:
+
+      run_progress    the run reached its finally-block and called
+                      finish("failed"), so we know which of the seven steps it
+                      died at and what the error said.
+      orphan folders  the process was killed hard enough that the
+                      finally-block never ran, so the only trace left behind
+                      is a debug folder with no matching row.
+
+    A run that is STILL GOING is not a failure, and its debug folder has no
+    database row either — so live run_ids are excluded explicitly. Without
+    that, every visit during a run would report that run as a crash.
+    """
+    now = time.time()
+    out: list[dict] = []
+    seen: set[str] = set()
+    live: set[str] = set()
+
+    try:
+        progress = run_progress.read_all()
+    except Exception:
+        progress = []
+    for p in progress:
+        rid = (p.get("run_id") or "").strip()
+        status = (p.get("status") or "").strip()
+        stalled = bool(p.get("stale"))
+        if status == "running" and not stalled:
+            if rid:
+                live.add(rid)
+            continue
+        # "cancelled" is deliberately NOT a failure. Somebody pressed stop;
+        # reporting a person's own decision back to them as a problem is how a
+        # notice area turns into something you learn to scroll past.
+        if status != "failed" and not stalled:
+            continue
+        when = float(p.get("updated_at") or 0)
+        if now - when > window:
+            continue
+        if rid:
+            seen.add(rid)
+        out.append({
+            "run_id": rid,
+            "when": when,
+            "channel": (p.get("channel") or "").strip(),
+            "step": int(p.get("step") or 0),
+            "total": int(p.get("total") or run_progress.TOTAL_STEPS),
+            "label": (p.get("label") or "").strip(),
+            "why": (p.get("detail") or "").strip(),
+            "stalled": stalled,
+        })
+
+    for o in _orphaned_debug_runs(limit=20):
+        rid = o["run_id"]
+        if rid in seen or rid in live or now - o["mtime"] > window:
+            continue
+        seen.add(rid)
+        out.append({"run_id": rid, "when": o["mtime"], "channel": "",
+                    "step": 0, "total": run_progress.TOTAL_STEPS,
+                    "label": "", "why": "", "stalled": False})
+
+    return sorted(out, key=lambda r: r["when"], reverse=True)
+
+
+def _failure_notice() -> str:
+    """The crashed-run block for the front page, or "" when nothing failed —
+    a quiet week must show a quiet page, or this becomes furniture."""
+    try:
+        fails = _recent_failures()
+    except Exception as e:                       # never break the front page
+        print(f"[dashboard] failure summary unavailable: {e}")
+        return ""
+    if not fails:
+        return ""
+
+    now = time.time()
+    rows = ""
+    for f in fails[:4]:
+        if f["stalled"]:
+            where = (f"went quiet at step {f['step']}/{f['total']}"
+                     if f["step"] else "went quiet before its first step")
+        elif f["step"]:
+            where = f"stopped at step {f['step']}/{f['total']}"
+            if f["label"]:
+                where += f" ({_esc(f['label'])})"
+        else:
+            where = "never reached the database"
+        ago = _human_gap(max(0.0, now - f["when"])) if f["when"] else "?"
+        who = f' · {_esc(f["channel"])}' if f["channel"] else ""
+        why = (f'<div class="muted" style="margin-top:4px">'
+               f'{_esc(f["why"][:240])}</div>') if f["why"] else ""
+        rows += (f'<div style="margin:8px 0">'
+                 f'<strong>{_esc(f["run_id"] or "a run")}</strong>'
+                 f'<span class="muted"> · {ago} ago{who} · </span>{where}'
+                 f'{why}</div>')
+
+    more = (f'<div class="muted">and {len(fails) - 4} more</div>'
+            if len(fails) > 4 else "")
+    plural = "" if len(fails) == 1 else "s"
+    return (f'<div class="card" style="width:100%;margin-bottom:18px">'
+            f'<span class="badge held">{len(fails)} run{plural} failed '
+            f'recently</span>'
+            f'<div style="margin-top:8px">{rows}{more}</div>'
+            f'<div class="muted" style="margin-top:6px">'
+            f'<a href="/failures">every failure, with what it wrote →</a> · '
+            f'<a href="/logs">the logs →</a></div></div>')
+
+
 def _rejected_attempts(limit: int = 200, channel: str | None = None,
                        niche: str | None = None, phase: str | None = None) -> list[dict]:
     """Every rejected hook/body attempt (script_attempts already logs these —
@@ -1659,14 +1785,28 @@ def index():
     except Exception as e:                       # never break the front page
         print(f"[dashboard] advice summary unavailable: {e}")
 
+    # WHAT NEEDS YOU, BEFORE WHAT YOU COULD MAKE. This page used to open on
+    # the topic box, which answers "what now" with "make another video" before
+    # anybody has said whether the last four are any good. When something is
+    # waiting on a decision, that IS what the page is for; the topic box is
+    # still here, one screen down, for when the queue is empty.
+    if pending:
+        review_block = (f'<h2 id="review">⏳ Awaiting your review '
+                        f'({len(pending)})</h2>'
+                        f'{_videos_table(pending, previews=True)}')
+    else:
+        review_block = ('<h2 id="review">⏳ Awaiting your review (0)</h2>'
+                        '<p class="muted">Nothing is waiting on you. Queue a '
+                        'topic below, or leave it to the schedule.</p>')
+
     body = f"""
     {_msg_banner()}
+    {_failure_notice()}
     {advice_html}
+    {review_block}
     {topic_form}
     {filt_html}
     {cards}
-    <h2>⏳ Awaiting your review ({len(pending)})</h2>
-    {_videos_table(pending, previews=True)}
     <h2>Score trend (oldest → newest)</h2>
     {_sparkline_svg(scored)}
     <div class="grid2">
