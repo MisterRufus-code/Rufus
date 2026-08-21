@@ -8,6 +8,7 @@ invisible until the video comes out wrong.
 """
 
 import json
+import re
 import sys
 import time
 from pathlib import Path
@@ -584,3 +585,89 @@ def test_the_decision_buttons_stack_on_a_phone():
     and two of the three are irreversible."""
     mobile = dashboard.PAGE_STYLE.split("max-width: 760px")[-1]
     assert ".actions { flex-direction: column" in mobile
+
+
+# ── the stylesheet is one system, not eleven ────────────────────────────────
+
+def _root_tokens() -> set:
+    """Only the tokens on bare :root. A token defined ONLY inside the light
+    media query exists in light mode and nowhere else, which is a bug that
+    hides from anyone whose phone is in dark mode."""
+    block = dashboard.PAGE_STYLE.split(":root {", 1)[1].split("}", 1)[0]
+    return set(re.findall(r"(--[a-z0-9-]+)\s*:", block))
+
+
+def _rule(selector: str) -> str:
+    """The declarations of one rule, whitespace removed so a test can ask what
+    it sets without caring how it was typed."""
+    m = re.search(re.escape(selector) + r"\s*\{([^}]*)\}", dashboard.PAGE_STYLE)
+    assert m, f"no rule for {selector}"
+    return re.sub(r"\s+", "", m.group(1))
+
+
+def test_every_token_a_rule_asks_for_actually_exists():
+    """CSS DROPS A DECLARATION WHOSE var() DOES NOT RESOLVE, SILENTLY.
+
+    Four names were in use that :root never defined — --line, --card, --muted,
+    --fg — all of them near-synonyms of tokens that did exist under another
+    name. `border: 1px solid var(--line)` is not a wrong border, it is NO
+    border: the grouped nav menu floated over the page with no edge at all,
+    and the style cards had none either. Nothing errors, nothing logs, and the
+    only symptom is that the page looks slightly wrong in a way you cannot
+    grep for. Which is the same shape as every other bug this file has had:
+    fail-open without fail-loud is fail-silent."""
+    src = Path(dashboard.__file__).read_text(encoding="utf-8")
+    used = set(re.findall(r"var\((--[a-z0-9-]+)", src))
+    missing = used - _root_tokens()
+    assert missing == set(), f"used but never defined: {sorted(missing)}"
+
+
+def test_corners_come_from_the_radius_tokens():
+    """Five different corner radii were in play — 7, 8, 10 and 12px plus the
+    pills — which reads as carelessness rather than as a choice. Two tokens:
+    panels and controls. The rest are shapes, not corners."""
+    found = {r.strip() for r in
+             re.findall(r"border-radius:\s*([^;}]+)", dashboard.PAGE_STYLE)}
+    allowed = {"var(--radius)", "var(--radius-sm)",
+               "999px",   # pills — badges, dots, the progress bar
+               "50%",     # the status dots are circles
+               "4px"}     # inline code and focus rings
+    assert found <= allowed, sorted(found - allowed)
+
+
+def test_the_stylesheet_uses_one_type_scale():
+    sizes = {float(x) for x in
+             re.findall(r"font-size:\s*([0-9.]+)px", dashboard.PAGE_STYLE)}
+    assert sizes <= {11.0, 12.0, 13.0, 14.0, 15.0, 18.0, 26.0}, sorted(sizes)
+
+
+def test_every_panel_is_the_same_panel():
+    """A card, a table, a log block, a script block and the status bar are all
+    the same idea — content raised off the background — and each had arrived
+    at its own combination of the four properties that say so."""
+    for selector in (".card", ".orphan", ".thumbcard", ".style-card",
+                     "#livebar", "table", "pre", ".script"):
+        rule = _rule(selector)
+        for expected in ("background:var(--surface)", "1pxsolidvar(--border)",
+                         "border-radius:var(--radius)", "box-shadow:var(--shadow)"):
+            assert expected in rule, f"{selector} is missing {expected}"
+
+
+def test_the_light_palette_redefines_every_colour_it_needs_to():
+    """A token whose dark value survives into light mode is the log viewer bug
+    again: a near-black block on a white page."""
+    style = dashboard.PAGE_STYLE
+    light = style.split("prefers-color-scheme: light", 1)[1].split("}", 1)[0]
+    for token in ("--bg", "--surface", "--border", "--text", "--dim"):
+        assert f"{token}:" in light, token
+
+
+def test_the_space_between_blocks_sits_on_one_grid():
+    """Gaps were 2, 4, 8, 10, 12, 14, 20 and 22px — seven values for one idea.
+    Component PADDING is deliberately not covered by this: those numbers are
+    tap targets tuned against a real phone, and rounding a working ergonomic
+    to a tidier number is a downgrade dressed up as a system."""
+    found = set()
+    for m in re.finditer(r"gap:\s*([^;}]+)", dashboard.PAGE_STYLE):
+        found.update(m.group(1).strip().split())
+    assert found <= {"0", "4px", "8px", "12px", "16px", "20px"}, sorted(found)

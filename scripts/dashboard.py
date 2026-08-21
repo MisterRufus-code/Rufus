@@ -1234,7 +1234,8 @@ PAGE_STYLE = """<!doctype html><html><head><meta charset="utf-8">
     --ok:      #22c55e;
     --warn:    #eab308;
     --bad:     #ef4444;
-    --radius:  10px;
+    --radius:  10px;   /* panels: cards, tables, code, images */
+    --radius-sm: 8px;  /* controls: buttons, fields, messages  */
     --shadow:  0 1px 2px rgba(0,0,0,.28);
   }
   @media (prefers-color-scheme: light) {
@@ -1295,18 +1296,19 @@ PAGE_STYLE = """<!doctype html><html><head><meta charset="utf-8">
   code { background: color-mix(in srgb, var(--dim) 14%, transparent);
          padding: 1px 5px; border-radius: 4px; font-size: 12px; }
   pre { background: var(--surface); border: 1px solid var(--border);
-        border-radius: var(--radius); color: var(--text); }
+        border-radius: var(--radius); box-shadow: var(--shadow);
+        color: var(--text); }
 
-  .msg { padding: 11px 14px; border-radius: 8px; margin-bottom: 14px;
+  .msg { padding: 11px 14px; border-radius: var(--radius-sm); margin-bottom: 14px;
          font-size: 14px; border: 1px solid transparent; }
   .msg.ok    { background: color-mix(in srgb, var(--ok) 12%, transparent);
                border-color: color-mix(in srgb, var(--ok) 30%, transparent); color: var(--ok); }
   .msg.error { background: color-mix(in srgb, var(--bad) 12%, transparent);
                border-color: color-mix(in srgb, var(--bad) 30%, transparent); color: var(--bad); }
 
-  .actions { margin: 16px 0; display: flex; gap: 10px; flex-wrap: wrap; }
+  .actions { margin: 16px 0; display: flex; gap: 12px; flex-wrap: wrap; }
   .btn { border: 1px solid var(--border); background: var(--raised);
-         color: var(--text); border-radius: 8px; padding: 10px 18px;
+         color: var(--text); border-radius: var(--radius-sm); padding: 10px 18px;
          font-size: 14px; font-weight: 600; cursor: pointer;
          transition: transform .06s ease, filter .12s ease; }
   .btn:hover { filter: brightness(1.08); }
@@ -1316,10 +1318,10 @@ PAGE_STYLE = """<!doctype html><html><head><meta charset="utf-8">
   .btn.save    { background: var(--accent); color: #06122a; border-color: transparent; }
 
   .field { display: block; width: 100%; margin: 6px 0 14px; padding: 9px 11px;
-           border-radius: 8px; border: 1px solid var(--border);
+           border-radius: var(--radius-sm); border: 1px solid var(--border);
            background: var(--bg); color: inherit; font-family: inherit;
            font-size: 14px; }
-  select { padding: 8px 10px; border-radius: 8px; border: 1px solid var(--border);
+  select { padding: 8px 10px; border-radius: var(--radius-sm); border: 1px solid var(--border);
            background: var(--bg); color: inherit; font: inherit; }
   label { font-size: 11px; color: var(--dim); text-transform: uppercase;
           letter-spacing: 0.06em; }
@@ -1329,7 +1331,8 @@ PAGE_STYLE = """<!doctype html><html><head><meta charset="utf-8">
   .back { text-decoration: none; font-size: 14px; }
   .script { white-space: pre-wrap; font-size: 15px; line-height: 1.6;
             background: var(--surface); border: 1px solid var(--border);
-            border-radius: var(--radius); padding: 14px; }
+            border-radius: var(--radius); box-shadow: var(--shadow);
+            padding: 14px; }
   .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
   @media (max-width: 760px) { .grid2 { grid-template-columns: 1fr; } }
   .assets a { display: inline-block; margin: 4px 8px 4px 0; font-size: 13px;
@@ -1345,26 +1348,27 @@ PAGE_STYLE = """<!doctype html><html><head><meta charset="utf-8">
              vertical-align: baseline }
   .navmore > summary { cursor: pointer; color: var(--dim); font-size: 14px;
                        list-style: none; padding: 2px 8px;
-                       border: 1px solid var(--line); border-radius: 7px }
+                       border: 1px solid var(--border); border-radius: var(--radius-sm) }
   .navmore > summary::-webkit-details-marker { display: none }
   .navmore > summary::after { content: " ▾"; opacity: .6 }
   .navmore[open] > summary { color: var(--accent); border-color: var(--accent) }
   .navmore-body { position: absolute; z-index: 40; top: calc(100% + 8px);
                   left: 0; min-width: 460px; display: grid;
-                  grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px 22px;
-                  background: var(--surface); border: 1px solid var(--line);
+                  grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px 20px;
+                  background: var(--surface); border: 1px solid var(--border);
                   border-radius: var(--radius); box-shadow: var(--shadow);
                   padding: 14px 16px }
-  .navgroup { display: flex; flex-direction: column; gap: 2px }
+  .navgroup { display: flex; flex-direction: column; gap: 4px }
   .navgroup-t { font-size: 11px; letter-spacing: .08em; text-transform: uppercase;
                 color: var(--dim); opacity: .7; margin-bottom: 2px }
   .navgroup .navlink { border-bottom: 0; padding: 5px 0 }
 
   .orphan { background: var(--surface); border: 1px solid var(--border);
-            border-radius: 8px; padding: 12px 14px; margin-bottom: 10px; }
+            border-radius: var(--radius); box-shadow: var(--shadow);
+            padding: 12px 14px; margin-bottom: 10px; }
 
   /* Live status bar — polls /api/status, no page reload */
-  #livebar { display: flex; gap: 14px; flex-wrap: wrap; align-items: center;
+  #livebar { display: flex; gap: 16px; flex-wrap: wrap; align-items: center;
              background: var(--surface); border: 1px solid var(--border);
              border-radius: var(--radius); padding: 10px 14px;
              margin-bottom: 16px; font-size: 13px; box-shadow: var(--shadow); }
@@ -1387,7 +1391,7 @@ PAGE_STYLE = """<!doctype html><html><head><meta charset="utf-8">
                   font-weight: 700; margin-left: 6px; }
 
   .thumbgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
-               gap: 14px; margin-top: 10px; }
+               gap: 16px; margin-top: 12px; }
   .thumbcard { background: var(--surface); border: 1px solid var(--border);
                border-radius: var(--radius); overflow: hidden;
                box-shadow: var(--shadow); transition: transform .1s ease; }
@@ -1418,27 +1422,28 @@ PAGE_STYLE = """<!doctype html><html><head><meta charset="utf-8">
     .actions .btn { display: block; text-align: center; }
   }
   .fmt-switch { display:inline-flex; gap:0; margin-left:10px; vertical-align:middle;
-                border:1px solid var(--line); border-radius:8px; overflow:hidden }
+                border:1px solid var(--border); border-radius:var(--radius-sm); overflow:hidden }
   .fmt-switch form { margin:0 }
-  button.fmt { border:0; background:var(--card); color:var(--muted);
+  button.fmt { border:0; background:var(--surface); color:var(--dim);
                padding:5px 11px; font-size:13px; cursor:pointer; font-family:inherit }
-  button.fmt:hover { color:var(--fg) }
+  button.fmt:hover { color:var(--text) }
   button.fmt.on { background:var(--accent); color:#fff; font-weight:600 }
-  .fmt-badge { margin-left:10px; color:var(--muted); font-size:13px }
+  .fmt-badge { margin-left:10px; color:var(--dim); font-size:13px }
   .style-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(230px,1fr));
-                gap:14px; margin-top:16px }
-  .style-card { border:1px solid var(--line); border-radius:12px; overflow:hidden;
-                background:var(--card); display:flex; flex-direction:column }
+                gap:16px; margin-top:16px }
+  .style-card { border:1px solid var(--border); border-radius:var(--radius);
+                box-shadow:var(--shadow); overflow:hidden;
+                background:var(--surface); display:flex; flex-direction:column }
   .style-card.on { border-color:var(--accent); box-shadow:0 0 0 2px var(--accent) }
   .style-card img { width:100%; aspect-ratio:16/9; object-fit:cover; display:block;
                     background:var(--bg) }
   .style-card .noimg { width:100%; aspect-ratio:16/9; display:flex; align-items:center;
-                       justify-content:center; color:var(--muted); font-size:13px;
+                       justify-content:center; color:var(--dim); font-size:13px;
                        background:var(--bg); text-align:center; padding:10px }
   .style-card .body { padding:10px 12px; display:flex; flex-direction:column; gap:8px;
                       flex:1 }
   .style-card h4 { margin:0; font-size:15px }
-  .style-card p { margin:0; font-size:12.5px; color:var(--muted); line-height:1.45;
+  .style-card p { margin:0; font-size:13px; color:var(--dim); line-height:1.45;
                   flex:1 }
   .style-card .row { display:flex; gap:8px }
 </style></head><body>
