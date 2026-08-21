@@ -1240,6 +1240,18 @@ PAGE_STYLE = """<!doctype html><html><head><meta charset="utf-8">
     --ok:      #22c55e;
     --warn:    #eab308;
     --bad:     #ef4444;
+    /* A HUE PER JOB. The nav already groups into Make / Review / Measure /
+       System; giving each one a colour means the page you are on is legible
+       before you have read a word of it. One accent for everything is tidy
+       and tells you nothing. */
+    --make:    #8b5cf6;
+    --review:  #f59e0b;
+    --measure: #06b6d4;
+    --system:  #64748b;
+    /* Scoped by .card.t-* and h2.s-* below, with a root default so a use that
+       escapes its scope degrades to a neutral edge instead of resolving to
+       nothing and silently dropping the whole declaration. */
+    --tone:    var(--dim);
     --radius:  10px;   /* panels: cards, tables, code, images */
     --radius-sm: 8px;  /* controls: buttons, fields, messages  */
     --shadow:  0 1px 2px rgba(0,0,0,.28);
@@ -1248,6 +1260,9 @@ PAGE_STYLE = """<!doctype html><html><head><meta charset="utf-8">
     :root {
       --bg: #f6f7f9; --surface: #ffffff; --raised: #ffffff;
       --border: #e3e6ea; --text: #14171c; --dim: #5f6672;
+      /* Slightly deeper on white: the dark-mode values are chosen to glow
+         against #0f1115 and go weak on a light page. */
+      --make: #7c3aed; --measure: #0891b2; --system: #475569;
       --shadow: 0 1px 2px rgba(16,24,40,.06), 0 1px 3px rgba(16,24,40,.08);
     }
   }
@@ -1255,13 +1270,30 @@ PAGE_STYLE = """<!doctype html><html><head><meta charset="utf-8">
   * { box-sizing: border-box; }
   body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
          Helvetica, Arial, sans-serif; margin: 0; background: var(--bg);
-         color: var(--text); -webkit-font-smoothing: antialiased; }
+         color: var(--text); -webkit-font-smoothing: antialiased;
+         /* A wash rather than a flat field. Fixed so it does not slide
+            around under a long table, and layered UNDER var(--bg) as a
+            colour so a browser that ignores the gradient still gets the
+            right background rather than white. */
+         background-image:
+           radial-gradient(900px 500px at 12% -8%,
+             color-mix(in srgb, var(--accent) 13%, transparent), transparent 70%),
+           radial-gradient(700px 420px at 92% 0%,
+             color-mix(in srgb, var(--make) 11%, transparent), transparent 70%);
+         background-attachment: fixed; }
+  @media (prefers-reduced-motion: reduce) {
+    * { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important;
+        transition-duration: 0.01ms !important; }
+  }
   a { color: var(--accent); }
   :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px;
                    border-radius: 4px; }
 
   header { position: sticky; top: 0; z-index: 20; padding: 12px 24px;
-           background: color-mix(in srgb, var(--bg) 88%, transparent);
+           background: linear-gradient(to right,
+             color-mix(in srgb, var(--accent) 10%, transparent),
+             color-mix(in srgb, var(--make) 8%, transparent)),
+             color-mix(in srgb, var(--bg) 88%, transparent);
            backdrop-filter: saturate(180%) blur(10px);
            border-bottom: 1px solid var(--border);
            display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
@@ -1277,6 +1309,26 @@ PAGE_STYLE = """<!doctype html><html><head><meta charset="utf-8">
           box-shadow: var(--shadow); }
   .card .num { font-size: 26px; font-weight: 700; letter-spacing: -0.02em; }
   .card .label { font-size: 12px; color: var(--dim); }
+
+  /* FOUR IDENTICAL GREY BOXES MADE YOU READ FOUR LABELS. The numbers already
+     mean four different things — waiting on you, published, thrown away, how
+     good they were — and the palette already has a colour for each of those
+     meanings. Using it costs nothing and is read before the words are. */
+  .card.tone { border-left: 3px solid var(--tone); }
+  .card.tone .num { color: var(--tone); }
+  .card.tone { background: linear-gradient(to bottom right,
+                 color-mix(in srgb, var(--tone) 9%, transparent), transparent 60%),
+                 var(--surface); }
+  .card.t-pending { --tone: var(--warn); }
+  .card.t-ok      { --tone: var(--ok); }
+  .card.t-bad     { --tone: var(--bad); }
+  .card.t-info    { --tone: var(--accent); }
+
+  /* A heading knows which job it belongs to. */
+  h2.sec { border-left: 3px solid var(--tone, var(--border)); padding-left: 10px; }
+  h2.s-make    { --tone: var(--make); color: var(--make); }
+  h2.s-review  { --tone: var(--review); color: var(--review); }
+  h2.s-measure { --tone: var(--measure); color: var(--measure); }
 
   table { width: 100%; border-collapse: collapse; margin-top: 6px;
           background: var(--surface); border: 1px solid var(--border);
@@ -1319,6 +1371,39 @@ PAGE_STYLE = """<!doctype html><html><head><meta charset="utf-8">
          transition: transform .06s ease, filter .12s ease; }
   .btn:hover { filter: brightness(1.08); }
   .btn:active { transform: translateY(1px); }
+  /* HALF OF "SLOW" IS A BUTTON THAT LOOKS DEAD. Approve, Draw them, Re-cut and
+     Regen all hand off to something that takes real time, and until the page
+     navigated there was no evidence the click had landed — so people click
+     again, which on Approve is a second upload attempt. Disabling on submit
+     costs one attribute and removes both problems. */
+  .btn[disabled], .btn.working { opacity: .72; cursor: progress;
+                                 filter: none; transform: none; }
+  .btn.working::before { content: ""; display: inline-block; width: 11px;
+                         height: 11px; margin-right: 7px; vertical-align: -1px;
+                         border: 2px solid currentColor; border-right-color: transparent;
+                         border-radius: 50%; animation: spin .7s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* Rows and cards move rather than snap. */
+  tbody tr td, tr td { transition: background .12s ease; }
+  .card, .thumbcard, .orphan { transition: transform .12s ease, box-shadow .12s ease; }
+  .card:hover, .orphan:hover { transform: translateY(-1px);
+                               box-shadow: 0 4px 14px rgba(0,0,0,.16); }
+
+  /* A WIDE TABLE SCROLLS INSIDE ITSELF, NOT BY DRAGGING THE PAGE WITH IT.
+     Six columns on a 390px screen pushed the whole document sideways: the
+     status bar's text ran off the right edge and the Status column — the one
+     that says whether a video is waiting on you — was simply not on screen,
+     with nothing to suggest it existed. */
+  .tablewrap { overflow-x: auto; -webkit-overflow-scrolling: touch;
+               border-radius: var(--radius); }
+  .tablewrap > table { margin-top: 0; }
+
+  /* Filter box above a long table. */
+  .tablefilter { display: block; width: 100%; max-width: 320px; margin: 10px 0 0;
+                 padding: 8px 11px; border-radius: var(--radius-sm);
+                 border: 1px solid var(--border); background: var(--bg);
+                 color: inherit; font: inherit; font-size: 13px; }
   .btn.approve { background: var(--ok);     color: #06210f; border-color: transparent; }
   .btn.reject  { background: var(--bad);    color: #2a0a0a; border-color: transparent; }
   .btn.save    { background: var(--accent); color: #06122a; border-color: transparent; }
@@ -1340,6 +1425,13 @@ PAGE_STYLE = """<!doctype html><html><head><meta charset="utf-8">
             border-radius: var(--radius); box-shadow: var(--shadow);
             padding: 14px; }
   .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+  /* A GRID ITEM DEFAULTS TO min-width:auto, WHICH MEANS "never shrink below
+     your content". So a 1fr column holding a six-column table stayed as wide
+     as the table wanted and pushed the whole document 20px sideways on a
+     390px screen — even with the table itself in an overflow:auto wrapper,
+     because the wrapper could not shrink either. min-width:0 is what lets
+     "one fraction of the available space" actually mean that. */
+  .grid2 > * { min-width: 0; }
   @media (max-width: 760px) { .grid2 { grid-template-columns: 1fr; } }
   .assets a { display: inline-block; margin: 4px 8px 4px 0; font-size: 13px;
               text-decoration: none; }
@@ -1364,7 +1456,7 @@ PAGE_STYLE = """<!doctype html><html><head><meta charset="utf-8">
                   background: var(--surface); border: 1px solid var(--border);
                   border-radius: var(--radius); box-shadow: var(--shadow);
                   padding: 14px 16px }
-  .navgroup { display: flex; flex-direction: column; gap: 4px }
+  .navgroup { display: flex; flex-direction: column; gap: 4px; min-width: 0 }
   .navgroup-t { font-size: 11px; letter-spacing: .08em; text-transform: uppercase;
                 color: var(--dim); opacity: .7; margin-bottom: 2px }
   .navgroup .navlink { border-bottom: 0; padding: 5px 0 }
@@ -1417,6 +1509,18 @@ PAGE_STYLE = """<!doctype html><html><head><meta charset="utf-8">
                     margin-top: 8px }
     .navgroup .navlink { padding: 9px 0; }
     .whoami { margin-left: 0; display: block; margin-top: 8px; }
+    /* SIX COLUMNS ON A 390px SCREEN, AND TWO OF THEM SAY NOTHING THERE. The
+       preview strip is a row of "—" until a run has keyframes, and the niche
+       is the same word on every row of a single-channel queue. Dropping them
+       leaves Made / Hook / Score / Status, which is the decision, and it fits
+       without sideways scrolling. Marked by class rather than by column index
+       because `previews` changes how many columns there are, and an nth-child
+       rule would silently hide the wrong one. */
+    .c-preview, .c-niche { display: none; }
+    /* The status bar wrapped to nowhere: white-space:nowrap on a 390px screen
+       put the end of every message past the right edge. */
+    #livebar { font-size: 12px; gap: 8px; }
+    #livebar .item { white-space: normal; }
     /* Tap targets. The review queue is worked from a phone. */
     .btn { padding: 12px 20px; }
     th, td { padding: 12px 10px; }
@@ -1642,7 +1746,57 @@ def _head() -> str:
             + LIVEBAR_JS)
 
 
-PAGE_TAIL = "</main></body></html>"
+# Vanilla, inline, no build step — the same reason LIVEBAR_JS is. Two small
+# behaviours, both of which degrade to "the page works as it did" if the script
+# never runs.
+INTERACT_JS = """
+<script>
+(function () {
+  // 1. A BUTTON THAT LOOKS DEAD GETS CLICKED TWICE. Approve, Draw them,
+  //    Re-cut and Regen all hand off to something that takes real time, and
+  //    until the page navigated there was no evidence the click had landed.
+  //    On Approve a second click is a second upload attempt.
+  document.addEventListener('submit', function (e) {
+    var form = e.target;
+    if (!form || form.dataset.noBusy) return;
+    var btn = form.querySelector('button[type=submit], button:not([type])');
+    if (!btn || btn.disabled) return;
+    // Let the browser send the form first: a button disabled synchronously in
+    // the submit handler is not included in the POST body, which silently
+    // drops any name/value it carried.
+    setTimeout(function () {
+      btn.classList.add('working');
+      btn.disabled = true;
+    }, 0);
+  }, true);
+
+  // 2. Filter a long table without a round trip. Added only where a table is
+  //    long enough to be worth it, so short pages gain nothing to ignore.
+  document.querySelectorAll('table').forEach(function (table) {
+    var rows = table.tBodies.length ? table.tBodies[0].rows : table.rows;
+    if (rows.length < 12) return;
+    var box = document.createElement('input');
+    box.className = 'tablefilter';
+    box.type = 'search';
+    box.placeholder = 'Filter these ' + (rows.length - 1) + ' rows\u2026';
+    // Outside the scroll container, or the filter box scrolls away sideways
+    // with the table it filters.
+    var anchor = table.parentNode.classList.contains('tablewrap')
+      ? table.parentNode : table;
+    anchor.parentNode.insertBefore(box, anchor);
+    box.addEventListener('input', function () {
+      var q = box.value.toLowerCase();
+      for (var i = 1; i < rows.length; i++) {
+        rows[i].style.display =
+          (!q || rows[i].textContent.toLowerCase().indexOf(q) !== -1) ? '' : 'none';
+      }
+    });
+  });
+})();
+</script>
+"""
+
+PAGE_TAIL = "</main>" + INTERACT_JS + "</body></html>"
 
 
 # ── Routes ─────────────────────────────────────────────────────────────────────
@@ -1692,10 +1846,11 @@ def _videos_table(videos: list[dict], *, previews: bool = False) -> str:
                     f'alt="" style="width:38px;height:66px;object-fit:cover;'
                     f'border-radius:4px;margin-right:3px">'
                     for f in frames)
-                preview_cell = (f'<td><a class="row-link" href="/video/{v["id"]}" '
+                preview_cell = (f'<td class="c-preview"><a class="row-link" '
+                                f'href="/video/{v["id"]}" '
                                 f'style="display:flex">{imgs}</a></td>')
             else:
-                preview_cell = '<td><span class="muted">—</span></td>'
+                preview_cell = '<td class="c-preview"><span class="muted">—</span></td>'
         went_out = (f'<br><span class="muted">out '
                     f'{_esc(str(v["uploaded_at"]).split(" ")[-1][:5])}</span>'
                     if v.get("uploaded_at") and " " in str(v["uploaded_at"])
@@ -1703,12 +1858,13 @@ def _videos_table(videos: list[dict], *, previews: bool = False) -> str:
         rows += (f'<tr>{preview_cell}<td><a class="row-link" href="/video/{v["id"]}">'
                  f'{_when_cell(v.get("created_at") or v.get("upload_date"))}'
                  f'{went_out}</a></td>'
-                 f'<td><a class="row-link" href="/video/{v["id"]}">{_esc(v["niche"])}</a></td>'
+                 f'<td class="c-niche"><a class="row-link" href="/video/{v["id"]}">{_esc(v["niche"])}</a></td>'
                  f'<td><a class="row-link" href="/video/{v["id"]}">{title}</a></td>'
                  f'<td>{score_html}</td><td>{_status_badge(v["upload_status"])}</td></tr>\n')
-    preview_th = "<th>Preview</th>" if previews else ""
-    return (f"<table><tr>{preview_th}<th>Made</th><th>Niche</th><th>Hook / Title</th>"
-            f"<th>Score</th><th>Status</th></tr>{rows}</table>")
+    preview_th = '<th class="c-preview">Preview</th>' if previews else ""
+    return (f'<div class="tablewrap"><table><tr>{preview_th}<th>Made</th>'
+            f'<th class="c-niche">Niche</th><th>Hook / Title</th>'
+            f"<th>Score</th><th>Status</th></tr>{rows}</table></div>")
 
 
 def _msg_banner() -> str:
@@ -1746,7 +1902,7 @@ def index():
 
     channel_options = "".join(f'<option value="{_esc(ch)}">{_esc(ch)}</option>' for ch in channels)
     topic_form = f"""
-    <h2>🎯 Make a video about a specific topic</h2>
+    <h2 class="sec s-make">🎯 Make a video about a specific topic</h2>
     <p class="muted">Runs in the background (can take a while) — resolved to a
        real Wikipedia article so it's still fact-grounded, then shows up in
        the pending list below like any other video. Never auto-uploads.</p>
@@ -1766,10 +1922,10 @@ def index():
 
     cards = f"""
     <div class="cards">
-      <div class="card"><div class="num">{stats['pending']}</div><div class="label">awaiting review</div></div>
-      <div class="card"><div class="num">{stats['uploaded']}</div><div class="label">approved / uploaded</div></div>
-      <div class="card"><div class="num">{stats['rejected']}</div><div class="label">rejected</div></div>
-      <div class="card"><div class="num">{stats['avg_score']}</div><div class="label">avg score</div></div>
+      <a class="card tone t-pending" href="#review" style="text-decoration:none;color:inherit"><div class="num">{stats['pending']}</div><div class="label">awaiting review</div></a>
+      <div class="card tone t-ok"><div class="num">{stats['uploaded']}</div><div class="label">approved / uploaded</div></div>
+      <div class="card tone t-bad"><div class="num">{stats['rejected']}</div><div class="label">rejected</div></div>
+      <div class="card tone t-info"><div class="num">{stats['avg_score']}</div><div class="label">avg score</div></div>
     </div>
     """
 
@@ -1808,11 +1964,11 @@ def index():
     # waiting on a decision, that IS what the page is for; the topic box is
     # still here, one screen down, for when the queue is empty.
     if pending:
-        review_block = (f'<h2 id="review">⏳ Awaiting your review '
-                        f'({len(pending)})</h2>'
+        review_block = (f'<h2 id="review" class="sec s-review">⏳ Awaiting your '
+                        f'review ({len(pending)})</h2>'
                         f'{_videos_table(pending, previews=True)}')
     else:
-        review_block = ('<h2 id="review">⏳ Awaiting your review (0)</h2>'
+        review_block = ('<h2 id="review" class="sec s-review">⏳ Awaiting your review (0)</h2>'
                         '<p class="muted">Nothing is waiting on you. Queue a '
                         'topic below, or leave it to the schedule.</p>')
 

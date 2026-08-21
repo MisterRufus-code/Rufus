@@ -599,11 +599,29 @@ def _root_tokens() -> set:
 
 
 def _rule(selector: str) -> str:
-    """The declarations of one rule, whitespace removed so a test can ask what
-    it sets without caring how it was typed."""
-    m = re.search(re.escape(selector) + r"\s*\{([^}]*)\}", dashboard.PAGE_STYLE)
-    assert m, f"no rule for {selector}"
-    return re.sub(r"\s+", "", m.group(1))
+    """Everything this selector gets, whitespace removed.
+
+    EVERY matching rule, not the first. A grouped selector — `.card,
+    .thumbcard, .orphan { transition: ... }` — made the old version return
+    that one rule for `.orphan` and report the panel treatment missing, when
+    in fact it is set two rules earlier. A test that reads only the first
+    mention of a selector is guessing about the cascade.
+    """
+    # Comments stripped first: the head captured before a `{` runs back to the
+    # previous `}`, so a /* ... */ note above a rule ends up glued to its
+    # selector and nothing matches by equality.
+    css = re.sub(r"/\*.*?\*/", " ", dashboard.PAGE_STYLE, flags=re.S)
+    out = []
+    for m in re.finditer(r"([^{}]+)\{([^{}]*)\}", css):
+        head = m.group(1)
+        if "@" in head:            # at-rule prelude, not a selector list
+            continue
+        heads = [h.strip() for h in head.replace("\n", " ").split(",")]
+        heads = [h.split()[-1] if h.split() else "" for h in heads]
+        if any(h == selector or h.startswith(selector + ":") for h in heads):
+            out.append(m.group(2))
+    assert out, f"no rule for {selector}"
+    return re.sub(r"\s+", "", " ".join(out))
 
 
 def test_every_token_a_rule_asks_for_actually_exists():
@@ -1131,3 +1149,108 @@ def test_the_row_niche_wins_over_whatever_the_dashboard_is_set_to(client,
     monkeypatch.setenv("RUFUS_NICHE_OVERRIDE", "finance")
     client.post(f"/video/{vid}/beat/3/regen")
     assert seen["env"]["RUFUS_NICHE_OVERRIDE"] == "money_history"
+
+
+# ── colour, and things that respond ────────────────────────────────────────
+
+def test_each_job_has_its_own_hue():
+    """The nav groups into Make / Review / Measure / System. One accent for
+    all four is tidy and tells you nothing about where you are."""
+    for token in ("--make", "--review", "--measure", "--system"):
+        assert token in _root_tokens(), token
+
+
+def test_the_stat_cards_do_not_all_look_the_same(client, monkeypatch):
+    """Four identical grey boxes made you read four labels. The numbers mean
+    four different things and the palette already has a colour for each."""
+    monkeypatch.setattr(dashboard, "_recent_videos",
+                        lambda limit=60, channel=None, status=None: [])
+    page = client.get("/").get_data(as_text=True)
+    for cls in ("t-pending", "t-ok", "t-bad", "t-info"):
+        assert cls in page, cls
+
+
+def test_a_scoped_token_still_resolves_outside_its_scope():
+    """--tone is set by .card.t-* and h2.s-*. Without a root default, a use
+    that escapes resolves to nothing and CSS drops the whole declaration
+    silently — the --line/--card bug again, one commit later."""
+    assert "--tone" in _root_tokens()
+
+
+# ── the phone stopped scrolling sideways ───────────────────────────────────
+
+def test_a_wide_table_scrolls_inside_itself(client, monkeypatch):
+    """Six columns on a 390px screen dragged the whole document sideways: the
+    status bar ran off the right edge and the Status column — the one saying
+    whether a video is waiting on you — was not on screen at all, with nothing
+    to suggest it existed."""
+    rows = [{"id": 1, "score": 9, "title": "t", "script_hook": "",
+             "niche": "money_history", "upload_status": "pending", "run_id": "",
+             "created_at": "2026-08-21 09:30:00", "uploaded_at": None}]
+    assert '<div class="tablewrap">' in dashboard._videos_table(rows)
+    assert "overflow-x:auto" in _rule(".tablewrap")
+
+
+def test_grid_children_are_allowed_to_shrink():
+    """A grid item defaults to min-width:auto — "never shrink below your
+    content" — so a 1fr column holding a six-column table stayed as wide as the
+    table wanted, even with the table in an overflow:auto wrapper, because the
+    wrapper could not shrink either. Measured at 20px of document overflow on a
+    390px viewport."""
+    css = re.sub(r"/\*.*?\*/", " ", dashboard.PAGE_STYLE, flags=re.S)
+    assert re.search(r"\.grid2\s*>\s*\*\s*\{[^}]*min-width:\s*0", css)
+    assert "min-width:0" in _rule(".navgroup")
+
+
+def test_the_two_columns_that_say_nothing_on_a_phone_are_hidden():
+    """The preview strip is a row of em-dashes until a run has keyframes, and
+    the niche is the same word on every row of a single-channel queue."""
+    mobile = dashboard.PAGE_STYLE.split("max-width: 760px")[-1]
+    assert ".c-preview, .c-niche { display: none; }" in mobile
+
+
+def test_the_hidden_columns_are_marked_by_class_not_by_position(client):
+    """`previews` changes how many columns the table has, so an nth-child rule
+    would hide the wrong one depending on which page you were looking at."""
+    rows = [{"id": 1, "score": 9, "title": "t", "script_hook": "",
+             "niche": "money_history", "upload_status": "pending", "run_id": "",
+             "created_at": "2026-08-21 09:30:00", "uploaded_at": None}]
+    for previews in (True, False):
+        html = dashboard._videos_table(rows, previews=previews)
+        assert 'class="c-niche"' in html
+    css = re.sub(r"/\*.*?\*/", " ", dashboard.PAGE_STYLE, flags=re.S)
+    assert "nth-child" not in css.split("max-width: 760px")[-1]
+
+
+# ── a button that looks dead gets clicked twice ────────────────────────────
+
+def test_a_submitted_button_shows_it_heard_you():
+    """Approve, Draw them, Re-cut and Regen all hand off to something that
+    takes real time, and until the page navigated there was no evidence the
+    click landed. On Approve a second click is a second upload attempt."""
+    assert "btn.classList.add('working')" in dashboard.INTERACT_JS
+    assert "btn.disabled = true" in dashboard.INTERACT_JS
+
+
+def test_the_button_is_disabled_after_the_form_is_sent_not_before():
+    """A button disabled synchronously inside the submit handler is not
+    included in the POST body, which silently drops any name/value it
+    carried."""
+    block = dashboard.INTERACT_JS.split("addEventListener('submit'", 1)[1]
+    assert "setTimeout(" in block.split("btn.disabled = true")[0]
+
+
+def test_the_page_still_works_without_the_script():
+    """No build step and no framework — and nothing here may be load-bearing.
+    Every behaviour degrades to the page as it was."""
+    assert "<script>" in dashboard.INTERACT_JS
+    assert dashboard.PAGE_TAIL.startswith("</main>")
+    assert dashboard.PAGE_TAIL.endswith("</body></html>")
+
+
+def test_the_filter_box_does_not_scroll_away_with_its_table():
+    assert "classList.contains('tablewrap')" in dashboard.INTERACT_JS
+
+
+def test_motion_is_dropped_for_anyone_who_asked_for_less_of_it():
+    assert "prefers-reduced-motion" in dashboard.PAGE_STYLE
