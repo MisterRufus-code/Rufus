@@ -323,6 +323,11 @@ def api_status():
         # available, which is what decides if a run would even work now.
         "uptime_seconds": int(time.time() - _STARTED_AT),
         "comfyui": _comfyui_reachable(),
+        # Empty when this is the venv interpreter. Reported rather than only
+        # printed at startup, because the startup line scrolls away in a log
+        # nobody opens and this is the fact that explains a dashboard missing
+        # packages it should have.
+        "interpreter_warning": _wrong_interpreter(),
         "busy": any(r["running"] for r in runs),
         "runs": runs,
         "queue": {
@@ -4704,6 +4709,64 @@ def _port_taken(host: str, port: int) -> bool:
             return False
 
 
+def _answers_healthz(host: str, port: int) -> bool:
+    """Whether whatever holds the port is actually SERVING.
+
+    _port_taken() answers a different question — a TCP connect succeeds against
+    a listener that has stopped serving, which is exactly the process that kept
+    this dashboard down for ten hours. "The port is occupied" and "a dashboard
+    is running there" were treated as the same fact, and the startup message
+    was written for the second one.
+    """
+    try:
+        r = requests.get(
+            f"http://{'127.0.0.1' if host in ('0.0.0.0', '') else host}:{port}"
+            f"/healthz", timeout=3)
+        return r.status_code == 200
+    except Exception:
+        return False
+
+
+def _venv_python() -> Path:
+    name = "python.exe" if os.name == "nt" else "python"
+    sub = "Scripts" if os.name == "nt" else "bin"
+    return ROOT / ".venv" / sub / name
+
+
+def _wrong_interpreter() -> str:
+    """One line if this process is not the repo's venv python, else "".
+
+    THE HOLE THIS CLOSES. run_dashboard.bat and run_watchdog.bat both refuse to
+    fall back to the system interpreter — they exit 9009 and say why, because
+    system python has no Flask and no torch. So the guard exists, and it only
+    guards the two doors it is nailed to. The python that squatted on port 8765
+    for ten hours was AppData/Local/Programs/Python/Python311/python.exe: the
+    system one, started by something that was not a launcher, and nothing
+    anywhere said a word about it.
+
+    A NOTICE AND NOT A REFUSAL. The .bat files refuse because the venv is
+    MISSING, which nothing downstream can recover from. Here it exists and a
+    different interpreter was chosen, which may well be deliberate — a second
+    dashboard on another port, a debugger, a developer. Refusing would break
+    those; saying nothing is how this happened. RUFUS_ALLOW_ANY_PYTHON=1 turns
+    it off for anyone who means it.
+    """
+    if os.environ.get("RUFUS_ALLOW_ANY_PYTHON", "").strip().lower() in (
+            "1", "true", "yes", "on"):
+        return ""
+    venv = _venv_python()
+    if not venv.exists():
+        return ""      # no venv to be wrong about
+    try:
+        if Path(sys.executable).resolve() == venv.resolve():
+            return ""
+    except OSError:
+        return ""
+    return (f"running on {sys.executable}, not the repo venv at {venv} — "
+            f"this interpreter may be missing packages the pipeline needs, and "
+            f"no launcher started it")
+
+
 # ── "it came back up" ────────────────────────────────────────────────────────
 
 START_STAMP = paths.log_dir() / ".dashboard_started"
@@ -4785,16 +4848,45 @@ if __name__ == "__main__":
     # reading it that the thing they wanted is already open in another window.
     # run_dashboard.bat exists specifically so a startup failure leaves a
     # readable trace; an unreadable one is only half of that.
+    # TWO DIFFERENT FAILURES WORE ONE MESSAGE. "The port is taken" was reported
+    # as "a dashboard is already running — open it", and for ten hours that
+    # advice pointed at a python that had stopped serving. The health check
+    # that disproves it lives one file away and was never asked. So ask it, and
+    # give the two states different words AND different exit codes — the
+    # watchdog acts on the code, and it cannot act differently on the same
+    # number.
     if _port_taken(host, port):
-        print(f"[dashboard] port {port} is already in use — a dashboard is "
-              f"almost certainly running already.")
-        print(f"[dashboard] Open http://localhost:{port} — that IS this "
-              f"dashboard, and it picked up the latest code when it started.")
-        print(f"[dashboard] If it is stale, close that window (or end the "
-              f"python.exe running dashboard.py) and start this again. To run "
-              f"a second one alongside it, set RUFUS_DASHBOARD_PORT to "
-              f"something else.")
-        sys.exit(3)
+        import port_owner
+        who = port_owner.holder(port)
+        if _answers_healthz(host, port):
+            print(f"[dashboard] port {port} is already in use, and the "
+                  f"dashboard there is answering.")
+            print(f"[dashboard] Open http://localhost:{port} — that IS this "
+                  f"dashboard, and it picked up the latest code when it "
+                  f"started.")
+            print(f"[dashboard] To run a second one alongside it, set "
+                  f"RUFUS_DASHBOARD_PORT to something else.")
+            if who:
+                print(f"[dashboard] holder: {port_owner.describe(who)}")
+            sys.exit(3)
+        print(f"[dashboard] port {port} is held by something that is NOT "
+              f"answering — opening http://localhost:{port} will not work.")
+        print(f"[dashboard] holder: {port_owner.describe(who)}")
+        if port_owner.is_rufus_dashboard(who):
+            print(f"[dashboard] that is a stale dashboard. End it and start "
+                  f"again:")
+            print(f"[dashboard]   Stop-Process -Id {who['pid']} -Force"
+                  if os.name == "nt" else
+                  f"[dashboard]   kill {who['pid']}")
+        else:
+            print(f"[dashboard] this does not look like a Rufus dashboard, so "
+                  f"nothing here will end it for you. Free the port, or set "
+                  f"RUFUS_DASHBOARD_PORT to something else.")
+        sys.exit(4)
+
+    wrong = _wrong_interpreter()
+    if wrong:
+        print(f"[dashboard] ⚠ {wrong}")
 
     db_manager.init_db()
     _announce_start()

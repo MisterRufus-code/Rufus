@@ -8,6 +8,7 @@ invisible until the video comes out wrong.
 """
 
 import json
+import os
 import re
 import sys
 import time
@@ -671,3 +672,98 @@ def test_the_space_between_blocks_sits_on_one_grid():
     for m in re.finditer(r"gap:\s*([^;}]+)", dashboard.PAGE_STYLE):
         found.update(m.group(1).strip().split())
     assert found <= {"0", "4px", "8px", "12px", "16px", "20px"}, sorted(found)
+
+
+# ── the port was held for ten hours and nothing named the holder ────────────
+
+def test_the_two_port_failures_do_not_share_a_message():
+    """"The port is taken" was reported as "a dashboard is already running —
+    open it", and for ten hours that advice pointed at a python that had
+    stopped serving. The health check that disproves it lives one file away and
+    was never asked."""
+    src = Path(dashboard.__file__).read_text(encoding="utf-8")
+    block = src.split('if _port_taken(host, port):', 1)[1].split("db_manager.init_db()")[0]
+    assert "_answers_healthz" in block, "the two states are still one message"
+    assert "port_owner.describe" in block, "the holder is still not named"
+
+
+def test_the_two_port_failures_do_not_share_an_exit_code():
+    """The watchdog acts on the exit code, and it cannot act differently on the
+    same number: 3 is "a healthy dashboard is already there, leave it alone",
+    4 is "something is squatting and serving nothing"."""
+    src = Path(dashboard.__file__).read_text(encoding="utf-8")
+    block = src.split('if _port_taken(host, port):', 1)[1].split("db_manager.init_db()")[0]
+    assert "sys.exit(3)" in block and "sys.exit(4)" in block
+
+
+def test_an_unidentified_holder_is_never_offered_up_to_be_killed():
+    """The suggested Stop-Process line is only printed for a process positively
+    identified as a Rufus dashboard. Telling somebody to kill pid 1888 when
+    1888 might be their own work is worse than telling them nothing."""
+    src = Path(dashboard.__file__).read_text(encoding="utf-8")
+    block = src.split('if _port_taken(host, port):', 1)[1].split("db_manager.init_db()")[0]
+    kill_at = block.index("Stop-Process")
+    guard_at = block.index("port_owner.is_rufus_dashboard")
+    assert guard_at < kill_at
+
+
+def test_healthz_is_probed_on_the_loopback_when_bound_to_all_interfaces():
+    """0.0.0.0 is an address to bind, not one to connect to — the same
+    correction _port_taken already makes."""
+    assert dashboard._answers_healthz("0.0.0.0", 1) is False
+
+
+# ── the interpreter that no launcher chose ─────────────────────────────────
+
+def test_the_venv_interpreter_is_not_complained_about(monkeypatch, tmp_path):
+    venv = tmp_path / ".venv" / ("Scripts" if os.name == "nt" else "bin")
+    venv.mkdir(parents=True)
+    exe = venv / ("python.exe" if os.name == "nt" else "python")
+    exe.write_text("")
+    monkeypatch.setattr(dashboard, "ROOT", tmp_path)
+    monkeypatch.setattr(dashboard.sys, "executable", str(exe))
+    assert dashboard._wrong_interpreter() == ""
+
+
+def test_a_different_interpreter_is_named_out_loud(monkeypatch, tmp_path):
+    """The python that squatted on port 8765 for ten hours was the SYSTEM one.
+    Both launchers refuse to use it — so something started this outside a
+    launcher, and nothing anywhere said a word."""
+    venv = tmp_path / ".venv" / ("Scripts" if os.name == "nt" else "bin")
+    venv.mkdir(parents=True)
+    (venv / ("python.exe" if os.name == "nt" else "python")).write_text("")
+    monkeypatch.setattr(dashboard, "ROOT", tmp_path)
+    monkeypatch.setattr(dashboard.sys, "executable", "/usr/bin/python3")
+    msg = dashboard._wrong_interpreter()
+    assert "/usr/bin/python3" in msg and ".venv" in msg
+
+
+def test_no_venv_means_nothing_to_be_wrong_about(monkeypatch, tmp_path):
+    monkeypatch.setattr(dashboard, "ROOT", tmp_path)
+    monkeypatch.setattr(dashboard.sys, "executable", "/usr/bin/python3")
+    assert dashboard._wrong_interpreter() == ""
+
+
+def test_the_notice_can_be_turned_off_by_someone_who_means_it(monkeypatch, tmp_path):
+    venv = tmp_path / ".venv" / ("Scripts" if os.name == "nt" else "bin")
+    venv.mkdir(parents=True)
+    (venv / ("python.exe" if os.name == "nt" else "python")).write_text("")
+    monkeypatch.setattr(dashboard, "ROOT", tmp_path)
+    monkeypatch.setattr(dashboard.sys, "executable", "/usr/bin/python3")
+    monkeypatch.setenv("RUFUS_ALLOW_ANY_PYTHON", "1")
+    assert dashboard._wrong_interpreter() == ""
+
+
+def test_it_is_a_notice_and_not_a_refusal():
+    """The .bat files refuse because the venv is MISSING, which nothing
+    downstream recovers from. Here it exists and another interpreter was
+    chosen, which may be deliberate — a second dashboard on another port, a
+    debugger. Refusing breaks those; saying nothing is how this happened."""
+    src = Path(dashboard.__file__).read_text(encoding="utf-8")
+    block = src.split("wrong = _wrong_interpreter()", 1)[1].split("app.run(")[0]
+    assert "sys.exit" not in block
+
+
+def test_the_interpreter_shows_up_in_the_status_api(client):
+    body = client.get("/api/status").get_json()
+    assert "interpreter_warning" in body
