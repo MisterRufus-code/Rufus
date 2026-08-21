@@ -387,7 +387,14 @@ def trending_queries_with_reason(niche_name: str) -> tuple[list[str], str]:
         return unique[:5], ""
 
     except Exception as e:
-        print(f"[research] pytrends failed (non-fatal): {e}")
+        # Same memo as OpenAlex, and for the same reason: get_seed retries the
+        # whole chain up to six times and this is called twice per attempt, so
+        # one rate-limited Google was producing twelve requests and twelve
+        # identical lines in a run that then failed for an unrelated reason.
+        if _looks_rate_limited(e):
+            _note_rate_limit("Google Trends")
+        else:
+            print(f"[research] pytrends failed (non-fatal): {e}")
         return [], (f"the Google Trends request failed: {e}. Usually rate "
                     f"limiting — it clears on its own.")
 
@@ -929,6 +936,64 @@ def _is_historical(text: str) -> bool:
     return False
 
 
+# A source that has answered 429 IN THIS PROCESS. Asking it again is futile and
+# makes the quota worse — and get_seed retries the whole chain up to six times,
+# so a rate-limited source was being hit six times per run. Cleared only by a
+# new process, which is the right lifetime: a quota that resets in an hour is
+# not going to reset inside one run.
+_RATE_LIMITED: set[str] = set()
+
+# Said once per process, not once per attempt. Six identical paragraphs about
+# the same missing setting is how a real instruction gets scrolled past.
+_MAILTO_SAID = False
+
+
+def _is_rate_limited(source: str) -> bool:
+    return source in _RATE_LIMITED
+
+
+def _note_rate_limit(source: str) -> None:
+    """Record a 429 and say what it means, once."""
+    if source in _RATE_LIMITED:
+        return
+    _RATE_LIMITED.add(source)
+    print(f"[research] {source} is rate-limited (HTTP 429) — not asking it "
+          f"again this run")
+
+
+def _looks_rate_limited(exc: Exception) -> bool:
+    """A 429 hiding inside whatever the client raised.
+
+    Checked on the text rather than the type because httpx raises
+    HTTPStatusError from raise_for_status but the pool can raise its own
+    classes, and a quota reported as an outage sends the reader looking for a
+    network problem that is not there.
+    """
+    status = getattr(getattr(exc, "response", None), "status_code", None)
+    return status == 429 or "429" in str(exc)
+
+
+def _say_missing_mailto() -> None:
+    """Name the one setting standing between this channel and OpenAlex's
+    higher rate limit.
+
+    OpenAlex runs a POLITE POOL: send a contact address and the limit rises
+    sharply. It is not a signup, not a key and not authentication — it is a
+    query parameter, and _openalex_mailto already reads the variable for it.
+    Nothing has ever said it was empty, so this channel has been in the
+    anonymous pool since OpenAlex was added, which is the pool that gets 429.
+    """
+    global _MAILTO_SAID
+    if _MAILTO_SAID:
+        return
+    _MAILTO_SAID = True
+    print("[research] RUFUS_OPENALEX_MAILTO is not set — you are in "
+          "OpenAlex's anonymous pool, which is the one that gets rate "
+          "limited. Setting it to any email address you read moves you to "
+          "their polite pool and raises the limit a lot. It is not a signup "
+          "and not a key, just a parameter they ask for.")
+
+
 def fetch_openalex_story(niche_name: str, used_ids: set | None = None) -> dict | None:
     """A cited paper on one of the niche's topics, as a seed.
 
@@ -936,6 +1001,8 @@ def fetch_openalex_story(niche_name: str, used_ids: set | None = None) -> dict |
     reply — all return None and the chain continues.
     """
     if not _openalex_enabled():
+        return None
+    if _is_rate_limited("OpenAlex"):
         return None
     if used_ids is None:
         used_ids = set()
@@ -961,6 +1028,8 @@ def fetch_openalex_story(niche_name: str, used_ids: set | None = None) -> dict |
     }
     if _openalex_mailto():
         params["mailto"] = _openalex_mailto()
+    else:
+        _say_missing_mailto()
 
     try:
         r = httpx.get(OPENALEX_URL, params=params, timeout=OPENALEX_TIMEOUT,
@@ -968,7 +1037,10 @@ def fetch_openalex_story(niche_name: str, used_ids: set | None = None) -> dict |
         r.raise_for_status()
         works = r.json().get("results", []) or []
     except Exception as e:
-        print(f"[research] OpenAlex unreachable ({e})")
+        if _looks_rate_limited(e):
+            _note_rate_limit("OpenAlex")
+        else:
+            print(f"[research] OpenAlex unreachable ({e})")
         return None
 
     rejected = {"no_abstract": 0, "short": 0, "seen": 0, "not history": 0}

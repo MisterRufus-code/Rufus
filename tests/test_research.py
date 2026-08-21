@@ -996,3 +996,96 @@ def test_the_filter_reads_the_title_as_well_as_the_abstract():
     the title; an abstract full of regression tables might not repeat it."""
     src = Path(research.__file__).read_text(encoding="utf-8")
     assert "w.get('display_name')" in src
+
+
+# ── a quota is not an outage, and asking six times makes it worse ────────────
+#
+# THE RUN THAT COULD NOT START. `.\run.bat` died in Step 1 with no seed at all:
+# Reddit needed OAuth nobody had configured, Google Trends returned 429,
+# OpenAlex returned 429, and the one seed StackExchange did produce was
+# correctly rejected by the supervisor for naming no year.
+#
+# Two things made it worse than it had to be. get_seed retries the whole source
+# chain up to six times, and nothing remembered that a source had just answered
+# 429 — so a rate-limited OpenAlex was asked six times per run and Google
+# Trends twelve, each one making the quota worse and printing a line that
+# buried the sentence explaining the real problem.
+#
+# And the real problem had a one-setting cause: RUFUS_OPENALEX_MAILTO was
+# empty, which puts every request in OpenAlex's anonymous pool — the pool that
+# gets rate limited. The dashboard called that setting "Optional. Nothing
+# breaks without it."
+
+@pytest.fixture(autouse=True)
+def _fresh_rate_limits():
+    """The memo is process-lifetime by design, which makes it leak between
+    tests unless it is cleared."""
+    research._RATE_LIMITED.clear()
+    research._MAILTO_SAID = False
+    yield
+    research._RATE_LIMITED.clear()
+
+
+@pytest.mark.parametrize("exc", [
+    Exception("Client error '429 Too Many Requests' for url '...'"),
+    type("E", (Exception,), {"response": type("R", (), {"status_code": 429})()})(),
+])
+def test_a_429_is_recognised_however_the_client_reports_it(exc):
+    """httpx raises HTTPStatusError from raise_for_status, but the pool can
+    raise its own classes — checking the type alone would miss half of them."""
+    assert research._looks_rate_limited(exc) is True
+
+
+@pytest.mark.parametrize("exc", [
+    OSError("connection refused"),
+    Exception("read timeout"),
+    Exception("500 Internal Server Error"),
+])
+def test_a_real_outage_is_not_called_a_quota(exc):
+    """The two need different fixes. Reporting a quota as an outage sends the
+    reader looking for a network problem that is not there."""
+    assert research._looks_rate_limited(exc) is False
+
+
+def test_a_rate_limited_source_is_not_asked_again(capsys):
+    research._note_rate_limit("OpenAlex")
+    assert research._is_rate_limited("OpenAlex") is True
+    out = capsys.readouterr().out
+    assert "rate-limited" in out and "429" in out
+    assert "not asking it again this run" in out
+
+
+def test_the_rate_limit_notice_is_said_once_not_per_attempt(capsys):
+    """Six identical paragraphs is how a real instruction gets scrolled past."""
+    for _ in range(6):
+        research._note_rate_limit("OpenAlex")
+    assert capsys.readouterr().out.count("rate-limited") == 1
+
+
+def test_openalex_returns_immediately_once_rate_limited(monkeypatch):
+    """Not merely quieter — it must not make the HTTP call at all, or the
+    quota keeps being spent on requests that cannot succeed."""
+    called = []
+    monkeypatch.setattr(research.httpx, "get",
+                        lambda *a, **k: called.append(1))
+    research._note_rate_limit("OpenAlex")
+    assert research.fetch_openalex_story("money_history") is None
+    assert called == [], "it asked a source it knew was rate-limited"
+
+
+def test_the_missing_mailto_is_named_once(capsys):
+    for _ in range(4):
+        research._say_missing_mailto()
+    out = capsys.readouterr().out
+    assert out.count("RUFUS_OPENALEX_MAILTO") == 1
+    assert "anonymous pool" in out
+    assert "not a signup" in out, "it has to say how little is being asked for"
+
+
+def test_the_settings_page_no_longer_calls_the_mailto_optional():
+    """It said "Optional. Nothing breaks without it." until a run died in Step
+    1 for want of a seed."""
+    src = (Path(research.__file__).parent / "dashboard.py").read_text(encoding="utf-8")
+    block = src.split('"RUFUS_OPENALEX_MAILTO"', 1)[1][:700]
+    assert "Nothing breaks without it" not in block
+    assert "anonymous pool" in block

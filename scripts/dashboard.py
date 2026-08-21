@@ -556,8 +556,13 @@ SETTINGS_GROUPS = [
          "the study's own figures — the three things the fact gate keeps "
          "rejecting scripts for lacking."),
         ("RUFUS_OPENALEX_MAILTO", "OpenAlex contact email", "text",
-         "Optional. OpenAlex's \"polite pool\" gives higher rate limits to "
-         "requests carrying a contact address. Nothing breaks without it."),
+         "Any address you read. OpenAlex's \"polite pool\" gives requests "
+         "carrying a contact address a much higher rate limit — it is not a "
+         "signup and not a key, just a parameter they ask for. Empty means "
+         "the anonymous pool, which is the one that returns 429, and a run "
+         "that cannot reach OpenAlex leans on sources the fact gate rejects "
+         "more often. This said \"nothing breaks without it\" until a run "
+         "died in Step 1 for want of a seed."),
         ("RUFUS_NEWSPAPERS", "Newspaper source", "bool",
          "Library of Congress scans. Turn off if the endpoint stays dead."),
     ]),
