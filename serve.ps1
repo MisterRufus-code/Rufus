@@ -56,6 +56,61 @@ function Get-PythonExe {
     return "python"
 }
 
+# WHO IS ON THE PORT. serve.ps1 -Status could say "NOT answering on port 8765"
+# and dashboard.py could say "port 8765 is already in use", and between them
+# they never once named the process. The owner ran -Restart three times against
+# a python that had stopped serving and found it by typing
+# Get-NetTCPConnection by hand. It took one command; nothing here ran it.
+function Get-PortHolder($Port) {
+    try {
+        $conn = Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction Stop |
+                Select-Object -First 1
+        if (-not $conn) { return $null }
+        $proc = Get-Process -Id $conn.OwningProcess -ErrorAction Stop
+        $cmd = ""
+        try {
+            $cmd = (Get-CimInstance Win32_Process -Filter "ProcessId=$($proc.Id)" `
+                    -ErrorAction Stop).CommandLine
+        } catch { }
+        return [pscustomobject]@{
+            Id = $proc.Id; Name = $proc.ProcessName
+            Path = $proc.Path; CommandLine = $cmd
+            StartTime = $(try { $proc.StartTime } catch { $null })
+        }
+    } catch {
+        return $null
+    }
+}
+
+# Deliberately narrow, and it stays narrow: everything that calls this ENDS
+# what it says yes to. "python" is the name of the venv interpreter, the
+# system interpreter and somebody's unrelated script alike, so the command
+# line has to actually name dashboard.py. Not sure means leave it alone.
+function Test-IsRufusDashboard($Holder) {
+    if (-not $Holder) { return $false }
+    if (-not $Holder.CommandLine) { return $false }
+    return $Holder.CommandLine.Replace('\', '/').ToLower().Contains("dashboard.py")
+}
+
+function Show-PortHolder($Port) {
+    $h = Get-PortHolder $Port
+    if (-not $h) {
+        Write-Host ("{0,-18} nothing identifiable is listening on {1}" -f "", $Port) -ForegroundColor Yellow
+        return $null
+    }
+    Write-Host ("{0,-18} port {1} is held by pid {2} ({3})" -f "", $Port, $h.Id, $h.Name) -ForegroundColor Yellow
+    if ($h.Path)        { Write-Host ("{0,-18}   exe     {1}" -f "", $h.Path) }
+    if ($h.CommandLine) { Write-Host ("{0,-18}   command {1}" -f "", $h.CommandLine) }
+    if ($h.StartTime)   { Write-Host ("{0,-18}   started {1}" -f "", $h.StartTime) }
+    if (Test-IsRufusDashboard $h) {
+        Write-Host ("{0,-18}   this IS a Rufus dashboard that is not answering." -f "") -ForegroundColor Yellow
+        Write-Host ("{0,-18}   .\serve.ps1 -Restart will end it and start a fresh one." -f "")
+    } else {
+        Write-Host ("{0,-18}   this is NOT a Rufus dashboard, so nothing here will end it." -f "") -ForegroundColor Yellow
+    }
+    return $h
+}
+
 function Test-Dependencies($Python) {
     # The single most common failure of this whole setup: no .venv, so this
     # silently falls back to system python, which usually does NOT have
@@ -123,12 +178,21 @@ if ($Status) {
         }
     } catch {
         Write-Host ("{0,-18} NOT answering on port {1}" -f "dashboard", $Port) -ForegroundColor Red
+        # THE ONE FACT THAT WAS MISSING, before the wall of log text rather
+        # than after it. "Not answering" and "port in use" are two different
+        # problems with two different fixes, and only this line tells them
+        # apart.
+        Show-PortHolder $Port | Out-Null
         foreach ($name in @("dashboard", "watchdog")) {
             $log = Join-Path $Root "logs\$name.log"
             if (Test-Path $log) {
                 Write-Host ""
                 Write-Host "Last lines of logs\$name.log:" -ForegroundColor Yellow
-                Get-Content $log -Tail 12 | ForEach-Object { Write-Host "  $_" }
+                # -Encoding UTF8 because PS 5.1's Get-Content decodes as the
+                # ANSI code page, which on this Hebrew-locale box is cp1255 —
+                # so every em-dash in these messages arrived as "ג€”". Same
+                # family as the PYTHONUTF8=1 line in every .bat.
+                Get-Content $log -Tail 12 -Encoding UTF8 | ForEach-Object { Write-Host "  $_" }
             }
         }
         # BOTH logs, not just the dashboard's. When the dashboard is down the
@@ -159,8 +223,60 @@ if ($Status) {
 # this the only documented way to bring them back was a reboot, and the honest
 # answer to "the dashboard is down" cannot be "restart Windows".
 if ($Restart) {
+    # schtasks /End ENDS ONLY WHAT THE TASK STARTED. That is the whole reason
+    # -Restart reported "Started: Rufus Dashboard" three times in a row at a
+    # dashboard that never came up: the python holding port 8765 had been
+    # launched by something else, /End was a no-op against it, /Run launched
+    # into a held port, and the new process exited before this script printed
+    # its success line.
+    #
+    # So: end the tasks, then look at the port. If it is still held by a Rufus
+    # dashboard that is not answering, end THAT too. An unidentified holder is
+    # named and left alone — it may be the owner's own work, and taking the
+    # port back is not worth killing something we cannot name.
     foreach ($t in @($DashTask, $WatchTask)) {
         schtasks /End /TN "$t" 2>$null | Out-Null
+    }
+    Start-Sleep -Milliseconds 500
+
+    # WHETHER OR NOT IT IS ANSWERING. -Restart is an instruction, not a repair:
+    # the ordinary reason to type it is "I just pulled new code", and a healthy
+    # dashboard started outside the task survives /End and keeps serving the
+    # OLD code while /Run exits 3 and this script prints "Started". That is the
+    # same silent no-op as the stale-port case, just with a working page in
+    # front of it.
+    $holder = Get-PortHolder $Port
+    if ($holder) {
+        if (Test-IsRufusDashboard $holder) {
+            Write-Host ("Ending the dashboard on port {0} (pid {1})" -f $Port, $holder.Id) -ForegroundColor Yellow
+            Stop-Process -Id $holder.Id -Force -ErrorAction SilentlyContinue
+            # Wait for the socket, not for a fixed guess: /Run into a port
+            # Windows has not released yet fails exactly like the problem this
+            # is here to fix.
+            $freed = $false
+            foreach ($i in 1..10) {
+                Start-Sleep -Milliseconds 500
+                if (-not (Get-PortHolder $Port)) { $freed = $true; break }
+            }
+            if (-not $freed) {
+                Write-Host ""
+                Write-Host ("Could not free port {0} - pid {1} is still holding it." -f $Port, $holder.Id) -ForegroundColor Red
+                Write-Host "Try an Administrator PowerShell, or:" -ForegroundColor Yellow
+                Write-Host ("  Stop-Process -Id {0} -Force" -f $holder.Id)
+                exit 1
+            }
+        } else {
+            Write-Host ""
+            Write-Host ("Port {0} is held by something that is NOT a Rufus dashboard:" -f $Port) -ForegroundColor Red
+            Show-PortHolder $Port | Out-Null
+            Write-Host ""
+            Write-Host "Free that port yourself, or run the dashboard elsewhere:" -ForegroundColor Yellow
+            Write-Host ("  `$env:RUFUS_DASHBOARD_PORT = '{0}'" -f ([int]$Port + 1))
+            exit 1
+        }
+    }
+
+    foreach ($t in @($DashTask, $WatchTask)) {
         schtasks /Run /TN "$t" 2>$null | Out-Null
         if ($LASTEXITCODE -eq 0) {
             Write-Host ("Started: {0}" -f $t) -ForegroundColor Green
@@ -173,7 +289,9 @@ if ($Restart) {
         Invoke-WebRequest -Uri "http://127.0.0.1:$Port/healthz" -TimeoutSec 5 -UseBasicParsing | Out-Null
         Write-Host ("dashboard answering on port {0}" -f $Port) -ForegroundColor Green
     } catch {
-        Write-Host ("dashboard still NOT answering on port {0} - .\serve.ps1 -Status has the reason" -f $Port) -ForegroundColor Red
+        Write-Host ("dashboard still NOT answering on port {0}" -f $Port) -ForegroundColor Red
+        Show-PortHolder $Port | Out-Null
+        Write-Host "Full detail:  .\serve.ps1 -Status" -ForegroundColor Cyan
     }
     exit 0
 }
@@ -317,7 +435,7 @@ try {
     $log = Join-Path $Root "logs\dashboard.log"
     if (Test-Path $log) {
         Write-Host "Last lines of logs\dashboard.log:" -ForegroundColor Yellow
-        Get-Content $log -Tail 15 | ForEach-Object { Write-Host "  $_" }
+        Get-Content $log -Tail 15 -Encoding UTF8 | ForEach-Object { Write-Host "  $_" }
     } else {
         Write-Host "logs\dashboard.log doesn't exist yet either - the task may not have run." -ForegroundColor Yellow
         Write-Host "Try running it directly to see the error:  .\run_dashboard.bat"

@@ -211,3 +211,125 @@ def test_the_fast_launcher_names_its_tts_backend():
     where nothing is wrong — the kind of noise that trains someone to ignore
     the log."""
     assert "set RUFUS_TTS=" in _wan_fast()
+
+
+# ── serve.ps1 knows who is on the port ─────────────────────────────────────
+#
+# Tested as text because there is no PowerShell on the CI runner. That is a
+# real limit and worth stating: these assert the script SAYS the right things,
+# not that it runs. The behaviour they stand for is covered in Python by
+# tests/test_port_owner.py and tests/test_watchdog.py, which exercise the same
+# three decisions — identify the holder, only end one we can name, never end a
+# busy one.
+
+SERVE = ROOT / "serve.ps1"
+
+
+def _serve() -> str:
+    return SERVE.read_text(encoding="utf-8")
+
+
+def test_restart_does_not_trust_schtasks_end_to_free_the_port():
+    """schtasks /End ends only what the TASK started. The python holding 8765
+    had been launched by something else, so /End was a no-op, /Run launched
+    into a held port, and the script printed "Started: Rufus Dashboard" three
+    times at a dashboard that never came up."""
+    s = _serve()
+    block = s.split("if ($Restart) {", 1)[1].split("if ($Unregister)")[0]
+    assert "Get-PortHolder" in block, "-Restart still never looks at the port"
+    assert block.index("schtasks /End") < block.index("Get-PortHolder")
+    assert block.index("Get-PortHolder") < block.rindex("schtasks /Run")
+
+
+def test_restart_only_ends_a_process_it_can_name():
+    """Taking the port back is not worth killing something we cannot
+    identify — it may be the owner's own work."""
+    s = _serve()
+    block = s.split("if ($Restart) {", 1)[1].split("if ($Unregister)")[0]
+    assert block.index("Test-IsRufusDashboard") < block.index("Stop-Process")
+
+
+def test_an_unidentified_holder_stops_the_restart_rather_than_being_killed():
+    s = _serve()
+    block = s.split("if ($Restart) {", 1)[1].split("if ($Unregister)")[0]
+    tail = block.split("} else {", 1)[1]
+    assert "NOT a Rufus dashboard" in tail
+    assert "exit 1" in tail
+    assert "Stop-Process" not in tail
+
+
+def test_the_identity_check_needs_the_command_line_not_just_a_name():
+    """"python" is the venv interpreter, the system interpreter and somebody's
+    unrelated script alike."""
+    s = _serve()
+    fn = s.split("function Test-IsRufusDashboard", 1)[1].split("\n}")[0]
+    assert "CommandLine" in fn
+    assert "dashboard.py" in fn
+    assert "return $false" in fn, "no not-sure branch at all"
+
+
+def test_status_names_the_holder_before_it_dumps_the_logs():
+    """"Not answering" and "port in use" are two different problems with two
+    different fixes, and only this line tells them apart. It was missing
+    entirely, so the answer had to be found by hand."""
+    s = _serve()
+    block = s.split("if ($Status) {", 1)[1].split("if ($Restart)")[0]
+    assert "Show-PortHolder" in block
+    assert block.index("Show-PortHolder") < block.index("Last lines of logs")
+
+
+def test_the_log_tails_are_read_as_utf8():
+    """PS 5.1's Get-Content decodes as the ANSI code page, which on this
+    Hebrew-locale box is cp1255 — so every em-dash in these messages arrived
+    as mojibake. Same family as the PYTHONUTF8=1 line in every .bat."""
+    s = _serve()
+    for line in s.splitlines():
+        if "Get-Content" in line and "-Tail" in line:
+            assert "-Encoding UTF8" in line, line
+
+
+def test_the_helpers_are_defined_before_anything_calls_them():
+    """PowerShell scripts execute top to bottom; a function called above its
+    definition is a runtime error, and this file has no test that runs it."""
+    s = _serve()
+    for fn in ("Get-PortHolder", "Test-IsRufusDashboard", "Show-PortHolder"):
+        defined = s.index(f"function {fn}")
+        first_call = min(
+            (i for i in (s.find(f"{fn} $"), s.find(f"{fn} ${'{'}"),
+                         s.find(f"= {fn} "), s.find(f"({fn} "))
+             if i != -1), default=len(s))
+        assert defined < first_call, f"{fn} is called before it is defined"
+
+
+def test_restart_ends_the_dashboard_even_when_it_is_answering():
+    """-Restart is an instruction, not a repair. The ordinary reason to type it
+    is "I just pulled new code" — and a healthy dashboard started outside the
+    task survives schtasks /End and keeps serving the OLD code while /Run exits
+    3 and the script prints "Started". Same silent no-op as the stale-port
+    case, with a working page in front of it."""
+    s = _serve()
+    block = s.split("if ($Restart) {", 1)[1].split("if ($Unregister)")[0]
+    # The kill decision must not be gated on a health check.
+    kill = block.index("Stop-Process")
+    healthz_before_kill = block.rfind("healthz", 0, kill)
+    assert healthz_before_kill == -1, "the kill is still gated on /healthz"
+
+
+def test_restart_waits_for_the_socket_rather_than_guessing():
+    """/Run into a port Windows has not released yet fails in exactly the way
+    this whole block exists to fix."""
+    s = _serve()
+    block = s.split("if ($Restart) {", 1)[1].split("if ($Unregister)")[0]
+    assert "foreach ($i in 1..10)" in block
+    assert "$freed" in block
+
+
+def test_a_kill_that_did_not_free_the_port_stops_rather_than_pressing_on():
+    """Stop-Process -ErrorAction SilentlyContinue hides its own failure, so
+    the port has to be re-checked. Printing "Started" after a failed kill is
+    the original bug."""
+    s = _serve()
+    block = s.split("if ($Restart) {", 1)[1].split("if ($Unregister)")[0]
+    fail = block.index("Could not free port")
+    assert block.index("exit 1", fail) > fail
+    assert fail < block.rindex("schtasks /Run"), "it starts anyway"
