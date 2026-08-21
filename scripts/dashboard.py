@@ -1213,6 +1213,27 @@ PAGE_STYLE = """<!doctype html><html><head><meta charset="utf-8">
              margin-left: 14px; padding: 5px 2px; border-bottom: 2px solid transparent; }
   .navlink:hover { color: var(--accent); border-bottom-color: var(--accent); }
 
+  /* The grouped overflow. Closed it is one word; open it is four labelled
+     columns. No script — see _head for why. */
+  .navmore { display: inline-block; position: relative; margin-left: 14px;
+             vertical-align: baseline }
+  .navmore > summary { cursor: pointer; color: var(--dim); font-size: 14px;
+                       list-style: none; padding: 2px 8px;
+                       border: 1px solid var(--line); border-radius: 7px }
+  .navmore > summary::-webkit-details-marker { display: none }
+  .navmore > summary::after { content: " ▾"; opacity: .6 }
+  .navmore[open] > summary { color: var(--accent); border-color: var(--accent) }
+  .navmore-body { position: absolute; z-index: 40; top: calc(100% + 8px);
+                  left: 0; min-width: 460px; display: grid;
+                  grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px 22px;
+                  background: var(--surface); border: 1px solid var(--line);
+                  border-radius: var(--radius); box-shadow: var(--shadow);
+                  padding: 14px 16px }
+  .navgroup { display: flex; flex-direction: column; gap: 2px }
+  .navgroup-t { font-size: 11px; letter-spacing: .08em; text-transform: uppercase;
+                color: var(--dim); opacity: .7; margin-bottom: 2px }
+  .navgroup .navlink { border-bottom: 0; padding: 5px 0 }
+
   .orphan { background: var(--surface); border: 1px solid var(--border);
             border-radius: 8px; padding: 12px 14px; margin-bottom: 10px; }
 
@@ -1252,6 +1273,13 @@ PAGE_STYLE = """<!doctype html><html><head><meta charset="utf-8">
     header { padding: 10px 14px; }
     main { padding: 14px 14px 48px; }
     .navlink { display: inline-block; margin: 6px 12px 0 0; }
+    /* On a phone the overflow drops INTO the flow rather than floating over
+       it: a 460px panel positioned absolutely on a 390px screen is a panel
+       with half of itself off the edge. */
+    .navmore { display: block; margin: 10px 0 0; position: static }
+    .navmore-body { position: static; min-width: 0; grid-template-columns: 1fr 1fr;
+                    margin-top: 8px }
+    .navgroup .navlink { padding: 9px 0; }
     .whoami { margin-left: 0; display: block; margin-top: 8px; }
     /* Tap targets. The review queue is worked from a phone. */
     .btn { padding: 12px 20px; }
@@ -1304,6 +1332,28 @@ NAV_ITEMS = [
     ("/system",     "🖥 System",                          "system"),
     ("/settings",   "⚙ Settings",                         "settings"),
 ]
+
+# SIXTEEN LINKS IS NOT A NAVIGATION, IT IS AN INVENTORY.
+#
+# Flat, they wrapped to two rows on a laptop and filled an entire phone screen
+# before any content appeared — on a dashboard whose review queue is worked
+# from a phone. They are not sixteen equal things either; they are four jobs,
+# and only three of them are opened daily.
+#
+# The registry above stays flat and stays the source of truth (four tests
+# unpack it, and a page is registered by adding one line to it). This is a
+# VIEW of it. The invariant that matters is that every registered page appears
+# somewhere here — a page that exists and is unreachable is worse than one
+# that was never written, and a test enforces it.
+NAV_PRIMARY = ("/generate", "/gallery", "/tracking")
+
+NAV_GROUPS = (
+    ("Make",    ("/generate", "/thumbnails", "/styles")),
+    ("Review",  ("/gallery", "/history", "/failures")),
+    ("Measure", ("/tracking", "/performance", "/insights", "/advice",
+                 "/trending", "/scout")),
+    ("System",  ("/bench", "/logs", "/system", "/settings")),
+)
 
 
 # Polls /api/status and rewrites the bar in place. Vanilla JS and inline —
@@ -1410,8 +1460,32 @@ def _head() -> str:
     is asking, which a constant can't express. Hiding a link is cosmetic —
     every route enforces its own permission besides.
     """
-    links = "".join(f'<a class="navlink" href="{href}">{label}</a>\n'
-                    for href, label, perm in NAV_ITEMS if auth.can(perm))
+    allowed = {href: label for href, label, perm in NAV_ITEMS if auth.can(perm)}
+
+    def _link(href: str) -> str:
+        return (f'<a class="navlink" href="{href}">{allowed[href]}</a>'
+                if href in allowed else "")
+
+    primary = "".join(_link(h) for h in NAV_PRIMARY)
+
+    # <details> and not a script: this dashboard is deliberately
+    # self-contained with no build step, and a menu that needs JavaScript to
+    # open is a menu that does not open when the JavaScript fails. It is also
+    # keyboard-reachable and screen-reader-sane for free.
+    #
+    # A group whose every link this user lacks permission for is omitted
+    # entirely rather than rendered empty — the same reason a single link they
+    # would only get a 403 from is hidden.
+    sections = []
+    for title, hrefs in NAV_GROUPS:
+        rows = "".join(_link(h) for h in hrefs if h in allowed)
+        if rows:
+            sections.append(f'<div class="navgroup"><span class="navgroup-t">'
+                            f'{title}</span>{rows}</div>')
+    more = (f'<details class="navmore"><summary>More</summary>'
+            f'<div class="navmore-body">{"".join(sections)}</div></details>'
+            if sections else "")
+    links = primary + more + "\n"
     user = getattr(g, "rufus_user", None) or {}
     who = ""
     if user:

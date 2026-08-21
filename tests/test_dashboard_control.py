@@ -404,3 +404,41 @@ def test_the_preview_scene_is_the_same_for_every_style():
 
 def test_a_preview_that_does_not_exist_is_a_404_not_a_traceback(client):
     assert client.get("/styles/preview/not_a_style").status_code == 404
+
+
+# ── sixteen links is not a navigation, it is an inventory ────────────────────
+#
+# Flat, they wrapped to two rows on a laptop and filled an entire phone screen
+# before any content appeared — on a dashboard whose review queue is worked
+# from a phone. NAV_ITEMS stays the flat registry (a page is registered by
+# adding one line to it, and four tests unpack it); NAV_GROUPS is a view.
+#
+# The invariant worth enforcing is coverage. A page that exists and is
+# unreachable is worse than one that was never written, and the failure mode
+# is silent: you add a route, add its NAV_ITEMS line, and it renders nowhere.
+
+def test_every_registered_page_is_reachable_from_the_nav():
+    registered = {href for href, _l, _p in dashboard.NAV_ITEMS}
+    grouped = {h for _title, hrefs in dashboard.NAV_GROUPS for h in hrefs}
+    assert registered - grouped == set(), "registered but in no group"
+    assert grouped - registered == set(), "grouped but not registered"
+
+
+def test_the_primary_links_are_real_pages():
+    registered = {href for href, _l, _p in dashboard.NAV_ITEMS}
+    assert set(dashboard.NAV_PRIMARY) <= registered
+
+
+def test_no_page_is_in_two_groups():
+    """Two homes for one page means the reader has to learn which one you
+    meant, which is the problem the grouping exists to remove."""
+    seen = [h for _t, hrefs in dashboard.NAV_GROUPS for h in hrefs]
+    assert len(seen) == len(set(seen))
+
+
+def test_the_menu_needs_no_javascript_to_open():
+    """This dashboard is deliberately self-contained with no build step, and a
+    menu that needs a script to open is a menu that does not open when the
+    script fails."""
+    src = Path(dashboard.__file__).read_text(encoding="utf-8")
+    assert '<details class="navmore">' in src

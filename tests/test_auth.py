@@ -944,3 +944,48 @@ def test_an_empty_stamp_is_a_dash_not_a_crash():
     for empty in (None, "", "   "):
         assert "&mdash;" in dashboard._when_cell(empty) or \
                "no time" in dashboard._when_cell(empty), repr(empty)
+
+
+# ── the grouped nav still hides what a partner cannot use ────────────────────
+#
+# Sixteen flat links became four groups. Hiding a link was always cosmetic —
+# every route enforces its own permission besides — but a group HEADING over
+# an empty column is worse than either: it advertises a page and then refuses
+# to show it.
+
+def test_a_partner_sees_no_link_they_cannot_use(client):
+    """The grouping must not smuggle a link back in. A partner keeps Logs,
+    which is why the System group survives for them — but not Settings, the
+    bench, or System itself."""
+    import re
+    client.get(f"/?token={PARTNER_TOKEN}")
+    header = client.get("/").data.decode("utf-8", "replace") \
+        .split("<header>", 1)[1].split("</header>", 1)[0]
+    hrefs = set(re.findall(r'navlink" href="([^"]+)"', header))
+    assert {"/settings", "/system", "/bench", "/styles"} & hrefs == set()
+    assert "/gallery" in hrefs
+
+
+def test_an_owner_still_reaches_every_registered_page(client):
+    """The grouping must not lose a page on the way. A route that exists and
+    is linked from nowhere is worse than one that was never written."""
+    client.get(f"/?token={OWNER_TOKEN}")
+    page = client.get("/").data.decode("utf-8", "replace")
+    for href, _label, _perm in dashboard.NAV_ITEMS:
+        assert f'href="{href}"' in page, href
+
+
+def test_an_empty_group_is_omitted_rather_than_rendered_bare(client):
+    """A heading over an empty column advertises pages and then refuses them.
+
+    A VIEWER is the case that empties one: Make holds generate, thumbnail and
+    settings permissions and a viewer has none of the three. A partner is not
+    the test — they keep `view`, so System still contains Logs.
+    """
+    import re
+    client.get(f"/?token={VIEWER_TOKEN}")
+    header = client.get("/").data.decode("utf-8", "replace") \
+        .split("<header>", 1)[1].split("</header>", 1)[0]
+    groups = re.findall(r'navgroup-t">([^<]+)<', header)
+    assert "Make" not in groups
+    assert "Review" in groups, "a viewer can still review"
