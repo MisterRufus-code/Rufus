@@ -414,7 +414,7 @@ SETTINGS_GROUPS = [
         # two cannot drift again.
         ("RUFUS_STYLE", "Style preset",
          "select:stickman,ink_explainer,flat_vector,ink_woodcut,paper_cut,"
-         "chalkboard,retro_print,storybook",
+         "chalkboard,retro_print,storybook,thumbnail",
          "Named look from config/styles.json, appended to every image prompt "
          "byte for byte. Leave at (default) to use the niche's own style_suffix. "
          "Render one of each on the Style page before choosing."),
@@ -2246,6 +2246,7 @@ def history_page():
 @app.route("/thumbnails")
 def thumbnails_page():
     auth.require("thumbnail")
+    import comfy_client
     import image_gen
 
     comfy_up = _comfyui_reachable()
@@ -2261,6 +2262,9 @@ def thumbnails_page():
     cards = ""
     for img in image_gen.recent_images(limit=36):
         name = _urlquote(img["name"])
+        # The composed file when there is one, the raw background otherwise —
+        # so a card shows the thing that would actually go on YouTube.
+        shown = _urlquote(img["composed"] or img["name"])
         make_btn = ""
         if can_generate and img["prompt"]:
             make_btn = (
@@ -2278,41 +2282,133 @@ def thumbnails_page():
                 f'<input type="hidden" name="name" value="{_esc(img["name"])}">'
                 f'<button class="btn" type="submit" '
                 f'style="padding:5px 10px;font-size:12px">🗑 Delete</button></form>')
+
+        # THE HEADLINE, TYPED HERE, RECOMPOSED INSTANTLY. No GPU — the picture
+        # already exists and Pillow draws the words on it in about a tenth of
+        # a second, so trying five headlines against one background costs
+        # nothing.
+        head_form = (
+            f'<form method="post" action="/thumbnails/compose" '
+            f'style="margin-top:6px;display:flex;gap:6px">'
+            f'<input type="hidden" name="name" value="{_esc(img["name"])}">'
+            f'<input class="field" style="margin:0;font-size:12px;padding:5px 8px" '
+            f'type="text" name="headline" value="{_esc(img["headline"])}" '
+            f'placeholder="headline (3-5 words)" maxlength="90">'
+            f'<button class="btn save" type="submit" '
+            f'style="padding:5px 10px;font-size:12px">Set</button></form>')
+
+        # WHAT IT LOOKS LIKE IN THE FEED. 168x94 is the size a thumbnail is
+        # actually competing at on a phone, and it is the only size that
+        # decides anything. The page used to show one size, full width, which
+        # is the size nobody ever sees it at.
+        feed = ""
+        if img["composed"]:
+            feed = (f'<img src="/thumbnails/file/{shown}?w=240" loading="lazy" '
+                    f'alt="" title="what it looks like in the feed" '
+                    f'style="width:168px;height:94px;object-fit:cover;'
+                    f'border-radius:4px;margin-top:6px">')
+
         when = time.strftime("%d %b %H:%M", time.localtime(img["mtime"]))
         cards += (
             f'<div class="thumbcard">'
-            f'<a href="/thumbnails/file/{name}" target="_blank">'
-            f'<img src="/thumbnails/file/{name}?w=480" loading="lazy" alt=""></a>'
+            f'<a href="/thumbnails/file/{shown}" target="_blank">'
+            f'<img src="/thumbnails/file/{shown}?w=480" loading="lazy" alt=""></a>'
             f'<div class="meta">{_esc(img["prompt"][:90] or img["name"])}<br>'
-            f'<a href="/thumbnails/file/{name}?download=1">⬇ Save to phone</a>'
-            f' · {img["kb"]}KB · {when}{make_btn}{del_btn}</div></div>')
+            f'<a href="/thumbnails/file/{shown}?download=1">⬇ Save to phone</a>'
+            f' · {img["kb"]}KB · {when}{feed}{head_form}{make_btn}{del_btn}'
+            f'</div></div>')
     gallery = (f'<div class="thumbgrid">{cards}</div>' if cards else
                "<p class='muted'>Nothing generated yet.</p>")
 
+    presets = sorted(comfy_client.style_presets())
+    style_options = "".join(
+        f'<option value="{_esc(k)}" {"selected" if k == "thumbnail" else ""}>'
+        f'{_esc(k)}</option>' for k in presets)
+
     body = f"""
     <a class="back" href="/">← back</a>
-    <h2 style="margin-top:14px">Generate a thumbnail</h2>
+    <h2 style="margin-top:14px">Make a thumbnail</h2>
     {warn}
     {_msg_banner()}
-    <p class="muted">Renders on the owner's RTX 3090 through the same image
-       model the videos use. Takes a few seconds — the page waits for it.
-       1280×720 is YouTube's thumbnail shape; the other option matches the
-       frame the next run renders at.</p>
+    <p class="muted">Draws the picture on the RTX 3090 and burns the headline
+       onto it — the niche accent bar, the words in Anton with an outline, and
+       the recurring character's badge once this niche has one. Runs in the
+       background; refresh when it is done. <b>The headline can be retyped on
+       any finished image without redrawing it</b>, so try several.</p>
     <form method="post" action="/thumbnails/generate">
-      <label for="tp">Describe the image</label>
+      <label for="tp">Describe the picture</label>
       <input class="field" type="text" id="tp" name="prompt" required
              placeholder="a cracked hourglass spilling gold coins across a desk">
-      <label for="tshape">Shape</label>
-      <select class="field" id="tshape" name="shape">
-        <option value="landscape">Landscape {image_gen.THUMB_W}×{image_gen.THUMB_H} (YouTube thumbnail)</option>
-        <option value="frame">{image_gen.FRAME_W}×{image_gen.FRAME_H} (video frame)</option>
-      </select>
-      <button class="btn save" type="submit">Generate</button>
+      <label for="th">Headline (3-5 words — this is what gets the click)</label>
+      <input class="field" type="text" id="th" name="headline" maxlength="90"
+             placeholder="The bank that printed itself">
+      <div style="display:flex;gap:12px;flex-wrap:wrap">
+        <div style="flex:1;min-width:180px">
+          <label for="tstyle">Look</label>
+          <select class="field" id="tstyle" name="style">{style_options}</select>
+        </div>
+        <div style="flex:1;min-width:180px">
+          <label for="tshape">Shape</label>
+          <select class="field" id="tshape" name="shape">
+            <option value="landscape">Landscape {image_gen.THUMB_W}×{image_gen.THUMB_H} (YouTube)</option>
+            <option value="frame">{image_gen.FRAME_W}×{image_gen.FRAME_H} (video frame)</option>
+          </select>
+        </div>
+        <div style="min-width:120px">
+          <label for="tcount">How many</label>
+          <select class="field" id="tcount" name="count">
+            <option value="1">1</option><option value="3" selected>3</option>
+            <option value="5">5</option>
+          </select>
+        </div>
+      </div>
+      <button class="btn save" type="submit">Draw them</button>
     </form>
     <h2>Generated</h2>
     {gallery}
     """
     return _head() + body + PAGE_TAIL
+
+
+def _launch_thumb(prompt: str, headline: str, count: int, *,
+                  frame: bool = False, style: str = ""):
+    """Render thumbnail backgrounds in a subprocess. (proc, log_path).
+
+    THE SAME SHAPE AS _launch_recut AND FOR THE SAME REASON. This used to call
+    image_gen.generate_image() inline and the page waited for it — which under
+    threaded=False froze the dashboard for everyone for the length of a GPU
+    render, and the code said so out loud ("that wait freezes the dashboard for
+    everyone") without doing anything about it. Threading fixes the freezing;
+    it does not make a browser tab sit on an open connection for ninety seconds
+    any less silly, and it cannot render three variants at once.
+
+    The style override belongs to THIS render and not to the channel: the run
+    style is whatever the videos are being made in, and asking for a thumbnail
+    must not quietly change it. _scoped_env cannot do that here because the
+    value has to reach a CHILD process, so it goes in that child's environment
+    and nowhere else.
+    """
+    cmd = [sys.executable, str(ROOT / "scripts" / "image_gen.py"), prompt,
+           "--count", str(max(1, min(count, 6)))]
+    if headline.strip():
+        cmd += ["--headline", headline.strip()]
+    if frame:
+        cmd += ["--frame"]
+    env = os.environ.copy()
+    env.update(_load_settings())
+    env.setdefault("PYTHONUTF8", "1")
+    env.setdefault("PYTHONIOENCODING", "utf-8")
+    if style:
+        env["RUFUS_STYLE"] = style
+        env.pop("RUFUS_STILLS_DETAIL", None)   # a literal override outranks it
+    log_dir = ROOT / "logs"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    log_path = log_dir / f"thumb_{int(time.time())}.log"
+    with open(log_path, "wb") as logf:
+        proc = subprocess.Popen(cmd, cwd=str(ROOT), stdout=logf, env=env,
+                                stderr=subprocess.STDOUT,
+                                stdin=subprocess.DEVNULL)
+    return proc, log_path
 
 
 @app.route("/thumbnails/generate", methods=["POST"])
@@ -2324,9 +2420,8 @@ def thumbnails_generate():
     if not prompt:
         return redirect("/thumbnails?error=Describe+the+image+first")
     # A video run owns the GPU for its whole duration, so a thumbnail asked
-    # for now would sit in ComfyUI's queue behind it — and because this render
-    # is inline on a threaded=False server, that wait freezes the dashboard for
-    # everyone. Refuse immediately instead, with the reason.
+    # for now would sit in ComfyUI's queue behind it. Refuse immediately with
+    # the reason rather than queueing a job that cannot start.
     busy = [c for c in _channels() if _run_in_progress(c)]
     if busy:
         return redirect("/thumbnails?error=" + _urlquote(
@@ -2334,29 +2429,50 @@ def thumbnails_generate():
             f"Thumbnails have to wait for it to finish — try again shortly."))
 
     # "frame" is the video's own shape, whatever format the next run is.
-    # "portrait" is the value the form used to send and older bookmarks and
+    # "portrait" is the value the form used to send, and older bookmarks and
     # any open tab still do, so it keeps meaning the same thing.
     want_frame = request.form.get("shape") in ("frame", "portrait")
-    w, h = ((image_gen.FRAME_W, image_gen.FRAME_H) if want_frame
-            else (image_gen.THUMB_W, image_gen.THUMB_H))
+    headline = request.form.get("headline", "").strip()
+    style = request.form.get("style", "").strip()
     try:
-        path = image_gen.generate_image(prompt, width=w, height=h,
-                                        timeout=image_gen.WEB_TIMEOUT)
-    except Exception as e:
-        return redirect(f"/thumbnails?error={_urlquote(f'Generation failed: {e}')}")
-    if path is None:
-        return redirect("/thumbnails?error=" + _urlquote(
-            "Generation failed — check ComfyUI is running and a stills "
-            "workflow is exported to config/stills_api.json"))
+        count = int(request.form.get("count", "1"))
+    except ValueError:
+        count = 1
 
-    # Mirror it into Discord so the team sees new art without opening the
-    # tailnet — best effort, never turns a good render into an error.
     try:
-        import notify
-        notify.send_file(path, caption=f"🎨 New thumbnail: {prompt[:180]}")
-    except Exception:
-        pass
-    return redirect("/thumbnails?ok=" + _urlquote(f"Generated {path.name}"))
+        _proc, log = _launch_thumb(prompt, headline, count,
+                                   frame=want_frame, style=style)
+    except Exception as e:
+        return redirect(f"/thumbnails?error={_urlquote(f'Could not start: {e}')}")
+    return redirect("/thumbnails?ok=" + _urlquote(
+        f"Drawing {count} — refresh in a minute (log: {log.name})"))
+
+
+@app.route("/thumbnails/compose", methods=["POST"])
+def thumbnails_compose():
+    """Put different words on a background that already exists.
+
+    THE FAST HALF, KEPT SEPARATE FROM THE SLOW ONE. Drawing the picture is
+    seconds of GPU; drawing the words on it is about a tenth of a second of
+    Pillow. Keeping them in one button meant every headline you wanted to try
+    cost another render, so nobody tried a second one.
+    """
+    auth.require("thumbnail")
+    import image_gen
+
+    name = request.form.get("name", "").strip()
+    headline = request.form.get("headline", "").strip()
+    # Matched against the listing rather than trusted as a path — this value
+    # reaches the filesystem otherwise.
+    match = next((i for i in image_gen.recent_images(limit=500)
+                  if i["name"] == name), None)
+    if match is None:
+        return redirect("/thumbnails?error=" + _urlquote("No such image."))
+    src = paths.thumbnails_dir() / match["name"]
+    if not image_gen.set_headline(src, headline):
+        return redirect("/thumbnails?error=" + _urlquote(
+            "Could not compose that headline — see the dashboard log."))
+    return redirect("/thumbnails?ok=" + _urlquote(f"Composed “{headline[:50]}”"))
 
 
 @app.route("/thumbnails/make-video", methods=["POST"])

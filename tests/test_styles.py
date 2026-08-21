@@ -26,6 +26,25 @@ def _looks() -> dict:
     return {k: v for k, v in STYLES.items() if not k.startswith("_")}
 
 
+# TWO DIFFERENT JOBS, AND ONLY ONE OF THEM IS A SEQUENCE.
+#
+# Eight of these presets render the ten beats of one video, so "the place
+# persists across shots" and "four to eight things that say where this is" are
+# load-bearing: they are what stop ten drawings of the same story looking like
+# ten different worlds, and what stopped the white-void bug.
+#
+# `thumbnail` renders ONE picture, looked at 168 pixels wide in a phone feed.
+# There are no consecutive shots for a horizon to stay level across, and four
+# to eight background objects at that size are mush. It is held to its own
+# version of the same protections below — specify the background, never leave
+# it bare, read at thumbnail size — not exempted from them.
+_SEQUENCE_ONLY = {"thumbnail"}
+
+
+def _story_looks() -> dict:
+    return {k: v for k, v in _looks().items() if k not in _SEQUENCE_ONLY}
+
+
 def test_every_preset_is_one_block_of_text():
     """The suffix is pasted verbatim into every prompt. A list or a dict here
     would render as its Python repr."""
@@ -128,7 +147,7 @@ def test_no_preset_makes_the_background_fainter_instead_of_simpler(name):
     assert "because it is simpler" in s
 
 
-@pytest.mark.parametrize("name", sorted(_looks()))
+@pytest.mark.parametrize("name", sorted(_story_looks()))
 def test_every_preset_builds_a_place_and_keeps_it(name):
     """A style is appended to every prompt byte for byte, so a preset that
     says nothing about the background lets the model decide — and the model
@@ -286,7 +305,7 @@ def test_no_preset_names_a_specific_thing_to_draw(name):
         f"example, it is a subject")
 
 
-@pytest.mark.parametrize("name", sorted(_looks()))
+@pytest.mark.parametrize("name", sorted(_story_looks()))
 def test_the_rule_the_examples_were_illustrating_survives(name):
     """The fix must not throw out the instruction with the nouns. Every preset
     still has to say to build the place — deleting the list and leaving nothing
@@ -657,3 +676,50 @@ def test_the_phrase_that_caused_the_blob_is_gone():
     s = _looks()["stickman"]
     assert "FLAT FILLED SHAPES" not in s
     assert "Every part is white fill inside an outline" not in s
+
+
+# ── the thumbnail look ───────────────────────────────────────────────────────
+#
+# Exempt from the two sequence rules (see _SEQUENCE_ONLY) and from nothing
+# else: it still has to ban lettering and the photographic tells, which the
+# shared parametrized tests above cover. These are its own versions of the
+# protections those two rules were giving the story presets.
+
+def test_the_thumbnail_preset_still_specifies_its_background():
+    """THE WHITE-VOID BUG DOES NOT CARE THAT THIS IS ONE PICTURE. A preset
+    that says nothing about the background lets the model decide, and the model
+    decides blank paper. This one says what to build; it just builds less of
+    it."""
+    s = STYLES["thumbnail"]
+    assert "BUILD THE WHOLE PLACE" in s
+    assert "never leave it\nas bare paper" in s or "never leave it as bare paper" in s
+    assert "two or three large shapes at most" in s
+
+
+def test_the_thumbnail_preset_is_not_faded_either():
+    """The correction that cost a gallery: quieter because simpler, not
+    because washed out."""
+    s = STYLES["thumbnail"]
+    assert "because it is simpler and further away, not because it\nis faded" in s \
+        or "because it is simpler and further away, not because it is faded" in s
+    assert "paler than the foreground" not in s
+
+
+def test_the_thumbnail_preset_leaves_room_for_the_headline():
+    """thumbnail_gen.compose draws the words across the lower third. A picture
+    with the subject centred there produces a headline over a face."""
+    s = STYLES["thumbnail"]
+    assert "LEAVE THE LOWER THIRD OPEN" in s
+
+
+def test_the_thumbnail_preset_is_built_for_the_size_it_is_seen_at():
+    s = STYLES["thumbnail"].lower()
+    assert "postage stamp" in s
+    assert "reads instantly at thumbnail size" in s
+
+
+def test_the_thumbnail_preset_is_not_the_stickman():
+    """It exists because stickman is thin uniform line art on white — built to
+    carry a story across ten beats, and at 168x94 a white rectangle."""
+    assert "ONE SUBJECT, ENORMOUS IN FRAME" in STYLES["thumbnail"]
+    assert "ONE SUBJECT, ENORMOUS IN FRAME" not in STYLES["stickman"]

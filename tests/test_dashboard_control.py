@@ -849,3 +849,126 @@ def test_two_overlapping_scoped_envs_cannot_interleave():
     assert not errors
     assert all(asked == got for asked, got in seen), seen
     assert "RUFUS_TEST_CHANNEL" not in os.environ
+
+
+# ── the thumbnails page makes thumbnails now ───────────────────────────────
+
+@pytest.fixture
+def thumbs(tmp_path, monkeypatch):
+    """A thumbnails dir with one background in it, wired everywhere it is read."""
+    import image_gen
+    from PIL import Image
+    d = tmp_path / "thumbs"
+    d.mkdir()
+    monkeypatch.setattr(dashboard.paths, "thumbnails_dir", lambda: d)
+    monkeypatch.setattr(image_gen.paths, "thumbnails_dir", lambda: d)
+    png = d / "1700000000_hourglass.png"
+    Image.new("RGB", (1280, 720), (26, 40, 68)).save(png)
+    png.with_suffix(".txt").write_text("PROMPT: a cracked hourglass\nSEED: 7\n",
+                                       encoding="utf-8")
+    return png
+
+
+def test_drawing_a_thumbnail_does_not_render_in_the_request(client, monkeypatch):
+    """It called image_gen.generate_image() inline and the page waited for it —
+    and the code SAID so ("that wait freezes the dashboard for everyone")
+    without doing anything about it. A browser tab holding an open connection
+    for ninety seconds is still silly on a threaded server, and it cannot draw
+    three variants at once."""
+    import image_gen
+    def _boom(*a, **k):                              # pragma: no cover
+        raise AssertionError("rendered inside the request")
+    monkeypatch.setattr(image_gen, "generate_image", _boom)
+    launched = {}
+    monkeypatch.setattr(dashboard, "_launch_thumb",
+                        lambda *a, **k: (launched.setdefault("args", (a, k)),
+                                         Path("logs/thumb_1.log"))[1:])
+    monkeypatch.setattr(dashboard, "_channels", lambda: [])
+    r = client.post("/thumbnails/generate",
+                    data={"prompt": "a cracked hourglass", "headline": "Gold",
+                          "count": "3"})
+    assert r.status_code == 302
+    assert launched, "the render was never launched"
+
+
+def test_the_style_override_reaches_the_child_and_not_this_process(monkeypatch):
+    """The run style is whatever the videos are being made in. Asking for a
+    thumbnail must not quietly change it — and _scoped_env cannot help here
+    because the value has to reach a CHILD process."""
+    seen = {}
+
+    class _Proc:
+        pid = 1
+
+    def _popen(cmd, **kw):
+        seen["env"] = kw["env"]
+        seen["cmd"] = cmd
+        return _Proc()
+
+    monkeypatch.setattr(dashboard.subprocess, "Popen", _popen)
+    monkeypatch.setenv("RUFUS_STYLE", "stickman")
+    dashboard._launch_thumb("a coin", "Gold", 2, style="thumbnail")
+    assert seen["env"]["RUFUS_STYLE"] == "thumbnail"
+    assert os.environ["RUFUS_STYLE"] == "stickman", "the process style changed"
+    assert "--count" in seen["cmd"] and "2" in seen["cmd"]
+    assert "--headline" in seen["cmd"]
+
+
+def test_a_literal_detail_override_cannot_outrank_the_chosen_look(monkeypatch):
+    """RUFUS_STILLS_DETAIL beats RUFUS_STYLE in comfy_client._detail_suffix,
+    so leaving it set would silently ignore the look picked on the form."""
+    class _Proc:
+        pid = 1
+    seen = {}
+    monkeypatch.setattr(dashboard.subprocess, "Popen",
+                        lambda cmd, **kw: (seen.update(env=kw["env"]), _Proc())[1])
+    monkeypatch.setenv("RUFUS_STILLS_DETAIL", "something else entirely")
+    dashboard._launch_thumb("a coin", "", 1, style="thumbnail")
+    assert "RUFUS_STILLS_DETAIL" not in seen["env"]
+
+
+def test_retyping_the_headline_never_touches_the_gpu(client, thumbs, monkeypatch):
+    """Drawing the picture is seconds of GPU; drawing the words on it is a
+    tenth of a second of Pillow. One button for both meant every headline you
+    wanted to try cost another render, so nobody tried a second one."""
+    import image_gen
+    def _boom(*a, **k):                              # pragma: no cover
+        raise AssertionError("called ComfyUI to change some words")
+    monkeypatch.setattr(image_gen, "generate_image", _boom)
+    r = client.post("/thumbnails/compose",
+                    data={"name": thumbs.name, "headline": "Rome ran out"})
+    assert r.status_code == 302
+    assert image_gen.composed_path(thumbs).exists()
+
+
+def test_the_headline_is_remembered_so_the_box_is_not_empty_next_time(client, thumbs):
+    import image_gen
+    client.post("/thumbnails/compose",
+                data={"name": thumbs.name, "headline": "Rome ran out"})
+    assert image_gen.recent_images()[0]["headline"] == "Rome ran out"
+
+
+def test_the_card_shows_the_composed_thumbnail_not_the_bare_background(client, thumbs):
+    """A card showing the raw picture is showing something that will never go
+    on YouTube."""
+    import image_gen
+    client.post("/thumbnails/compose",
+                data={"name": thumbs.name, "headline": "Rome ran out"})
+    page = client.get("/thumbnails").get_data(as_text=True)
+    assert image_gen.composed_path(thumbs).name in page
+
+
+def test_the_page_shows_it_at_the_size_it_competes_at(client, thumbs):
+    """168x94 is the mobile feed. The page showed one size, full width, which
+    is the size nobody ever sees it at."""
+    client.post("/thumbnails/compose",
+                data={"name": thumbs.name, "headline": "Rome ran out"})
+    page = client.get("/thumbnails").get_data(as_text=True)
+    assert "width:168px;height:94px" in page
+
+
+def test_an_unknown_image_name_cannot_reach_the_filesystem(client, thumbs):
+    r = client.post("/thumbnails/compose",
+                    data={"name": "../../etc/passwd", "headline": "x"})
+    assert r.status_code == 302
+    assert "No%20such%20image" in r.headers["Location"]

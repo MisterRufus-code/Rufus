@@ -219,6 +219,54 @@ def generate_image(prompt: str, out_path: Path | None = None, *,
     return out_path
 
 
+# The composed thumbnail sits beside its background rather than replacing it.
+# Overwriting the png would mean the headline could be typed exactly once —
+# and the whole point of typing it on the page is trying five of them against
+# the same picture without paying for the GPU again.
+COMPOSED_SUFFIX = ".thumb.jpg"
+
+
+def composed_path(png_path: Path) -> Path:
+    return Path(png_path).with_suffix(COMPOSED_SUFFIX)
+
+
+def _sidecar_set(png_path: Path, key: str, value: str) -> None:
+    """Replace one KEY: line in the sidecar, keeping the rest."""
+    meta = Path(png_path).with_suffix(".txt")
+    try:
+        lines = meta.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        lines = []
+    lines = [ln for ln in lines if not ln.startswith(f"{key}:")]
+    lines.append(f"{key}: {value}")
+    try:
+        meta.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    except OSError:
+        pass
+
+
+def set_headline(png_path: Path, headline: str) -> Path | None:
+    """Compose `headline` onto this background and remember it.
+
+    ONE IMPLEMENTATION, TWO CALLERS: the CLI (so a background job can render
+    and compose in one process) and the dashboard's recompose route (so
+    retyping the words costs ~100ms of Pillow and no GPU at all). A second copy
+    of "compose, then record what was composed" would drift, and the half that
+    drifts is whichever one is not being looked at.
+    """
+    png_path = Path(png_path)
+    if not png_path.exists():
+        return None
+    try:
+        import thumbnail_gen
+        out = thumbnail_gen.compose(png_path, headline, composed_path(png_path))
+    except Exception as e:
+        print(f"[image] could not compose the headline: {e}")
+        return None
+    _sidecar_set(png_path, "HEADLINE", headline.replace("\n", " "))
+    return out
+
+
 def recent_images(limit: int = 40) -> list[dict]:
     """Newest-first list of generated images, for the dashboard gallery."""
     d = paths.thumbnails_dir()
@@ -228,15 +276,20 @@ def recent_images(limit: int = 40) -> list[dict]:
     out = []
     for p in pngs[:limit]:
         meta = p.with_suffix(".txt")
-        prompt = ""
+        prompt, headline = "", ""
         if meta.exists():
             try:
-                first = meta.read_text(encoding="utf-8").splitlines()[0]
-                prompt = first.replace("PROMPT:", "").strip()
-            except (OSError, IndexError):
+                for line in meta.read_text(encoding="utf-8").splitlines():
+                    if line.startswith("PROMPT:") and not prompt:
+                        prompt = line.split(":", 1)[1].strip()
+                    elif line.startswith("HEADLINE:"):
+                        headline = line.split(":", 1)[1].strip()
+            except OSError:
                 pass
         st = p.stat()
-        out.append({"name": p.name, "prompt": prompt,
+        composed = composed_path(p)
+        out.append({"name": p.name, "prompt": prompt, "headline": headline,
+                    "composed": composed.name if composed.exists() else "",
                     "mtime": st.st_mtime, "kb": st.st_size // 1024})
     return out
 
@@ -254,18 +307,35 @@ def main() -> int:
     ap.add_argument("--height", type=int, help="Explicit height")
     ap.add_argument("--no-detail", action="store_true",
                     help="Skip the photographic detail suffix — use the prompt verbatim")
+    ap.add_argument("--headline", default="",
+                    help="Compose these words onto the image as a YouTube "
+                         "thumbnail headline (thumbnail_gen.compose)")
+    ap.add_argument("--count", type=int, default=1,
+                    help="Render this many variants of the same prompt. Real "
+                         "thumbnail work is picking one of several, not "
+                         "accepting the first.")
     args = ap.parse_args()
 
     width  = args.width  or (FRAME_W if args.frame else THUMB_W)
     height = args.height or (FRAME_H if args.frame else THUMB_H)
 
-    path = generate_image(args.prompt, Path(args.out) if args.out else None,
-                          width=width, height=height, seed=args.seed,
-                          add_detail=not args.no_detail)
-    if path is None:
-        return 1
-    print(f"OUTPUT={path}")
-    return 0
+    made = 0
+    for n in range(max(1, args.count)):
+        # --out names ONE file, so it only makes sense for a single render;
+        # asking for five into one path would leave one image and four
+        # overwritten ones, which is worse than refusing.
+        out = Path(args.out) if (args.out and args.count <= 1) else None
+        path = generate_image(args.prompt, out, width=width, height=height,
+                              seed=args.seed, add_detail=not args.no_detail)
+        if path is None:
+            continue
+        made += 1
+        if args.headline.strip():
+            composed = set_headline(path, args.headline.strip())
+            if composed:
+                print(f"COMPOSED={composed}")
+        print(f"OUTPUT={path}")
+    return 0 if made else 1
 
 
 if __name__ == "__main__":
