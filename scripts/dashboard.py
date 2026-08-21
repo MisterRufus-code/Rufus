@@ -1410,6 +1410,12 @@ PAGE_STYLE = """<!doctype html><html><head><meta charset="utf-8">
     /* Tap targets. The review queue is worked from a phone. */
     .btn { padding: 12px 20px; }
     th, td { padding: 12px 10px; }
+    /* Approve / Reject / Download stack full width instead of sharing a row
+       three ways — on a 390px screen that row gives each of them about a
+       thumb's width, and the two that are not Download are irreversible. */
+    .actions { flex-direction: column; align-items: stretch; }
+    .actions form, .actions .btn { width: 100%; }
+    .actions .btn { display: block; text-align: center; }
   }
   .fmt-switch { display:inline-flex; gap:0; margin-left:10px; vertical-align:middle;
                 border:1px solid var(--line); border-radius:8px; overflow:hidden }
@@ -3872,8 +3878,16 @@ def video_detail(video_id):
     # being here) but no Approve, because publishing isn't theirs to do.
     buttons = ""
     if v["upload_status"] != "approved" and auth.can("approve"):
+        # The confirm names the title, because the editor for it now sits
+        # below this button rather than above it. json.dumps builds the JS
+        # string literal (quotes, backslashes, newlines) and _esc then makes
+        # it safe as an attribute value — hand-escaping one and not the other
+        # is how a title with an apostrophe breaks the button entirely.
+        going_out = _esc(json.dumps(
+            f"Upload \u201c{(v['title'] or v['script_hook'] or 'this video')[:70]}"
+            f"\u201d to YouTube now?"))
         buttons += (f'<form method="post" action="/video/{v["id"]}/approve" '
-                    f'onsubmit="return confirm(\'Upload this video to YouTube now?\');">'
+                    f'onsubmit="return confirm({going_out});">'
                     f'<button class="btn approve" type="submit">✓ Approve &amp; Upload</button>'
                     f'</form>')
     if v["upload_status"] != "approved" and auth.can("reject"):
@@ -3972,28 +3986,45 @@ def video_detail(video_id):
         )
         assets_html = f'<div class="assets">{links}</div>'
 
+    # THE ORDER OF THIS PAGE IS THE ORDER OF THE JOB: hear it, look at the
+    # beats, decide. It used to be the order the page was built in — the id
+    # line, the status, the score, the five-row criteria table, the approve
+    # buttons, the publish form and the title editor all came BEFORE the
+    # voiceover and the contact sheet. On a laptop that is a slightly odd
+    # page. On a phone, which is where this review actually happens, it is
+    # four screens of numbers and forms before the first thing you were going
+    # to judge it on, and the buttons are somewhere in the middle of them.
+    #
+    # So: what it is, then the thing itself, then the decision. Everything
+    # that explains or amends the decision — the score breakdown, the critic's
+    # reasoning, the rewrite candidate, the seed, the prompts, the artifacts —
+    # comes after it, because that is when it gets read.
+    #
+    # The title editor stays adjacent to the buttons rather than below the
+    # fold, and Approve now names the title it is about to publish, so moving
+    # the editor down cannot quietly ship a title nobody looked at.
     body = f"""
     <a class="back" href="/">← back</a>
     <h2 style="margin-top:14px">#{v['id']} · {_esc(v['upload_date'])} · {_esc(v['niche'])} · {_esc(v['channel'])}</h2>
     {msg_html}
     <p>{status_html}</p>
-    <p><b>Score: <span style="color:{_score_color(v['score'])}">{v['score']}/10</span></b>
-       ({v['attempts_used'] or '?'} attempts, temp {v['final_temperature'] or '?'})</p>
-    <table style="max-width:320px">{crit_rows}</table>
-    {actions_html}
-    {published_html}
-    {edit_html}
     {_preview_block(v['run_id'], v['id'])}
+    {actions_html}
+    {edit_html}
     <h2>Script</h2>
     <div class="script">{_esc(v['script_full'] or v['script_hook'])}</div>
+    {_rewrite_block(v)}
+    <h2>Score: <span style="color:{_score_color(v['score'])}">{v['score']}/10</span></h2>
+    <p class="muted">{v['attempts_used'] or '?'} attempts, temp {v['final_temperature'] or '?'}</p>
+    <table style="max-width:320px">{crit_rows}</table>
     <h2>Why this score (critic reasoning)</h2>
     <div class="script">{_esc(v['score_reasoning'] or '—')}</div>
-    {_rewrite_block(v)}
     <h2>Seed / source</h2>
     <p class="muted">{_esc(v['seed_type'])} · {_esc(v['seed_source'])}</p>
     <div class="script">{_esc(v['seed_content'] or '—')}</div>
     <h2>Image prompts (what each beat was told to draw)</h2>
     {prompts_html}
+    {published_html}
     <h2>Debug artifacts (run {_esc(v['run_id'] or '—')})</h2>
     {assets_html}
     """

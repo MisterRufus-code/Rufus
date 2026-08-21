@@ -575,3 +575,12 @@ def test_an_empty_queue_says_so_instead_of_showing_a_bare_zero(client, monkeypat
                         lambda limit=60, channel=None, status=None: [])
     page = client.get("/").get_data(as_text=True)
     assert "Nothing is waiting on you" in page
+
+
+# ── the review page is in the order the review happens ──────────────────────
+
+def test_the_decision_buttons_stack_on_a_phone():
+    """Three buttons sharing one 390px row give each about a thumb's width,
+    and two of the three are irreversible."""
+    mobile = dashboard.PAGE_STYLE.split("max-width: 760px")[-1]
+    assert ".actions { flex-direction: column" in mobile

@@ -1420,3 +1420,69 @@ def test_the_page_shows_what_it_is_watching(client):
     page = client.get("/scout").get_data(as_text=True)
     assert "Neighbour" in page and "How Money Broke" in page
     assert "9.0x" in page
+
+
+# ── the review page is in the order the review happens ──────────────────────
+#
+# Reviewing is: hear it, look at the beats, decide. The page was in the order
+# it was BUILT in — id line, status, score, a five-row criteria table, then the
+# buttons, the publish form and the title editor, and only then the voiceover
+# and the contact sheet. On the phone this review is actually done from, that
+# is several screens of numbers before the first thing being judged.
+
+
+@pytest.fixture
+def reviewable(client, tmp_path):
+    """One pending video with a run folder that has a voiceover in it, so the
+    preview block actually renders and its position can be asserted."""
+    run = dashboard.DEBUG_ROOT / "run-review"
+    run.mkdir(parents=True)
+    (run / "voiceover.mp3").write_bytes(b"\xff\xfb" + b"\0" * 400)
+    vid = db_manager.save_video(niche="money_history", script_hook="Hook",
+                                scene_desc="s", video_file="v.mp4", score=9,
+                                run_id="run-review", title="A title",
+                                description="A description")
+    return vid
+
+
+def test_you_hear_it_before_you_are_asked_to_decide(client, reviewable):
+    """The page used to open on the id line, the status, the score and a
+    five-row criteria table — four screens of numbers on a phone before the
+    voiceover, which is the thing the judgement is actually about."""
+    page = client.get(f"/video/{reviewable}").get_data(as_text=True)
+    assert page.index("voiceover.mp3") < page.index(f"/video/{reviewable}/approve")
+
+
+def test_the_decision_comes_before_the_reading(client, reviewable):
+    """Script, score breakdown, critic reasoning, seed and prompts all explain
+    or amend the decision — they are read after it, not scrolled past to get
+    to it."""
+    page = client.get(f"/video/{reviewable}").get_data(as_text=True)
+    approve = page.index(f"/video/{reviewable}/approve")
+    for later in ("<h2>Script</h2>", "Why this score", "<h2>Seed / source</h2>",
+                  "Image prompts", "Debug artifacts"):
+        assert approve < page.index(later), f"{later} sits above Approve"
+
+
+def test_approving_names_the_title_it_is_about_to_publish(client, reviewable):
+    """The title editor moved below this button. A confirm that says "this
+    video" would let a title nobody looked at go out on a tap."""
+    page = client.get(f"/video/{reviewable}").get_data(as_text=True)
+    assert "A title" in page.split("confirm(")[1].split(")")[0]
+
+
+def test_a_title_with_an_apostrophe_does_not_break_the_button(client):
+    """Hand-escaping the JS string and the attribute value differently is how
+    one quote turns Approve into a button that does nothing."""
+    vid = db_manager.save_video(niche="n", script_hook="h", scene_desc="s",
+                                video_file="v.mp4", score=9,
+                                title="Bretton Woods' end \"1971\"")
+    page = client.get(f"/video/{vid}").get_data(as_text=True)
+    attr = page.split('onsubmit="')[1].split('"')[0]
+    assert attr.startswith("return confirm(")
+    # Un-escape the attribute the way a browser would, then check what is left
+    # is a single valid JS/JSON string literal rather than a broken one.
+    import html as _html
+    import json
+    inner = _html.unescape(attr)[len("return confirm("):-len(");")]
+    assert json.loads(inner).endswith("to YouTube now?")
