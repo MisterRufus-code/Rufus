@@ -135,8 +135,20 @@ def _best_frame(video_path: Path, duration: float, tmp_png: str) -> Image.Image 
     return best_img
 
 
-def _wrap_hook(text: str, max_chars: int = MAX_LINE_CHARS) -> list[str]:
-    """Word-wrap hook text to at most 2 lines for thumbnail readability."""
+def _wrap_hook(text: str, max_chars: int = MAX_LINE_CHARS,
+               max_lines: int = 2) -> list[str]:
+    """Word-wrap hook text to at most `max_lines` lines.
+
+    THE DEFAULT STILL DROPS WORDS, AND THAT IS STILL RIGHT FOR ITS CALLER. A
+    video's hook is a spoken sentence pulled off the front of a script; two
+    lines of it is a thumbnail, and the rest is narration nobody was going to
+    read at 168x94 anyway.
+
+    It is NOT right for a headline somebody typed, which is why max_lines
+    exists. compose() searches for a wrap that keeps every word — quietly
+    deleting the last word of what a person wrote is the kind of thing that is
+    only noticed after it has gone out.
+    """
     words = text.split()
     lines: list[str] = []
     current = ""
@@ -148,26 +160,50 @@ def _wrap_hook(text: str, max_chars: int = MAX_LINE_CHARS) -> list[str]:
             if current:
                 lines.append(current)
             current = w
-        if len(lines) == 2:
+        if len(lines) == max_lines:
             break
-    if current and len(lines) < 2:
+    if current and len(lines) < max_lines:
         lines.append(current)
-    return [l.upper() for l in lines[:2]]
+    return [l.upper() for l in lines[:max_lines]]
 
 
-def _draw_gradient_overlay(draw: ImageDraw.Draw, height_pct: float = 0.45) -> None:
-    """Draw a dark-to-transparent gradient at the bottom of the thumbnail."""
-    band_h = int(THUMB_H * height_pct)
+def _keeps_every_word(text: str, lines: list[str]) -> bool:
+    return len(" ".join(lines).split()) == len(text.split())
+
+
+# EVERY DRAWING HELPER TAKES THE SIZE IT IS DRAWING ON.
+#
+# They used to read the module-level THUMB_W/THUMB_H, which come from
+# video_format.dimensions() — the VIDEO's shape, portrait 1080x1920 for Shorts.
+# That is correct for the one thing this file could do (composite over an
+# extracted video frame) and wrong for everything else. A 1280x720 YouTube
+# thumbnail composed with portrait constants puts the gradient band off the
+# bottom of the image, draws an accent bar two and a half times too long, and
+# lands the character badge outside the frame entirely.
+#
+# The globals stay as the defaults, so make_thumbnail is unchanged.
+
+def _draw_gradient_overlay(draw: ImageDraw.Draw, w: int, h: int,
+                           height_pct: float = 0.45) -> None:
+    """Draw a dark-to-transparent gradient at the bottom of the image."""
+    band_h = max(1, int(h * height_pct))
     for y_off in range(band_h):
         # alpha 0 at top of band → 200 at bottom
         alpha = int(200 * (y_off / band_h) ** 1.5)
-        y     = THUMB_H - band_h + y_off
-        draw.rectangle([(0, y), (THUMB_W, y)], fill=(0, 0, 0, alpha))
+        y     = h - band_h + y_off
+        draw.rectangle([(0, y), (w, y)], fill=(0, 0, 0, alpha))
 
 
-def _draw_accent_bar(draw: ImageDraw.Draw, accent_rgb: tuple[int, int, int]) -> None:
-    """Draw a thin niche-colored bar on the left edge — brand mark."""
-    draw.rectangle([(0, 0), (12, THUMB_H)], fill=accent_rgb + (220,))
+def _draw_accent_bar(draw: ImageDraw.Draw, w: int, h: int,
+                     accent_rgb: tuple[int, int, int]) -> None:
+    """Draw a thin niche-colored bar on the left edge — brand mark.
+
+    Width scales with the image rather than being a flat 12px: 12px is a
+    confident stripe on a 1080-wide portrait frame and a hairline on a 1280
+    landscape one, and a brand mark that disappears at one of the two sizes
+    it is used at is not a brand mark."""
+    bar = max(8, round(w * 0.011))
+    draw.rectangle([(0, 0), (bar, h)], fill=accent_rgb + (220,))
 
 
 def _composite_character_badge(img: Image.Image, ref_path: Path,
@@ -188,7 +224,11 @@ def _composite_character_badge(img: Image.Image, ref_path: Path,
         print(f"[thumb] character badge skipped (non-fatal): {e}")
         return img
 
-    badge_d = int(THUMB_W * 0.30)
+    # Sized against the SHORTER edge, not the width. 30% of the width is a
+    # reasonable badge on a portrait frame and swallows a third of a landscape
+    # thumbnail; the short edge gives the same visual weight on both.
+    img_w, img_h = img.size
+    badge_d = max(48, int(min(img_w, img_h) * 0.26))
     w, h = ref.size
     side = min(w, h)
     left = (w - side) // 2
@@ -197,17 +237,199 @@ def _composite_character_badge(img: Image.Image, ref_path: Path,
     mask = Image.new("L", (badge_d, badge_d), 0)
     ImageDraw.Draw(mask).ellipse((0, 0, badge_d, badge_d), fill=255)
 
-    ring_pad = 7
+    ring_pad = max(4, round(badge_d * 0.022))
     ring_d   = badge_d + ring_pad * 2
     ring     = Image.new("RGBA", (ring_d, ring_d), (0, 0, 0, 0))
     ImageDraw.Draw(ring).ellipse((0, 0, ring_d, ring_d), fill=accent_rgb + (255,))
 
-    margin = 44
-    x = THUMB_W - ring_d - margin
+    margin = max(12, round(min(img_w, img_h) * 0.045))
+    x = img_w - ring_d - margin
     y = margin
     img.paste(ring, (x, y), ring)
     img.paste(ref, (x + ring_pad, y + ring_pad), mask)
     return img
+
+
+def _fit_font(draw: ImageDraw.Draw, lines: list[str], font_path: str,
+              box_w: int, box_h: int, start_px: int) -> "ImageFont.FreeTypeFont":
+    """The largest font size at which these lines fit the box.
+
+    A FIXED SIZE CANNOT BE RIGHT FOR BOTH. FONT_SIZE was 110 for every
+    headline: correct for one short word, and for five it simply ran off both
+    edges of the image with nothing to notice. Since the words are typed by a
+    person on the thumbnails page, "however long they felt like" is the actual
+    input, and the renderer has to cope with it rather than hope.
+
+    GROWS AS WELL AS SHRINKS. This shrank only, on the theory that inflating
+    "GOLD" to fill the frame would look like an accident. Rendered side by side
+    at feed size that theory was simply wrong: one short word at 110px is a
+    caption, and the thumbnail's whole job is to be readable as a postage
+    stamp. The cap is a fraction of the image height, so it gets big without
+    getting silly.
+    """
+    size = start_px
+    while size > 14:
+        try:
+            font = ImageFont.truetype(font_path, size) if font_path else ImageFont.load_default()
+        except Exception:
+            return ImageFont.load_default()
+        widest = 0
+        for line in lines:
+            try:
+                bbox = draw.textbbox((0, 0), line, font=font)
+                widest = max(widest, bbox[2] - bbox[0])
+            except Exception:
+                widest = max(widest, int(len(line) * size * 0.6))
+        total_h = len(lines) * int(size * 1.18)
+        if widest <= box_w and total_h <= box_h:
+            return font
+        size -= 4
+    try:
+        return ImageFont.truetype(font_path, 14) if font_path else ImageFont.load_default()
+    except Exception:
+        return ImageFont.load_default()
+
+
+# How many characters a line may hold, tried widest-first. A headline is
+# wrapped by the layout that produces the LARGEST type while still containing
+# every word — which is not the same as the fewest lines, because three short
+# lines can carry a bigger font than two long ones.
+_WRAP_CANDIDATES = (12, 15, 18, 22, 26, 30, 34)
+
+
+def _wrap_score(lines: list[str], box_ratio: float = 2.6) -> float:
+    """Roughly how big the type can be at this wrap. Bigger is better.
+
+    FEWEST LINES IS NOT BIGGEST TYPE, which is what the first version of this
+    assumed. "THE BANK THAT PRINTED ITSELF" fits on one line and is therefore
+    tiny, because a single line 28 characters long is limited by the box WIDTH
+    long before it is limited by its height; broken over two it can be half
+    again as large. Rendered side by side that was obvious and it was not
+    obvious at all from the code.
+
+    So score both constraints the way _fit_font will actually apply them —
+    width across the longest line, height shared between the lines — and take
+    whichever binds. box_ratio is the text box's width over its height, which
+    for the layout compose() uses is about 2.6.
+    """
+    if not lines:
+        return 0.0
+    longest = max(len(l) for l in lines)
+    by_width  = box_ratio / (longest * 0.55)   # 0.55em is Anton's rough advance
+    by_height = 1.0 / (len(lines) * 1.18)
+    return min(by_width, by_height)
+
+
+def _best_wrap(text: str, max_lines: int = 3) -> list[str]:
+    """The wrap that keeps every word and renders largest.
+
+    Falls back to the lossy default only when nothing fits — a headline of one
+    forty-letter word has no wrap that works, and half of it on screen beats a
+    blank thumbnail. The caller can tell the two apart with
+    _keeps_every_word().
+    """
+    if not text.strip():
+        return []
+    best_lines, best_score = None, -1.0
+    for n_lines in range(1, max_lines + 1):
+        for max_chars in _WRAP_CANDIDATES:
+            lines = _wrap_hook(text, max_chars, n_lines)
+            if not lines or not _keeps_every_word(text, lines):
+                continue
+            score = _wrap_score(lines)
+            if score > best_score:
+                best_lines, best_score = lines, score
+    if best_lines is not None:
+        return best_lines
+    return _wrap_hook(text, MAX_LINE_CHARS, max_lines)
+
+
+def compose(background, headline: str, out_path: Path,
+            niche: str | None = None) -> Path:
+    """Put the branding and the headline on a finished background image.
+
+    THE ONLY PLACE COMPOSITION HAPPENS. make_thumbnail extracts a frame and
+    then calls this; the dashboard generates a background and then calls this.
+    Two implementations of "what a Rufus thumbnail looks like" would drift, and
+    the one that drifts is the one nobody notices is wrong — the same reason
+    _when_cell in dashboard.py is one function serving two pages.
+
+    `background` is a path or an already-open PIL image. Whatever size it is,
+    is the size everything is drawn against.
+    """
+    img = (background if isinstance(background, Image.Image)
+           else Image.open(Path(background)))
+    img = img.convert("RGBA")
+    w, h = img.size
+    accent_rgb = _hex_to_rgb(_load_niche_accent())
+    font_path  = _find_font()
+
+    overlay = Image.new("RGBA", img.size, (0, 0, 0, 0))
+    draw    = ImageDraw.Draw(overlay)
+    _draw_gradient_overlay(draw, w, h)
+    _draw_accent_bar(draw, w, h, accent_rgb)
+    img = Image.alpha_composite(img, overlay)
+
+    # Recurring-character brand badge (top-right), if this niche has one
+    # enabled AND a reference portrait has actually been bootstrapped
+    # (character_engine.py / comfy_client.py). A niche with no character block
+    # — which is every niche today — silently no-ops here.
+    try:
+        import character_engine
+        if character_engine.enabled(niche):
+            ref_path = character_engine.reference_image_path(niche)
+            if ref_path and ref_path.exists():
+                img = _composite_character_badge(img, ref_path, accent_rgb)
+    except Exception as e:
+        print(f"[thumb] character badge skipped (non-fatal): {e}")
+
+    draw = ImageDraw.Draw(img)
+    text = (headline or "").strip().split("\n")[0].rstrip(".!?,;")
+    lines = _best_wrap(text)
+
+    if lines:
+        # KEEP CLEAR OF WHAT YOUTUBE DRAWS ON TOP. The duration badge sits in
+        # the bottom-right corner and the progress bar runs across the bottom
+        # on hover — and the text was centred at 80px from the bottom, i.e.
+        # underneath both. The box stops short of the bottom and of the right
+        # edge, so the words survive contact with the player.
+        side_pad   = max(24, round(w * 0.05))
+        bottom_pad = max(28, round(h * 0.12))
+        box_w = w - side_pad * 2 - round(w * 0.13)    # room for the duration badge
+        box_h = round(h * 0.42)
+        # Start from a size proportional to the image rather than a flat 110px,
+        # so the same headline has the same visual weight on a 1280-wide
+        # thumbnail and a 1080-wide portrait frame.
+        font = _fit_font(draw, lines, font_path, box_w, box_h,
+                         max(FONT_SIZE, round(h * 0.26)))
+
+        try:
+            line_h = int(font.size * 1.18)
+        except AttributeError:                        # the PIL default font
+            line_h = int(FONT_SIZE * 1.18)
+        y_start = h - bottom_pad - len(lines) * line_h
+
+        # A STROKE, NOT A DROP SHADOW. An offset shadow only darkens one side,
+        # so a light background swallows the other three; an outline holds the
+        # letters apart from whatever is behind them at any size — which is
+        # the entire job at 168x94 in a phone feed.
+        stroke = max(2, round((getattr(font, "size", FONT_SIZE)) * 0.075))
+        for i, line in enumerate(lines):
+            y = y_start + i * line_h
+            try:
+                bbox = draw.textbbox((0, 0), line, font=font)
+                text_w = bbox[2] - bbox[0]
+            except Exception:
+                text_w = len(line) * getattr(font, "size", FONT_SIZE) * 0.6
+            x = side_pad + max(0, (box_w - text_w) / 2)
+            color = accent_rgb + (255,) if i == 0 else (255, 255, 255, 255)
+            draw.text((x, y), line, font=font, fill=color,
+                      stroke_width=stroke, stroke_fill=(0, 0, 0, 235))
+
+    out_path = Path(out_path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    img.convert("RGB").save(str(out_path), "JPEG", quality=92)
+    return out_path
 
 
 def make_thumbnail(video_path: Path, script: str, out_path: Path = None,
@@ -217,97 +439,32 @@ def make_thumbnail(video_path: Path, script: str, out_path: Path = None,
     `niche` is optional — when it has an enabled recurring character with a
     bootstrapped reference portrait (character_engine.py), that character's
     face is badged into the corner for cross-video brand recognition.
-    Omitting it (every pre-existing caller) is identical to before this."""
+    Omitting it (every pre-existing caller) is identical to before this.
+
+    Extract, then compose. The composition used to live here, inline; it now
+    lives in compose() so the dashboard's thumbnails page produces the same
+    thing rather than its own approximation of it.
+    """
     video_path = Path(video_path)
     if not video_path.exists():
         raise FileNotFoundError(video_path)
 
     if out_path is None:
         out_path = video_path.with_suffix(".thumb.jpg")
-    out_path = Path(out_path)
 
-    duration    = _probe_duration(video_path)
-    accent_hex  = _load_niche_accent()
-    accent_rgb  = _hex_to_rgb(accent_hex)
-    font_path   = _find_font()
-
-    # Extract best frame from 5 candidate timestamps
+    duration = _probe_duration(video_path)
     with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tf:
         tmp_png = tf.name
     try:
         img = _best_frame(video_path, duration, tmp_png)
         if img is None:
             raise RuntimeError("Frame extraction failed at all candidate timestamps")
-        # Ensure correct dimensions
         if img.size != (THUMB_W, THUMB_H):
             img = img.resize((THUMB_W, THUMB_H), Image.LANCZOS)
-
-        overlay = Image.new("RGBA", img.size, (0, 0, 0, 0))
-        draw    = ImageDraw.Draw(overlay)
-
-        # Dark gradient at bottom (behind text)
-        _draw_gradient_overlay(draw)
-
-        # Niche accent bar on left edge
-        _draw_accent_bar(draw, accent_rgb)
-
-        # Merge overlay onto frame
-        img = Image.alpha_composite(img, overlay)
-
-        # Recurring-character brand badge (top-right corner), if this niche
-        # has one enabled AND a reference portrait has actually been
-        # bootstrapped already (character_engine.py / comfy_client.py) — a
-        # video that hasn't rendered a single character-mode image yet has
-        # nothing to badge with, so this silently no-ops until then.
-        try:
-            import character_engine
-            if character_engine.enabled(niche):
-                ref_path = character_engine.reference_image_path(niche)
-                if ref_path and ref_path.exists():
-                    img = _composite_character_badge(img, ref_path, accent_rgb)
-        except Exception as e:
-            print(f"[thumb] character badge skipped (non-fatal): {e}")
-
-        draw = ImageDraw.Draw(img)
-
-        # Load font
-        try:
-            font = ImageFont.truetype(font_path, FONT_SIZE) if font_path else ImageFont.load_default()
-        except Exception:
-            font = ImageFont.load_default()
-
-        # Get and wrap the hook (first line of script); None-safe
-        hook_raw = (script or "").strip().split("\n")[0].rstrip(".!?,;")
-        lines    = _wrap_hook(hook_raw)
-
-        # Position text in the lower quarter of the frame
-        total_text_h = len(lines) * (FONT_SIZE + 12)
-        y_start      = THUMB_H - total_text_h - 80   # 80px from bottom
-
-        for i, line in enumerate(lines):
-            y = y_start + i * (FONT_SIZE + 12)
-            # Measure text width for centering
-            try:
-                bbox = draw.textbbox((0, 0), line, font=font)
-                text_w = bbox[2] - bbox[0]
-            except Exception:
-                text_w = len(line) * FONT_SIZE * 0.6
-            x = (THUMB_W - text_w) / 2
-
-            # Shadow pass (deep black, offset 4px)
-            draw.text((x + 4, y + 4), line, font=font, fill=(0, 0, 0, 210))
-            # Main text — accent color for first line (hook), white for second
-            color = accent_rgb + (255,) if i == 0 else (255, 255, 255, 255)
-            draw.text((x, y), line, font=font, fill=color)
-
-        # Convert back to RGB and save as high-quality JPG
-        final = img.convert("RGB")
-        final.save(str(out_path), "JPEG", quality=92)
-
+        hook = (script or "").strip().split("\n")[0]
+        return compose(img, hook, Path(out_path), niche=niche)
     finally:
         Path(tmp_png).unlink(missing_ok=True)
-
-    return out_path
 
 
 if __name__ == "__main__":

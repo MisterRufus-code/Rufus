@@ -151,3 +151,149 @@ def test_make_thumbnail_no_badge_when_reference_not_bootstrapped_yet(tmp_path, m
 
     result = Image.open(out).convert("RGB")
     assert result.getpixel((tg.THUMB_W - 20, 20)) == (10, 10, 10)
+
+
+# ── composing on a supplied background, at whatever size it is ─────────────
+#
+# Every drawing helper used to read the module-level THUMB_W/THUMB_H, which
+# come from video_format.dimensions() — the VIDEO's shape, portrait for Shorts.
+# Correct for the one thing this file could do, and wrong for a 1280x720
+# YouTube thumbnail: the gradient lands off the bottom, the accent bar is drawn
+# two and a half times too long, and the badge falls outside the frame.
+
+LANDSCAPE = (1280, 720)
+
+
+def _bg(size=LANDSCAPE, colour=(30, 44, 72)):
+    from PIL import Image
+    return Image.new("RGB", size, colour)
+
+
+def test_compose_returns_an_image_the_size_of_its_background(tmp_path):
+    from PIL import Image
+    out = tg.compose(_bg(), "Gold", tmp_path / "t.jpg")
+    assert Image.open(out).size == LANDSCAPE
+
+
+def test_the_gradient_leaves_the_top_of_the_image_alone(tmp_path):
+    """THE ONE THAT WAS ACTUALLY BROKEN. band_h was int(THUMB_H * 0.45) — 864
+    rows — drawn onto a 720-tall thumbnail, so the band started at row -144 and
+    covered the WHOLE image: alpha 13 at the very top rising to 99 by 55% of
+    the way down. The subject of the picture was being dimmed to make room for
+    text that sits in the bottom third.
+
+    Nothing errors when you draw past an edge, which is why this survived.
+    """
+    from PIL import Image
+    colour = (30, 44, 72)
+    out = tg.compose(_bg(colour=colour), "Gold", tmp_path / "t.jpg")
+    im = Image.open(out).convert("RGB")
+    # Right of the accent bar, above the band, away from the badge corner.
+    got = im.getpixel((int(LANDSCAPE[0] * 0.45), int(LANDSCAPE[1] * 0.20)))
+    assert sum(abs(a - b) for a, b in zip(got, colour)) < 12, got
+
+
+def test_the_accent_bar_scales_with_the_image(tmp_path):
+    """A flat 12px is a confident stripe on a 1080-wide portrait frame and a
+    hairline on a landscape one. A brand mark that disappears at one of the two
+    sizes it is used at is not a brand mark."""
+    from PIL import Image
+    out = tg.compose(_bg(), "Gold", tmp_path / "t.jpg")
+    im = Image.open(out).convert("RGB")
+    accent = tg._hex_to_rgb(tg._load_niche_accent())
+    row = LANDSCAPE[1] // 2
+    width = 0
+    for x in range(40):
+        px = im.getpixel((x, row))
+        if sum(abs(a - b) for a, b in zip(px, accent)) < 90:
+            width = x + 1
+        else:
+            break
+    assert width >= 12, f"accent bar is only {width}px wide"
+
+
+def test_a_short_headline_is_drawn_large(tmp_path):
+    """Auto-fit shrank only, on the theory that inflating one word would look
+    like an accident. Side by side at feed size that was simply wrong: the
+    thumbnail's whole job is to be readable as a postage stamp."""
+    from PIL import ImageDraw
+    draw = ImageDraw.Draw(_bg())
+    font = tg._fit_font(draw, ["GOLD"], tg._find_font(),
+                                   900, 300, 187)
+    assert getattr(font, "size", 0) > tg.FONT_SIZE
+
+
+def test_a_long_headline_is_shrunk_rather_than_overflowing(tmp_path):
+    from PIL import ImageDraw
+    draw = ImageDraw.Draw(_bg())
+    lines = ["NOBODY TOLD THEM THE MONEY WAS ALREADY WORTHLESS"]
+    font = tg._fit_font(draw, lines, tg._find_font(),
+                                   900, 300, 187)
+    assert getattr(font, "size", 999) < 187
+
+
+# ── a typed headline must never lose a word ───────────────────────────────
+
+def test_the_wrap_used_for_a_typed_headline_keeps_every_word():
+    """_wrap_hook's 2-line cap DROPS the rest, which is right for a spoken
+    hook pulled off a script and wrong for words a person typed. Quietly
+    deleting somebody's last word is only noticed after it has gone out."""
+    text = "Nobody told them the money was already worthless"
+    assert tg._keeps_every_word(text, tg._best_wrap(text))
+
+
+def test_the_lossy_default_is_still_the_default():
+    """The video path relies on it: two lines of a spoken sentence is a
+    thumbnail, the rest is narration nobody reads at 168x94."""
+    text = "one two three four five six seven eight nine ten eleven twelve"
+    assert len(tg._wrap_hook(text)) == 2
+    assert not tg._keeps_every_word(text, tg._wrap_hook(text))
+
+
+def test_fewest_lines_is_not_what_wins():
+    """"THE BANK THAT PRINTED ITSELF" fits on one line and is therefore tiny —
+    a 28-character line is limited by the box WIDTH long before its height.
+    Broken over two it renders half again as large."""
+    lines = tg._best_wrap("The bank that printed itself")
+    assert len(lines) == 2, lines
+
+
+def test_an_unbreakable_headline_still_produces_a_thumbnail(tmp_path):
+    """One forty-letter word has no wrap that works. Half of it on screen
+    beats a blank thumbnail."""
+    from PIL import Image
+    out = tg.compose(_bg(), "A" * 40, tmp_path / "t.jpg")
+    assert Image.open(out).size == LANDSCAPE
+
+
+def test_an_empty_headline_composes_the_branding_and_no_text(tmp_path):
+    from PIL import Image
+    out = tg.compose(_bg(), "", tmp_path / "t.jpg")
+    assert Image.open(out).size == LANDSCAPE
+
+
+# ── what YouTube draws on top ─────────────────────────────────────────────
+
+def test_the_text_clears_the_corner_youtube_stamps(tmp_path):
+    """The duration badge sits bottom-right and the progress bar runs across
+    the bottom on hover. The text was centred 80px from the bottom — under
+    both."""
+    from PIL import Image
+    out = tg.compose(_bg(colour=(10, 10, 10)),
+                                "Nobody told them the money was already worthless",
+                                tmp_path / "t.jpg")
+    im = Image.open(out).convert("L")
+    w, h = im.size
+    corner = im.crop((int(w * 0.86), int(h * 0.90), w, h))
+    assert max(corner.getdata()) < 110, "something is drawn where the badge goes"
+
+
+# ── one composer, not two ─────────────────────────────────────────────────
+
+def test_make_thumbnail_goes_through_compose():
+    """Two implementations of "what a Rufus thumbnail looks like" drift, and
+    the one that drifts is the one nobody notices is wrong."""
+    src = Path(tg.__file__).read_text(encoding="utf-8")
+    body = src.split("def make_thumbnail", 1)[1]
+    assert "return compose(" in body
+    assert "_draw_gradient_overlay" not in body, "make_thumbnail composes its own"
