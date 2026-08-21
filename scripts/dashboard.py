@@ -4350,6 +4350,51 @@ def _launch_recut(video_id: int, v: dict):
     return proc, log_path
 
 
+def _launch_regen(v: dict, beat: int, png: Path, txt: Path, prompt: str,
+                  *, save_prompt: bool):
+    """Redraw one beat in a subprocess. (proc, log_path).
+
+    Same shape as _launch_recut: sys.executable, saved settings layered over
+    this process's environment, UTF-8 defaults for a child whose stdout is a
+    file, and a log in logs/.
+
+    The prompt goes through a FILE rather than argv. Beat prompts run to
+    several hundred characters, Windows caps a command line at 32,767, and
+    quoting a multi-line prompt through cmd is a class of bug worth not having.
+    The child deletes it after reading.
+    """
+    handoff = png.with_name(f"{png.stem}.regen-prompt.txt")
+    handoff.write_text(prompt, encoding="utf-8")
+    cmd = [sys.executable, str(ROOT / "scripts" / "comfy_client.py"),
+           "--regen-beat", "--out", str(png), "--prompt-file", str(handoff)]
+    if save_prompt:
+        # Only when the human edited it. An unedited prompt is already in the
+        # sidecar, and rewriting it would touch the file for no reason.
+        cmd += ["--sidecar", str(txt)]
+    if v.get("niche"):
+        cmd += ["--niche", str(v["niche"])]
+    env = os.environ.copy()
+    env.update(_load_settings())
+    env.setdefault("PYTHONUTF8", "1")
+    env.setdefault("PYTHONIOENCODING", "utf-8")
+    # The row's own niche wins over whatever the dashboard is set to now —
+    # same reasoning as _launch_recut.
+    if v.get("niche"):
+        env["RUFUS_NICHE_OVERRIDE"] = str(v["niche"])
+    log_dir = ROOT / "logs"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    log_path = log_dir / f"regen_{v['id']}_{beat:02d}_{int(time.time())}.log"
+    try:
+        with open(log_path, "wb") as logf:
+            proc = subprocess.Popen(cmd, cwd=str(ROOT), stdout=logf, env=env,
+                                    stderr=subprocess.STDOUT,
+                                    stdin=subprocess.DEVNULL)
+    except Exception:
+        handoff.unlink(missing_ok=True)   # nothing will read it now
+        raise
+    return proc, log_path
+
+
 def _run_dir(run_id: str):
     """A run's debug folder, or None if the id does not name one.
 
@@ -4408,14 +4453,21 @@ def regen_beat(video_id: int, beat: int):
         return _redirect_detail(video_id, error=(
             "a run is using the GPU right now — wait for it to finish"))
 
-    if not comfy_client.render_one_beat(prompt, png, niche=v.get("niche")):
-        return _redirect_detail(video_id, error=(
-            "the render failed — the existing frame is untouched. Is ComfyUI "
-            "running?"))
-    if edited:
-        comfy_client.write_beat_prompt(txt, edited)
+    # NOT ON THIS THREAD. This called render_one_beat() inline, and a GPU
+    # render is tens of seconds to minutes — long enough that /healthz cannot
+    # answer, the watchdog reads that as death, and it starts a second
+    # dashboard into the port this one is still holding. That is the ten-hour
+    # outage, reachable by pressing Regen. Its two neighbours, recut_video and
+    # rewrite_script, have always spawned subprocesses, and rewrite_script even
+    # carries the comment saying why. This is the one that drifted.
+    try:
+        _proc, log = _launch_regen(v, beat, png, txt, prompt,
+                                   save_prompt=bool(edited))
+    except Exception as e:
+        return _redirect_detail(video_id, error=f"could not start the redraw: {e}")
     return _redirect_detail(video_id, ok=(
-        f"redrew beat {beat:02d} — re-cut to put it in the video"))
+        f"redrawing beat {beat:02d} — refresh in a minute, then re-cut to put "
+        f"it in the video (log: {log.name})"))
 
 
 @app.route("/video/<int:video_id>/recut", methods=["POST"])

@@ -1015,3 +1015,119 @@ def test_the_upload_is_what_declares_itself_busy():
     src = Path(dashboard.__file__).read_text(encoding="utf-8")
     block = src.split("def approve_video", 1)[1].split("def ")[0]
     assert "_busy(" in block
+
+
+# ── redrawing a beat stopped freezing the dashboard ────────────────────────
+
+@pytest.fixture
+def regenable(client, tmp_path, monkeypatch):
+    """A pending video with one beat still and its prompt sidecar.
+
+    Points DEBUG_ROOT and the database at tmp_path itself: this file's `client`
+    fixture only isolates SETTINGS_FILE, so without this the test writes a run
+    folder and a video row into the developer's real media_library and
+    rufus.db. It did, once, while this was being written.
+    """
+    import db_manager
+    from PIL import Image
+    monkeypatch.setattr(db_manager, "DB_FILE", tmp_path / "test.db")
+    db_manager.init_db()
+    monkeypatch.setattr(dashboard, "DEBUG_ROOT", tmp_path / "debug")
+    run = dashboard.DEBUG_ROOT / "run-regen"
+    run.mkdir(parents=True)
+    Image.new("RGB", (108, 192), (20, 20, 20)).save(run / "03.png")
+    (run / "03.txt").write_text("FLUX PROMPT: a cracked hourglass\n", encoding="utf-8")
+    vid = db_manager.save_video(niche="money_history", script_hook="h",
+                                scene_desc="s", video_file="v.mp4", score=9,
+                                run_id="run-regen")
+    monkeypatch.setattr(dashboard, "_run_in_progress", lambda c: False)
+    return vid, run
+
+
+def test_redrawing_a_beat_does_not_render_in_the_request(client, regenable,
+                                                         monkeypatch):
+    """A GPU render is tens of seconds to minutes. On a request thread that
+    means /healthz cannot answer, the watchdog reads it as death, and it starts
+    a second dashboard into the port this one still holds — the ten-hour
+    outage, reachable by pressing Regen."""
+    import comfy_client
+    vid, _run = regenable
+    monkeypatch.setattr(comfy_client, "render_one_beat", lambda *a, **k:
+                        (_ for _ in ()).throw(AssertionError("rendered inline")))
+    launched = {}
+    monkeypatch.setattr(dashboard, "_launch_regen",
+                        lambda *a, **k: (launched.setdefault("k", k),
+                                         Path("logs/regen.log"))[1:])
+    r = client.post(f"/video/{vid}/beat/3/regen")
+    assert r.status_code == 302
+    assert launched
+
+
+def test_the_prompt_reaches_the_child_in_a_file_not_in_argv(client, regenable,
+                                                            monkeypatch):
+    """Beat prompts run to several hundred characters, Windows caps a command
+    line at 32,767, and quoting a multi-line prompt through cmd is a class of
+    bug worth not having."""
+    vid, run = regenable
+    seen = {}
+
+    class _Proc:
+        pid = 1
+
+    monkeypatch.setattr(dashboard.subprocess, "Popen",
+                        lambda cmd, **kw: (seen.update(cmd=cmd), _Proc())[1])
+    long_prompt = "a cracked hourglass " * 60
+    client.post(f"/video/{vid}/beat/3/regen", data={"prompt": long_prompt})
+    assert "--prompt-file" in seen["cmd"]
+    assert long_prompt not in " ".join(seen["cmd"])
+    handoff = Path(seen["cmd"][seen["cmd"].index("--prompt-file") + 1])
+    assert handoff.read_text(encoding="utf-8").strip() == long_prompt.strip()
+
+
+def test_the_sidecar_is_only_rewritten_when_a_human_edited_it(client, regenable,
+                                                              monkeypatch):
+    """An unedited prompt is already in the sidecar; rewriting it touches the
+    file for no reason, and the run's record should mean something."""
+    vid, _run = regenable
+    seen = {}
+
+    class _Proc:
+        pid = 1
+
+    monkeypatch.setattr(dashboard.subprocess, "Popen",
+                        lambda cmd, **kw: (seen.update(cmd=cmd), _Proc())[1])
+    client.post(f"/video/{vid}/beat/3/regen")
+    assert "--sidecar" not in seen["cmd"]
+    client.post(f"/video/{vid}/beat/3/regen", data={"prompt": "something else"})
+    assert "--sidecar" in seen["cmd"]
+
+
+def test_a_failed_launch_does_not_leave_the_handoff_behind(client, regenable,
+                                                           monkeypatch):
+    """Nothing will ever read it, and a stray file in the run folder is one
+    more thing to wonder about later."""
+    vid, run = regenable
+    monkeypatch.setattr(dashboard.subprocess, "Popen",
+                        lambda *a, **k: (_ for _ in ()).throw(OSError("nope")))
+    r = client.post(f"/video/{vid}/beat/3/regen", data={"prompt": "x"})
+    assert r.status_code == 302
+    assert not list(run.glob("*.regen-prompt.txt"))
+
+
+def test_the_row_niche_wins_over_whatever_the_dashboard_is_set_to(client,
+                                                                  regenable,
+                                                                  monkeypatch):
+    """Redrawing last week's money_history beat from a machine now pointed at
+    another niche would fetch the wrong look — the same reasoning _launch_recut
+    already carries."""
+    vid, _run = regenable
+    seen = {}
+
+    class _Proc:
+        pid = 1
+
+    monkeypatch.setattr(dashboard.subprocess, "Popen",
+                        lambda cmd, **kw: (seen.update(env=kw["env"]), _Proc())[1])
+    monkeypatch.setenv("RUFUS_NICHE_OVERRIDE", "finance")
+    client.post(f"/video/{vid}/beat/3/regen")
+    assert seen["env"]["RUFUS_NICHE_OVERRIDE"] == "money_history"

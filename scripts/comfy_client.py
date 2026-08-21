@@ -2083,8 +2083,61 @@ def generate_clips(queries: list[str], n: int = 4,
     return clips
 
 
+def _regen_beat_cli(argv: list[str]) -> int:
+    """`--regen-beat`: redraw one still, as its own process.
+
+    THE DASHBOARD CANNOT DO THIS ON A REQUEST THREAD. regen_beat called
+    render_one_beat() inline, and a GPU render is tens of seconds to minutes —
+    which under the old threaded=False server froze the whole dashboard, and
+    even now means a browser tab holding an open connection while /healthz
+    cannot answer. The watchdog reads that as death, tries to start a second
+    dashboard, and hits the port the first one is still holding: the exact
+    ten-hour outage, triggered by pressing Regen.
+
+    THE PROMPT ARRIVES IN A FILE, not in argv. Beat prompts run to several
+    hundred characters, Windows caps a command line at 32,767, and quoting a
+    multi-line prompt through cmd is a source of bugs nobody needs. The file
+    is deleted once it has been read.
+
+    THE SIDECAR IS WRITTEN ONLY ON SUCCESS, which is the semantic the inline
+    version had: a failed regenerate must leave both the picture and the run's
+    record of it exactly as they were.
+    """
+    import argparse
+    ap = argparse.ArgumentParser(prog="comfy_client --regen-beat")
+    ap.add_argument("--regen-beat", action="store_true")
+    ap.add_argument("--out", required=True, help="the PNG to overwrite")
+    ap.add_argument("--prompt-file", required=True,
+                    help="file holding the prompt (deleted after reading)")
+    ap.add_argument("--sidecar", default="",
+                    help="write the prompt here on success")
+    ap.add_argument("--niche", default="")
+    args = ap.parse_args(argv)
+
+    src = Path(args.prompt_file)
+    try:
+        prompt = src.read_text(encoding="utf-8").strip()
+    except OSError as e:
+        print(f"[comfy] could not read the prompt: {e}")
+        return 1
+    finally:
+        src.unlink(missing_ok=True)
+
+    if not render_one_beat(prompt, Path(args.out), niche=args.niche or None):
+        return 1
+    if args.sidecar:
+        try:
+            write_beat_prompt(Path(args.sidecar), prompt)
+        except Exception as e:
+            print(f"[comfy] redrew the frame but could not save the prompt: {e}")
+    print(f"OUTPUT={args.out}")
+    return 0
+
+
 if __name__ == "__main__":
     import sys
+    if "--regen-beat" in sys.argv[1:]:
+        raise SystemExit(_regen_beat_cli(sys.argv[1:]))
     # STILLS-ONLY BY DEFAULT when run by hand. RUFUS_STILLS_ONLY=1 is set by
     # run.bat, not by this module, so a one-prompt check from the CLI used to
     # fall straight through to the motion chain — on a 16GB-RAM box that turned
