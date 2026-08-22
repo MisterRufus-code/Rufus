@@ -468,6 +468,55 @@ def test_the_scale_rule_is_in_the_half_of_the_block_that_gets_obeyed(stick):
     assert s.index("SCALE:") < len(s) // 2
 
 
+# ── SCALE was overruling the camera the storyboard had already chosen ────────
+#
+# "Close on" never once produced a close-up. Not on either preset, not with
+# the shot first or last, not in any probe run.
+#
+# storyboard.py already solves this and solves it well: it asks the model for
+# a `framing` on every shot — wide|mid|close|detail — varies them so no
+# distance runs three times, maps each to a phrase the image model
+# understands (_FRAMINGS), and _apply_framing puts that phrase FIRST, with a
+# docstring explaining that this is "the one instruction that decides what the
+# picture IS rather than what is in it".
+#
+# And then SCALE, appended to every prompt byte for byte, said the figures
+# stand between half and three quarters of the frame's height. That is a
+# mid-shot, hardcoded onto every beat. On a `close` beat — "head and
+# shoulders, filling most of the frame" — it contradicts it outright. On a
+# `wide` beat — "the figures are small within it" — it contradicts it the
+# other way.
+#
+# Neither half was wrong alone. SCALE stopped a real bug (a vast green field
+# with one small figure in the corner) by making every shot a mid-shot; the
+# framing vocabulary was added later to stop a sequence reading as a
+# slideshow. Nothing told either about the other, which is this repo's
+# recurring failure and not a new one: a constant quietly beating a variable.
+
+@pytest.mark.parametrize("stick", _STICK)
+def test_the_shot_s_own_distance_beats_the_style_s_default(stick):
+    s = _looks()[stick]
+    assert "unless the shot names its own distance" in s
+    assert "The shot's distance always wins." in s
+
+
+@pytest.mark.parametrize("stick", _STICK)
+def test_the_style_leaves_room_for_every_framing_the_storyboard_can_choose(stick):
+    """THE TEST THAT TIES THE TWO FILES TOGETHER. storyboard._FRAMINGS is the
+    list of distances a shot may ask for; this block is appended to every one
+    of them. An edit to either file now has to face the other, which is
+    exactly what neither of them did the first time."""
+    import storyboard
+    s = _looks()[stick]
+    assert set(storyboard._FRAMINGS) == {"wide", "mid", "close", "detail"}
+    # The two that SCALE's old wording forbade outright.
+    assert "come closer" in s, "a close or detail shot cannot be drawn"
+    assert "stand back" in s, "a wide shot cannot be drawn"
+    # And the default it still supplies for a beat that names no distance,
+    # because deleting it brings back the field with the figure in the corner.
+    assert "half and three quarters of the frame" in s
+
+
 @pytest.mark.parametrize("stick", _STICK)
 def test_the_scale_rule_does_not_undo_the_scene_rule(stick):
     """The opposite failure is the white-void bug, which cost two galleries:
@@ -737,8 +786,29 @@ def test_the_pose_vocabulary_is_geometry_and_not_a_label(stick):
     matters, without saying what a pose looks like, buys nothing."""
     s = _looks()[stick]
     for shape in ("shoulders thrown up", "arms reaching", "back hunched",
-                  "head dropped", "leaning away from another"):
+                  "head dropped"):
         assert shape in s, shape
+
+
+@pytest.mark.parametrize("stick", _STICK)
+def test_the_pose_vocabulary_names_no_number_of_figures(stick):
+    """"one figure leaning away from another" was in that list, and it is a
+    FIGURE COUNT in a block appended to every prompt on this channel — the
+    same class as the lion, the banknote, the coin face and the no-lettering
+    inventory, every one of which is pinned above by a test whose rule is that
+    the rule may be stated and the things may not be listed.
+
+    The four shapes that stay are single-figure geometry and are what made the
+    hammer in the crowd probe get picked up instead of floating. This one
+    describes a second person, and the shots that asked for ONE figure came
+    back with two and with four.
+
+    It was in the block for a long time and it was in the list I wrote to pin
+    the list — which is the mistake one level up: a phrase does not become
+    safe by being old, or by having a test."""
+    s = _looks()[stick]
+    assert "leaning away from another" not in s
+    assert "one figure leaning" not in s
 
 
 @pytest.mark.parametrize("stick", _STICK)

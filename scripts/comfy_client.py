@@ -1010,6 +1010,14 @@ def shot_last() -> bool:
     no rules dropped; if length is what matters, it will change nothing and
     should be turned back off rather than left on as folklore.
 
+    AND IT FIGHTS A DECISION ANOTHER MODULE MADE ON PURPOSE. storyboard's
+    _apply_framing puts the shot's distance — "Close shot: head and shoulders
+    ... filling most of the frame" — at the OPENING of the prompt, and says
+    why: it is "the one instruction that decides what the picture IS rather
+    than what is in it". This flag moves the whole shot, that phrase included,
+    behind three thousand characters of style. Whatever it buys at the end of
+    the prompt, it costs at the start.
+
     OFF BY DEFAULT, because it reorders every image prompt on the channel and
     the evidence for it is a hypothesis, not a gallery. Turn it on for a probe
     first:  $env:RUFUS_SHOT_LAST = "1"
