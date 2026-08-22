@@ -701,6 +701,46 @@ def test_the_arms_are_required_to_be_visible(stick):
     assert "clear of the torso" in s
 
 
+# ── two rules the 37% cut lost, and no test noticed ──────────────────────────
+#
+# stickman_lean passed all twenty-five scar tests above and still shipped two
+# regressions, both visible in the first six-probe gallery it rendered:
+#
+#   crowd   five figures, FOUR OF THEM WITH NO FACE AT ALL — no eyebrows, no
+#           mouth, two dots and nothing else. The full block says "Every
+#           figure has a perfect oval head ..."; the cut turned that into a
+#           heading, "Head:", which reads as one head, and the model drew the
+#           nearest one.
+#   crowd   the hammer floats in mid-air and all five sets of arms hang dead
+#           straight at their sides. The full block carries the geometry —
+#           "shoulders thrown up, arms reaching, back hunched, head dropped,
+#           one figure leaning away from another" — and the cut reduced it to
+#           "The pose carries it too."
+#
+# Both are the SAME lesson the face vocabulary already taught this file and
+# that its own test docstring states: naming the thing is not enough, the
+# model needs the geometry. "The pose carries it too" is a label for a rule,
+# not a rule. Neither had a test, so both cuts were green.
+
+@pytest.mark.parametrize("stick", _STICK)
+def test_the_head_rule_applies_to_every_figure_not_just_the_nearest(stick):
+    """A crowd shot is five faces, and four of them came back blank."""
+    s = _looks()[stick]
+    assert "Every figure" in s, "the head rule reads as one head"
+
+
+@pytest.mark.parametrize("stick", _STICK)
+def test_the_pose_vocabulary_is_geometry_and_not_a_label(stick):
+    """"both arms are visible in every figure, DOING SOMETHING" is the rule
+    this channel keeps failing — thirteen of sixteen frames with nobody doing
+    anything is why the `action` probe exists. A sentence that says the pose
+    matters, without saying what a pose looks like, buys nothing."""
+    s = _looks()[stick]
+    for shape in ("shoulders thrown up", "arms reaching", "back hunched",
+                  "head dropped", "leaning away from another"):
+        assert shape in s, shape
+
+
 @pytest.mark.parametrize("stick", _STICK)
 def test_the_blob_is_named_as_the_thing_to_avoid(stick):
     """Naming the failure is what made the other rules stick — "a wide

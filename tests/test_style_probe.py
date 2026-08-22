@@ -186,6 +186,36 @@ def test_the_probe_restores_the_style_override_it_borrowed(monkeypatch):
     assert "finally:" in body
 
 
+# ── a place shot is not a figure shot ────────────────────────────────────────
+
+def test_a_shot_with_no_person_in_it_is_tagged_as_one():
+    """THE FIGURE THAT NOBODY ASKED FOR. weather_place is rain, a cave, a
+    flooded bank and hills — no person anywhere in the sentence. Untagged,
+    shot_kind() reads "figure" and the whole FIGURE ONLY half goes into the
+    prompt: oval heads, eyebrow strokes, five separate limbs. The gallery came
+    back with a stick figure standing in the middle of the landscape, wearing
+    a small blue mouth-shape that poured water down its front — "the mouth of
+    a cave" plus a paragraph about faces, arriving together.
+
+    The pipeline tags its beats. A probe that does not is measuring a prompt
+    the channel never sends."""
+    import comfy_client
+    probes = dict(bench.PROBES)
+    assert comfy_client.shot_kind(probes["weather_place"]) == "object"
+    for has_a_person in ("face", "animal", "action", "writing_surface", "crowd"):
+        assert comfy_client.shot_kind(probes[has_a_person]) == "figure", has_a_person
+
+
+def test_the_place_shot_is_never_sent_the_figure_rules(monkeypatch):
+    import comfy_client
+    monkeypatch.setenv("RUFUS_STYLE", "stickman_lean")
+    monkeypatch.delenv("RUFUS_STILLS_DETAIL", raising=False)
+    out = comfy_client._with_detail(dict(bench.PROBES)["weather_place"])
+    assert "STICK FIGURE" not in out
+    assert "eyebrow strokes" not in out
+    assert "[SHOT=" not in out, "the tag is an instruction to us, not to the model"
+
+
 # ── the diff, which is the point ─────────────────────────────────────────────
 
 def _run(style_text, shas):

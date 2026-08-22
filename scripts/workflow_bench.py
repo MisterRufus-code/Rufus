@@ -82,9 +82,18 @@ PROBES: list[tuple[str, str]] = [
     ("crowd",
      "Five people crowd against the shutters of a closed bank, one hammering "
      "on the wood."),
+    # TAGGED, BECAUSE THE PIPELINE TAGS ITS BEATS. Untagged, shot_kind() reads
+    # "figure" and _detail_for_shot sends the whole FIGURE ONLY half — a
+    # paragraph about oval heads and five separate limbs — attached to a shot
+    # with no person in it. A real gallery run showed exactly what that buys:
+    # a stick figure standing in the middle of a landscape that never asked
+    # for one, with a small blue mouth-shape stuck to its face pouring water,
+    # because "the mouth of a cave" and a paragraph about faces arrived in the
+    # same prompt. A probe that sends what the pipeline would not send is
+    # measuring a prompt this channel never renders.
     ("weather_place",
-     "Rain pours past the mouth of a cave onto a flooded river bank below, "
-     "hills behind it under a low grey sky."),
+     "[SHOT=object] Rain pours past the mouth of a cave onto a flooded river "
+     "bank below, hills behind it under a low grey sky."),
 ]
 
 # Fixed per probe and shared by every candidate: the difference between two
