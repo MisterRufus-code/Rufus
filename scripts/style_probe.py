@@ -43,6 +43,7 @@ import argparse
 import difflib
 import hashlib
 import json
+import os
 import sys
 import time
 from pathlib import Path
@@ -112,9 +113,33 @@ def style_text(name: str | None, plain: bool) -> tuple[str, str]:
                   f"{', '.join(sorted(presets))}")
             return ("", "")
         return (name, presets[name])
-    import os
     label = (os.environ.get("RUFUS_STYLE") or "").strip() or "(default)"
     return (label, comfy_client._detail_suffix())
+
+
+# Did the saved settings file supply RUFUS_STYLE, or was it already in the
+# environment? Only main() can tell them apart — it holds apply()'s return
+# value, and one line later both are just os.environ. A module flag rather
+# than another parameter threaded through run(): the answer is a property of
+# how this process started, not of the render being asked for.
+_STYLE_CAME_FROM_SETTINGS = False
+
+
+def style_source(name: str | None, plain: bool) -> str:
+    """Where the style about to be rendered came from, in a person's words.
+
+    The probe reported style "(default)" under a heading promising "the
+    workflow the channel actually ships", and six renders were read as
+    evidence about stickman. A label that names a preset is not enough; what
+    you need to see is whether the preset was CHOSEN or fallen back to.
+    """
+    if plain:
+        return "--plain"
+    if name:
+        return "--style"
+    if not (os.environ.get("RUFUS_STYLE") or "").strip():
+        return "built-in default"
+    return "saved settings" if _STYLE_CAME_FROM_SETTINGS else "environment"
 
 
 def compare(now: dict, before: dict) -> list[str]:
@@ -190,9 +215,20 @@ def run(style_name: str | None = None, probes: str | None = None,
     out_dir = probe_root() / stamp
     previous = runs()
 
-    print(f"[probe] style {label!r} · {len(chosen)} probe(s) at {width}×{height}")
-    manifest = {"stamp": stamp, "style": label, "style_text": tail,
-                "width": width, "height": height,
+    source = style_source(style_name, plain)
+    print(f"[probe] style {label!r} ({source}) · {len(chosen)} probe(s) "
+          f"at {width}×{height}")
+    if source == "built-in default":
+        # Fail-open without fail-loud is fail-silent. Falling back is the
+        # right behaviour — the probe should still render — but the pictures
+        # that come out are then evidence about a style nobody chose, and the
+        # only way to know that today is to open probe.json and read line 3.
+        print("[probe] ⚠ NOTHING sets RUFUS_STYLE — not the environment, not "
+              "the dashboard's saved settings. These renders are the built-in "
+              "fallback, NOT the style this channel ships. Set the style on "
+              "the Settings page, or pass --style.")
+    manifest = {"stamp": stamp, "style": label, "style_source": source,
+                "style_text": tail, "width": width, "height": height,
                 "workflow": str(template), "renders": {}}
 
     for name, text in chosen:
@@ -242,6 +278,27 @@ def show_runs() -> int:
 
 def main(argv: list[str] | None = None) -> int:
     console.force_utf8()
+
+    # THE STYLE THE CHANNEL ACTUALLY SHIPS LIVES IN THE DASHBOARD, NOT IN THIS
+    # TERMINAL. main.py and watchdog.py both read the saved settings before
+    # they do anything; this file did not, so a probe started from a fresh
+    # PowerShell rendered on the built-in default while the owner's channel
+    # runs on stickman — and the JSON dutifully recorded style "(default)"
+    # under a heading claiming these are "the workflow the channel actually
+    # ships". A tool built to answer "did my style edit work" answering it
+    # about a different style is worse than no tool.
+    #
+    # This is the same failure comfy_client._detail_suffix already carries a
+    # warning about, in a new place: RUFUS_STYLE set in a terminal for weeks
+    # and then not. apply() only fills gaps, so --style below and any
+    # $env:RUFUS_STYLE still win.
+    try:
+        import settings_store
+        global _STYLE_CAME_FROM_SETTINGS
+        _STYLE_CAME_FROM_SETTINGS = "RUFUS_STYLE" in settings_store.apply()
+    except Exception as e:
+        print(f"[probe] saved settings not read ({e})")
+
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[2])
     ap.add_argument("--style", help="preset name (default: RUFUS_STYLE)")
     ap.add_argument("--probes", help="comma-separated subset, e.g. face,crowd")

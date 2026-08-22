@@ -79,6 +79,69 @@ def test_plain_renders_the_scene_with_no_style_at_all():
     assert style_probe.style_text(None, True) == ("plain", "")
 
 
+# ── where the style came from, which the pictures cannot tell you ────────────
+#
+# A run of this probe reported style "(default)" and rendered flat-vector
+# people in realistic proportions. They were read as a stickman regression.
+# Stickman was never rendered: nothing in a fresh terminal sets RUFUS_STYLE,
+# the probe fell back to the built-in block, and said so only in line 3 of a
+# JSON file nobody opens when the pictures are right there.
+
+def test_the_built_in_fallback_is_named_as_a_fallback(monkeypatch):
+    monkeypatch.delenv("RUFUS_STYLE", raising=False)
+    assert style_probe.style_source(None, False) == "built-in default"
+
+
+def test_a_style_typed_for_this_run_is_not_credited_to_the_settings(monkeypatch):
+    """--style beats everything, and has to READ as beating everything —
+    otherwise the manifest of a one-off experiment claims the channel ships
+    it."""
+    monkeypatch.setattr(style_probe, "_STYLE_CAME_FROM_SETTINGS", True)
+    monkeypatch.setenv("RUFUS_STYLE", "stickman")
+    assert style_probe.style_source("ink_woodcut", False) == "--style"
+
+
+def test_the_settings_file_and_the_environment_are_told_apart(monkeypatch):
+    """Same os.environ either way by the time run() looks. The difference
+    matters: "saved settings" means the dashboard and the channel agree;
+    "environment" means somebody typed it here and a scheduled run will do
+    something else."""
+    monkeypatch.setenv("RUFUS_STYLE", "stickman")
+    monkeypatch.setattr(style_probe, "_STYLE_CAME_FROM_SETTINGS", True)
+    assert style_probe.style_source(None, False) == "saved settings"
+    monkeypatch.setattr(style_probe, "_STYLE_CAME_FROM_SETTINGS", False)
+    assert style_probe.style_source(None, False) == "environment"
+
+
+def test_an_empty_style_variable_is_still_the_fallback(monkeypatch):
+    """`$env:RUFUS_STYLE = ""` sets the name and not the style."""
+    monkeypatch.setenv("RUFUS_STYLE", "   ")
+    assert style_probe.style_source(None, False) == "built-in default"
+
+
+def test_plain_is_reported_as_plain(monkeypatch):
+    monkeypatch.setenv("RUFUS_STYLE", "stickman")
+    assert style_probe.style_source(None, True) == "--plain"
+
+
+def test_the_manifest_records_where_the_style_came_from():
+    """probe.json is what a probe is FOR — it is the thing still readable a
+    week later, and compare() diffs against it. A label without a provenance
+    was how "(default)" got mistaken for the channel's style."""
+    src = Path(style_probe.__file__).read_text(encoding="utf-8")
+    assert '"style_source": source' in src
+
+
+def test_the_fallback_is_loud_on_the_way_past(monkeypatch, capsys):
+    """Fail-open without fail-loud is fail-silent. Falling back is right —
+    the probe should still render — but not quietly, because the output is
+    then evidence about a style nobody chose."""
+    src = Path(style_probe.__file__).read_text(encoding="utf-8")
+    body = src.split("def run(")[1]
+    assert 'if source == "built-in default":' in body
+    assert "NOT the style this channel ships" in body
+
+
 # ── the diff, which is the point ─────────────────────────────────────────────
 
 def _run(style_text, shas):

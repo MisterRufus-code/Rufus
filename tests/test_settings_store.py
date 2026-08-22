@@ -166,6 +166,41 @@ def test_the_entry_points_that_notify_read_the_saved_settings():
         assert "settings_store.apply()" in text, name
 
 
+def test_the_entry_points_that_RENDER_read_the_saved_settings():
+    """The two tools whose entire job is "show me what my style edit did"
+    were free to answer about a different style.
+
+      style_probe.py     run from a fresh PowerShell it rendered six probes on
+                         the BUILT-IN FALLBACK and wrote style "(default)"
+                         into probe.json, under a heading promising "the
+                         workflow the channel actually ships". Six pictures
+                         were read as evidence about stickman. They were not
+                         evidence about stickman.
+      workflow_bench.py  same gap, worse consequence: a bench exists to vary
+                         ONE thing between columns, and the one thing that
+                         must not vary is the style.
+
+    A probe that renders the wrong style is worse than no probe, because you
+    act on it. Both are asserted here, next to the notifying entry points, so
+    that "which processes read the settings file" is one list in one place —
+    the answer is meant to be "all of them", and a future entry point that
+    quietly skips it fails this test rather than a gallery.
+    """
+    root = Path(settings_store.__file__).parent
+
+    probe = (root / "style_probe.py").read_text(encoding="utf-8")
+    entry = probe.split("def main(")[1]
+    assert "settings_store.apply()" in entry
+    # Before argparse, therefore before --style is read and long before
+    # anything asks comfy_client what RUFUS_STYLE says.
+    assert entry.index("settings_store.apply()") < entry.index("argparse.ArgumentParser")
+
+    bench = (root / "workflow_bench.py").read_text(encoding="utf-8")
+    entry = bench.split('if __name__ == "__main__":')[1]
+    assert "settings_store.apply()" in entry
+    assert entry.index("settings_store.apply()") < entry.index("run()")
+
+
 def test_a_powershell_written_file_still_loads(tmp_path, monkeypatch):
     """Windows PowerShell 5.1's `Set-Content -Encoding utf8` writes a BOM, and
     editing this file from a PowerShell prompt is a documented way to set it.

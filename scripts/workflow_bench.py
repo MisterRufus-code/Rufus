@@ -360,6 +360,26 @@ def check() -> int:
 
 
 if __name__ == "__main__":
+    # THE STYLE THE CHANNEL SHIPS LIVES IN THE DASHBOARD, NOT IN THIS TERMINAL.
+    # `run(styled=True)` appends comfy_client._with_detail(), which reads
+    # RUFUS_STYLE — and RUFUS_STYLE is set on the Settings page, into
+    # config/dashboard_settings.json. main.py and watchdog.py read that file
+    # before they do anything; this file did not, so a bench started from a
+    # fresh PowerShell compared workflows through the BUILT-IN FALLBACK style
+    # while the channel renders on another one. The whole point of a bench is
+    # that only one thing varies between the columns, and the one thing that
+    # must not vary is the style. (The same gap put style_probe.py's manifest
+    # on record as style "(default)".)
+    #
+    # apply() fills gaps only, so a `$env:RUFUS_STYLE` typed for this one
+    # comparison still wins. Best-effort: an unreadable settings file must not
+    # stop a bench that would otherwise run.
+    try:
+        import settings_store
+        settings_store.apply()
+    except Exception as e:
+        print(f"[bench] saved settings not read ({e})")
+
     if "--check" in sys.argv[1:]:
         raise SystemExit(check())
     run()
