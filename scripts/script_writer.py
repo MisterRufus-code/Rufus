@@ -222,6 +222,34 @@ def _load_gold_examples(niche_name: str) -> list[dict]:
     return data.get(niche_name, [])
 
 
+def _gold_voice_note() -> str:
+    """The `note` key of gold_examples.json.
+
+    THE BEST DESCRIPTION OF THIS CHANNEL'S VOICE, AND THE MODEL HAD NEVER SEEN
+    IT. It says: open on the VIEWER or a sharp take, use the famous name as
+    PROOF mid-script rather than as the subject of a biography, present tense
+    and second person, a loop that echoes the hook, an ending that earns a
+    comment instead of begging for a follow.
+
+    Every one of those is a rule about HOW a fact is said rather than which
+    fact it is — which is the exact axis the scripts were weakest on — and it
+    sat in a JSON key that _load_gold_examples never read. It was documentation
+    for whoever opened the file. Two examples were carrying the entire weight
+    of teaching a voice that had been written down in words all along.
+    """
+    if not GOLD_EXAMPLES_FILE.exists():
+        return ""
+    try:
+        data = json.loads(GOLD_EXAMPLES_FILE.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return ""
+    # `voice` is for the model; `note` is for whoever opens the file. Sending
+    # the developer note as well would tell the model that it "mimics these
+    # more than any instruction", which is true, useless to it, and a strange
+    # thing to say to somebody you are about to instruct.
+    return (data.get("voice") or "").strip()
+
+
 def _pick_cta(niche_cfg: dict, niche_name: str = "") -> str:
     """Pick a CTA, avoiding the ones used in the last few videos of this niche
     (a CTA the viewer saw yesterday reads as a template, not a sign-off)."""
@@ -401,7 +429,17 @@ def _build_gold_block(examples: list[dict]) -> str:
     if not examples:
         return ""
     lines = ["\n── GOLD STANDARD EXAMPLES ── Study these. This is the exact level required.\n"]
-    for i, ex in enumerate(examples[:2], 1):
+    note = _gold_voice_note()
+    if note:
+        lines.append(f"WHAT MAKES THEM WORK — this is the voice, not a suggestion:\n{note}\n")
+    # FOUR, NOT TWO. The slice was written when every niche had exactly two,
+    # and it silently discarded the examples added to fix this file's actual
+    # problem: both money_history originals demonstrate the same move — deny
+    # the obvious explanation — so the set taught one lesson twice, and a
+    # writer shown one lesson writes one shape. The two new ones drop the
+    # viewer into a moment and name what something cost. Roughly 600 tokens
+    # for the highest-transfer part of the whole prompt.
+    for i, ex in enumerate(examples[:4], 1):
         src = f"{ex.get('seed_type', 'source')}: \"{ex.get('seed_content', '')[:120]}\" — {ex.get('seed_source', '')}"
         lines.append(f"Example {i} | {src}\n")
         lines.append(ex.get("script", ""))
@@ -1140,6 +1178,37 @@ def _pre_analyze(client: OpenAI, seed: dict, scene: str, run_id: str,
 
 # ── Phase A: Hook factory ───────────────────────────────────────────────────────
 
+def _hook_styles_block(niche_cfg: dict) -> str:
+    """The niche's declared hook_styles, finally sent somewhere.
+
+    money_history has asked for counterintuitive / shocking_stat / warning
+    since it was written, and a grep for "hook_styles" across every script in
+    this repo returned nothing at all. A niche has been declaring how it wants
+    to open its videos into a void.
+
+    Descriptions rather than bare slugs: "warning" alone tells the model
+    nothing it does not already imagine, and half of these names mean something
+    slightly different to a language model than they do to whoever typed them.
+    """
+    styles = [str(x).strip() for x in (niche_cfg.get("hook_styles") or []) if str(x).strip()]
+    if not styles:
+        return ""
+    known = {
+        "counterintuitive": "the thing everyone believes, shown backwards by the source",
+        "shocking_stat":    "one figure from the source that should not be possible",
+        "warning":          "the pattern is running again now, and the viewer is inside it",
+        "scene":            "drop the viewer into a real documented moment, second person",
+        "cost":             "what it actually took from someone real, stated cold",
+        "question":         "a question about the source's facts the viewer cannot not answer",
+    }
+    lines = ["THIS CHANNEL'S HOOK STYLES — bias the candidates toward these:"]
+    for st in styles:
+        lines.append(f"- {st}: {known.get(st, 'as the name suggests')}")
+    lines.append("Cover more than one of them across the set; eight variations of "
+                 "a single style is one hook with eight haircuts.\n\n")
+    return "\n".join(lines)
+
+
 def _hook_factory(client: OpenAI, seed: dict, analysis: str, niche_name: str,
                   niche_cfg: dict, run_id: str, temperature: float = None,
                   model: str = None) -> tuple[list[str], float]:
@@ -1160,6 +1229,7 @@ def _hook_factory(client: OpenAI, seed: dict, analysis: str, niche_name: str,
     # rule costs a generation every time it fires.
     forbidden_str = ", ".join(f"'{x}'" for x in hs["forbidden_openers"])
     novelty_blk   = _novelty_block(niche_name)
+    styles_blk    = _hook_styles_block(niche_cfg)
     # The SAME corpus the gate will check against — see grounding_corpus.
     numbers_blk   = _allowed_numbers_block(grounding_corpus(seed, analysis))
 
@@ -1168,6 +1238,7 @@ def _hook_factory(client: OpenAI, seed: dict, analysis: str, niche_name: str,
         f"NICHE: {niche_name}\n"
         f"PRE-ANALYSIS:\n{analysis}\n\n"
         f"{novelty_blk}"
+        f"{styles_blk}"
         f"Generate exactly {n_hooks} numbered HOOK LINES for a YouTube Short.\n\n"
         f"HOOK RULES — every line must obey ALL of these:\n"
         f"- Length: {hs['min_words']}–{hs['max_words']} words (HARD CAP {hs['hard_max_words']})\n"
@@ -1178,7 +1249,11 @@ def _hook_factory(client: OpenAI, seed: dict, analysis: str, niche_name: str,
         f"downstream fact-check and kills the whole video. NEVER write in first "
         f"person ('I', 'my', 'we') — this is a faceless channel with no narrator persona.\n"
         f"{numbers_blk}"
-        f"- Must surface a contradiction, paradox, or pattern interrupt — not a report\n"
+        f"- Must create an itch, not file a report. Any ONE of these does it: it\n"
+        f"  contradicts what the viewer believes, OR it drops them inside a real\n"
+        f"  documented moment in second person ('In 1560 England, you'd spend the\n"
+        f"  worst coin first'), OR it names what something actually cost someone\n"
+        f"  real. These are equally good — see the eight angles below.\n"
         f"- Must NOT start with any of: {forbidden_str}\n"
         f"- Must NOT use vague generalities — every word earns its place\n\n"
         # THE EXAMPLES CARRY NO DIGITS ANY MORE. They used to, and the model
@@ -1305,11 +1380,27 @@ def _hook_scorer(client: OpenAI, hooks: list[str], seed: dict, niche_name: str,
         "SCORING — two steps, no exceptions:\n\n"
         "STEP 1 — BINARY GATE (if ANY gate fails → maximum score is 3, hard cap):\n"
         "  • Contains a specific number, dollar amount, year, or proper noun (real person/place)?\n"
-        "  • States or implies the OPPOSITE of common belief (contradiction/paradox)?\n"
-        "  • Is that contradiction ACTUALLY SUPPORTED BY THE SOURCE ABOVE? Read the\n"
+        "  • Does it do at least ONE of these THREE? All three are equally good.\n"
+        "    This gate asks whether the line WORKS, never which shape it picked —\n"
+        "    a contradiction is not worth more than the other two, and scoring it\n"
+        "    higher is how ten videos in a row all open 'X didn't do Y'. That is a\n"
+        "    format, and a format stops being surprising by the third one.\n"
+        "      A. CONTRADICTS — states or implies the opposite of common belief.\n"
+        "         ('Rome didn't run out of silver.')\n"
+        "      B. PUTS THE VIEWER INSIDE A REAL MOMENT — second person and/or\n"
+        "         present tense, in a place and time the source documents.\n"
+        "         ('In 1560 England, you'd spend the worst coin first.') This is\n"
+        "         NOT a contradiction and does not need to be: the itch is 'why\n"
+        "         would I do that?' rather than 'wait, is that true?'\n"
+        "      C. NAMES WHAT IT COST — the price someone real paid, stated cold.\n"
+        "         The stake is the hook. ('Henry the Eighth cut the silver by two\n"
+        "         thirds and the country hid its coins in the walls.')\n"
+        "  • Is whichever of A/B/C it did ACTUALLY SUPPORTED BY THE SOURCE ABOVE? Read the\n"
         "    source and answer honestly. A hook asserting something the source does\n"
         "    not state — or that the source contradicts — FAILS this gate no matter\n"
-        "    how good it sounds. Example of a failure: source says a silver lode was\n"
+        "    how good it sounds — an invented scene and an invented cost fail this\n"
+        "    gate exactly as an invented contradiction does. Example of a failure:\n"
+        "    source says a silver lode was\n"
         "    \"named after Canadian miner Henry Comstock\" and the hook claims \"Henry\n"
         "    Comstock didn't discover the Comstock Lode\" — the source does not say\n"
         "    that, so the hook is a guess dressed as a revelation. This gate exists\n"
@@ -1319,12 +1410,15 @@ def _hook_scorer(client: OpenAI, hooks: list[str], seed: dict, niche_name: str,
         "    voiceover and its render get built on it before a fact-check rejects it.\n"
         "  • ≤10 words?\n"
         "If all four pass, proceed to Step 2. If any fail → score 1-3 and stop.\n\n"
-        "STEP 2 — SURPRISE INTENSITY (only when all gates pass — score 4-10):\n"
-        "  • LOW surprise — viewer half-expected this, mild paradox: 4-6\n"
-        "  • MEDIUM surprise — viewer wouldn't have predicted this: 7-8\n"
-        "  • HIGH surprise — viewer actively thinks 'wait, is that actually true?': 9-10\n\n"
-        "A 9/10 hook makes a viewer question something they believed with certainty.\n"
-        "A 7/10 is solid. A 5/10 fails. A 3/10 gets cut.\n\n"
+        "STEP 2 — HOW BADLY DOES THE VIEWER NEED THE NEXT LINE? (all gates passed — score 4-10):\n"
+        "  • LOW — mildly interesting; the viewer can put the phone down: 4-6\n"
+        "  • MEDIUM — the viewer wants the answer: 7-8\n"
+        "  • HIGH — the viewer cannot leave without it: 9-10\n\n"
+        "A 9/10 hook leaves the viewer holding one of these and unable to drop it:\n"
+        "  'wait, is that actually true?'  (A)\n"
+        "  'why would I have done that?'   (B)\n"
+        "  'what did that cost him?'       (C)\n"
+        "Judge the PULL, not the shape. A 7/10 is solid. A 5/10 fails. A 3/10 gets cut.\n\n"
         "Reply ONLY with this JSON array, one object per hook, in order:\n"
         '[{"i": 1, "score": 0-10, "reason": "one-sentence citing which gate passed/failed or surprise level"}, ...]'
     )
@@ -2043,9 +2137,19 @@ def _fixes_from_crits(crits: dict, std: dict, opinion_all: str,
     if crits.get("loop", 2) < 2:
         fixes.append("CRITICAL: the second-to-last line must structurally mirror the "
                      "hook (echo one of its concrete words), not just share a theme.")
-    if crits.get("human", 1) < 1:
-        fixes.append(f"CRITICAL: sound like a person with a real opinion — use one "
-                     f"of: {opinion_all}. No neutral, encyclopedia-style description.")
+    if crits.get("human", 2) < 2:
+        fixes.append(
+            "CRITICAL: the viewer has to be IN this and has to feel it. Put 'you' "
+            "in the body doing something, in present tense. Give one real person "
+            "something to lose and let it cost them. And put a TURN in the middle "
+            "— one line where what the viewer assumed becomes what was never "
+            f"true. Opinion words ({opinion_all}) help but do not replace those "
+            "three; a narrator with strong adjectives is still a narrator. "
+            "The turn and the cost must both come from the source: do NOT invent "
+            "why anyone acted — no 'they were afraid', no 'it was buried', no "
+            "attributed motive the source does not state. That is the single most "
+            "expensive rejection in this pipeline, because it is caught after the "
+            "whole video is rendered.")
     # The disqualifier list isn't parsed into structured criteria like
     # SPECIFICITY/HOOK/etc. — it's echoed in the raw reasoning text (the
     # scorer prompt asks for "DISQUALIFIERS: [list, or 'none']"), so this
@@ -2118,12 +2222,23 @@ def _score(client: OpenAI, script: str, seed: dict, hook: str, run_id: str,
         if is_wisdom else
         "□ Script invents a person, dollar amount, percentage, or date not present in the source material\n"
     )
+    # SPECIFICITY GAVE UP A POINT, AND IT IS THE ONE AXIS THAT COULD AFFORD IT.
+    # Nine of the ten points measured accuracy and mechanics; ONE measured
+    # voice, and it did so by looking for the words "worst" and "wrong". The
+    # scripts came back true, tight, correctly looped and completely flat —
+    # exactly what a rubric shaped like that asks for.
+    #
+    # Specificity is the most heavily guarded thing in this pipeline even after
+    # losing a point: a regex pre-filter enforces one specific per 25 words, the
+    # seed gate refuses ungroundable sources, the hook scorer checks every claim
+    # against the source, and the fact gate re-checks every figure afterwards.
+    # Four guards. Voice had one point and no guard at all.
     specificity_criterion = (
-        "SPECIFICITY 0-3: Does the script ground claims in real, verifiable history? "
-        "Well-documented facts ARE the specifics. 0=vague, 1=one fact, 2=several, 3=every claim grounded.\n"
+        "SPECIFICITY 0-2: Does the script ground claims in real, verifiable history? "
+        "Well-documented facts ARE the specifics. 0=vague, 1=some grounded, 2=every claim grounded.\n"
         if is_wisdom else
-        "SPECIFICITY 0-3: Does the script use real details from source? "
-        "0=invented/vague, 1=one specific, 2=several, 3=every claim grounded.\n"
+        "SPECIFICITY 0-2: Does the script use real details from source? "
+        "0=invented/vague, 1=some grounded, 2=every claim grounded.\n"
     )
 
     # THE RUBRIC KNOWING WHICH VIDEO IT IS LOOKING AT.
@@ -2218,14 +2333,37 @@ def _score(client: OpenAI, script: str, seed: dict, hook: str, run_id: str,
         + hook_criterion
         + compression_criterion
         + close_criterion +
-        "HUMAN 0-1: Sounds like a real expert with opinions. Reward opinion words (worst/wrong/smartest/scared). Penalize neutral description. 0=AI/generic, 1=genuine voice.\n\n"
+        "HUMAN 0-2: Can the viewer FEEL this, and is the viewer IN it? Three things,\n"
+        "score what is actually there:\n"
+        "  • Is the viewer in the script — 'you', present tense, something they do\n"
+        "    or already did? A script with no 'you' is a lecture.\n"
+        "  • Is there one real person with something at stake, and does it cost\n"
+        "    them? A fact nobody paid for is trivia.\n"
+        "  • Is there a TURN — a point where the meaning changes and what the\n"
+        "    viewer assumed becomes what was never true? Without one the body is a\n"
+        "    list of true sentences.\n"
+        "THE TURN AND THE COST MUST BE IN THE SOURCE. This criterion pays for\n"
+        "tension, and the cheapest way to fake tension is to invent why somebody\n"
+        "acted — 'policymakers were scared to act', 'the finding was buried by\n"
+        "people who feared it'. Five of the last eight fact-check rejections were\n"
+        "exactly that, and each one was caught only AFTER the images and the\n"
+        "render had been paid for. A turn is a change in what the documented FACTS\n"
+        "MEAN, never a claim about what someone privately wanted. Score 0 on this\n"
+        "criterion for any attributed motive, fear, or intent the source does not\n"
+        "state outright — an invented feeling is worth less than a flat script,\n"
+        "because a flat script is at least cheap to reject.\n"
+        "0=none of the three, an encyclopedia entry read aloud. 1=one of them.\n"
+        "2=the viewer is in it, somebody pays, and the meaning turns.\n"
+        "Opinion words (worst/wrong/smartest/scared) help but do not by themselves\n"
+        "earn a 2 — 'the worst monetary decision in history' is still a narrator\n"
+        "talking about strangers.\n\n"
         "STEP 3 — REPLY EXACTLY:\n"
         "DISQUALIFIERS: [list, or 'none']\n"
-        "SPECIFICITY: [0-3]/3 — [explain]\n"
+        "SPECIFICITY: [0-2]/2 — [explain]\n"
         "HOOK: [0-2]/2 — [explain]\n"
         "COMPRESSION: [0-2]/2 — [explain]\n"
         + close_reply +
-        "HUMAN: [0-1]/1 — [explain]\n"
+        "HUMAN: [0-2]/2 — [name which of the three are present]\n"
         "TOTAL: [sum]/10"
     )
 

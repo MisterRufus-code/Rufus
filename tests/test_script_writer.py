@@ -331,20 +331,20 @@ def _std():
 
 def test_fixes_from_crits_empty_when_all_criteria_pass():
     from script_writer import _fixes_from_crits
-    crits = {"specificity": 3, "hook": 2, "compression": 2, "loop": 2, "human": 1}
+    crits = {"specificity": 2, "hook": 2, "compression": 2, "loop": 2, "human": 2}
     assert _fixes_from_crits(crits, _std(), "worst, smartest, wrong") == []
 
 
 def test_fixes_from_crits_flags_low_specificity():
     from script_writer import _fixes_from_crits
-    crits = {"specificity": 0, "hook": 2, "compression": 2, "loop": 2, "human": 1}
+    crits = {"specificity": 0, "hook": 2, "compression": 2, "loop": 2, "human": 2}
     fixes = _fixes_from_crits(crits, _std(), "worst, smartest, wrong")
     assert any("ground EVERY claim" in f for f in fixes)
 
 
 def test_fixes_from_crits_flags_low_loop():
     from script_writer import _fixes_from_crits
-    crits = {"specificity": 3, "hook": 2, "compression": 2, "loop": 0, "human": 1}
+    crits = {"specificity": 2, "hook": 2, "compression": 2, "loop": 0, "human": 2}
     fixes = _fixes_from_crits(crits, _std(), "worst, smartest, wrong")
     assert any("mirror the hook" in f for f in fixes)
 
@@ -450,7 +450,7 @@ def test_story_architect_returns_plan_and_cost(monkeypatch):
 
 def test_fixes_from_crits_detects_sensory_disqualifier_from_reasoning():
     from script_writer import _fixes_from_crits, _standards
-    crits = {"specificity": 3, "hook": 2, "compression": 2, "loop": 2, "human": 1}
+    crits = {"specificity": 2, "hook": 2, "compression": 2, "loop": 2, "human": 2}
     reasoning = "DISQUALIFIERS: NO SENSORY DETAIL — entirely abstract summary\nTOTAL: 4/10"
     fixes = _fixes_from_crits(crits, _standards(), "worst", reasoning=reasoning)
     assert any("sensory" in f.lower() for f in fixes)
@@ -458,7 +458,7 @@ def test_fixes_from_crits_detects_sensory_disqualifier_from_reasoning():
 
 def test_fixes_from_crits_no_sensory_fix_when_not_flagged():
     from script_writer import _fixes_from_crits, _standards
-    crits = {"specificity": 3, "hook": 2, "compression": 2, "loop": 2, "human": 1}
+    crits = {"specificity": 2, "hook": 2, "compression": 2, "loop": 2, "human": 2}
     fixes = _fixes_from_crits(crits, _standards(), "worst", reasoning="DISQUALIFIERS: none\nTOTAL: 10/10")
     assert not any("sensory" in f.lower() for f in fixes)
 
@@ -881,7 +881,7 @@ def test_score_prompt_requires_sensory_detail_in_first_third():
 
 def test_fixes_from_crits_sensory_fix_mentions_first_third():
     from script_writer import _fixes_from_crits, _standards
-    crits = {"specificity": 3, "hook": 2, "compression": 2, "loop": 2, "human": 1}
+    crits = {"specificity": 2, "hook": 2, "compression": 2, "loop": 2, "human": 2}
     reasoning = "DISQUALIFIERS: NO EARLY SENSORY DETAIL\nTOTAL: 4/10"
     fixes = _fixes_from_crits(crits, _standards(), "worst", reasoning=reasoning)
     assert any("first third" in f.lower() for f in fixes)
@@ -1323,9 +1323,17 @@ def test_both_formats_still_score_out_of_the_same_ten(monkeypatch):
     for fmt in ("short", "long"):
         monkeypatch.setenv("RUFUS_FORMAT", fmt)
         p = _capture_rubric()
-        assert "SPECIFICITY 0-3" in p and "HUMAN 0-1" in p, fmt
+        # The invariant is the SUM, not any one criterion's range: a point moved
+        # from SPECIFICITY (guarded four other ways) to HUMAN (guarded nowhere)
+        # because nine of ten points measured accuracy and one measured voice,
+        # and the scripts came back true, tight and completely flat.
+        assert "SPECIFICITY 0-2" in p and "HUMAN 0-2" in p, fmt
         assert "TOTAL: [sum]/10" in p, fmt
-        assert p.count("0-2:") == 3, fmt
+        ranges = {"SPECIFICITY": 2, "HOOK": 2, "COMPRESSION": 2, "HUMAN": 2}
+        ranges["PAYOFF" if fmt == "long" else "LOOP"] = 2
+        assert sum(ranges.values()) == 10, fmt
+        for name, hi in ranges.items():
+            assert f"{name} 0-{hi}:" in p, f"{fmt}: {name}"
 
 
 @pytest.mark.parametrize("fmt", ["short", "long"])

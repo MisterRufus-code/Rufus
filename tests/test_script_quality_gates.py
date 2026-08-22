@@ -561,8 +561,16 @@ def test_scorer_still_rewards_a_genuine_contradiction(monkeypatch):
     """The fix must not turn the gate into "no contradictions" — the paradox
     hook is the format. Only UNSUPPORTED ones are rejected."""
     p = _scorer_prompt(monkeypatch)
-    assert "OPPOSITE of common belief" in p
-    assert "SURPRISE INTENSITY" in p
+    assert "opposite of common belief" in p.lower()
+    # AND IT IS NO LONGER THE ONLY WAY THROUGH. The gate used to require a
+    # contradiction, which capped every other shape at 3 — including the second
+    # of this niche's own two gold examples ("In 1560 England, you'd spend the
+    # worst coin first"), a hook the writer is told to imitate and the scorer
+    # would have rejected. Ten videos opening "X didn't do Y" is a format, and a
+    # format stops surprising by the third one.
+    assert "PUTS THE VIEWER INSIDE A REAL MOMENT" in p
+    assert "NAMES WHAT IT COST" in p
+    assert "All three are equally good" in p
 
 
 # ── Invented motive is the dominant fact-gate failure ────────────────────────
@@ -849,3 +857,62 @@ def test_year_detection_bounds():
     assert not script_writer._looks_like_a_year("9999")   # not a plausible date
     assert not script_writer._looks_like_a_year("156")    # too short
     assert not script_writer._looks_like_a_year("70000")  # a quantity
+
+
+# ── the rubric had nine points for accuracy and one for voice ──────────────
+
+def _rubric(monkeypatch, fmt="short"):
+    monkeypatch.setenv("RUFUS_FORMAT", fmt)
+    from test_script_writer import _capture_rubric
+    return _capture_rubric()
+
+
+def test_the_body_rubric_scores_whether_the_viewer_is_in_it(monkeypatch):
+    """HUMAN was one point out of ten and was defined as "reward opinion words
+    (worst/wrong/smartest)". A keyword check is not a measure of feeling, and
+    the scripts came back true, tight, correctly looped and completely flat —
+    which is exactly what a rubric shaped like that asks for."""
+    p = _rubric(monkeypatch)
+    assert "HUMAN 0-2" in p
+    for expected in ("Is the viewer in the script", "something at stake", "TURN"):
+        assert expected in p, expected
+
+
+def test_opinion_words_alone_no_longer_earn_the_voice_points(monkeypatch):
+    """'the worst monetary decision in history' is still a narrator talking
+    about strangers."""
+    p = _rubric(monkeypatch)
+    assert "do not by themselves" in p
+
+
+def test_the_turn_may_not_be_an_invented_motive(monkeypatch):
+    """THE COLLISION THIS CRITERION WALKS INTO. Paying for tension is paying
+    for the cheapest way to fake it — inventing why somebody acted. Five of the
+    last eight fact-check rejections were exactly that, and each was caught
+    only after the images and the render were paid for. The criterion that
+    creates the pressure is the right place to put the guard."""
+    p = _rubric(monkeypatch)
+    assert "attributed motive" in p
+    assert "documented FACTS" in p
+
+
+def test_the_retry_asks_for_connection_not_for_adjectives():
+    """The fix text is what the writer actually acts on, so it has to ask for
+    the same thing the criterion scores — and carry the same warning."""
+    from script_writer import _fixes_from_crits, _standards
+    crits = {"specificity": 2, "hook": 2, "compression": 2, "loop": 2, "human": 0}
+    fixes = _fixes_from_crits(crits, _standards(), "worst, wrong")
+    joined = " ".join(fixes)
+    assert "TURN" in joined and "present tense" in joined
+    assert "do NOT invent" in joined
+
+
+def test_specificity_is_still_guarded_after_giving_up_its_point():
+    """The point was safe to move only because this axis is checked four other
+    ways. If any of those guards go, the rubric point has to come back."""
+    import json as _json
+    root = Path(__file__).parent.parent
+    std = _json.loads((root / "config" / "script_standards.json").read_text(encoding="utf-8"))
+    assert std["body"]["specificity_per_25_words"] >= 1.0
+    from script_writer import _body_violations
+    assert _body_violations("word " * 100).__class__ is list

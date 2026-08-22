@@ -200,3 +200,82 @@ def test_every_sd_niche_has_a_starter_character_disabled_by_default():
     # Each niche's mascot must be visually distinct — not the same character
     # relabeled across niches.
     assert len(names) == len(sd_niches)
+
+
+# ── the config that was declared and never read ────────────────────────────
+#
+# Two keys in this repo described how the scripts should sound and were wired
+# to nothing. That is the same shape as every other bug this pipeline has had:
+# the knowledge existed, computed and written down, and never reached the place
+# that needed it.
+
+def test_the_voice_note_actually_reaches_the_model():
+    """`gold_examples.json` held the single best description of this channel's
+    voice — open on the viewer, second person, the famous name as PROOF not as
+    subject — in a key `_load_gold_examples` never read. Two examples were
+    carrying the whole weight of teaching a voice that was written down in
+    words the entire time."""
+    import script_writer as sw
+    voice = sw._gold_voice_note()
+    assert voice, "no voice note is being sent at all"
+    block = sw._build_gold_block(sw._load_gold_examples("money_history"))
+    assert voice.splitlines()[0] in block
+
+
+def test_the_developer_note_does_not_reach_the_model():
+    """`note` is addressed to whoever opens the file. Telling the model it
+    "mimics these more than any instruction" is true, useless to it, and a
+    strange thing to say to something you are about to instruct."""
+    import json as _json
+    import script_writer as sw
+    raw = _json.loads((ROOT / "config" / "gold_examples.json").read_text(encoding="utf-8"))
+    block = sw._build_gold_block(sw._load_gold_examples("money_history"))
+    assert raw["note"].split(".")[0] not in block
+
+
+def test_every_niche_that_declares_hook_styles_has_them_sent_somewhere():
+    """money_history declared counterintuitive/shocking_stat/warning since it
+    was written, and a grep for hook_styles across every script returned
+    nothing. A niche was describing how it wanted to open its videos into a
+    void."""
+    import json as _json
+    import script_writer as sw
+    niches = _json.loads((ROOT / "config" / "niches.json").read_text(encoding="utf-8"))["niches"]
+    seen = False
+    for name, cfg in niches.items():
+        if not cfg.get("hook_styles"):
+            continue
+        seen = True
+        blk = sw._hook_styles_block(cfg)
+        for style in cfg["hook_styles"]:
+            assert style in blk, f"{name}: {style} never reaches the generator"
+    assert seen, "no niche declares hook_styles — this test is watching nothing"
+
+
+def test_a_niche_with_no_hook_styles_adds_nothing_to_the_prompt():
+    import script_writer as sw
+    assert sw._hook_styles_block({}) == ""
+    assert sw._hook_styles_block({"hook_styles": []}) == ""
+
+
+def test_the_gold_set_teaches_more_than_one_shape():
+    """Both money_history originals denied the obvious explanation — "Rome
+    didn't run out of silver", "Henry gutted the currency". Two examples of one
+    move teach one lesson twice, and a writer shown one lesson writes one
+    shape."""
+    import json as _json
+    raw = _json.loads((ROOT / "config" / "gold_examples.json").read_text(encoding="utf-8"))
+    hooks = [ex["script"].splitlines()[0].lower() for ex in raw["money_history"]]
+    assert len(hooks) >= 3, "not enough examples to demonstrate a range"
+    # At least one must put the viewer in the scene rather than deny something.
+    assert any(h.startswith("in ") and "you" in h for h in hooks), hooks
+
+
+def test_every_gold_example_is_shown_not_just_the_first_two():
+    """The slice was examples[:2], written when every niche had exactly two —
+    so examples added to fix the range problem were silently discarded."""
+    import script_writer as sw
+    examples = sw._load_gold_examples("money_history")
+    block = sw._build_gold_block(examples)
+    assert block.count("Example ") == len(examples), \
+        f"{len(examples)} examples on disk, {block.count('Example ')} in the prompt"

@@ -1,6 +1,5 @@
 {
-  "note": "Gold-standard scripts per niche. 2 examples each. Injected into the system prompt as few-shot demonstrations — the model mimics these more than any instruction, so they define the voice: open on the VIEWER or a sharp take, use the famous name as PROOF mid-script (never as the subject of a biography), present tense and second person, a loop line that echoes the hook, and an ending that earns a comment instead of begging for a follow. 85-115 words (34-46s at ~150wpm).",
-
+  "note": "FOR WHOEVER OPENS THIS FILE. Gold-standard scripts per niche, injected into the system prompt as few-shot demonstrations. The model mimics these more than any instruction, so they define the voice — which is why `voice` below is sent to the model too, and this key is not. Keep 2-4 per niche and make them show DIFFERENT shapes: two examples of the same move teach one lesson twice.",
   "finance": [
     {
       "seed_type": "wisdom",
@@ -15,7 +14,6 @@
       "script": "You think the market is the risky part. It isn't. You are.\nThe S&P 500 has never lost money over any twenty-year stretch in history.\nNot in 2008. Not the Great Depression. Not COVID.\nEvery single time, it came back higher.\nYet the average investor underperforms that exact index by three percent a year.\nNot from bad stocks. From selling during the crashes.\nJack Bogle saw this in 1974 and built Vanguard on one idea.\nStop trying to beat the market. Own all of it.\nThe index never fails people. People fail the index.\nSo the risk was never the market. The risk is you.\nWhich crash are you going to sell into next?"
     }
   ],
-
   "motivation": [
     {
       "seed_type": "wisdom",
@@ -30,7 +28,6 @@
       "script": "Your body quit at forty percent. You called it your limit.\nGoggins ran a hundred miles on two broken feet.\nNot because he's built different. Because he learned to argue with the voice that says stop.\nHe says your mind throttles you at forty percent of what you have left.\nThe rest is a negotiation. Not with your legs — with your own head.\nMost people take the first exit their mind offers and obey it instantly.\nThey feel the urge to stop and call it a wall.\nYou have never actually hit your ceiling.\nYou only believed the voice that said this is it.\nSo that wasn't your limit. That was your first offer.\nWhat are you negotiating with right now?"
     }
   ],
-
   "mindset": [
     {
       "seed_type": "wisdom",
@@ -45,7 +42,6 @@
       "script": "There's a half-second gap you skip every single day. It's costing you your character.\nViktor Frankl survived three concentration camps.\nHe watched some people break and others find meaning in the exact same hell.\nThe difference wasn't strength. Wasn't luck. Wasn't background.\nIt was the pause between what happened and how they answered.\nFrankl called that pause freedom.\nNot freedom from your circumstances. Freedom inside your response.\nMost people never use it. Stimulus, reaction, no gap.\nThen they call that reaction their personality.\nSo the gap you keep skipping is the only freedom you actually own.\nWhere are you skipping the pause today?"
     }
   ],
-
   "business": [
     {
       "seed_type": "wisdom",
@@ -60,7 +56,6 @@
       "script": "You've been building for six months without talking to one user. That's why it will flop.\nPaul Graham has funded companies now worth over a trillion dollars combined.\nHe runs one test on every founder in the first ten minutes.\nNot the idea. Not the market. Not the resume.\nOne question: do you talk to your users every week?\nMost founders build in a room for months, then wonder why nobody shows up.\nYou cannot guess what people want from inside your own head.\nDropbox, Airbnb, Stripe — every one started by talking to ten people.\nThe product was never the work. The conversation is the work.\nSo when did you last talk to the person you're building for?\nWhen did you last talk to a real customer?"
     }
   ],
-
   "personal_development": [
     {
       "seed_type": "wisdom",
@@ -75,7 +70,6 @@
       "script": "You're chasing what's hot. That's exactly why you'll stay average.\nNaval Ravikant built two companies, invested early in Uber and Twitter, retired at forty.\nHe repeats one thing: don't optimize for what's hot, optimize for what you can't stop thinking about.\nHe calls it specific knowledge.\nThe expertise that feels like play to you and looks like work to everyone else.\nThat gap is an edge nobody can grind their way into copying.\nYou can fake discipline. You cannot fake genuine obsession.\nThe people who chased trends are doing fine.\nThe people who chased an obsession built the companies the trend-chasers wish they had started.\nSo what do you keep circling back to that you've been calling a distraction?\nWhich one are you starting with — tell me."
     }
   ],
-
   "money_history": [
     {
       "seed_type": "wikipedia",
@@ -88,6 +82,19 @@
       "seed_source": "Wikipedia",
       "seed_content": "The Great Debasement was a currency policy begun in 1544 under Henry VIII of England, which reduced the silver content of English coins — at its worst to about a quarter of the sterling standard — to fund wars with France and Scotland. Merchants and the public hoarded the older, higher-silver coins and spent the debased ones, driving the good coin out of circulation. Elizabeth I, advised by the financier Thomas Gresham, restored the coinage in 1560-61.",
       "script": "In 1560 England, you'd spend the worst coin first.\nElizabeth the First inherited a currency her father had gutted.\nHenry the Eighth had cut the silver in English coins by two thirds.\nPeople noticed immediately.\nThey paid their debts with the thin new coins and hid the old heavy ones in the walls.\nGood money vanished from circulation entirely.\nThomas Gresham told the queen why: bad coin drives out good.\nNobody organises it. Everyone quietly keeps the better thing.\nYou do it now, with the worn note and the crisp one.\nYou'd still spend the worst coin first today.\nSave this — money was never what you think."
+    },
+    {
+      "seed_type": "wikipedia",
+      "seed_source": "Hyperinflation in the Weimar Republic",
+      "seed_content": "By November 1923 the German Papiermark had fallen to 4.2 trillion to the US dollar. Workers were paid twice a day so wages could be spent before they lost value; banknotes were used as wallpaper and burned as fuel.",
+      "script": "In 1923 Berlin, you'd get paid twice a day and run.\nNot to the bank. To the shops.\nYour morning wage bought bread by noon and nothing by evening.\nPeople papered their walls with banknotes and fed them to the stove, because the paper was worth more as fuel than it was as money.\nHere is what nobody plans for: your savings were never stolen.\nEvery mark you earned sat in the account. Still yours.\nThe number never fell. What it bought did.\nThat is the whole trick, and it is running somewhere right now.\nYou'd still be running to the shops today.\nFollow for the real history of money."
+    },
+    {
+      "seed_type": "wikipedia",
+      "seed_source": "Tally stick",
+      "seed_content": "The English Exchequer used notched wooden tally sticks as receipts for tax payments from the 12th century until 1826. In 1834 the accumulated sticks were burned in a stove in the House of Lords; the fire spread and destroyed the Palace of Westminster.",
+      "script": "England ran its treasury on notched sticks for six hundred years.\nA stick was split down the middle. You kept half, the Exchequer kept half.\nForging one was impossible, because only your two pieces matched.\nNo metal, no paper, no bank. Just wood that fit.\nIt worked until 1826.\nThen a clerk burned the retired sticks in a stove under the House of Lords, and the fire took the Palace of Westminster with it.\nSix centuries of proof that money is only an agreement, gone because somebody wanted the cupboard back.\nYou trust a number on a screen the way England trusted notched sticks.\nSave this — money was never what you think."
     }
-  ]
+  ],
+  "voice": "OPEN ON THE VIEWER OR ON A SHARP TAKE — never on a fact. \"Rome didn't run out of silver\" and \"In 1560 England, you'd spend the worst coin first\" both work; \"The denarius lost 90% of its silver content\" is a sentence from an encyclopedia.\nSECOND PERSON, PRESENT TENSE. The viewer is in the script, doing something, now. \"You'd spend the worst coin first.\" \"Your money looks fine too.\" A script with no 'you' in it is a lecture.\nTHE FAMOUS NAME IS PROOF, NOT THE SUBJECT. Gresham appears to explain why the thing you already do has a name. Do not write a biography — nobody opened a Short to learn about Thomas Gresham.\nSOMEONE HAS TO LOSE SOMETHING. Give one real person a stake and let it cost them. A fact nobody paid for is trivia.\nONE TURN. Somewhere in the middle the meaning has to change — the thing the viewer assumed becomes the thing that was never true. Without a turn the body is a list.\nTHE NUMBER LANDS AFTER THE CLAIM, not as the claim. Make the point, then let the figure prove it.\nEND SO IT EARNS A COMMENT, not a follow. Land the last line against the viewer's own life and stop."
 }
