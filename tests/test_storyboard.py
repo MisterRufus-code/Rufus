@@ -990,8 +990,14 @@ def test_the_style_keeps_people_simple_and_draws_the_animals():
     import json
     style = json.loads((Path(storyboard.__file__).parent.parent / "config" /
                         "styles.json").read_text(encoding="utf-8"))["stickman"]
-    assert "ANIMALS AND OBJECTS ARE DRAWN PROPERLY" in style
-    assert "stick-figure" in style
+    # Lowercase since the block was split: this sentence moved into the shared
+    # half, which is the top of the string, and a shouted drawable noun there
+    # is a candidate for being painted — the banknote rule.
+    assert "animals and objects are drawn properly" in style.lower()
+    # "stick-figure" used to be the block's opening word, describing the medium.
+    # It now lives only in the FIGURE ONLY half — the medium line is shot-neutral
+    # so an object beat is not told to draw a stick figure.
+    assert "stick figure" in style.lower()
 
 
 # ── a hundred and fifty shots do not fit in one reply ────────────────────────

@@ -938,6 +938,54 @@ def _is_photographic(style: str) -> bool:
         or "shot on" in low or "real camera" in low)
 
 
+# The marker inside a style preset that separates "true of any shot" from
+# "true only when a person is in frame". A preset without it is one block and
+# behaves exactly as it always has.
+STYLE_FIGURE_MARKER = "--- FIGURE ONLY ---"
+
+# GPT tags each prompt with the kind of shot it wrote. The tag never reaches
+# the image model — it is stripped here, after it has chosen the style.
+_SHOT_TAG_RE = re.compile(r"^\s*\[SHOT\s*=\s*(figure|object)\s*\]\s*", re.I)
+
+
+def shot_kind(prompt: str) -> str:
+    """"figure" or "object" for a tagged prompt; "figure" when untagged.
+
+    UNTAGGED MEANS FIGURE, deliberately. Every prompt written before this
+    existed, every hand-typed prompt in the dashboard's regen box, and every
+    prompt from a model that ignored the instruction all arrive without a tag
+    — and for all of them the old behaviour (the whole style block) is the
+    right answer. Defaulting to "object" would silently strip the figure rules
+    from a run that never asked for that.
+    """
+    m = _SHOT_TAG_RE.match(prompt or "")
+    return m.group(1).lower() if m else "figure"
+
+
+def strip_shot_tag(prompt: str) -> str:
+    return _SHOT_TAG_RE.sub("", prompt or "", count=1).strip()
+
+
+def _detail_for_shot(kind: str) -> str:
+    """The style text this shot should actually receive.
+
+    WHY THE STYLE HAS TO KNOW. The block is appended byte for byte to every
+    prompt, and roughly half of stickman describes how to draw a body — five
+    separate parts, the oval head, where the arms leave the torso. On a beat
+    whose subject is a banana, that is a long paragraph about limbs sitting
+    directly after "a macro shot of a banana", and the model draws a figure.
+    A style block has no meta level: every word in it is a word in the prompt,
+    and the only reliable way not to get a figure is not to mention one.
+    """
+    tail = _detail_suffix()
+    if STYLE_FIGURE_MARKER not in tail:
+        return tail
+    shared, _, figure = tail.partition(STYLE_FIGURE_MARKER)
+    if kind == "object":
+        return shared.strip()
+    return f"{shared.strip()} {figure.strip()}"
+
+
 def _with_detail(prompt: str) -> str:
     """Append the style direction, reconciling it with any photographic
     direction the prompt already carries.
@@ -947,7 +995,9 @@ def _with_detail(prompt: str) -> str:
     Non-photographic style (the flat-2D default) → the prompt's camera spec
     directly contradicts the look; strip it and apply the style anyway. The
     style is a channel-wide decision and must never lose to one stray line."""
-    tail = _detail_suffix()
+    kind = shot_kind(prompt)
+    prompt = strip_shot_tag(prompt)
+    tail = _detail_for_shot(kind)
     if not tail:
         return prompt
     low = prompt.lower()

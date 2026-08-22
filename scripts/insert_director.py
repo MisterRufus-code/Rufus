@@ -280,7 +280,12 @@ def style_suffix() -> str:
     """
     try:
         import comfy_client
-        return comfy_client._detail_suffix()
+        # AN INSERT IS AN OBJECT BY DEFINITION — one thing, cut out, on a plain
+        # backdrop, with nobody in it. Handing it the figure half of the style
+        # block put a paragraph about arms, legs and where the head sits
+        # directly after "a single sword, centred in frame", which is the same
+        # mismatch that puts a stick figure next to a banana.
+        return comfy_client._detail_for_shot("object")
     except Exception:
         return ""
 

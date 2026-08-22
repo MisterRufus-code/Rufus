@@ -1105,6 +1105,20 @@ def _build_sd_prompts(script: str, niche: str, max_scenes: int = 10,
             # actually weights.
             f"{char_clause}"
             + ("\n" if char_clause else "")
+            + "SHOT KIND — tag every prompt, first thing on the line:\n"
+            "  [SHOT=figure] when a PERSON is what carries the beat — someone "
+            "doing something, reacting, deciding, paying, refusing.\n"
+            "  [SHOT=object]  when the clearest picture of the beat is the THING "
+            "itself, with no person in it at all — the coin, the ledger, the "
+            "wheelbarrow of banknotes, the split tally stick, the empty vault.\n"
+            "CHOOSE HONESTLY, BEAT BY BEAT. Do not put a person in a shot to "
+            "fill it. If the narrator says 'the denarius fell to five percent "
+            "silver', the picture is the coin — a figure standing next to it "
+            "adds nothing and costs the frame. A run where every beat is "
+            "[SHOT=figure] means you did not actually choose.\n"
+            "The tag decides which drawing rules the image model is sent, so a "
+            "wrong tag is not cosmetic: tagging an object shot as a figure "
+            "sends a paragraph about arms and legs along with it.\n\n"
             + "RULES:\n"
             "- 2 to 4 vivid natural-language sentences per prompt.\n"
             "- DESCRIBE ONLY WHAT THE CAMERA SEES. Never quote, repeat, or paraphrase "
@@ -1205,7 +1219,8 @@ def _build_sd_prompts(script: str, niche: str, max_scenes: int = 10,
             + (f"REMINDER — the recurring character above is REQUIRED and is the one "
                f"element that SHOULD repeat across prompts and across videos; the "
                f"freshness list never applies to it.\n\n" if char_clause else "")
-            + f"Output EXACTLY {n} prompts, one per line. No numbering, no labels, no blank lines."
+            + f"Output EXACTLY {n} prompts, one per line, each beginning with "
+              f"its [SHOT=...] tag. No numbering, no other labels, no blank lines."
         )
 
         client = OpenAI(api_key=key)

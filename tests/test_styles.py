@@ -328,7 +328,12 @@ def test_stickman_still_says_animals_are_drawn_properly():
     """The contrast IS the style — stick people, real animals — and it has to
     survive losing the zebra and the lion that illustrated it."""
     s = STYLES["stickman"]
-    assert "ANIMALS AND OBJECTS ARE DRAWN PROPERLY" in s
+    # LOWERCASE NOW, AND THAT IS THE POINT. The block was split so an object
+    # beat is never sent the figure rules, which put this sentence into the top
+    # half of the string — where the banknote rule applies and a shouted
+    # drawable noun is a candidate for being painted. The rule survives; only
+    # its capitals were a casualty of moving it somewhere they were unsafe.
+    assert "animals and objects are drawn properly" in s.lower()
     assert "true shape, proportions and markings" in s
     assert "stay simple stick figures" in s
 
@@ -454,8 +459,14 @@ def test_the_scale_rule_names_no_drawable_noun_in_capitals():
     """Same rule the banknote taught. Anything shouted near the front of the
     block is a candidate for being painted."""
     import re
-    s = _looks()["stickman"]
-    head = s[:len(s) // 2]
+    # THE SHARED SECTION, NOT THE FIRST HALF OF THE STRING. The block is split
+    # at FIGURE ONLY so a beat whose subject is an object is never sent the
+    # figure rules at all. Everything before the marker ships with EVERY
+    # prompt, so all of it is "the front" as far as this rule is concerned —
+    # and everything after it is allowed to shout FIGURE, because it only
+    # arrives when there is a figure to draw.
+    s = _looks()["stickman"].split("--- FIGURE ONLY ---")[0]
+    head = s
     for shout in re.findall(r"\b[A-Z]{3,}(?:\s+[A-Z]{2,})*\b", head):
         for noun in ("FIGURE", "PEOPLE", "PERSON", "MAN", "WOMAN", "ANIMAL",
                      "COIN", "PAPER", "SIGN"):
@@ -723,3 +734,110 @@ def test_the_thumbnail_preset_is_not_the_stickman():
     carry a story across ten beats, and at 168x94 a white rectangle."""
     assert "ONE SUBJECT, ENORMOUS IN FRAME" in STYLES["thumbnail"]
     assert "ONE SUBJECT, ENORMOUS IN FRAME" not in STYLES["stickman"]
+
+
+# ── not every beat has a person in it ────────────────────────────────────────
+#
+# THE OWNER'S OBSERVATION, AND IT WAS RIGHT: "if the beat is about a banana,
+# you can just put a picture of a banana." The FLUX instruction already allowed
+# that — its own example is "the first coins of Lydia -> a macro shot of
+# ancient electrum Lydian stater coins", no figure anywhere. What overrode it
+# was the style block, appended byte for byte to EVERY prompt, roughly half of
+# which describes how to draw a body. A paragraph about arms and legs sitting
+# directly after "a macro shot of a banana" produces a figure, because a style
+# block has no meta level: every word in it is a word in the prompt.
+
+MARKER = "--- FIGURE ONLY ---"
+
+
+def test_the_stickman_block_separates_the_figure_rules():
+    assert MARKER in STYLES["stickman"]
+
+
+def test_an_object_shot_is_never_told_how_to_draw_a_body(monkeypatch):
+    monkeypatch.delenv("RUFUS_STILLS_DETAIL", raising=False)
+    monkeypatch.setenv("RUFUS_STYLE", "stickman")
+    import comfy_client
+    obj = comfy_client._detail_for_shot("object")
+    for limb_rule in ("FIVE SEPARATE PARTS", "oval head", "elbow",
+                      "mid-thigh", "PROPORTION IS FIXED"):
+        assert limb_rule not in obj, limb_rule
+
+
+def test_a_figure_shot_still_gets_every_rule_it_always_had(monkeypatch):
+    """The partition must not lose anything — these were each written after a
+    real gallery came back wrong."""
+    monkeypatch.delenv("RUFUS_STILLS_DETAIL", raising=False)
+    monkeypatch.setenv("RUFUS_STYLE", "stickman")
+    import comfy_client
+    fig = comfy_client._detail_for_shot("figure")
+    for rule in ("FIVE SEPARATE PARTS", "never one filled blob with a head on top",
+                 "two different constructions in one picture",
+                 "COLOUR IS FLAT", "NO LETTERING ANYWHERE IN THE FRAME",
+                 "BUILD THE WHOLE PLACE"):
+        assert rule in fig, rule
+
+
+def test_an_object_shot_keeps_the_rules_that_are_not_about_bodies(monkeypatch):
+    """Colour, place and lettering are as true of a coin as of a person — and
+    an object floating on white is the same white-void bug the place rule was
+    written for."""
+    monkeypatch.delenv("RUFUS_STILLS_DETAIL", raising=False)
+    monkeypatch.setenv("RUFUS_STYLE", "stickman")
+    import comfy_client
+    obj = comfy_client._detail_for_shot("object")
+    for rule in ("COLOUR IS FLAT", "BUILD THE WHOLE PLACE",
+                 "NO LETTERING ANYWHERE IN THE FRAME",
+                 "never leave it as bare paper"):
+        assert rule in obj, rule
+
+
+def test_the_medium_line_does_not_name_a_figure(monkeypatch):
+    """It is the first sentence every prompt sees. It used to open "Minimalist
+    stick-figure cartoon illustration", which asks for a stick figure on a beat
+    about a coin."""
+    # The FIRST sentence specifically. Later in the shared half, "the people
+    # stay simple stick figures, while anything that is not a person is a real
+    # illustration" has to name a stick figure — that contrast IS the style,
+    # and it is stated as a comparison rather than as the thing to draw.
+    first = STYLES["stickman"].split(".")[0].lower()
+    assert "stick figure" not in first and "stick-figure" not in first
+    assert "line art" in first, "the opening line no longer names the medium"
+
+
+def test_a_preset_without_the_marker_behaves_exactly_as_before(monkeypatch):
+    """Seven of the eight presets have no figure section. They must be handed
+    the whole block for both kinds, not silently truncated."""
+    monkeypatch.delenv("RUFUS_STILLS_DETAIL", raising=False)
+    monkeypatch.setenv("RUFUS_STYLE", "flat_vector")
+    import comfy_client
+    assert MARKER not in STYLES["flat_vector"]
+    assert comfy_client._detail_for_shot("object") == comfy_client._detail_for_shot("figure")
+
+
+def test_an_untagged_prompt_is_treated_as_a_figure():
+    """Every prompt written before this existed, every hand-typed one in the
+    dashboard's regen box, and every prompt from a model that ignored the
+    instruction arrives untagged — and for all of them the old behaviour is
+    right. Defaulting to object would silently strip the figure rules from a
+    run that never asked for that."""
+    import comfy_client
+    assert comfy_client.shot_kind("A man counting coins.") == "figure"
+    assert comfy_client.shot_kind("") == "figure"
+
+
+def test_the_tag_never_reaches_the_image_model(monkeypatch):
+    monkeypatch.delenv("RUFUS_STILLS_DETAIL", raising=False)
+    monkeypatch.setenv("RUFUS_STYLE", "stickman")
+    import comfy_client
+    out = comfy_client._with_detail("[SHOT=object] A macro shot of a banana.")
+    assert "[SHOT=" not in out
+    assert out.startswith("A macro shot of a banana")
+
+
+def test_the_prompt_writer_is_asked_to_choose_a_kind():
+    """A tag nothing produces is a default that never changes."""
+    src = (ROOT / "scripts" / "main.py").read_text(encoding="utf-8")
+    block = src.split("_FLUX_INSTRUCTION = (", 1)[1].split("client = OpenAI")[0]
+    assert "[SHOT=figure]" in block and "[SHOT=object]" in block
+    assert "CHOOSE HONESTLY" in block

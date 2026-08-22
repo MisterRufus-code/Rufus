@@ -152,7 +152,7 @@ def test_the_insert_style_is_the_channels_own():
     renderers ask ONE function so the two paths cannot drift into two looks."""
     import insert_director
     src = Path(insert_director.__file__).read_text(encoding="utf-8")
-    assert "_detail_suffix" in src
+    assert "_detail_for_shot" in src
     for name, rsrc in _renderer_sources().items():
         assert "style_suffix" in rsrc, name
 
@@ -229,7 +229,9 @@ def test_readme_keys_are_not_offered_as_styles():
 def test_a_named_style_becomes_the_look(monkeypatch):
     monkeypatch.delenv("RUFUS_STILLS_DETAIL", raising=False)
     monkeypatch.setenv("RUFUS_STYLE", "stickman")
-    assert "stick-figure" in comfy_client._detail_suffix()
+    # Asserted on the shared half: an insert never receives the figure rules,
+    # and "stick-figure" now lives only in the half that draws people.
+    assert "clean black line art" in comfy_client._detail_suffix()
 
 
 def test_a_literal_style_outranks_a_preset(monkeypatch):
@@ -268,8 +270,11 @@ def test_inserts_inherit_whatever_style_is_active(monkeypatch):
     bug — the same failure text-to-video produced against flat-vector."""
     monkeypatch.delenv("RUFUS_STILLS_DETAIL", raising=False)
     monkeypatch.setenv("RUFUS_STYLE", "stickman")
-    p = insert_director.insert_prompt("sword", comfy_client._detail_suffix())
-    assert "stick-figure" in p
+    p = insert_director.insert_prompt("sword", insert_director.style_suffix())
+    assert "clean black line art" in p
+    # AND NOT THE FIGURE RULES. A sword cut out on a plain backdrop was being
+    # sent a paragraph about how arms leave the torso.
+    assert "FIVE SEPARATE PARTS" not in p
 
 
 # ── inserts are cheap only if they are actually rendered small ───────────────
