@@ -240,11 +240,35 @@ def run(style_name: str | None = None, probes: str | None = None,
                 "width": width, "height": height,
                 "workflow": str(template), "renders": {}}
 
+    # THE PIPELINE'S OWN COMPOSER, NOT A COPY OF IT.
+    #
+    # This loop used to hand-assemble `f"{scene}. {tail}"` under a comment
+    # promising "the same composition the pipeline builds". It was the same
+    # composition right up until _with_detail grew a second branch for
+    # RUFUS_SHOT_LAST, and then the probe rendered shot-first while its own
+    # manifest recorded shot_last: true. Two runs came back with byte-identical
+    # SHAs and the JSON said they were different experiments — a probe lying
+    # about the condition it ran under, which is the one thing a probe may
+    # never do.
+    #
+    # So the tail goes in through RUFUS_STILLS_DETAIL (the override that beats
+    # RUFUS_STYLE, which is exactly what --style and --plain need) and the
+    # prompt comes back from _with_detail. Ordering, the figure/object split
+    # and the camera-spec reconciliation are then the pipeline's, permanently,
+    # because there is no second copy of them left to drift.
+    prev_detail = os.environ.get("RUFUS_STILLS_DETAIL")
+    os.environ["RUFUS_STILLS_DETAIL"] = tail
+    try:
+        composed = {name: comfy_client._with_detail(text)
+                    for name, text in chosen}
+    finally:
+        if prev_detail is None:
+            os.environ.pop("RUFUS_STILLS_DETAIL", None)
+        else:
+            os.environ["RUFUS_STILLS_DETAIL"] = prev_detail
+
     for name, text in chosen:
-        # The same composition the pipeline builds: the scene, then the style
-        # block appended byte for byte. Rendering the bare scene would test
-        # something this channel never ships.
-        prompt = f"{text.rstrip().rstrip('.')}. {tail}" if tail else text
+        prompt = composed[name]
         png = out_dir / f"{name}.png"
         ok, secs = bench.render_probe(graph, prompt, bench._PROBE_SEEDS[name],
                                       png, width, height)

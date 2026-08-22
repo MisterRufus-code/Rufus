@@ -142,6 +142,50 @@ def test_the_fallback_is_loud_on_the_way_past(monkeypatch, capsys):
     assert "NOT the style this channel ships" in body
 
 
+# ── the probe composes the prompt the way the pipeline does ──────────────────
+#
+# THE DRIFT, CAUGHT BY ITS OWN OUTPUT. This loop hand-assembled
+# `f"{scene}. {tail}"` under a comment promising "the same composition the
+# pipeline builds". Two things had already gone wrong with that copy:
+#
+#   1. It sent the literal separator line "--- FIGURE ONLY ---" into the
+#      prompt. _detail_for_shot strips it; the hand-copy never called
+#      _detail_for_shot, so every probe rendered so far had that string in it
+#      as prompt text — in a style block whose own rule is that it has no meta
+#      level and every word in it is a word in the prompt.
+#   2. When _with_detail grew the RUFUS_SHOT_LAST branch, the copy did not.
+#      Four probe runs came back as two pairs of byte-identical SHAs while
+#      their manifests recorded shot_last true and false. A probe that reports
+#      a condition it did not apply is worse than one that cannot apply it.
+
+def test_the_probe_does_not_assemble_its_own_prompt():
+    """One composer. A second copy of "scene, then style" cannot be kept in
+    step with the first — this file has now proved that twice in one night."""
+    src = Path(style_probe.__file__).read_text(encoding="utf-8")
+    assert "comfy_client._with_detail(" in src
+    assert 'f"{text.rstrip().rstrip(\'.\')}. {tail}"' not in src
+
+
+def test_the_separator_never_reaches_the_prompt(monkeypatch):
+    import comfy_client
+    monkeypatch.setenv("RUFUS_STILLS_DETAIL",
+                       f"SHARED PART.\n{comfy_client.STYLE_FIGURE_MARKER}\n"
+                       f"FIGURE PART.")
+    out = comfy_client._with_detail("a figure on a hill")
+    assert comfy_client.STYLE_FIGURE_MARKER not in out
+    assert "SHARED PART" in out and "FIGURE PART" in out
+
+
+def test_the_probe_restores_the_style_override_it_borrowed(monkeypatch):
+    """RUFUS_STILLS_DETAIL is how the tail is handed to _with_detail. It is
+    also a real setting somebody may have set for this shell, and a probe that
+    leaves it rewritten would change the next command they run."""
+    src = Path(style_probe.__file__).read_text(encoding="utf-8")
+    body = src.split("def run(")[1]
+    assert "prev_detail" in body
+    assert "finally:" in body
+
+
 # ── the diff, which is the point ─────────────────────────────────────────────
 
 def _run(style_text, shas):
