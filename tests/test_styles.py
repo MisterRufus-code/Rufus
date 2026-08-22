@@ -830,6 +830,85 @@ def test_the_fill_survived_the_correction(stick):
     assert "Never two different constructions in one picture" in s
 
 
+# ── the dress, which turned out to be the blob ───────────────────────────────
+#
+# The owner's words: "the clothing looks like a dress". He is right, and it is
+# the same defect as the merged silhouette that survived every other fix.
+#
+#   "Clothing is drawn as simple line-art garments with flat unshaded colour
+#    fills inside the outlines only."
+#
+# Unconditional, in a block appended to every prompt, so EVERY figure gets a
+# garment whether or not the shot mentions one. A garment drawn around a stick
+# torso — which has no waist — is a single outline widening from the shoulders
+# to the ground. That is the flared shape he is seeing. It is also the outline
+# that swallows the arms, which is why FIVE SEPARATE PARTS kept losing no
+# matter how loudly it was stated: the block was asking for the limbs to be
+# separate and, one sentence later, for a shape drawn around all of them.
+#
+# The clause survives because the contradiction it settled is real (see
+# test_the_body_and_the_clothing_rule_can_both_be_obeyed). It becomes
+# conditional, which is what it always meant.
+
+@pytest.mark.parametrize("stick", _STICK)
+def test_clothing_is_drawn_only_when_the_shot_asks_for_it(stick):
+    s = _looks()[stick]
+    assert "Clothing ONLY when the shot says what someone is wearing" in s
+    assert "When the shot says nothing about clothes, draw none" in s
+
+
+@pytest.mark.parametrize("stick", _STICK)
+def test_the_flared_outline_is_named_as_the_thing_to_avoid(stick):
+    """Named as GEOMETRY, not as a garment. "never a dress" would put the word
+    dress in every prompt on this channel, and this block has been caught four
+    times over believing it has a meta level — the lion, the banknote, the coin
+    face, the figure count. "One outline that widens from the shoulders down"
+    describes the same failure and names nothing drawable."""
+    s = _looks()[stick]
+    assert "widens from the shoulders down" in s
+    assert "hides the limbs inside it" in s
+    for garment in ("dress", "gown", "robe", "skirt"):
+        assert garment not in s.lower(), garment
+
+
+# ── the shot's own face, against four recipes that ship with every prompt ────
+#
+# The face probe asks for "brows raised high, mouth a small open oval" — the
+# block's own shock recipe, almost word for word — and came back drawn as
+# grief. All four recipes are in every prompt, in full, so the shot's line is
+# one of five competing descriptions of the same face and it is the shortest.
+#
+# Same disease as SCALE overruling the camera, and the same cure: the list is
+# the default for a shot that says nothing, and the shot wins when it speaks.
+
+@pytest.mark.parametrize("stick", _STICK)
+def test_the_shot_s_own_face_beats_the_style_s_recipes(stick):
+    s = _looks()[stick]
+    assert "When the shot describes a face, draw exactly what it describes" in s
+    assert "the shot's face always wins" in s
+    # The recipes stay — they are what a beat that describes no face needs,
+    # and deleting them brings back ten shots of a country losing its money
+    # rendered as ten mild smiles.
+    for feeling in ("anger", "shock", "grief", "delight"):
+        assert feeling in s, feeling
+
+
+@pytest.mark.parametrize("stick", _STICK)
+def test_the_style_yields_to_the_shot_in_all_three_places(stick):
+    """THE PATTERN, ASSERTED AS A PATTERN. Distance, face and clothing were
+    each written as a channel-wide constant, and each one silently beat the
+    shot that had asked for something else — the same failure three times, and
+    the same failure as the port outage and as the 2.6% prompt.
+
+    Anything added to this block that describes what a picture CONTAINS rather
+    than how it is DRAWN belongs on this list, with a clause saying the shot
+    wins."""
+    s = _looks()[stick]
+    assert "The shot's distance always wins." in s
+    assert "the shot's face always wins" in s
+    assert "Clothing ONLY when the shot says" in s
+
+
 @pytest.mark.parametrize("stick", _STICK)
 def test_the_phrase_that_caused_the_blob_is_gone(stick):
     s = _looks()[stick]
