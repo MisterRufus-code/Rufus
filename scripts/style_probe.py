@@ -227,8 +227,17 @@ def run(style_name: str | None = None, probes: str | None = None,
               "the dashboard's saved settings. These renders are the built-in "
               "fallback, NOT the style this channel ships. Set the style on "
               "the Settings page, or pass --style.")
+    # RECORD THE CONDITION, NOT JUST THE RESULT. This file is what compare()
+    # diffs against a week later, and RUFUS_SHOT_LAST changes where the shot's
+    # own words sit in the prompt — two probe runs that differ only in that
+    # would otherwise look like two runs of the same experiment.
+    shot_last = comfy_client.shot_last()
+    if shot_last:
+        print("[probe] shot description LAST (RUFUS_SHOT_LAST) — the style "
+              "block goes first and this shot's sentence ends the prompt")
     manifest = {"stamp": stamp, "style": label, "style_source": source,
-                "style_text": tail, "width": width, "height": height,
+                "shot_last": shot_last, "style_text": tail,
+                "width": width, "height": height,
                 "workflow": str(template), "renders": {}}
 
     for name, text in chosen:

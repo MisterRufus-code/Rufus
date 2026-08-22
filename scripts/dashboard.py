@@ -413,14 +413,22 @@ SETTINGS_GROUPS = [
         # the tests below build the same list from config/styles.json, so the
         # two cannot drift again.
         ("RUFUS_STYLE", "Style preset",
-         "select:stickman,ink_explainer,flat_vector,ink_woodcut,paper_cut,"
-         "chalkboard,retro_print,storybook,thumbnail",
+         "select:stickman,stickman_lean,ink_explainer,flat_vector,ink_woodcut,"
+         "paper_cut,chalkboard,retro_print,storybook,thumbnail",
          "Named look from config/styles.json, appended to every image prompt "
          "byte for byte. Leave at (default) to use the niche's own style_suffix. "
          "Render one of each on the Style page before choosing."),
         ("RUFUS_STILLS_DETAIL", "Style override (literal)", "text",
          "A style block written out in full. Beats the preset above — for a "
          "one-off experiment that does not deserve a name yet."),
+        ("RUFUS_SHOT_LAST", "Shot description last", "bool",
+         "Put the style block first and this shot's own sentence at the END of "
+         "the prompt. A probe showed the shot losing to the style: asked for a "
+         "leopard drawn in full it returned a rock and a tail, and asked for a "
+         "close-up with raised brows it returned a wide shot with the brows "
+         "down — while the same prompt with no style block drew both exactly "
+         "as asked. The shot is ~130 characters against the block's ~3,000-5,000. "
+         "This changes the order and nothing else. Probe it before a real run."),
         ("RUFUS_STILLS_ONLY", "Stills only", "bool",
          "Force images-only, overriding Wan/Hunyuan/LTX/SVD all at once. On "
          "this hardware a motion clip is minutes; a still is seconds."),

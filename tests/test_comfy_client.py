@@ -564,6 +564,87 @@ def test_with_detail_strips_camera_spec_under_a_flat_style(monkeypatch):
     assert "moody light" in out
 
 
+# ── which end of the prompt the shot's own words sit at ──────────────────────
+#
+# THE MEASUREMENT. Two probes, same seeds, same nine steps at CFG 1, the only
+# difference being whether the style block was attached:
+#
+#   with stickman   "the animal drawn in full with its spots and its real
+#                   proportions" → a rock, and a tail.
+#                   "Close on one figure's face … brows raised high, mouth a
+#                   small open oval" → a full-body wide shot, brows angled DOWN.
+#   --plain         both drawn exactly as asked, first try.
+#
+# So the checkpoint follows those instructions perfectly well. What buries
+# them is the ratio: the shot is 129 characters, the block is 4,816, and the
+# block goes second. RUFUS_SHOT_LAST is the other half of the experiment —
+# shorten the block (stickman_lean) OR move the shot to the end, and find out
+# which one the pictures respond to.
+
+def test_the_shot_comes_first_by_default(monkeypatch):
+    """OFF unless asked for. This reorders every image prompt on the channel
+    and the case for it is a hypothesis, not a gallery."""
+    monkeypatch.delenv("RUFUS_SHOT_LAST", raising=False)
+    monkeypatch.delenv("RUFUS_STILLS_DETAIL", raising=False)
+    assert not c.shot_last()
+    assert c._with_detail("a quiet harbour at dawn").startswith(
+        "a quiet harbour at dawn.")
+
+
+def test_the_shot_can_be_given_the_last_word(monkeypatch):
+    monkeypatch.setenv("RUFUS_SHOT_LAST", "1")
+    monkeypatch.delenv("RUFUS_STILLS_DETAIL", raising=False)
+    out = c._with_detail("a quiet harbour at dawn")
+    assert out.endswith("a quiet harbour at dawn.")
+    assert not out.startswith("a quiet harbour")
+
+
+def test_the_flag_moves_the_shot_and_changes_nothing_else(monkeypatch):
+    """A REORDER, NOT AN EDIT — and specifically not a repetition. Bookending
+    the shot would change two things at once and produce a gallery that cannot
+    be attributed to either. Same characters, different order, so whatever the
+    next probe shows is about position and only position."""
+    monkeypatch.delenv("RUFUS_STILLS_DETAIL", raising=False)
+    shot = "Five people crowd against the shutters of a closed bank"
+    monkeypatch.delenv("RUFUS_SHOT_LAST", raising=False)
+    first = c._with_detail(shot)
+    monkeypatch.setenv("RUFUS_SHOT_LAST", "1")
+    last = c._with_detail(shot)
+    assert len(first) == len(last)
+    assert sorted(first) == sorted(last)
+    assert last.count(shot) == 1, "the shot must appear once, not bookended"
+
+
+def test_an_empty_style_is_still_just_the_shot(monkeypatch):
+    """With nothing to reorder the flag has nothing to do, and must not leave
+    a stray separator behind."""
+    monkeypatch.setenv("RUFUS_SHOT_LAST", "1")
+    monkeypatch.setenv("RUFUS_STILLS_DETAIL", "")
+    assert c._with_detail("subject") == "subject"
+
+
+def test_the_camera_spec_is_still_stripped_with_the_shot_last(monkeypatch):
+    """The flag reorders; it does not get to skip the reconciliation the
+    ordinary path does. A photographic camera spec under a flat style is a
+    contradiction wherever in the prompt it sits."""
+    monkeypatch.setenv("RUFUS_SHOT_LAST", "1")
+    monkeypatch.delenv("RUFUS_STILLS_DETAIL", raising=False)
+    out = c._with_detail("a coin, 85mm f/1.4, moody light")
+    assert "85mm" not in out and "f/1.4" not in out
+    assert out.rstrip(".").endswith("moody light")
+
+
+def test_an_object_beat_still_gets_only_the_shared_half(monkeypatch):
+    """The two features are independent: moving the shot must not smuggle the
+    figure rules onto a beat whose subject is an object."""
+    monkeypatch.setenv("RUFUS_SHOT_LAST", "1")
+    monkeypatch.setenv("RUFUS_STYLE", "stickman")
+    monkeypatch.delenv("RUFUS_STILLS_DETAIL", raising=False)
+    out = c._with_detail("[SHOT=object] A macro view of a banana")
+    assert "STICK FIGURE" not in out
+    assert out.endswith("A macro view of a banana.")
+
+
 def test_generate_clips_sends_the_detailed_prompt(monkeypatch):
     """The suffix must be applied before render AND before the debug/log save,
     so what's reviewed afterwards is what was actually sent."""

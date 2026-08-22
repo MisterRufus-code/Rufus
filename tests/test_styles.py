@@ -41,6 +41,18 @@ def _looks() -> dict:
 _SEQUENCE_ONLY = {"thumbnail"}
 
 
+# EVERY PRESET THAT DRAWS THIS CHANNEL'S STICK-FIGURE LOOK.
+#
+# `stickman_lean` is the same rules with the prose taken out — 4,816
+# characters down to 3,048 — written because a probe showed the block's tail
+# was not being read at all. The claim being made about it is precisely "the
+# same rules, fewer words", and the only way to know a 37% cut did not quietly
+# drop one of them is to run every scar test below over both presets. Each of
+# those tests is a bug that reached a gallery; a leaner block that loses one
+# is not leaner, it is a regression with a smaller file size.
+_STICK = ["stickman", "stickman_lean"]
+
+
 def _story_looks() -> dict:
     return {k: v for k, v in _looks().items() if k not in _SEQUENCE_ONLY}
 
@@ -52,20 +64,22 @@ def test_every_preset_is_one_block_of_text():
         assert isinstance(text, str) and len(text) > 200, name
 
 
-def test_stickman_asks_for_a_background_that_places_the_scene():
+@pytest.mark.parametrize("stick", _STICK)
+def test_stickman_asks_for_a_background_that_places_the_scene(stick):
     """THE WHITE-VOID BUG. The preset said "on a pure white background" and
     "Everything not deliberately filled with colour is pure white", so a
     storyboard that carefully built a medieval hall with a beam of light from
     a high window rendered as two stick figures and a table in empty space.
     The style was overriding the whole scene description, every frame."""
-    s = STYLES["stickman"]
+    s = _looks()[stick]
     assert "pure white background" not in s
     assert "not deliberately filled with colour is pure white" not in s
     assert "BUILD THE WHOLE PLACE" in s
     assert "horizon line" in s
 
 
-def test_stickman_backgrounds_stay_out_of_the_subjects_way():
+@pytest.mark.parametrize("stick", _STICK)
+def test_stickman_backgrounds_stay_out_of_the_subjects_way(stick):
     """The fix must not swing into the other failure — a busy background on a
     frame that is on screen for four seconds at thumbnail size reads as
     noise.
@@ -75,36 +89,39 @@ def test_stickman_backgrounds_stay_out_of_the_subjects_way():
     foreground" produced sixty beige stills where only the figure looked
     finished. A background is quieter because it is simpler and further away,
     not because it is washed out."""
-    s = STYLES["stickman"]
+    s = _looks()[stick]
     assert "quieter than the subject" in s
     assert "reads instantly at thumbnail size" in s
     assert "paler than the foreground" not in s
 
 
-def test_stickman_faces_carry_the_emotion():
+@pytest.mark.parametrize("stick", _STICK)
+def test_stickman_faces_carry_the_emotion(stick):
     """The preset pinned every mouth to "a single thin curved line with a
     slight upturn" and banned eyebrows outright, so ten shots of a country
     losing its money came back with ten mild smiles. Eyebrows and a mouth
     curve are the entire emotional vocabulary of this art style."""
-    s = STYLES["stickman"]
+    s = _looks()[stick]
     assert "no eyebrows" not in s
     assert "eyebrow strokes" in s
     assert "THE FACE CARRIES THE EMOTION OF THE MOMENT" in s
     assert "must not be the same on every figure" in s
 
 
+@pytest.mark.parametrize("stick", _STICK)
 @pytest.mark.parametrize("feeling", ["anger", "shock", "delight"])
-def test_stickman_spells_out_how_to_draw_a_feeling(feeling):
+def test_stickman_spells_out_how_to_draw_a_feeling(feeling, stick):
     """Naming the feeling is not enough — the model needs the geometry, since
     "sad" on a face with two dot eyes has no obvious drawing."""
-    assert feeling in STYLES["stickman"]
+    assert feeling in _looks()[stick]
 
 
-def test_stickman_keeps_the_line_art_that_was_working():
+@pytest.mark.parametrize("stick", _STICK)
+def test_stickman_keeps_the_line_art_that_was_working(stick):
     """The character consistency across the owner's gallery came from these
     exact constraints. The fix is additive or it trades one problem for a
     worse one."""
-    s = STYLES["stickman"]
+    s = _looks()[stick]
     for kept in ("thin, clean black line art of uniform weight",
                  "no nose", "no gradients", "no shading", "no film grain",
                  "flat unshaded colour fills", "reads instantly at thumbnail size"):
@@ -319,15 +336,16 @@ def test_the_scene_comes_from_the_shot_and_not_from_the_style():
     """Four presets already said only "the four to eight things that say where
     this is" and stopped, and their galleries were not full of somebody else's
     scenery. The three that listed nouns now say where the nouns come from."""
-    for name in ("stickman", "ink_woodcut", "ink_explainer"):
+    for name in ("stickman", "stickman_lean", "ink_woodcut", "ink_explainer"):
         assert "from the shot's own description and from nothing else" in \
             STYLES[name], name
 
 
-def test_stickman_still_says_animals_are_drawn_properly():
+@pytest.mark.parametrize("stick", _STICK)
+def test_stickman_still_says_animals_are_drawn_properly(stick):
     """The contrast IS the style — stick people, real animals — and it has to
     survive losing the zebra and the lion that illustrated it."""
-    s = STYLES["stickman"]
+    s = _looks()[stick]
     # LOWERCASE NOW, AND THAT IS THE POINT. The block was split so an object
     # beat is never sent the figure rules, which put this sentence into the top
     # half of the string — where the banknote rule applies and a shouted
@@ -364,15 +382,17 @@ def test_stickman_still_says_animals_are_drawn_properly():
 # checkpoint was the whole story after all and this should be reverted rather
 # than left as folklore.
 
-def test_the_colour_rule_is_near_the_top_of_the_stickman_block():
-    s = _looks()["stickman"]
+@pytest.mark.parametrize("stick", _STICK)
+def test_the_colour_rule_is_near_the_top_of_the_stickman_block(stick):
+    s = _looks()[stick]
     at = s.index("COLOUR IS FLAT")
     assert at < len(s) // 2, (
         f"the colour rule is at character {at} of {len(s)} — back in the tail "
         f"of the block, where the pale-background bug lived")
 
 
-def test_the_block_does_not_open_on_a_shouty_heading():
+@pytest.mark.parametrize("stick", _STICK)
+def test_the_block_does_not_open_on_a_shouty_heading(stick):
     """THE BANKNOTE THAT SAID "BEHIND THE FIGURES".
 
     The first attempt moved the whole scene-and-colour section to the front,
@@ -390,7 +410,7 @@ def test_the_block_does_not_open_on_a_shouty_heading():
     the top, and the heading goes back into the body where it reads as an
     instruction rather than as a caption.
     """
-    s = _looks()["stickman"]
+    s = _looks()[stick]
     opening = s[:200].upper()
     for heading in ("BEHIND THE FIGURES", "THE FACE CARRIES", "NO LETTERING",
                     "THE PLACE PERSISTS", "ANIMALS AND OBJECTS"):
@@ -399,11 +419,12 @@ def test_the_block_does_not_open_on_a_shouty_heading():
             f"first breath of a prompt gets drawn, not obeyed")
 
 
-def test_the_experiment_did_not_lose_a_single_rule():
+@pytest.mark.parametrize("stick", _STICK)
+def test_the_experiment_did_not_lose_a_single_rule(stick):
     """Reordering must be a move, not an edit. Every sentence that was in the
     block before has to still be in it — a rule quietly dropped during a
     rearrangement is indistinguishable from the bug being 'fixed'."""
-    s = _looks()["stickman"]
+    s = _looks()[stick]
     for rule in ("never leave it as bare paper",
                  "Never wash the background out",
                  "BUILD THE WHOLE PLACE",
@@ -434,28 +455,32 @@ def test_the_experiment_did_not_lose_a_single_rule():
 # "BEHIND THE FIGURES" came back printed across a banknote. A capitalised
 # drawable noun near the front of a prompt is a subject.
 
-def test_the_preset_says_how_big_a_person_is_in_frame():
-    s = _looks()["stickman"]
+@pytest.mark.parametrize("stick", _STICK)
+def test_the_preset_says_how_big_a_person_is_in_frame(stick):
+    s = _looks()[stick]
     assert "SCALE:" in s
     assert "half and three quarters of the frame" in s
 
 
-def test_the_scale_rule_is_in_the_half_of_the_block_that_gets_obeyed():
-    s = _looks()["stickman"]
+@pytest.mark.parametrize("stick", _STICK)
+def test_the_scale_rule_is_in_the_half_of_the_block_that_gets_obeyed(stick):
+    s = _looks()[stick]
     assert s.index("SCALE:") < len(s) // 2
 
 
-def test_the_scale_rule_does_not_undo_the_scene_rule():
+@pytest.mark.parametrize("stick", _STICK)
+def test_the_scale_rule_does_not_undo_the_scene_rule(stick):
     """The opposite failure is the white-void bug, which cost two galleries:
     a figure with nothing behind it. Filling the frame with the subject must
     not mean deleting the place."""
-    s = _looks()["stickman"]
+    s = _looks()[stick]
     assert "built BEHIND them, never instead of them" in s
     assert "BUILD THE WHOLE PLACE" in s
     assert "four to eight things" in s
 
 
-def test_the_scale_rule_names_no_drawable_noun_in_capitals():
+@pytest.mark.parametrize("stick", _STICK)
+def test_the_scale_rule_names_no_drawable_noun_in_capitals(stick):
     """Same rule the banknote taught. Anything shouted near the front of the
     block is a candidate for being painted."""
     import re
@@ -465,7 +490,7 @@ def test_the_scale_rule_names_no_drawable_noun_in_capitals():
     # prompt, so all of it is "the front" as far as this rule is concerned —
     # and everything after it is allowed to shout FIGURE, because it only
     # arrives when there is a figure to draw.
-    s = _looks()["stickman"].split("--- FIGURE ONLY ---")[0]
+    s = _looks()[stick].split("--- FIGURE ONLY ---")[0]
     head = s
     for shout in re.findall(r"\b[A-Z]{3,}(?:\s+[A-Z]{2,})*\b", head):
         for noun in ("FIGURE", "PEOPLE", "PERSON", "MAN", "WOMAN", "ANIMAL",
@@ -491,30 +516,34 @@ def test_the_scale_rule_names_no_drawable_noun_in_capitals():
 # Same class of gap as SCALE, and the same lesson the face fix taught: naming
 # the thing is not enough, the model needs the geometry.
 
-def test_the_figure_has_a_stated_head_to_body_ratio():
-    s = _looks()["stickman"]
+@pytest.mark.parametrize("stick", _STICK)
+def test_the_figure_has_a_stated_head_to_body_ratio(stick):
+    s = _looks()[stick]
     assert "PROPORTION IS FIXED" in s
     assert "one third of the whole figure's height" in s
 
 
-def test_the_proportion_rule_covers_all_three_parts():
+@pytest.mark.parametrize("stick", _STICK)
+def test_the_proportion_rule_covers_all_three_parts(stick):
     """A ratio for the head alone leaves the torso and legs free, which is
     most of the drift."""
-    s = _looks()["stickman"]
+    s = _looks()[stick]
     for part in ("head is about", "torso line about", "legs the remaining"):
         assert part in s, part
 
 
-def test_the_proportion_rule_says_it_holds_across_shots():
+@pytest.mark.parametrize("stick", _STICK)
+def test_the_proportion_rule_says_it_holds_across_shots(stick):
     """Per-frame correctness was never the problem — every frame in the sheet
     was defensible alone. Consistency between them is the thing being asked
     for, so the block has to ask for it in those words."""
-    s = _looks()["stickman"]
+    s = _looks()[stick]
     assert "DOES NOT DRIFT BETWEEN SHOTS" in s
 
 
-def test_the_proportion_rule_did_not_displace_the_body_parts_list():
-    s = _looks()["stickman"]
+@pytest.mark.parametrize("stick", _STICK)
+def test_the_proportion_rule_did_not_displace_the_body_parts_list(stick):
+    s = _looks()[stick]
     for kept in ("bends once at the elbow", "bends once at the knee",
                  "Small simple hands", "no muscle lines, no shading"):
         assert kept.lower() in s.lower(), kept
@@ -601,37 +630,41 @@ def test_a_medium_named_after_a_book_is_not_an_object(name=None):
 # 3D volume" — the clause was protecting against rendering, and only got
 # entangled with body mass by being in the same list.
 
-def test_the_body_is_built_one_way_and_only_one_way():
-    s = _looks()["stickman"]
+@pytest.mark.parametrize("stick", _STICK)
+def test_the_body_is_built_one_way_and_only_one_way(stick):
+    s = _looks()[stick]
     assert "white fill inside the same clean black outline" in s
     assert "no filled body mass" not in s, "the contradiction is back"
     assert "one straight line for the torso" not in s
 
 
-def test_the_body_and_the_clothing_rule_can_both_be_obeyed():
+@pytest.mark.parametrize("stick", _STICK)
+def test_the_body_and_the_clothing_rule_can_both_be_obeyed(stick):
     """The test that would have caught this: a garment needs something to sit
     on. If the block ever again says the torso has no fill AND that clothing
     fills it, one of them loses at random, per frame."""
-    s = _looks()["stickman"]
+    s = _looks()[stick]
     fills_clothing = "flat unshaded colour fills inside the outlines" in s
     denies_body = ("no filled body mass" in s or "no volume." in s
                    or "one straight line for the torso" in s)
     assert not (fills_clothing and denies_body)
 
 
-def test_the_anti_rendering_rules_survived_the_rewrite():
+@pytest.mark.parametrize("stick", _STICK)
+def test_the_anti_rendering_rules_survived_the_rewrite(stick):
     """Dropping "no volume" wholesale would invite soft 3D shading back, which
     is the tell that stops a drawing looking drawn."""
-    s = _looks()["stickman"].lower()
+    s = _looks()[stick].lower()
     for kept in ("no muscle lines", "no shading", "no rounded 3d volume",
                  "no gradients", "no film grain"):
         assert kept in s, kept
 
 
-def test_the_preset_says_not_to_mix_constructions_within_one_picture():
+@pytest.mark.parametrize("stick", _STICK)
+def test_the_preset_says_not_to_mix_constructions_within_one_picture(stick):
     """Per-frame consistency was never the complaint either — 08 has three
     figures built two different ways in the same drawing."""
-    assert "two different constructions in one picture" in _looks()["stickman"]
+    assert "two different constructions in one picture" in _looks()[stick]
 
 
 # ── the overcorrection: from two bodies to no arms ───────────────────────────
@@ -652,39 +685,44 @@ def test_the_preset_says_not_to_mix_constructions_within_one_picture():
 # with a head on top. The fill survives, because bare pen strokes were the
 # original bug and are not the fix for this one.
 
-def test_the_body_is_described_as_separate_parts():
-    s = _looks()["stickman"]
+@pytest.mark.parametrize("stick", _STICK)
+def test_the_body_is_described_as_separate_parts(stick):
+    s = _looks()[stick]
     assert "FIVE SEPARATE PARTS" in s
     assert "never merged into a single silhouette" in s
 
 
-def test_the_arms_are_required_to_be_visible():
+@pytest.mark.parametrize("stick", _STICK)
+def test_the_arms_are_required_to_be_visible(stick):
     """A gallery of armless figures is what happens when the block says what
     an arm is made of and never says there has to be one."""
-    s = _looks()["stickman"]
+    s = _looks()[stick]
     assert "both arms are visible in every figure" in s
     assert "clear of the torso" in s
 
 
-def test_the_blob_is_named_as_the_thing_to_avoid():
+@pytest.mark.parametrize("stick", _STICK)
+def test_the_blob_is_named_as_the_thing_to_avoid(stick):
     """Naming the failure is what made the other rules stick — "a wide
     landscape with a small figure off to one side is a picture of a
     landscape" did more than any amount of describing the right answer."""
-    assert "never one filled blob with a head on top" in _looks()["stickman"]
+    assert "never one filled blob with a head on top" in _looks()[stick]
 
 
-def test_the_fill_survived_the_correction():
+@pytest.mark.parametrize("stick", _STICK)
+def test_the_fill_survived_the_correction(stick):
     """Bare pen strokes were the ORIGINAL bug. Swinging back to them to cure
     the blob would just restore the first failure — this is the third pass
     over these two sentences and each one has to keep the last one's win."""
-    s = _looks()["stickman"]
+    s = _looks()[stick]
     assert "white fill inside the same clean black outline" in s
     assert "not a bare pen stroke" in s
     assert "Never two different constructions in one picture" in s
 
 
-def test_the_phrase_that_caused_the_blob_is_gone():
-    s = _looks()["stickman"]
+@pytest.mark.parametrize("stick", _STICK)
+def test_the_phrase_that_caused_the_blob_is_gone(stick):
+    s = _looks()[stick]
     assert "FLAT FILLED SHAPES" not in s
     assert "Every part is white fill inside an outline" not in s
 

@@ -986,6 +986,38 @@ def _detail_for_shot(kind: str) -> str:
     return f"{shared.strip()} {figure.strip()}"
 
 
+def shot_last() -> bool:
+    """Whether the shot's own words go LAST in the prompt instead of first.
+
+    THE MEASUREMENT THAT PROMPTED THIS. Two probes, same seeds, same nine
+    steps at CFG 1, the only difference being the style block:
+
+        with stickman     "the animal drawn in full with its spots and its
+                          real proportions" → a rock, and a tail.
+                          "Close on one figure's face … brows raised high,
+                          mouth a small open oval" → a full-body wide shot
+                          with the brows angled DOWN.
+        --plain           both drawn exactly as asked, first try.
+
+    So the checkpoint follows those instructions perfectly well. What stops it
+    is that the shot is 129 characters and the style block is 4,816 — the part
+    of the prompt that says what THIS picture is comes to 2.6% of it, and then
+    97.4% of constant text follows and buries it.
+
+    Shortening the block is one lever (see stickman_lean). This is the other,
+    and it is independent: put the constant first and let the variable have
+    the last word. If position is what matters, this costs nothing and needs
+    no rules dropped; if length is what matters, it will change nothing and
+    should be turned back off rather than left on as folklore.
+
+    OFF BY DEFAULT, because it reorders every image prompt on the channel and
+    the evidence for it is a hypothesis, not a gallery. Turn it on for a probe
+    first:  $env:RUFUS_SHOT_LAST = "1"
+    """
+    return os.environ.get("RUFUS_SHOT_LAST", "0").strip().lower() \
+        in ("1", "true", "yes", "on")
+
+
 def _with_detail(prompt: str) -> str:
     """Append the style direction, reconciling it with any photographic
     direction the prompt already carries.
@@ -1006,7 +1038,13 @@ def _with_detail(prompt: str) -> str:
         return prompt
     if has_photo_spec:
         prompt = _strip_photo_direction(prompt)
-    return f"{prompt.rstrip().rstrip('.')}. {tail}"
+    body = prompt.rstrip().rstrip('.')
+    if shot_last():
+        # The shot ONCE, at the end — not bookended. Repeating it would
+        # change two things at a time and produce a result that cannot be
+        # attributed to either.
+        return f"{tail.rstrip().rstrip('.')}. {body}."
+    return f"{body}. {tail}"
 
 
 def _shrink(graph: dict, px: int) -> dict:
