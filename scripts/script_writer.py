@@ -1003,7 +1003,14 @@ def _split_for_punch(script: str) -> str:
                 continue
             for m in re.finditer(r",\s+", s):
                 left, right = s[:m.start()].strip(), s[m.end():].strip()
-                if not (3 <= len(left.split()) <= 6) or len(right.split()) < 4:
+                nl, nr = len(left.split()), len(right.split())
+                # EITHER side may be the short one. A comma sits far more often
+                # before a closing clause than after an opening four words, so
+                # only checking the prefix left most real sentences uncuttable:
+                # "prices rose four hundred percent that century, and savers
+                # were ruined" has no short opener and a perfectly good short
+                # closer. The other side still has to stand as a sentence.
+                if not ((3 <= nl <= 6 and nr >= 4) or (3 <= nr <= 6 and nl >= 4)):
                     continue
                 piece = f"{left}. {right[0].upper()}{right[1:]}"
                 new_middle = list(middle)
@@ -1029,11 +1036,26 @@ def _repair_cadence(script: str) -> str:
     range, which is the same edit, continued.
 
     And when what is missing is the SHORT sentence instead, the fix is the
-    opposite cut — see _split_for_punch.
+    opposite cut — see _split_for_punch. A script can be missing BOTH, which is
+    the ordinary shape of a body written entirely in nine-word sentences: no
+    contrast in either direction. Repairing one and returning would leave the
+    other complaint standing, the loop would refuse the whole edit for not
+    clearing its label, and the attempt would be spent anyway — so both run,
+    in the order that does not undo the other.
     """
-    if "punchy" in (_cadence_violation(script) or ""):
-        return _split_for_punch(script)
+    missing = _cadence_violation(script) or ""
+    if "punchy" in missing:
+        script = _split_for_punch(script)
+        # Splitting can only ever have removed a long sentence, so re-read
+        # rather than trusting the complaint we came in with.
+        missing = _cadence_violation(script) or ""
+    if "flowing" not in missing:
+        return script
+    return _join_for_flow(script)
 
+
+def _join_for_flow(script: str) -> str:
+    """Join a run of adjacent short body sentences into one flowing one."""
     head, middle, tail = _protected_lines(script)
     if not middle:
         return script
@@ -1043,9 +1065,21 @@ def _repair_cadence(script: str) -> str:
         if len(parts) < 2 or not all(parts):
             return None
         n = sum(len(p.split()) for p in parts)
-        # Below 15 it does not satisfy the gate; above 26 the "fix" is a run-on
+        # Below 15 it does not satisfy the gate; above 22 the "fix" is a run-on
         # worse than the violation, and DELIVERY explicitly forbids those.
-        if n < 15 or n > 26:
+        #
+        # AND EVERY PART HAS TO BE SHORT, not just the total. A comma joining
+        # two SHORT clauses reads as rhythm — "the crown spent it faster than
+        # the fleets could carry it, on wars it could not win". A comma joining
+        # two full-length independent clauses is a splice, and the cap alone
+        # allowed one: two thirteen-word sentences summed to exactly 26 and
+        # produced "…sending enormous quantities of silver home, prices in
+        # Seville rose four hundred percent that century", which is the same
+        # ungrammatical narration this function already carries a warning
+        # about, arriving by arithmetic instead of by punctuation.
+        if n < 15 or n > 22:
+            return None
+        if any(len(p.split()) > 12 for p in parts):
             return None
         # NEVER join across a question or an exclamation. Stripping that mark
         # destroys the sentence: a live run produced

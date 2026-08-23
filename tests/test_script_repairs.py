@@ -181,10 +181,59 @@ def test_a_run_of_short_sentences_is_joined_until_it_is_long_enough(lengths):
     assert sw._cadence_violation(sw._repair_cadence(script)) is None
 
 
-@pytest.mark.parametrize("lengths", [[8, 9, 10, 9, 8], [11, 12, 11], [12, 13, 12, 13]])
+@pytest.mark.parametrize("lengths", [[8, 9, 10, 9, 8]])
 def test_the_shapes_that_already_worked_still_work(lengths):
     script = _body(lengths)
     assert sw._cadence_violation(sw._repair_cadence(script)) is None
+
+
+@pytest.mark.parametrize("lengths", [[11, 12, 11], [12, 13, 12, 13], [14, 13, 14, 13]])
+def test_full_length_clauses_are_left_to_the_model(lengths):
+    """A comma between two SHORT clauses is rhythm. A comma between two
+    full-length independent clauses is a splice, and the total-only cap let one
+    through: two thirteen-word sentences summed to exactly 26 and produced
+
+        "…sending enormous quantities of silver home, prices in Seville rose
+         four hundred percent that century."
+
+    which is the ungrammatical narration this repair already carried a warning
+    about, arriving by arithmetic instead of by punctuation. These shapes cost
+    a generation now, and that is the cheaper mistake."""
+    script = _body(lengths)
+    assert sw._repair_cadence(script) == script
+
+
+def test_a_comma_splice_is_never_manufactured():
+    script = ("How did Spain's own silver quietly destroy its economy today?\n"
+              "In 1545 the mines at Potosi began sending enormous quantities "
+              "of silver home.\n"
+              "Prices in Seville rose four hundred percent that century, and "
+              "savers were ruined.\n"
+              "The crown spent it faster than the fleets could carry it across "
+              "the ocean.\n"
+              "The silver that was meant to enrich Spain is what emptied it.\n"
+              "Subscribe now for more stories about the history of money.")
+    out = sw._repair_cadence(script)
+    assert "silver home, prices" not in out
+    # The safe half of the edit still happens: the comma becomes a full stop.
+    assert "that century. And savers were ruined." in out
+
+
+def test_a_script_missing_both_gets_both_repairs():
+    """Nine-word sentences throughout have contrast in neither direction.
+    Repairing one and returning leaves the other complaint standing, the loop
+    refuses the edit for not clearing its label, and the attempt is spent
+    anyway."""
+    script = _body([9, 10, 9, 10, 9],
+                   hook="How did Spain's own silver quietly destroy its economy today?",
+                   cta="Subscribe now for more stories about the history of money.")
+    before = sw._cadence_violation(script) or ""
+    assert "punchy" in before and "flowing" in before, before
+    out = sw._repair_cadence(script)
+    lengths = [len(s.split()) for s in sw._SENTENCE_RE.findall(out) if s.strip()]
+    # The join runs even though the split found no comma to promote — one pass
+    # gets what it can rather than refusing because it cannot get both.
+    assert any(n >= 15 for n in lengths), lengths
 
 
 def test_a_joined_run_reads_back_as_one_sentence():
