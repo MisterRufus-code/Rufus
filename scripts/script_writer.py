@@ -1488,7 +1488,7 @@ def _hook_scorer(client: OpenAI, hooks: list[str], seed: dict, niche_name: str,
         "    contradiction is the single most expensive thing you can approve: the\n"
         "    hook cannot be changed later, so the whole script, all its images, its\n"
         "    voiceover and its render get built on it before a fact-check rejects it.\n"
-        "  • ≤10 words?\n"
+        f"  • ≤{_standards()['hook']['hard_max_words']} words?\n"
         "If all four pass, proceed to Step 2. If any fail → score 1-3 and stop.\n\n"
         "STEP 2 — HOW BADLY DOES THE VIEWER NEED THE NEXT LINE? (all gates passed — score 4-10):\n"
         "  • LOW — mildly interesting; the viewer can put the phone down: 4-6\n"

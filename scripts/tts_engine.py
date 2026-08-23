@@ -316,10 +316,28 @@ def _edge(script: str, out_path: Path,
     """
     import emotional_map
 
-    if (not beats or not tones or len(tones) < len(beats) or len(beats) < 2
-            or emotional_map.voice_is_neutral(tones[:len(beats)])):
+    # SAY WHICH VOICE THIS RUN GOT. The two paths sound different and log
+    # identically, so "the narration is flat" has never been answerable from a
+    # run's own output — the owner had to read this function to learn that the
+    # single-request path is what most runs take. A per-beat voice that
+    # silently degrades to one flat request is the same shape of failure as a
+    # style probe reporting the wrong style: the feature is built, the run does
+    # not get it, and nothing says so.
+    reason = ""
+    if not beats:
+        reason = "no beat split"
+    elif len(beats) < 2:
+        reason = "one beat"
+    elif not tones or len(tones) < len(beats):
+        reason = "no tone plan (edit_director returned nothing usable)"
+    elif emotional_map.voice_is_neutral(tones[:len(beats)]):
+        reason = "every beat came back neutral"
+    if reason:
+        print(f"[tts] flat voice — {reason}")
         asyncio.run(_edge_async(script, out_path))
         return
+    print(f"[tts] per-beat voice over {len(beats)} beats: "
+          f"{emotional_map.describe(tones[:len(beats)])}")
 
     base = _edge_base_rate_pct()
     tmp = out_path.parent / f".{out_path.stem}.beats"

@@ -242,3 +242,60 @@ def test_the_repair_never_touches_the_hook_or_the_cta():
         out = sw._repair_cadence(script)
         assert out.split("\n")[0] == script.split("\n")[0]
         assert out.split("\n")[-1] == script.split("\n")[-1]
+
+
+# ── the hook could not be longer than a headline ─────────────────────────────
+#
+# The scorer's own rubric asks "how badly does the viewer need the next line",
+# with 9-10 reserved for "the viewer cannot leave without it". Then the length
+# rule capped every hook at eight words, hard cap ten. At that length a hook
+# can STATE a fact but cannot build the tension the rubric is grading:
+#
+#   'Are your coins secretly worthless?'              5 words, pulls
+#   "How Spain's Gold Rush Led to Economic Collapse"  8 words, a headline
+#
+# Both shipped. The ceiling moves to 12 (hard cap 14); the floor stays at 4,
+# and the model scorer still rejects a long hook that has not earned its
+# length. This raises the ceiling, it does not lower the bar.
+
+def test_a_hook_may_now_build_tension_rather_than_only_state_a_fact():
+    hs = sw._standards()["hook"]
+    assert hs["min_words"] == 4, "the floor is not what was wrong"
+    assert hs["max_words"] >= 12
+    assert hs["hard_max_words"] >= 14
+    long_hook = ("In 1965 the Mint took the silver out and nobody "
+                 "noticed at all")
+    assert len(long_hook.split()) > 10
+    assert sw._hook_pre_check(long_hook) is None
+
+
+def test_a_three_word_hook_is_still_a_title():
+    assert "too short" in (sw._hook_pre_check("Coins are worthless") or "")
+
+
+def test_the_scorer_reads_the_cap_instead_of_hardcoding_it():
+    """The pre-check and the model scorer have to agree on the number. The
+    scorer asked '≤10 words?' as a literal, so widening the standard would
+    have left every 11-word hook passing the gate and failing the score — a
+    disagreement that costs a whole hook cycle to discover."""
+    src = Path(sw.__file__).read_text(encoding="utf-8")
+    assert "• ≤10 words?" not in src
+    assert "hard_max_words']} words?" in src
+
+
+# ── a flat narration and a per-beat one logged identically ───────────────────
+
+def test_the_run_says_which_voice_it_got():
+    """emotional_map.describe exists so "every beat came back NEUTRAL should be
+    obvious at a glance" — its own words — but tts_engine took the flat path
+    silently, and its docstring admits that path "is still what most runs
+    take". A feature that is built, not delivered, and says nothing is the
+    same shape as a probe reporting the wrong style."""
+    import tts_engine
+    src = Path(tts_engine.__file__).read_text(encoding="utf-8")
+    assert "[tts] flat voice" in src
+    assert "[tts] per-beat voice" in src
+    # Every degradation names its own cause, so the log says what to fix.
+    for cause in ("no beat split", "one beat", "no tone plan",
+                  "every beat came back neutral"):
+        assert cause in src, cause
