@@ -427,3 +427,80 @@ def test_a_loop_that_shares_nothing_is_still_rejected():
                         "Nobody expected the weather to turn that afternoon.",
                         "Follow for more."])
     assert not sw._loop_echoes_hook(script)[0]
+
+
+# ── the same bug again, twelve lines further down the same file ──────────────
+#
+# The opinion pool lists 'ruined', 'destroyed', 'crushed', 'saved' and the
+# match was exact, so a body that had plainly taken a stance was told it had
+# not:
+#
+#     "silver ruins the empire"        ruins   vs pool's ruined
+#     "the crown destroys its economy" destroys vs destroyed
+#     "the debt crushes every saver"   crushes vs crushed
+#
+# 23 live rejections, each a generation spent on a script that had already done
+# what was asked.
+
+@pytest.mark.parametrize("line", [
+    "Silver ruins the empire that mined it.",
+    "The crown destroys its own economy.",
+    "The debt crushes every saver in the country.",
+    "It saves nobody in the end.",
+])
+def test_an_opinion_in_a_different_word_form_still_counts(line):
+    assert sw._has_opinion_word(line)
+
+
+@pytest.mark.parametrize("word", ["ruined", "destroyed", "crushed", "saved",
+                                  "worst", "rigged", "fake", "afraid"])
+def test_the_pool_words_themselves_still_count(word):
+    assert sw._has_opinion_word(f"The empire was {word} by its own silver.")
+
+
+def test_a_gerund_is_not_the_verbs_opinion():
+    """Folding forms onto each other merges 'savings' into 'saved', and a
+    script about savings has taken no position — which is the one thing this
+    gate exists to detect. Swept over the gold examples' whole vocabulary that
+    noun was the only collision, so -ing and -ings are excluded by name."""
+    assert not sw._has_opinion_word("He put his savings in the bank that year.")
+    assert not sw._has_opinion_word("She had savings and a plan for them.")
+
+
+def test_a_body_with_no_stance_is_still_rejected():
+    assert not sw._has_opinion_word("In 1965 the Mint changed the alloy.")
+    assert not sw._has_opinion_word("Prices in Seville rose across the century.")
+
+
+def test_the_fold_introduces_no_collision_in_the_real_vocabulary():
+    """The sweep, as a test. Every pair the stemmer merges across the gold
+    examples' 708 content words has to be one word in two forms — a fold that
+    merged two different words would make a weak loop pass as a strong one."""
+    import collections, json as _json
+
+    def _texts(o):
+        if isinstance(o, str):
+            yield o
+        elif isinstance(o, dict):
+            for v in o.values():
+                yield from _texts(v)
+        elif isinstance(o, list):
+            for v in o:
+                yield from _texts(v)
+
+    root = Path(__file__).parent.parent
+    gold = _json.loads((root / "config" / "gold_examples.json")
+                       .read_text(encoding="utf-8"))
+    words: set[str] = set()
+    for t in _texts(gold):
+        words |= sw._content_tokens(t)
+    assert len(words) > 300, "the vocabulary sample got smaller — check the path"
+    groups = collections.defaultdict(set)
+    for w in words:
+        groups[sw._stem(w)].add(w)
+    for stem, ws in groups.items():
+        if len(ws) < 2:
+            continue
+        base = min(ws, key=len)
+        prefix = base[:max(3, len(base) - 2)]
+        assert all(w.startswith(prefix) for w in ws), (stem, sorted(ws))

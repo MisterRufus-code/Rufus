@@ -846,8 +846,10 @@ def _stem(word: str) -> str:
     elif len(w) > 4 and w.endswith("ed"):
         w = w[:-2]
     # "collapse" and "collapsed" have to land on the same string, so the bare
-    # form loses its trailing e as well.
-    if len(w) > 4 and w.endswith("e"):
+    # form loses its trailing e as well. The floor is 3 and not 4 because
+    # "saved" strips to "sav" while "save" is four letters — a threshold that
+    # let the pair miss each other, which is the whole failure one level down.
+    if len(w) > 3 and w.endswith("e"):
         w = w[:-1]
     return w
 
@@ -886,9 +888,26 @@ _TENSION_WORDS = {
 
 
 def _has_opinion_word(text: str) -> bool:
-    text_lower = text.lower()
-    return any(re.search(r"\b" + re.escape(w) + r"\b", text_lower)
-               for w in _standards()["opinion_pool"])
+    """Whether the body takes a stance, matched on word form as well as word.
+
+    THE SAME BUG AS THE LOOP GATE, IN THE SAME FILE. The pool lists 'ruined',
+    'destroyed', 'crushed', 'saved' — and the match was exact, so "silver ruins
+    the empire", "the crown destroys its own economy" and "the debt crushes
+    every saver" all counted as no opinion at all. 23 live rejections, each one
+    a generation spent on a script that had already done what was asked.
+
+    A GERUND IS NOT THE VERB'S OPINION. Folding forms onto each other merges
+    'savings' into 'saved', and a script about savings has taken no position —
+    which is the one thing this gate exists to detect. Swept over the gold
+    examples' whole vocabulary, that noun was the only collision, so -ing and
+    -ings are excluded and the rest of the fold stands.
+    """
+    pool = _standards()["opinion_pool"]
+    if any(re.search(r"\b" + re.escape(w) + r"\b", text.lower()) for w in pool):
+        return True
+    stems = {_stem(w) for w in pool}
+    return any(_stem(w) in stems for w in _word_tokens(text)
+               if not w.endswith(("ing", "ings")))
 
 
 def _hook_already_present(first_line: str, hook: str) -> bool:
