@@ -348,3 +348,82 @@ def test_the_run_says_which_voice_it_got():
     for cause in ("no beat split", "one beat", "no tone plan",
                   "every beat came back neutral"):
         assert cause in src, cause
+
+
+# ── the largest rejection in the library was a plural ────────────────────────
+#
+# "loop no echo" was 135 live rejections, more than twice the next reason. The
+# gate asks for ONE shared content word, which is the mildest requirement it
+# could ask — but the match was a set intersection of exact strings, and a
+# writer echoing a hook naturally changes the word's form:
+#
+#     hook  "How a Bank Collapse Triggered a Financial Crisis"
+#     loop  "The banks that failed were the ones everyone trusted"
+#
+# That is exactly the loop line the instruction asks for. It was rejected on an
+# s, the attempt was spent, and a script that exhausts its attempts ships at
+# the hard-capped 4/10 — where 26 of the last 60 videos sit.
+
+_ECHO_PAIRS = [
+    ("How a Bank Collapse Triggered a Financial Crisis in 2008",
+     "The banks that failed were the ones everyone trusted."),
+    ("Are your coins secretly worthless?",
+     "Every coin in your pocket is a promise someone can break."),
+    ("How Spain's Gold Rush Led to Economic Collapse",
+     "The gold that was meant to enrich Spain collapsed it."),
+    ("How 1971 Changed the Future of Money Forever",
+     "Nixon changed what a dollar was, and never changed it back."),
+]
+
+
+@pytest.mark.parametrize("hook,loop", _ECHO_PAIRS)
+def test_an_echo_in_a_different_word_form_still_counts(hook, loop):
+    script = "\n".join([hook, "Filler body line one here.", loop,
+                        "Follow for more."])
+    echoes, shared = sw._loop_echoes_hook(script)
+    assert echoes, f"{hook} / {loop}"
+    assert shared
+
+
+@pytest.mark.parametrize("hook,loop", _ECHO_PAIRS)
+def test_the_shared_words_are_reported_as_words_not_stems(hook, loop):
+    """The correction tells the model to echo "a word from the hook". Telling
+    it to echo "collaps" would be telling it to write something nobody says."""
+    script = "\n".join([hook, "Filler body line one here.", loop,
+                        "Follow for more."])
+    _, shared = sw._loop_echoes_hook(script)
+    hook_words = set(hook.lower().replace("?", "").split())
+    for w in shared:
+        assert w in hook_words, w
+
+
+@pytest.mark.parametrize("word", ["bank", "coin", "collapse", "money", "silver",
+                                  "crisis", "gold", "war", "price", "company"])
+def test_folding_can_only_ever_add_matches_never_remove_one(word):
+    """The safety property, and the reason this is a safe edit to make on a
+    gate that guards every script: two identical words share a stem by
+    construction, so a pairing that passed before still passes."""
+    assert sw._stem(word) == sw._stem(word)
+    script = "\n".join([f"What happened to the {word} in 1965?",
+                        "Filler body line one here.",
+                        f"The {word} was never the same again.",
+                        "Follow for more."])
+    assert sw._loop_echoes_hook(script)[0]
+
+
+@pytest.mark.parametrize("a,b", [("bank", "banner"), ("gold", "golf"),
+                                 ("money", "monkey"), ("price", "pride"),
+                                 ("silver", "sliver"), ("crown", "crowd")])
+def test_unrelated_words_do_not_fold_together(a, b):
+    """A false echo is a weak loop passing as a strong one, which is the thing
+    the gate exists to catch. Plurals and tenses only — nothing that would
+    start matching words sharing a prefix."""
+    assert sw._stem(a) != sw._stem(b)
+
+
+def test_a_loop_that_shares_nothing_is_still_rejected():
+    script = "\n".join(["Are your coins secretly worthless?",
+                        "Filler body line one here.",
+                        "Nobody expected the weather to turn that afternoon.",
+                        "Follow for more."])
+    assert not sw._loop_echoes_hook(script)[0]

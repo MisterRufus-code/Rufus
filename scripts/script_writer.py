@@ -810,14 +810,62 @@ def _sentence_stats(text: str) -> tuple[float, int]:
     return sum(word_counts) / len(sentences), len(sentences)
 
 
+def _stem(word: str) -> str:
+    """A word folded to the form the loop gate should match on.
+
+    THE GATE ASKS FOR ONE SHARED WORD AND WAS THE LARGEST SINGLE REJECTION IN
+    THE LIBRARY — 135, more than twice the next. Not because one shared word is
+    demanding, but because the match was a set intersection of exact strings
+    and a writer echoing a hook naturally changes the word's form:
+
+        hook  "How a Bank Collapse Triggered a Financial Crisis"
+        loop  "The banks that failed were the ones everyone trusted"   bank ≠ banks
+
+        hook  "Are your coins secretly worthless?"
+        loop  "Every coin in your pocket is a promise"                coins ≠ coin
+
+    Both loop lines are exactly what the instruction asks for. Both were
+    rejected on a plural, each rejection costing a generation cycle, and a
+    script that exhausts its cycles ships at the hard-capped 4/10 — which is
+    where 26 of the last 60 videos sit.
+
+    Deliberately not a real stemmer. Plurals, past tense and gerunds are the
+    forms an echo actually takes; anything cleverer would start matching words
+    that share only a prefix, and a false echo is a weaker loop passing as a
+    strong one. The length floors are what keep short words out of it.
+    """
+    w = word[:-2] if word.endswith("'s") else word
+    if len(w) > 4 and w.endswith("ies"):
+        return w[:-3] + "y"
+    if len(w) > 4 and w.endswith("es") and w[-3] in "sxzh":
+        return w[:-2]
+    if len(w) > 3 and w.endswith("s") and not w.endswith("ss"):
+        w = w[:-1]
+    if len(w) > 5 and w.endswith("ing"):
+        w = w[:-3]
+    elif len(w) > 4 and w.endswith("ed"):
+        w = w[:-2]
+    # "collapse" and "collapsed" have to land on the same string, so the bare
+    # form loses its trailing e as well.
+    if len(w) > 4 and w.endswith("e"):
+        w = w[:-1]
+    return w
+
+
 def _loop_echoes_hook(script: str) -> tuple[bool, set[str]]:
-    """Return (echoes, shared_content_tokens). Loop = second-to-last non-empty line."""
+    """Return (echoes, shared_content_tokens). Loop = second-to-last non-empty line.
+
+    Matched on stems, reported in the words the writer used — the correction
+    message tells the model to echo "a word from the hook", and telling it to
+    echo "collaps" would be telling it to write something no one says.
+    """
     lines = [l.strip() for l in script.strip().split("\n") if l.strip()]
     if len(lines) < 3:
         return False, set()
     hook_tokens = _content_tokens(lines[0])
     loop_tokens = _content_tokens(lines[-2])  # second-to-last (last is CTA)
-    shared = hook_tokens & loop_tokens
+    loop_stems = {_stem(w) for w in loop_tokens}
+    shared = {w for w in hook_tokens if _stem(w) in loop_stems}
     needed = _standards()["loop"]["min_shared_content_tokens"]
     return len(shared) >= needed, shared
 

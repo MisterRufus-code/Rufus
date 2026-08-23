@@ -55,9 +55,14 @@ def test_every_niche_has_gold_examples():
 # then burns a generation attempt getting rejected for copying it. Fixing them
 # means rewriting five niches' channel voice, which is the owner's call, so
 # they are pinned here rather than silently tolerated or silently rewritten.
+#
+# 9 -> 8: one of them was failing "loop no echo" on a word FORM. The gate
+# matched the hook against the loop by exact string, so an example whose loop
+# line echoed the hook's noun in the plural counted as no echo at all. Nothing
+# about the example changed; the gate stopped being wrong about it.
 _LEGACY_GOLD_NICHES = {"finance", "motivation", "mindset", "business",
                        "personal_development"}
-_KNOWN_FAILING_LEGACY_EXAMPLES = 9
+_KNOWN_FAILING_LEGACY_EXAMPLES = 8
 
 
 def test_money_history_gold_examples_pass_the_pipelines_own_body_gates():
