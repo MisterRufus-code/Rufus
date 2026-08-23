@@ -978,26 +978,98 @@ def _repair_length(script: str, cap: int) -> str:
     return "\n".join(head + middle + tail)
 
 
+def _split_for_punch(script: str) -> str:
+    """Cut one long body sentence at a comma so a short one exists.
+
+    THE OTHER HALF OF THE CADENCE GATE, WHICH HAD NO REPAIR AT ALL. The gate
+    rejects two things — "missing a longer, flowing sentence (≥15 words)" and
+    "missing a short, punchy sentence (≤6 words)" — and only the first could be
+    repaired. The second was 21 live rejections, every one of them buying with
+    a whole generation an edit a human editor makes with one keystroke.
+
+    Splitting at a comma is the safe direction: the clause boundary is already
+    there, and promoting it to a full stop is what DELIVERY asks for anyway
+    ("Never write a long comma-chained run-on when the moment deserves a hard
+    stop"). The prefix must be a plausible sentence on its own, so 3-6 words,
+    and the remainder must not be left as a fragment.
+    """
+    head, middle, tail = _protected_lines(script)
+    if not middle:
+        return script
+    for i, line in enumerate(middle):
+        sentences = [s.strip() for s in _SENTENCE_RE.findall(line) if s.strip()]
+        for j, s in enumerate(sentences):
+            if len(s.split()) < 12 or not s.rstrip().endswith("."):
+                continue
+            for m in re.finditer(r",\s+", s):
+                left, right = s[:m.start()].strip(), s[m.end():].strip()
+                if not (3 <= len(left.split()) <= 6) or len(right.split()) < 4:
+                    continue
+                piece = f"{left}. {right[0].upper()}{right[1:]}"
+                new_middle = list(middle)
+                new_middle[i] = " ".join(sentences[:j] + [piece] + sentences[j + 1:])
+                return "\n".join(head + new_middle + tail)
+    return script
+
+
 def _repair_cadence(script: str) -> str:
-    """Join two adjacent short body sentences into one longer, flowing one.
+    """Give the script the rhythm contrast the gate asks for, without a retry.
 
     The observed failure is "missing a longer, flowing sentence (≥15 words)",
     and it is the prompt's own fault: DELIVERY tells the model to "split it into
     short sentences instead", then this gate rejects the result for having only
     short sentences. The prompt now states the rhythm requirement too, but a
     model that still lands short should not cost a generation to fix — joining
-    two sentences with a comma is exactly the edit a human editor would make.
+    sentences with a comma is exactly the edit a human editor would make.
+
+    A RUN, NOT A PAIR. Joining exactly two was measured declining on the very
+    shape the prompt produces: six sentences of six words each pair to twelve,
+    below the fifteen the gate wants, so the repair refused and the attempt was
+    spent. Three of them make eighteen. The run grows until the total lands in
+    range, which is the same edit, continued.
+
+    And when what is missing is the SHORT sentence instead, the fix is the
+    opposite cut — see _split_for_punch.
     """
+    if "punchy" in (_cadence_violation(script) or ""):
+        return _split_for_punch(script)
+
     head, middle, tail = _protected_lines(script)
     if not middle:
         return script
 
-    def _join(a: str, b: str) -> str | None:
-        n = len(a.split()) + len(b.split())
+    def _joinable(parts: list[str]) -> str | None:
+        """One flowing sentence from a run of short ones, or None."""
+        if len(parts) < 2 or not all(parts):
+            return None
+        n = sum(len(p.split()) for p in parts)
         # Below 15 it does not satisfy the gate; above 26 the "fix" is a run-on
         # worse than the violation, and DELIVERY explicitly forbids those.
-        if n < 15 or n > 26 or not b:
+        if n < 15 or n > 26:
             return None
+        # NEVER join across a question or an exclamation. Stripping that mark
+        # destroys the sentence: a live run produced
+        #   "But why does it still hold immense value, during global financial
+        #    crises, investors turned to the stability of the pound sterling."
+        # from a clean question followed by a clean statement, and that
+        # ungrammatical line went into the narration. The mark is also the
+        # pacing — DELIVERY says punctuation is how the voice is heard, and a
+        # rhetorical question is the one beat whose punctuation is the point.
+        if not all(p.rstrip().endswith(".") for p in parts[:-1]):
+            return None
+        # EVERY part but the last loses its full stop, not just the first. A
+        # three-sentence run joined with the middle periods left in place reads
+        # back as three sentences again — _SENTENCE_RE splits on them — so the
+        # "long sentence" the gate is looking for is never there and the repair
+        # spends itself for nothing.
+        out = parts[0].rstrip(".")
+        for k, p in enumerate(parts[1:], start=1):
+            piece = p if k == len(parts) - 1 else p.rstrip(".")
+            out = f"{out}, {piece[0].lower()}{piece[1:]}"
+        return out
+
+    def _join(a: str, b: str) -> str | None:
+        return _joinable([a, b])
         # NEVER join across a question or an exclamation. Stripping that mark
         # destroys the sentence: a live run produced
         #   "But why does it still hold immense value, during global financial
@@ -1010,32 +1082,40 @@ def _repair_cadence(script: str) -> str:
             return None
         return f"{a.rstrip('.')}, {b[0].lower()}{b[1:]}"
 
-    # Within a single line first — the least disruptive edit available.
-    for i, line in enumerate(middle):
-        sentences = [s.strip() for s in _SENTENCE_RE.findall(line) if s.strip()]
-        for j in range(len(sentences) - 1):
-            merged = _join(sentences[j], sentences[j + 1])
-            if merged is None:
-                continue
-            new_middle = list(middle)
-            new_middle[i] = " ".join(sentences[:j] + [merged] + sentences[j + 2:])
-            return "\n".join(head + new_middle + tail)
+    # Within a single line first — the least disruptive edit available. Shortest
+    # run wins, so two sentences are joined before three are.
+    for run in (2, 3, 4):
+        for i, line in enumerate(middle):
+            sentences = [s.strip() for s in _SENTENCE_RE.findall(line) if s.strip()]
+            for j in range(len(sentences) - run + 1):
+                merged = _joinable(sentences[j:j + run])
+                if merged is None:
+                    continue
+                new_middle = list(middle)
+                new_middle[i] = " ".join(sentences[:j] + [merged]
+                                         + sentences[j + run:])
+                return "\n".join(head + new_middle + tail)
 
     # Then across two adjacent body lines. These scripts are usually written one
     # beat per line, so the two short sentences that need joining are far more
     # often neighbours across a line break than inside one line.
-    for i in range(len(middle) - 1):
-        first = [s.strip() for s in _SENTENCE_RE.findall(middle[i]) if s.strip()]
-        second = [s.strip() for s in _SENTENCE_RE.findall(middle[i + 1]) if s.strip()]
-        if not first or not second:
-            continue
-        merged = _join(first[-1], second[0])
-        if merged is None:
-            continue
-        new_middle = list(middle)
-        new_middle[i] = " ".join(first[:-1] + [merged] + second[1:])
-        new_middle.pop(i + 1)
-        return "\n".join(head + new_middle + tail)
+    for span in (2, 3, 4):
+        for i in range(len(middle) - span + 1):
+            block = [[s.strip() for s in _SENTENCE_RE.findall(l) if s.strip()]
+                     for l in middle[i:i + span]]
+            if not all(block):
+                continue
+            # The tail of the first line, the whole of the ones between, and the
+            # head of the last — the sentences that actually sit next to each
+            # other across the breaks.
+            parts = [block[0][-1]] + [s for b in block[1:-1] for s in b] + [block[-1][0]]
+            merged = _joinable(parts)
+            if merged is None:
+                continue
+            new_middle = list(middle)
+            new_middle[i] = " ".join(block[0][:-1] + [merged] + block[-1][1:])
+            del new_middle[i + 1:i + span]
+            return "\n".join(head + new_middle + tail)
     return script
 
 

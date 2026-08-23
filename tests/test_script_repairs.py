@@ -21,6 +21,7 @@ contradicted each other, so the model was being punished for obeying it.
 """
 
 import sys
+import pytest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
@@ -142,3 +143,102 @@ def test_the_repairs_are_wired_into_the_generation_loop():
     src = Path(sw.__file__).read_text(encoding="utf-8")
     assert "_repair_length" in src and "_repair_cadence" in src
     assert "no retry spent" in src
+
+
+# ── the repair declined on the exact shape the prompt produces ───────────────
+#
+# _repair_cadence joined EXACTLY TWO adjacent sentences. Measured against the
+# shapes a live body actually takes, that is the wrong number:
+#
+#     8, 9, 10, 9, 8   pairs to 17-19   repaired
+#     6, 6, 6, 6, 6    pairs to 12      DECLINED — below the gate's 15
+#     5, 5, 5, 5, 5    pairs to 10      DECLINED
+#
+# And all-short is not an unlucky shape, it is the shape DELIVERY asks for:
+# "Never write a long comma-chained run-on when the moment deserves a hard
+# stop. Split it into short sentences instead." The model complies, the gate
+# rejects it for having only short sentences, and the repair written to absorb
+# that rejection refuses because two of them are still not long enough. Three
+# six-word sentences make eighteen.
+#
+# The other half of the gate — "missing a short, punchy sentence (≤6 words)" —
+# had no repair at all. 21 live rejections, each one buying with a whole
+# generation an edit that is one keystroke: promote a comma to a full stop.
+
+def _body(lengths, hook="Are your coins secretly worthless?",
+          cta="Follow for more."):
+    mid = [" ".join(["word%d" % i] * (n - 1) + ["end."]).capitalize()
+           for i, n in enumerate(lengths)]
+    return "\n".join([hook] + mid
+                     + ["Every coin is a promise someone can break.", cta])
+
+
+@pytest.mark.parametrize("lengths", [[6, 6, 6, 6, 6, 6], [5, 5, 5, 5, 5, 5, 5],
+                                     [4, 5, 4, 5, 4]])
+def test_a_run_of_short_sentences_is_joined_until_it_is_long_enough(lengths):
+    script = _body(lengths)
+    assert "longer, flowing" in (sw._cadence_violation(script) or "")
+    assert sw._cadence_violation(sw._repair_cadence(script)) is None
+
+
+@pytest.mark.parametrize("lengths", [[8, 9, 10, 9, 8], [11, 12, 11], [12, 13, 12, 13]])
+def test_the_shapes_that_already_worked_still_work(lengths):
+    script = _body(lengths)
+    assert sw._cadence_violation(sw._repair_cadence(script)) is None
+
+
+def test_a_joined_run_reads_back_as_one_sentence():
+    """The middle parts have to lose their full stops too. Left in place, the
+    "long sentence" splits back into three the moment the gate re-reads it —
+    the repair reports success and changes nothing that counts."""
+    out = sw._repair_cadence(_body([6, 6, 6, 6, 6, 6]))
+    lengths = [len(s.split()) for s in sw._SENTENCE_RE.findall(out) if s.strip()]
+    assert any(n >= 15 for n in lengths), lengths
+
+
+def test_two_long_sentences_are_still_not_joined_into_a_run_on():
+    """26 words is the cap and it stays. DELIVERY forbids run-ons, so a repair
+    that produces one has traded a rhythm complaint for a worse sentence."""
+    script = _body([14, 13, 14, 13])
+    assert sw._repair_cadence(script) == script
+
+
+def test_a_missing_short_sentence_is_repaired_by_promoting_a_comma():
+    script = ("How did Spain's own silver quietly destroy its economy?\n"
+              "By 1600 the crown was bankrupt, despite owning the richest "
+              "silver mine anywhere on the planet.\n"
+              "Prices in Seville rose four hundred percent across the century "
+              "that followed the first discovery.\n"
+              "The fleets kept arriving and the money kept losing its meaning "
+              "with every single voyage home.\n"
+              "The silver that was meant to make Spain rich is what emptied "
+              "it completely.\n"
+              "Subscribe now for more stories about the history of money.")
+    assert "punchy" in (sw._cadence_violation(script) or "")
+    out = sw._repair_cadence(script)
+    assert sw._cadence_violation(out) is None
+    assert "bankrupt. Despite" in out
+
+
+def test_the_short_repair_leaves_a_sentence_it_cannot_cut_cleanly_alone():
+    """No comma at a place where one side is a plausible short sentence means
+    no safe cut. A repair that hacked one in would put an ungrammatical line
+    into the narration, which is what the join rule already warns about."""
+    script = ("How did Spain's own silver quietly destroy its economy?\n"
+              "In 1545 the mines at Potosi began sending enormous quantities "
+              "of silver back across the Atlantic.\n"
+              "Prices in Seville rose four hundred percent across the century "
+              "that followed the discovery.\n"
+              "The silver that was meant to make Spain rich is what emptied "
+              "it completely.\n"
+              "Subscribe now for more stories about the history of money.")
+    assert "punchy" in (sw._cadence_violation(script) or "")
+    assert sw._repair_cadence(script) == script
+
+
+def test_the_repair_never_touches_the_hook_or_the_cta():
+    for lengths in ([6, 6, 6, 6, 6, 6], [5, 5, 5, 5, 5, 5, 5]):
+        script = _body(lengths)
+        out = sw._repair_cadence(script)
+        assert out.split("\n")[0] == script.split("\n")[0]
+        assert out.split("\n")[-1] == script.split("\n")[-1]
