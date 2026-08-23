@@ -943,6 +943,58 @@ def _is_photographic(style: str) -> bool:
 # behaves exactly as it always has.
 STYLE_FIGURE_MARKER = "--- FIGURE ONLY ---"
 
+# THE DEFAULT DISTANCE, AND WHY IT IS DELIMITED RATHER THAN QUALIFIED.
+#
+# SCALE says the figures stand between half and three quarters of the frame's
+# height. That stopped a real bug — a vast green field with one figure in the
+# corner — and it is the right answer for a beat that names no distance.
+#
+# It is the WRONG answer for a beat that names one, and storyboard names one on
+# every beat it plans: _apply_framing puts "Close shot: head and shoulders,
+# filling most of the frame" at the very front of the prompt, deliberately,
+# because the opening of a prompt is weighted most heavily.
+#
+# The first attempt at reconciling them was a sentence — "unless the shot names
+# its own distance ... the shot's distance always wins". It did not work, and
+# could not have: a text encoder has no meta level. "half and three quarters of
+# the frame's height" is concrete and drawable; "unless the shot names its own
+# distance" is abstract and is not. Both concepts reach the latent together and
+# the drawable one wins. Six probe runs came back full-body against a prompt
+# that opened with "Close on one figure's face".
+#
+# So the default is DELIMITED and DELETED instead. This is the same move
+# _detail_for_shot already makes at FIGURE ONLY, for the same stated reason:
+# the only reliable way not to get a thing is not to mention it.
+STYLE_SCALE_OPEN = "--- DEFAULT DISTANCE ---"
+STYLE_SCALE_CLOSE = "--- /DEFAULT DISTANCE ---"
+
+# The distances a shot can name. storyboard._FRAMINGS supplies the first four
+# phrasings; the rest are what a hand-typed prompt and the bench probes use for
+# the same thing. tests/test_styles.py asserts every _FRAMINGS phrase matches,
+# so the two files cannot drift apart again without a test failing.
+_NAMES_DISTANCE_RE = re.compile(
+    r"\b(wide shot|wide angle|establishing shot|medium shot|mid shot|"
+    r"close shot|close detail|close ?-?up|close on|extreme close)\b", re.I)
+
+
+def names_own_distance(prompt: str) -> bool:
+    """Whether this shot already says how far away the camera is."""
+    return bool(_NAMES_DISTANCE_RE.search(prompt or ""))
+
+
+def _resolve_scale(tail: str, framed: bool) -> str:
+    """Drop the default-distance clause when the shot supplied its own.
+
+    A style with no markers is returned untouched — every preset that predates
+    this, and every literal RUFUS_STILLS_DETAIL, keeps its old behaviour.
+    """
+    if STYLE_SCALE_OPEN not in tail:
+        return tail
+    head, _, rest = tail.partition(STYLE_SCALE_OPEN)
+    default, _, after = rest.partition(STYLE_SCALE_CLOSE)
+    keep = "" if framed else default.strip()
+    return " ".join(p for p in (head.strip(), keep, after.strip()) if p)
+
 # GPT tags each prompt with the kind of shot it wrote. The tag never reaches
 # the image model — it is stripped here, after it has chosen the style.
 _SHOT_TAG_RE = re.compile(r"^\s*\[SHOT\s*=\s*(figure|object)\s*\]\s*", re.I)
@@ -966,7 +1018,7 @@ def strip_shot_tag(prompt: str) -> str:
     return _SHOT_TAG_RE.sub("", prompt or "", count=1).strip()
 
 
-def _detail_for_shot(kind: str) -> str:
+def _detail_for_shot(kind: str, framed: bool = False) -> str:
     """The style text this shot should actually receive.
 
     WHY THE STYLE HAS TO KNOW. The block is appended byte for byte to every
@@ -977,7 +1029,7 @@ def _detail_for_shot(kind: str) -> str:
     A style block has no meta level: every word in it is a word in the prompt,
     and the only reliable way not to get a figure is not to mention one.
     """
-    tail = _detail_suffix()
+    tail = _resolve_scale(_detail_suffix(), framed)
     if STYLE_FIGURE_MARKER not in tail:
         return tail
     shared, _, figure = tail.partition(STYLE_FIGURE_MARKER)
@@ -1037,7 +1089,7 @@ def _with_detail(prompt: str) -> str:
     style is a channel-wide decision and must never lose to one stray line."""
     kind = shot_kind(prompt)
     prompt = strip_shot_tag(prompt)
-    tail = _detail_for_shot(kind)
+    tail = _detail_for_shot(kind, names_own_distance(prompt))
     if not tail:
         return prompt
     low = prompt.lower()

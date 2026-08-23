@@ -10,6 +10,7 @@ with the same faint smile.
 Both causes were single clauses in this file. These tests keep them out.
 """
 
+import os
 import json
 import sys
 from pathlib import Path
@@ -493,11 +494,45 @@ def test_the_scale_rule_is_in_the_half_of_the_block_that_gets_obeyed(stick):
 # slideshow. Nothing told either about the other, which is this repo's
 # recurring failure and not a new one: a constant quietly beating a variable.
 
+# ── AND QUALIFYING IT WAS NOT ENOUGH ─────────────────────────────────────────
+#
+# The first fix wrote the conflict away in words: "unless the shot names its
+# own distance ... the shot's distance always wins". Six probes later, `face`
+# still came back full-body against a prompt whose FIRST words were "Close on
+# one figure's face" — the acceptance test, failed.
+#
+# It could not have worked. A text encoder has no meta level, which is the
+# lesson _detail_for_shot already carries in its own docstring. "half and three
+# quarters of the frame's height" is concrete and drawable; "unless the shot
+# names its own distance" is abstract and is not. Both reach the latent
+# together and the drawable one wins.
+#
+# So the default is now DELIMITED and DELETED — the same move the block
+# already makes at FIGURE ONLY, for the same stated reason: the only reliable
+# way not to get a thing is not to mention it.
+
 @pytest.mark.parametrize("stick", _STICK)
-def test_the_shot_s_own_distance_beats_the_style_s_default(stick):
+def test_the_default_distance_is_delimited_so_it_can_be_removed(stick):
+    import comfy_client
     s = _looks()[stick]
-    assert "unless the shot names its own distance" in s
-    assert "The shot's distance always wins." in s
+    assert comfy_client.STYLE_SCALE_OPEN in s
+    assert comfy_client.STYLE_SCALE_CLOSE in s
+    head, _, rest = s.partition(comfy_client.STYLE_SCALE_OPEN)
+    default, _, _ = rest.partition(comfy_client.STYLE_SCALE_CLOSE)
+    # The contradicting sentence, and ONLY it, sits between the markers.
+    assert "half and three quarters of the frame" in default
+    assert "half and three quarters of the frame" not in head
+    # The clause the white-void bug needs stays OUTSIDE, always shipped.
+    assert "never instead of them" in head
+
+
+@pytest.mark.parametrize("stick", _STICK)
+def test_the_conditional_wording_that_did_not_work_is_gone(stick):
+    """Left in alongside the mechanism it would be two rules for one job, and
+    the losing one still ships in every prompt."""
+    s = _looks()[stick]
+    assert "unless the shot names its own distance" not in s
+    assert "The shot's distance always wins" not in s
 
 
 @pytest.mark.parametrize("stick", _STICK)
@@ -505,16 +540,35 @@ def test_the_style_leaves_room_for_every_framing_the_storyboard_can_choose(stick
     """THE TEST THAT TIES THE TWO FILES TOGETHER. storyboard._FRAMINGS is the
     list of distances a shot may ask for; this block is appended to every one
     of them. An edit to either file now has to face the other, which is
-    exactly what neither of them did the first time."""
-    import storyboard
-    s = _looks()[stick]
+    exactly what neither of them did the first time.
+
+    It asserts BEHAVIOUR now, not vocabulary: every phrase storyboard can put
+    in front of a shot must be recognised as naming a distance, and must
+    actually remove the default from the block that follows it."""
+    import comfy_client, storyboard
     assert set(storyboard._FRAMINGS) == {"wide", "mid", "close", "detail"}
-    # The two that SCALE's old wording forbade outright.
-    assert "come closer" in s, "a close or detail shot cannot be drawn"
-    assert "stand back" in s, "a wide shot cannot be drawn"
-    # And the default it still supplies for a beat that names no distance,
-    # because deleting it brings back the field with the figure in the corner.
-    assert "half and three quarters of the frame" in s
+    monkey = os.environ.get("RUFUS_STYLE")
+    prev_detail = os.environ.pop("RUFUS_STILLS_DETAIL", None)
+    os.environ["RUFUS_STYLE"] = stick
+    try:
+        for name, phrase in storyboard._FRAMINGS.items():
+            assert comfy_client.names_own_distance(phrase), name
+            got = comfy_client._with_detail(f"{phrase}. A clerk reacts.")
+            assert "half and three quarters of the frame" not in got, name
+            assert comfy_client.STYLE_SCALE_OPEN not in got, name
+        # A beat that names no distance still gets the default, because
+        # deleting it outright brings back the field with the figure in the
+        # corner that SCALE was written for.
+        plain = comfy_client._with_detail("A clerk reacts.")
+        assert "half and three quarters of the frame" in plain
+        assert comfy_client.STYLE_SCALE_OPEN not in plain
+    finally:
+        if monkey is None:
+            os.environ.pop("RUFUS_STYLE", None)
+        else:
+            os.environ["RUFUS_STYLE"] = monkey
+        if prev_detail is not None:
+            os.environ["RUFUS_STILLS_DETAIL"] = prev_detail
 
 
 @pytest.mark.parametrize("stick", _STICK)
@@ -903,8 +957,12 @@ def test_the_style_yields_to_the_shot_in_all_three_places(stick):
     Anything added to this block that describes what a picture CONTAINS rather
     than how it is DRAWN belongs on this list, with a clause saying the shot
     wins."""
+    import comfy_client
     s = _looks()[stick]
-    assert "The shot's distance always wins." in s
+    # Distance yields by DELETION — see the DEFAULT DISTANCE tests above. The
+    # other two still yield by a clause, because neither has a concrete
+    # drawable default that contradicts the shot the way SCALE's did.
+    assert comfy_client.STYLE_SCALE_OPEN in s
     assert "the shot's face always wins" in s
     assert "Clothing ONLY when the shot says" in s
 
