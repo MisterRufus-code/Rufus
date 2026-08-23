@@ -240,9 +240,14 @@ def advise(patterns: dict, stats: dict | None = None,
             "value": None,
         })
 
+    # DEMOTE FIRST, THEN SORT. The demotion drops a finding to "low", and it
+    # only sinks below the live problems if the ordering sees that — sorting
+    # first leaves an already-fixed item sitting at the top of the page with a
+    # low badge on it, which is the same wrong shape in a new costume.
+    out = [_mark_if_already_done(i, settings) for i in out]
     order = {"high": 0, "medium": 1, "low": 2}
     out.sort(key=lambda d: order.get(d["severity"], 3))
-    return [_mark_if_already_done(i, settings) for i in out]
+    return out
 
 
 def _mark_if_already_done(item: dict, settings: dict) -> dict:
