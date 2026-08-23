@@ -185,15 +185,6 @@ def advise(patterns: dict, stats: dict | None = None,
         # a record of the runs made before it. Saying so, quietly, at the
         # bottom, is the honest shape; leading with it tells the owner to do
         # something they have already done.
-        current = settings.get(item["setting"]) if item["setting"] else None
-        if item["setting"] and current == item["value"]:
-            item["title"] += " (already fixed)"
-            item["action"] = (f"{item['setting']} is already {current}. These "
-                              f"measurements are of runs made before that, so "
-                              f"this clears once newer runs are measured.")
-            item["severity"] = "low"
-            item["done"] = True
-            item["setting"] = item["value"] = None
         out.append(item)
 
     # 2. The writing, which no picture setting can rescue.
@@ -251,7 +242,43 @@ def advise(patterns: dict, stats: dict | None = None,
 
     order = {"high": 0, "medium": 1, "low": 2}
     out.sort(key=lambda d: order.get(d["severity"], 3))
-    return out
+    return [_mark_if_already_done(i, settings) for i in out]
+
+
+def _mark_if_already_done(item: dict, settings: dict) -> dict:
+    """Demote a finding whose recommended change is already in force.
+
+    ADVICE ALREADY FOLLOWED IS HISTORY, NOT ADVICE — and this guard has now
+    been in the wrong place twice.
+
+    The first time, a live page led with "Too few pictures for the length" and
+    "Already set to 24" tacked on the end, driving the readiness line with it.
+    The fix went INSIDE the loop over _REMEDIES — where, as it turns out, not
+    one of the seven entries names a setting at all, so it could never fire.
+
+    Meanwhile `weak_scripts` — the only finding that does name a real setting,
+    RUFUS_SEED_TRIES — is appended after that loop and never passed through
+    it. A dashboard reporting 5.8/10 as its top HIGH finding was telling its
+    owner to set a value the settings file had held for weeks, and readiness()
+    excludes `done` items, so the stale card was also the readiness headline.
+
+    So it runs over every finding on the way out, where a new section added
+    below cannot miss it.
+    """
+    name = item.get("setting")
+    if not name:
+        return item
+    current = (settings or {}).get(name)
+    if current is None or str(current) != str(item.get("value")):
+        return item
+    item["title"] += " (already fixed)"
+    item["action"] = (f"{name} is already {current}. These measurements are of "
+                      f"runs made before that, so this clears once newer runs "
+                      f"are measured.")
+    item["severity"] = "low"
+    item["done"] = True
+    item["setting"] = item["value"] = None
+    return item
 
 
 def readiness(patterns: dict, stats: dict | None = None,

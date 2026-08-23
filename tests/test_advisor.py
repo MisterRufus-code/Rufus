@@ -264,3 +264,67 @@ def test_the_page_shows_the_clear_label(client, monkeypatch):
         {"state": "needs work", "detail": "t"}))
     page = client.get("/advice").get_data(as_text=True)
     assert "Clear SD_CLIPS (currently 24)" in page
+
+
+# ── the guard was in the branch that could not use it ────────────────────────
+#
+# `a_remedy_with_a_value` injects a synthetic entry INTO _REMEDIES, so every
+# test above travels through the loop over that dict — and the demotion lived
+# inside that loop. It looked covered.
+#
+# Meanwhile all seven real _REMEDIES entries carry setting=None, so the guard
+# could never fire for any of them, and `weak_scripts` — the ONLY finding that
+# names a real setting — is appended after the loop and never passed through
+# it. A live dashboard led with "Scripts are averaging 5.8/10" and "Set
+# RUFUS_SEED_TRIES = 6" against a settings file that had held 6 for weeks, and
+# because readiness() drops `done` items, the stale card was the readiness
+# headline too. The same failure the tests above were written for, one section
+# further down the file.
+
+def test_the_weak_script_finding_is_demoted_when_the_lever_is_already_pulled():
+    stats = {"total": 98, "avg_score": 5.8}
+    it = next(i for i in advisor.advise({}, stats, {"RUFUS_SEED_TRIES": "6"})
+              if i["id"] == "weak_scripts")
+    assert it["done"] is True
+    assert it["severity"] == "low"
+    assert it["setting"] is None
+    assert "already 6" in it["action"]
+
+
+def test_the_weak_script_finding_still_fires_when_it_has_not_been():
+    stats = {"total": 98, "avg_score": 5.8}
+    for settings in ({}, {"RUFUS_SEED_TRIES": "4"}):
+        it = next(i for i in advisor.advise({}, stats, settings)
+                  if i["id"] == "weak_scripts")
+        assert it["severity"] == "high", settings
+        assert not it.get("done"), settings
+        assert it["setting"] == "RUFUS_SEED_TRIES"
+
+
+def test_readiness_does_not_lead_with_advice_already_followed():
+    stats = {"total": 98, "avg_score": 5.8, "held": 77}
+    assert advisor.readiness({}, stats, {})["state"] == "needs work"
+    r = advisor.readiness({}, stats, {"RUFUS_SEED_TRIES": "6"})
+    assert r["state"] != "needs work"
+    assert "5.8" not in r["detail"]
+
+
+def test_no_finding_anywhere_can_skip_the_guard():
+    """THE STRUCTURAL ONE. The two tests above pin today's card; this pins the
+    shape, so a finding added in a new section below cannot repeat this."""
+    stats = {"total": 98, "avg_score": 5.8, "held": 77}
+    for item in advisor.advise({}, stats, {}):
+        if not item.get("setting"):
+            continue
+        matched = advisor.advise({}, stats, {item["setting"]: item["value"]})
+        same = next(i for i in matched if i["id"] == item["id"])
+        assert same.get("done") is True, item["id"]
+        assert same["severity"] == "low", item["id"]
+
+
+def test_a_different_value_is_not_mistaken_for_the_advised_one():
+    stats = {"total": 98, "avg_score": 5.8}
+    it = next(i for i in advisor.advise({}, stats, {"RUFUS_SEED_TRIES": "16"})
+              if i["id"] == "weak_scripts")
+    assert it["severity"] == "high"
+    assert not it.get("done")
