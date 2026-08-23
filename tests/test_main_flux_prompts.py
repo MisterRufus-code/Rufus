@@ -2,6 +2,7 @@
 anchoring rule that addresses "the scene doesn't match what's being said"."""
 
 import json
+import pytest
 import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -463,3 +464,51 @@ def test_a_scene_with_no_lettering_is_still_left_alone():
 def test_the_clause_is_never_applied_twice():
     once = _main._defuse_readable_text("A protest in the square.")
     assert _main._defuse_readable_text(once) == once
+
+
+# ── the words a shot asked to have printed ───────────────────────────────────
+#
+# storyboard rule 6 already says "NEVER NAME WORDS THAT WOULD BE PRINTED IN
+# FRAME ... Write the object as a blank physical thing instead." The model
+# ignores it, and a live gallery came back with two frames of legible text:
+#
+#     "A protest sign reading 'Stop Police Brutality' held in a crowd"
+#     "A newspaper being folded with a headline about police reform visible"
+#
+# Both prompts ALSO carried _DETEXT_CLAUSE, which says every sign is blank —
+# appended after the quoted string, which is the shape that loses every time
+# here. The clause describes the surface we want and stays; the words no
+# longer reach the encoder to be painted.
+
+@pytest.mark.parametrize("shot,expect_gone,expect_kept", [
+    ("A protest sign reading 'Stop Police Brutality' held in a crowd, faces unseen.",
+     "Stop Police Brutality", "protest sign"),
+    ("A newspaper being folded with a headline about police reform visible.",
+     "police reform", "newspaper"),
+    ('A book titled "How Money Really Began" on a table.',
+     "How Money Really Began", "book"),
+    ("A banner that says 'Part of a series' above the door.",
+     "Part of a series", "banner"),
+])
+def test_the_named_words_are_removed_and_the_object_stays(shot, expect_gone, expect_kept):
+    out = main._strip_named_words(shot)
+    assert expect_gone not in out
+    assert expect_kept in out
+
+
+@pytest.mark.parametrize("shot", [
+    "A clerk pushes an open ledger across a counter, its pages turned toward us.",
+    "Five people crowd against the shutters of a closed bank, one hammering on the wood.",
+    "The table goes over and coins scatter across the floorboards.",
+])
+def test_a_shot_that_names_no_words_is_untouched(shot):
+    assert main._strip_named_words(shot) == shot
+
+
+def test_the_blank_surface_clause_still_follows():
+    """Deleting the words must not delete the description of what we DO want:
+    a prompt with a sign in it still says the sign is blank."""
+    out = main._defuse_readable_text(
+        "A protest sign reading 'Stop Police Brutality' held in a crowd.")
+    assert "Stop Police Brutality" not in out
+    assert main._DETEXT_SENTINEL in out.lower()

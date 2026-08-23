@@ -1314,3 +1314,46 @@ def test_a_shot_with_its_own_place_is_not_also_sent_a_beach(stick):
     # What the shot actually asked for still arrives.
     for noun in ("alleyway", "asphalt", "shadow"):
         assert noun in low, noun
+
+
+# ── the hands, and the uniform that only half the frame got ──────────────────
+#
+# The owner's gallery: "יד לשישית" — a hand with six fingers — and a frame of
+# four police officers where two wore a uniform and two were bare white
+# figures. The second is the two-constructions failure the block already
+# forbids, arriving through a rule that had nothing to say about roles.
+#
+# The style said only "Small simple hands" — no shape, no finger count — while
+# shots asked for "a hand making a tally motion with fingers" and "hands
+# clutching a phone". A diffusion model handed the word fingers draws fingers,
+# and gets the number wrong.
+
+@pytest.mark.parametrize("stick", _STICK)
+def test_a_hand_is_one_shape_and_not_a_count_of_fingers(stick):
+    s = _looks()[stick]
+    assert "Small simple hands" in s, "the pinned phrase survives"
+    assert "no separated fingers" in s
+    assert "whatever the shot says the hand is doing" in s, \
+        "a shot naming fingers must not win this one"
+
+
+@pytest.mark.parametrize("stick", _STICK)
+def test_a_role_is_worn_by_every_figure_that_has_it(stick):
+    s = _looks()[stick]
+    assert "A ROLE THE STORY NEEDS IS WORN" in s
+    assert "EVERY figure of that role in the frame gets it" in s
+    assert "two-constructions failure" in s
+
+
+@pytest.mark.parametrize("stick", _STICK)
+def test_the_role_rule_names_no_garment(stick):
+    """THE FIFTH TIME. The lion, the banknote, the coin face, the figure count
+    — and this block was one edit away from adding a tunic, a cap, a helmet, an
+    apron and a crown to every prompt on the channel. The rule may be stated;
+    the things may not be listed, and "taken from the shot's own words" is
+    where the garment comes from."""
+    s = _looks()[stick].lower()
+    for garment in ("dress", "gown", "robe", "skirt", "tunic", "apron",
+                    "helmet", "crown", "badge", "trousers", "coat"):
+        assert garment not in s, garment
+    assert "taken from the shot's own words" in _looks()[stick]

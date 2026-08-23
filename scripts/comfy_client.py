@@ -2155,6 +2155,28 @@ def generate_clips(queries: list[str], n: int = 4,
                 frame.unlink(missing_ok=True)
             continue
 
+        # THE HERO BEAT SKIPS THE CUT PATH, or it never reaches the motion
+        # code at all. That branch ends in `continue`, and the motion engines
+        # are chosen BELOW it — so any beat with more than one still was
+        # animated with Ken Burns and cut, and the engine chain was never
+        # consulted. In hero mode frames_per_beat is set once, to
+        # RUFUS_HERO_OTHER_FRAMES, for EVERY beat including the hero one: the
+        # comment where it is set promises "resolved per beat further down"
+        # and nothing further down resolves it. So a live run logged
+        #     [comfy] hero: beat 4 gets the motion clip
+        #     [comfy] clip 4 ready (2 cut frames)
+        # — the beat was chosen, announced, and then quietly rendered as
+        # stills, with Hunyuan loaded and idle. Hero mode produced motion only
+        # when RUFUS_HERO_OTHER_FRAMES happened to be 1.
+        #
+        # The hero beat animates from beat_frames[0]; the spare stills it was
+        # given are dropped, because the point of the beat is the movement.
+        is_hero = (beat_mode == "hero" and hero_i is not None and i == hero_i)
+        if is_hero and len(beat_frames) > 1:
+            for spare in beat_frames[1:]:
+                spare.unlink(missing_ok=True)
+            beat_frames = beat_frames[:1]
+
         if len(beat_frames) > 1:
             share = clip_duration / len(beat_frames)
             # The 50KB default floor is calibrated for a full-length beat clip

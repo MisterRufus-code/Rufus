@@ -752,10 +752,52 @@ _DETEXT_CLAUSE = (
     "distance, described by shape, color and wear alone.")
 
 
+# THE WORDS THEMSELVES, DELETED — not argued with.
+#
+# storyboard rule 6 already says "NEVER NAME WORDS THAT WOULD BE PRINTED IN
+# FRAME. No headline text, no inscriptions ... Write the object as a blank
+# physical thing instead." The model ignores it, and a live run produced
+#
+#     "A protest sign reading 'Stop Police Brutality' held in a crowd"
+#     "A newspaper being folded with a headline about police reform visible"
+#
+# both of which came back with the lettering rendered, legibly, because
+# _DETEXT_CLAUSE is APPENDED — a general instruction arriving after a concrete
+# quoted string, which is the shape that loses every time in this pipeline.
+# The clause stays (it describes the surface we do want); what changes is that
+# the words no longer reach the encoder to be painted.
+_NAMED_WORDS_RE = re.compile(
+    r"""(?ix)
+    \s*
+    (?: \b(?:reading|that\s+reads?|titled|labell?ed|marked|inscribed|
+              stamped|emblazoned|that\s+says?)\b \s*
+        (?: ["'“‘] [^"'”’]{1,80} ["'”’]   # reading "X"
+          | [^,.;]{1,60} )                                              # reading X
+      | \b(?:with\s+(?:a\s+)?)?headlines?\s+(?:about|on|reading)\s+
+        [^,.;]{1,60}
+      | ["'“‘] [^"'”’]{2,80} ["'”’]        # a bare quote
+    )
+    """)
+
+
+def _strip_named_words(prompt: str) -> str:
+    """Remove the words a shot asked to have printed, leaving the object.
+
+    "A protest sign reading 'Stop Police Brutality' held in a crowd" becomes
+    "A protest sign held in a crowd" — the picture the storyboard wanted,
+    without the lettering the image model garbles.
+    """
+    out = _NAMED_WORDS_RE.sub(" ", prompt)
+    out = re.sub(r"\s{2,}", " ", out)
+    out = re.sub(r"\s+([,.;])", r"\1", out)
+    return out.strip()
+
+
 def _defuse_readable_text(prompt: str) -> str:
     """Append the blank-surfaces clause to prompts that mention a text-bearing
     prop. Only when triggered — a clean prompt stays untouched (keeps token
     budgets tight and avoids diluting every prompt)."""
+    prompt = _strip_named_words(prompt)
     if _TEXT_PROP_RE.search(prompt) and _DETEXT_SENTINEL not in prompt.lower():
         return prompt.rstrip() + _DETEXT_CLAUSE
     return prompt
