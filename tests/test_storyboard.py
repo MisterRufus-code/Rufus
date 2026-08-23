@@ -981,7 +981,14 @@ def test_the_style_no_longer_fades_the_background():
     assert "paler than the foreground" not in style
     assert "soft muted flat colours" not in style
     assert "SATURATED" in style
-    assert "grass is green" in style
+    # IT USED TO PIN "grass is green". The colour rule taught its point with a
+    # list — grass, sky, clouds, earth, sand, water, stone — and that list was
+    # appended to every prompt, so a shot asking for "an alleyway, empty except
+    # for shadows across the cracked asphalt" also asked for a beach. Every
+    # probe rendered the same coastline whatever the shot said. The rule stays
+    # and states itself instead of illustrating itself.
+    assert "takes its own true colour at full strength" in style
+    assert "grass is green" not in style
 
 
 def test_the_style_keeps_people_simple_and_draws_the_animals():
@@ -1220,3 +1227,66 @@ def test_the_brief_forbids_a_contact_sheet():
     assert "ONE SCENE, ONE CAMERA, ONE MOMENT" in p
     assert "never a grid" in p
     assert "character sheet" in p
+
+
+# ── four of the five faces are dark, and only the dark ones had a home ───────
+#
+# "they are never happy people in the pictures" — the owner, about a real
+# gallery. The five recipes the renderer can draw are anger, shock, grief,
+# delight and cold detachment: four dark or blank, one not. The instruction
+# then asked for "at least three of the five" and gave three placement
+# examples, every one of them dark — the shock on the reveal, the flat
+# official face on the announcement, the grief after the loss. Nothing said
+# where the upturned one goes, so a sequence picked without thinking was grim
+# by default. A live run: faces cold×2, grief×2, shock×1, delight×0.
+
+def test_the_positive_face_has_somewhere_to_go():
+    import inspect
+    src = inspect.getsource(storyboard)
+    assert "the upturned" in src, "no placement rule for the one bright face"
+    assert "the boom" in src or "the deal signed" in src
+    # And the imbalance is stated, because a model that is not told the list
+    # leans dark cannot correct for it.
+    assert "grim by default" in src
+
+
+def test_the_dark_placements_are_still_taught():
+    """The fix must not trade one monotony for another — the shock still
+    belongs on the reveal."""
+    import inspect
+    src = inspect.getsource(storyboard)
+    for anchor in ("the shock belongs on the reveal", "the grief after the loss"):
+        assert anchor in src, anchor
+
+
+# ── the shot counter was counting the pipeline's own framing vocabulary ──────
+
+def test_the_framing_phrase_is_not_a_subject():
+    """_apply_framing prepends "Wide shot: ... the figures are small within
+    it, standing on the ground plane with the horizon behind them" — pipeline
+    text, not a picture the storyboard chose. Two of the four phrases contain
+    "behind", so a run of seven mid shots and three wide ones carried it ten
+    times and a live run reported:
+
+        "coin" is the subject of 10 of 16 — re-planning 5 of them
+        re-planned 4 shot(s); "behind" is now the widest subject at 9 of 16
+
+    Four shots re-planned, then a finding about a word that was never a
+    subject and had been there the whole time.
+    """
+    from run_review import _subject_words
+    prompt = (storyboard._FRAMINGS["mid"] + ". A man stands at the table, his "
+              "hand hovering over a thinning gold coin.")
+    words = _subject_words(prompt)
+    for pipeline_word in ("behind", "frame", "figures", "place", "knees",
+                          "readable", "middle", "filling"):
+        assert pipeline_word not in words, pipeline_word
+    # What the storyboard actually asked for survives.
+    for chosen in ("coin", "gold", "table", "hovering"):
+        assert chosen in words, chosen
+
+
+@pytest.mark.parametrize("framing", ["wide", "mid", "close", "detail"])
+def test_no_framing_phrase_contributes_any_subject_word(framing):
+    from run_review import _subject_words
+    assert _subject_words(storyboard._FRAMINGS[framing] + ". A coin.") <= {"coin"}

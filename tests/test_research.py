@@ -797,13 +797,22 @@ def test_the_list_only_caller_is_unaffected():
 
 _WORK = {
     "id": "https://openalex.org/W123",
-    "doi": "https://doi.org/10.1126/science.aac4249",
-    "title": "The unique ecology of human predators",
+    "doi": "https://doi.org/10.1017/S0022050700100015",
+    "title": "Debasement of the denarius and grain prices in Roman Egypt",
     "publication_year": 2015,
     "cited_by_count": 900,
-    "primary_location": {"source": {"display_name": "Science"}},
-    "authorships": [{"author": {"display_name": "Chris Darimont"}},
-                    {"author": {"display_name": "Caroline Fox"}}],
+    "primary_location": {"source": {"display_name": "The Journal of Economic History"}},
+    "authorships": [{"author": {"display_name": "Colin Elliott"}},
+                    {"author": {"display_name": "Kyle Harper"}}],
+    # ON THE NICHE'S OWN SUBJECT, and it was not always. This fixture used to
+    # be "The unique ecology of human predators" (Science) — a real paper,
+    # standing in for a money_history seed. It passed every assertion here and
+    # would have become a video about monetary history built on a study of
+    # predation rates, which is precisely what _is_on_subject was added to
+    # stop after four consecutive live runs seeded on lung cancer, supernovae,
+    # IT productivity and blockchain. A fixture that the pipeline's own filter
+    # rejects is not testing the pipeline.
+    #
     # A real abstract arrives as {word: [positions]} — see the licensing note
     # in _abstract_from_inverted_index.
     "abstract_inverted_index": {
@@ -814,14 +823,18 @@ _WORK = {
         # cannot ground a numeric hook, and the two checks agreeing about that
         # is the point.
         w: [i] for i, w in enumerate(
-            ("Humans kill adult prey at rates up to 14 times higher than other "
-             "predators do, with especially intense exploitation of terrestrial "
-             "carnivores and fishes, a pattern measured across 2,125 species "
-             "worldwide. Median exploitation of adult biomass reached 14.1% for "
-             "marine fishes against 6.3% for the predators they replaced, and "
-             "the imbalance is sharpest for large-bodied carnivores whose adult "
-             "survivorship falls furthest below the rates their populations "
-             "evolved with, on every continent examined.").split())
+            ("The silver content of the denarius fell from 97% under Augustus "
+             "to 14% by 250 AD, a debasement measured across 2,125 assayed "
+             "coins drawn from 41 hoards spanning the western provinces. Wheat "
+             "prices recorded on papyri from Roman Egypt rose 14.1% a decade "
+             "over the same period, against 6.3% in the century before, and "
+             "the divergence is sharpest in the provinces furthest from the "
+             "mint at Rome. We reconstruct the implied seigniorage the "
+             "treasury collected at each step, show that it tracked military "
+             "payrolls rather than harvest failure, and argue that the "
+             "wage-to-price ratio recorded in the Egyptian archive is the "
+             "closest surviving proxy for what the debasement cost an ordinary "
+             "household on every trade route examined.").split())
     },
 }
 
@@ -867,8 +880,8 @@ def test_the_year_and_authors_are_in_the_TEXT(monkeypatch):
     _fake_openalex(monkeypatch, [_WORK])
     seed = research.fetch_openalex_story("money_history", used_ids=set())
     assert "2015" in seed["content"]
-    assert "Darimont" in seed["content"]
-    assert "Science" in seed["content"]
+    assert "Elliott" in seed["content"]
+    assert "The Journal of Economic History" in seed["content"]
 
 
 def test_a_paper_already_used_is_skipped(monkeypatch, capsys):
@@ -878,7 +891,7 @@ def test_a_paper_already_used_is_skipped(monkeypatch, capsys):
     _fake_openalex(monkeypatch, [_WORK])
     seed = research.fetch_openalex_story("money_history", used_ids=set())
     used = {research._seed_id(seed)}
-    assert used == {"oa:https://doi.org/10.1126/science.aac4249"}
+    assert used == {"oa:https://doi.org/10.1017/S0022050700100015"}
     assert research.fetch_openalex_story("money_history", used_ids=used) is None
 
 
@@ -1089,3 +1102,105 @@ def test_the_settings_page_no_longer_calls_the_mailto_optional():
     block = src.split('"RUFUS_OPENALEX_MAILTO"', 1)[1][:700]
     assert "Nothing breaks without it" not in block
     assert "anonymous pool" in block
+
+
+# ── a niche called money_history filtered on history and never on money ──────
+#
+# Four consecutive live runs, every seed off-topic:
+#
+#   [tribute] → "Erlotinib in Previously Treated Non-Small-Cell Lung Cancer"
+#   [silver]  → "Type Ia Supernova Discoveries at z>1"
+#   [wages]   → "The productivity paradox of information technology"
+#   [coinage] → "A Comprehensive Review of Blockchain Consensus Mechanisms"
+#
+# "tribute" matched a line in an acknowledgement, "coinage" matched a
+# blockchain coin, and the supernova paper PASSED the history filter on the
+# phrase "the history of cosmic expansion". The script then ignored the seed
+# and wrote from the model's own knowledge, which the fact gate caught in
+# words: "the source discusses the productivity paradox of information
+# technology, not monetary history".
+
+_OFF_TOPIC = [
+    ("Type Ia Supernova Discoveries at z>1 from the Hubble Space Telescope",
+     "constraining the history of cosmic expansion since 1998"),
+    ("Erlotinib in Previously Treated Non-Small-Cell Lung Cancer",
+     "patients were randomly assigned in 2004 to erlotinib or placebo"),
+    ("A Comprehensive Review of Blockchain Consensus Mechanisms",
+     "proof of work and proof of stake have evolved since 2008"),
+    ("Roman concrete durability",
+     "cores drilled from ancient Roman harbour structures"),
+]
+
+_ON_TOPIC = [
+    ("Assay of the denarius from 64 AD", "silver content by hoard"),
+    ("Byzantine coinage under Justinian", "the solidus held its weight"),
+    ("The Florentine florin and long-distance trade",
+     "the florin, first struck in 1252, became the standard of account"),
+    ("Cowrie shells as currency in West Africa",
+     "cowries circulated as money from the sixteenth century"),
+    ("Tally sticks in the English Exchequer",
+     "split hazel tallies recorded Crown debt from the twelfth century"),
+]
+
+
+@pytest.mark.parametrize("title,abstract", _OFF_TOPIC)
+def test_a_source_about_something_else_is_not_a_money_history_seed(title, abstract):
+    blob = f"{title} {abstract}"
+    assert not research._is_on_subject(blob, "money_history")
+
+
+@pytest.mark.parametrize("title,abstract", _ON_TOPIC)
+def test_the_channel_s_own_subject_matter_still_gets_through(title, abstract):
+    """The filter was ALSO too tight in the other direction: it rejected
+    "Byzantine coinage under Justinian" and "the denarius from 64 AD" — a
+    two-digit year is not three digits, and no named era matched."""
+    blob = f"{title} {abstract}"
+    assert research._is_historical(blob), "period"
+    assert research._is_on_subject(blob, "money_history"), "subject"
+
+
+def test_a_niche_with_no_pattern_is_not_filtered_at_all():
+    """Fail-open: adding a niche must never silently starve it of seeds."""
+    assert research._is_on_subject("anything at all", "a_niche_with_no_pattern")
+
+
+# ── and a rising search query is not automatically this channel's subject ────
+#
+# Google matched "gold standard" to a whey protein brand and "hyperinflation"
+# to a lung condition. A live run resolved
+#     "optimum nutrition gold standard pre-workout"
+# into the Wikipedia article "Sprint (running)" and made it the topic of a
+# monetary-history video. fetch_trending_wikipedia's own docstring promised
+# that "a trend term with no real article just gets skipped" — it guarded
+# against the ABSENCE of an article, never against the wrong one.
+
+@pytest.mark.parametrize("query", [
+    "optimum nutrition gold standard 100% whey.",
+    "optimum nutrition gold standard pre-workout",
+    "gold standard synonym",
+    "hyperinflation of the lungs",
+    "hyperinflation definition",
+])
+def test_a_rising_query_that_is_not_about_money_is_skipped(query):
+    assert not research._trend_is_usable(query, "money_history")
+
+
+@pytest.mark.parametrize("query", [
+    "when did the us leave the gold standard",
+    "when did we go off the gold standard",
+    "us hyperinflation",
+    "how to survive hyperinflation",
+])
+def test_a_rising_query_that_is_about_money_is_kept(query):
+    """These four came back in the SAME rate-limited reply as the whey ones.
+    A filter that dropped them too would have cost the channel its one real
+    reach lever to spare it the noise."""
+    assert research._trend_is_usable(query, "money_history")
+
+
+def test_hyperinflation_matches_despite_having_no_word_boundary():
+    """\\binflation\\w* cannot match "hyperinflation" — there is no boundary
+    before the i. Every hyperinflation source silently failed the subject test
+    the moment the test existed."""
+    assert research._is_on_subject("the German hyperinflation", "money_history")
+    assert research._is_on_subject("stagflation in the 1970s", "money_history")

@@ -284,6 +284,23 @@ def _subject_words(prompt: str, common: str = "") -> set[str]:
     for mark in (THREAD_MARK, SETTING_MARK):
         head = re.sub(re.escape(mark) + r"[^.]*\.?", " ", head)
     head = head.split(BLANK_MARK)[0]
+    # AND THE FRAMING PHRASE, by the same argument. storyboard._apply_framing
+    # puts "Wide shot: the whole place is visible and the figures are small
+    # within it, standing on the ground plane with the horizon behind them"
+    # in FRONT of the shot — pipeline text, not a picture the storyboard chose.
+    # Two of the four phrases contain "behind", so a run of seven mid shots and
+    # three wide ones carried it ten times, and a live run reported:
+    #     "coin" is the subject of 10 of 16 — re-planning 5 of them
+    #     re-planned 4 shot(s); "behind" is now the widest subject at 9 of 16
+    # Four shots re-planned, then a finding about a word that was never a
+    # subject and had been there the whole time — it only reached the top of
+    # the count once "coin" came down.
+    try:
+        from storyboard import _FRAMINGS
+        for phrase in _FRAMINGS.values():
+            head = head.replace(phrase, " ")
+    except Exception:
+        pass
     words = re.findall(r"[a-z]{3,}", head.lower())
     return {w for w in words if w not in _PROMPT_STOPWORDS}
 

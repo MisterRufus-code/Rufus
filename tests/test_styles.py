@@ -76,7 +76,12 @@ def test_stickman_asks_for_a_background_that_places_the_scene(stick):
     assert "pure white background" not in s
     assert "not deliberately filled with colour is pure white" not in s
     assert "BUILD THE WHOLE PLACE" in s
-    assert "horizon line" in s
+    # THE RULE, NOT THE SCENERY. It used to pin "horizon line", and a horizon
+    # is a thing you can draw — appended to every prompt it put an open
+    # landscape behind an alleyway. The place instruction has to survive; the
+    # nouns it used to name must not. See test_the_place_rule_names_no_scenery.
+    assert "surface for the subject to stand on" in s
+    assert "four to eight things" in s
 
 
 @pytest.mark.parametrize("stick", _STICK)
@@ -174,7 +179,8 @@ def test_every_preset_builds_a_place_and_keeps_it(name):
     has none."""
     s = _looks()[name]
     assert "BUILD THE WHOLE" in s, "no scene instruction at all"
-    assert "same horizon height" in s, "the place has to persist across shots"
+    assert ("same horizon height" in s or "same eye level" in s), \
+        "the place has to persist across shots"
     assert "reads instantly at thumbnail size" in s.lower()
 
 
@@ -552,8 +558,9 @@ def test_the_default_distance_is_delimited_so_it_can_be_removed(stick):
 # bottom third to half of the frame" and "two thin legs" where `stickman_lean`
 # says "across the bottom third" and "two legs".
 _NEEDS_ROOM = [
-    "ground plane", "a horizon line", "open sky", "BUILD THE WHOLE PLACE",
-    "FIVE SEPARATE PARTS", "each leg bends once at the knee",
+    "surface for the subject to stand on", "closes off the distance",
+    "BUILD THE WHOLE PLACE", "FIVE SEPARATE PARTS",
+    "each leg bends once at the knee",
     "both arms are visible in every figure", "PROPORTION IS FIXED",
     "the legs the remaining third",
 ]
@@ -1251,3 +1258,59 @@ def test_the_prompt_writer_is_asked_to_choose_a_kind():
     block = src.split("_FLUX_INSTRUCTION = (", 1)[1].split("client = OpenAI")[0]
     assert "[SHOT=figure]" in block and "[SHOT=object]" in block
     assert "CHOOSE HONESTLY" in block
+
+
+# ── the colour rule taught its point with a landscape ────────────────────────
+#
+# "COLOUR IS FLAT, SATURATED AND REAL: grass is green, sky is a clear light
+# blue with a few simple white clouds, earth and sand are warm brown, water is
+# blue, stone is grey" — seven drawable nouns, appended to every prompt.
+#
+# A shot reading "an alleyway, empty except for shadows stretching across the
+# cracked asphalt" therefore also asked for grass, sky, sand and water, and
+# every probe of the evening rendered the same coastline whatever the shot
+# said. The place rule did it too: "a ground plane across the bottom third, a
+# horizon line, open sky".
+#
+# This is the rule the repo already states — the rule may be given, the things
+# may not be listed — applied to the two clauses that were never audited
+# against it, because the audit list was built from the animal rule's nouns.
+
+_SCENERY = ("grass", "sky", "clouds", "cloud", "earth", "sand", "water",
+            "stone", "horizon")
+
+
+@pytest.mark.parametrize("stick", _STICK)
+def test_the_colour_rule_names_no_scenery(stick):
+    s = _looks()[stick].lower()
+    named = [n for n in _SCENERY if n in s]
+    assert not named, (
+        f"{stick} names {named} — appended to every prompt that is not an "
+        f"example of a colour, it is a place")
+
+
+@pytest.mark.parametrize("stick", _STICK)
+def test_the_rule_the_scenery_was_illustrating_survives(stick):
+    """Deleting the list must not delete the instruction: a colour rule with
+    no rule left brings back the washed-out beige gallery, and a place rule
+    with no rule left brings back the white void."""
+    s = _looks()[stick]
+    assert "SATURATED" in s
+    assert "takes its own true colour at full strength" in s
+    assert "BUILD THE WHOLE PLACE" in s
+    assert "four to eight things" in s
+
+
+@pytest.mark.parametrize("stick", _STICK)
+def test_a_shot_with_its_own_place_is_not_also_sent_a_beach(stick):
+    """The acceptance test, as a test. An alleyway is not a coastline."""
+    got = _composed(stick, "Wide shot: the whole place is visible and the "
+                           "figures are small within it. An alleyway, empty "
+                           "except for shadows stretching across the cracked "
+                           "asphalt.")
+    low = got.lower()
+    for noun in _SCENERY:
+        assert noun not in low, noun
+    # What the shot actually asked for still arrives.
+    for noun in ("alleyway", "asphalt", "shadow"):
+        assert noun in low, noun

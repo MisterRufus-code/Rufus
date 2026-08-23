@@ -917,18 +917,103 @@ def _abstract_from_inverted_index(index: dict | None) -> str:
 # handful of period words. "The price revolution in sixteenth-century Spain"
 # passes on "century"; "we estimate diversification's effect on firm value"
 # has neither and is exactly what should be dropped.
+# TOO LOOSE AND TOO TIGHT AT ONCE, which is why it was worth measuring rather
+# than trusting. Loose: an astronomy paper passed on "the history of cosmic
+# expansion". Tight: it rejected "Byzantine coinage under Justinian" and
+# "assay of the denarius from 64 AD" — the exact sources this channel exists
+# for — because no named era matched and a two-digit year is not three digits.
+# The loose half is now _is_on_subject's job; this half only has to know when.
 _HISTORY_WORD_RE = re.compile(
     r"\b(histor\w+|century|centuries|medieval|mediaeval|ancient|antiquity|"
     r"dynast\w+|empire|imperial|colonial|pre-?modern|early modern|"
-    r"archiv\w+|BCE?|AD\d|renaissance|reformation)\b", re.IGNORECASE)
+    r"archiv\w+|BCE?|AD\d|renaissance|reformation|"
+    # The eras a monetary history actually runs through. Each names a period,
+    # not a subject, so none of them can let a modern paper in on its own.
+    r"roman|greek|hellenistic|byzantine|ottoman|mughal|carolingian|"
+    r"sumerian|babylonian|mesopotamian|phoenician|feudal|victorian|"
+    r"edwardian|interwar|antebellum|classical era|middle ages)\b",
+    re.IGNORECASE)
+# A bare 3-4 digit number, OR any number followed by an era marker — "64 AD",
+# "300 BCE", "1971 CE". Without the second form every date before 100 AD read
+# as no date at all.
 _HISTORY_YEAR_RE = re.compile(r"\b(1[0-9]{3}|[1-9][0-9]{2})\b")
+_HISTORY_ERA_RE = re.compile(r"\b\d{1,4}\s*(?:AD|BC|BCE|CE)\b")
+
+
+# WHAT THE NICHE IS ABOUT, not just WHEN it happened. _is_historical answers
+# "is this the past" and nothing more, which is half the question a niche named
+# money_history is asking. A live run seeded on:
+#
+#   [tribute] → "Erlotinib in Previously Treated Non-Small-Cell Lung Cancer"
+#   [silver]  → "Type Ia Supernova Discoveries at z>1"
+#   [wages]   → "The productivity paradox of information technology"
+#   [coinage] → "A Comprehensive Review of Blockchain Consensus Mechanisms"
+#
+# Four for four off-topic, and the supernova paper PASSED the history filter on
+# the phrase "the history of cosmic expansion". The script then ignored the
+# seed and wrote from the model's own knowledge, which the fact gate caught:
+# "the source discusses the productivity paradox of information technology,
+# not monetary history".
+_SUBJECT_WORDS = {
+    "money_history": re.compile(
+        r"\b(money|monetary|currenc\w+|coin\w*|mint\w*|specie|bullion|"
+        r"gold|silver|banknote|paper money|\w*inflation\w*|deflation|"
+        r"stagflation|debase\w+|"
+        r"bank\w*|credit|debt|loan|interest rate|usury|tax\w*|tariff|tribute|"
+        r"trade|merchant|market|price\w*|wage\w*|econom\w+|financ\w+|"
+        r"treasur\w+|exchange|barter|commerce|"
+        # The money itself, by name. A paper titled "assay of the denarius"
+        # says nothing about "money" and is entirely about it — naming the
+        # coins is what a filter is for, unlike a prompt, where naming a thing
+        # is what draws it.
+        r"denarius|denarii|sestertius|aureus|solidus|drachma|obol|stater|"
+        r"ducat|florin|guilder|thaler|groat|shilling|sovereign|doubloon|"
+        r"cowrie|wampum|tally stick|greenback|reichsmark|rentenmark|"
+        r"seigniorage|numismat\w+)\b", re.IGNORECASE),
+}
+
+
+# WHAT A RISING QUERY IS ABOUT WHEN IT SHARES A WORD WITH THIS CHANNEL.
+# "gold standard" is a whey protein brand, "hyperinflation" is a lung
+# condition, and "<term> synonym" or "<term> definition" is somebody using
+# Google as a dictionary — none of which resolve to a story. A subject match
+# alone is too weak here because the query is six words, not an abstract: one
+# shared noun carries the whole decision.
+_TREND_NOISE = {
+    "money_history": re.compile(
+        r"\b(whey|protein|supplement|creatine|workout|nutrition|calorie|"
+        r"lung\w*|pulmonary|respirator\w+|emphysema|"
+        r"synonym|antonym|definition|meaning|pronounce|spelling|"
+        r"lyrics|recipe|near me|for sale|coupon|discount|review\w*)\b",
+        re.IGNORECASE),
+}
+
+
+def _trend_is_usable(query: str, niche_name: str) -> bool:
+    """Whether a rising search query is worth resolving into a topic."""
+    if not _is_on_subject(query, niche_name):
+        return False
+    noise = _TREND_NOISE.get(niche_name)
+    return not (noise and noise.search(query or ""))
+
+
+def _is_on_subject(text: str, niche_name: str) -> bool:
+    """True if this source is about what the niche is about.
+
+    Fail-open by design: a niche with no pattern here is not filtered at all,
+    so adding a niche never silently starves it of seeds.
+    """
+    pat = _SUBJECT_WORDS.get(niche_name)
+    if pat is None:
+        return True
+    return bool(pat.search(text or ""))
 
 
 def _is_historical(text: str) -> bool:
     """True if this source is about the past, not about last quarter."""
     if not text:
         return False
-    if _HISTORY_WORD_RE.search(text):
+    if _HISTORY_WORD_RE.search(text) or _HISTORY_ERA_RE.search(text):
         return True
     for year in _HISTORY_YEAR_RE.findall(text):
         if int(year) < 1960:
@@ -1043,7 +1128,8 @@ def fetch_openalex_story(niche_name: str, used_ids: set | None = None) -> dict |
             print(f"[research] OpenAlex unreachable ({e})")
         return None
 
-    rejected = {"no_abstract": 0, "short": 0, "seen": 0, "not history": 0}
+    rejected = {"no_abstract": 0, "short": 0, "seen": 0, "not history": 0,
+                "off subject": 0}
     usable = []
     for w in works:
         # THE SAME KEY _seed_id RECORDS, or nothing is ever seen as used. The
@@ -1062,8 +1148,12 @@ def fetch_openalex_story(niche_name: str, used_ids: set | None = None) -> dict |
         if len(abstract) < OPENALEX_MIN_ABSTRACT:
             rejected["short"] += 1
             continue
-        if not _is_historical(f"{w.get('display_name') or ''} {abstract}"):
+        blob = f"{w.get('display_name') or ''} {abstract}"
+        if not _is_historical(blob):
             rejected["not history"] += 1
+            continue
+        if not _is_on_subject(blob, niche_name):
+            rejected["off subject"] += 1
             continue
         usable.append((w, abstract))
 
@@ -1452,8 +1542,26 @@ def fetch_trending_wikipedia(niche_name: str, used_ids: set | None = None) -> di
     if used_ids is None:
         used_ids = set()
     for query in _trending_queries(niche_name):
+        # THE RISING QUERY IS NOT AUTOMATICALLY THIS CHANNEL'S SUBJECT. Google
+        # matched "gold standard" to a whey protein brand and "hyperinflation"
+        # to a lung condition, and a live run then resolved
+        #     "optimum nutrition gold standard pre-workout"
+        # into the Wikipedia article "Sprint (running)" and made it the topic
+        # of a monetary-history video. The docstring above promised that "a
+        # trend term with no real article just gets skipped" — it guarded
+        # against the ABSENCE of an article and never against the wrong one.
+        if not _trend_is_usable(query, niche_name):
+            print(f"[research] trend '{query}' is not this niche's subject — skipped")
+            continue
         seed = fetch_wikipedia_by_title(query)
         if not seed:
+            continue
+        # And the article has to be on subject too: a term can be about money
+        # and still land on an article that is not.
+        if not _is_on_subject(f"{seed.get('title', '')} {seed.get('content', '')}",
+                              niche_name):
+            print(f"[research] trend '{query}' resolved to an off-topic "
+                  f"article ({seed.get('title', '?')}) — skipped")
             continue
         if _seed_id(seed) in used_ids:
             continue
