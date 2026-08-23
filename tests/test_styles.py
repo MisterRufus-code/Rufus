@@ -526,6 +526,131 @@ def test_the_default_distance_is_delimited_so_it_can_be_removed(stick):
     assert "never instead of them" in head
 
 
+# ── AND DELETING THE DISTANCE WAS NOT ENOUGH EITHER ──────────────────────────
+#
+# The bench of 2026-08-23 ran with the default distance gone and `face` came
+# back full-body anyway — head to feet, against a prompt whose first words were
+# "Close on one figure's face".
+#
+# The absence of a contradiction is not the presence of an instruction. Twelve
+# other phrases in the block still required a whole body and a landscape, and
+# not one of them can be drawn inside a head-and-shoulders frame:
+#
+#     a ground plane across the bottom third, a horizon line, open sky
+#     two legs; each leg bends once at the knee
+#     both arms are visible in every figure
+#     PROPORTION IS FIXED: the head is one third of the whole figure's height
+#
+# The FIGURE half was written, every sentence of it, for a full-body mid-shot.
+# So the style did not need a better sentence about distance — it needed the
+# rules that ASSUME a distance to stop shipping when the shot names a closer
+# one. Same mechanism as DEFAULT DISTANCE, second pair of markers.
+
+# What only a camera far enough back can show. Kept as one list because the
+# whole failure was that nobody had ever counted them.
+# Phrased so both presets match: `stickman` says "a ground plane filling the
+# bottom third to half of the frame" and "two thin legs" where `stickman_lean`
+# says "across the bottom third" and "two legs".
+_NEEDS_ROOM = [
+    "ground plane", "a horizon line", "open sky", "BUILD THE WHOLE PLACE",
+    "FIVE SEPARATE PARTS", "each leg bends once at the knee",
+    "both arms are visible in every figure", "PROPORTION IS FIXED",
+    "the legs the remaining third",
+]
+
+# True at any distance. A close-up that lost these would be a different style.
+_ALWAYS = [
+    "perfect oval head", "THE FACE CARRIES THE EMOTION", "COLOUR IS FLAT",
+    "NO LETTERING", "no rounded 3D volume",
+    "two different constructions in one picture",
+]
+
+
+def _composed(stick, shot):
+    """The prompt the pipeline would actually send for this shot."""
+    import comfy_client
+    prev_style = os.environ.get("RUFUS_STYLE")
+    prev_detail = os.environ.pop("RUFUS_STILLS_DETAIL", None)
+    os.environ["RUFUS_STYLE"] = stick
+    try:
+        return comfy_client._with_detail(shot)
+    finally:
+        if prev_style is None:
+            os.environ.pop("RUFUS_STYLE", None)
+        else:
+            os.environ["RUFUS_STYLE"] = prev_style
+        if prev_detail is not None:
+            os.environ["RUFUS_STILLS_DETAIL"] = prev_detail
+
+
+@pytest.mark.parametrize("stick", _STICK)
+def test_a_close_up_is_not_told_to_draw_legs_and_a_horizon(stick):
+    """THE ACCEPTANCE TEST, AS A TEST. `face` asked for a close-up in six probe
+    runs and two bench columns and never once got one."""
+    got = _composed(stick, "Close on one figure's face at the moment the news "
+                           "lands: brows raised high, mouth a small open oval.")
+    for phrase in _NEEDS_ROOM:
+        assert phrase not in got, phrase
+
+
+@pytest.mark.parametrize("stick", _STICK)
+def test_a_close_up_still_gets_the_face_and_the_look(stick):
+    """The other direction, and the more dangerous one: dropping too much would
+    buy a close-up by losing the style it is drawn in."""
+    got = _composed(stick, "Close shot: head and shoulders, filling most of the "
+                           "frame. One figure hears the news.")
+    for phrase in _ALWAYS:
+        assert phrase in got, phrase
+
+
+@pytest.mark.parametrize("stick", _STICK)
+def test_a_shot_that_names_no_distance_still_gets_every_rule(stick):
+    """The white-void bug and the figure-in-the-corner bug are both still real.
+    This mechanism must only fire when a shot has asked it to."""
+    got = _composed(stick, "A clerk pushes a ledger across a counter.")
+    for phrase in _NEEDS_ROOM:
+        assert phrase in got, phrase
+    assert "half and three quarters of the frame" in got
+
+
+@pytest.mark.parametrize("stick", _STICK)
+def test_wide_and_mid_keep_the_whole_body(stick):
+    """A wide shot needs the ground plane MORE than a mid shot does — it is the
+    framing the place rule was written for."""
+    import storyboard
+    for name in ("wide", "mid"):
+        got = _composed(stick, f"{storyboard._FRAMINGS[name]}. A clerk reacts.")
+        for phrase in _NEEDS_ROOM:
+            assert phrase in got, f"{name}: {phrase}"
+
+
+@pytest.mark.parametrize("stick", _STICK)
+def test_no_marker_ever_reaches_the_image_model(stick):
+    """A separator rendered as a literal line of text is a defect this file has
+    already shipped once — see tests/test_style_probe.py."""
+    import comfy_client, storyboard
+    shots = ["A clerk pushes a ledger across a counter."] + [
+        f"{p}. A clerk reacts." for p in storyboard._FRAMINGS.values()]
+    for shot in shots:
+        got = _composed(stick, shot)
+        for marker in (comfy_client.STYLE_SCALE_OPEN, comfy_client.STYLE_SCALE_CLOSE,
+                       comfy_client.STYLE_FARSHOT_OPEN, comfy_client.STYLE_FARSHOT_CLOSE,
+                       comfy_client.STYLE_FIGURE_MARKER):
+            assert marker not in got, f"{marker} in {shot[:30]}"
+
+
+@pytest.mark.parametrize("stick", _STICK)
+def test_every_close_framing_the_storyboard_can_pick_is_recognised(stick):
+    """Ties the two files together the same way the DEFAULT DISTANCE test does:
+    storyboard may add a fifth framing, and if it names a near one this fails
+    rather than a gallery."""
+    import comfy_client, storyboard
+    assert comfy_client.is_close_shot(storyboard._FRAMINGS["close"])
+    assert comfy_client.is_close_shot(storyboard._FRAMINGS["detail"])
+    assert not comfy_client.is_close_shot(storyboard._FRAMINGS["wide"])
+    assert not comfy_client.is_close_shot(storyboard._FRAMINGS["mid"])
+
+
 @pytest.mark.parametrize("stick", _STICK)
 def test_the_conditional_wording_that_did_not_work_is_gone(stick):
     """Left in alongside the mechanism it would be two rules for one job, and

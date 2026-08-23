@@ -982,18 +982,69 @@ def names_own_distance(prompt: str) -> bool:
     return bool(_NAMES_DISTANCE_RE.search(prompt or ""))
 
 
-def _resolve_scale(tail: str, framed: bool) -> str:
-    """Drop the default-distance clause when the shot supplied its own.
+# AND DELETING THE DEFAULT DISTANCE WAS NOT ENOUGH.
+#
+# It was necessary — a competing instruction cannot stay — but the bench of
+# 2026-08-23 ran with it gone and `face` came back full-body anyway, head to
+# feet, against a prompt opening "Close on one figure's face".
+#
+# Because the absence of a contradiction is not the presence of an
+# instruction, and thirteen other phrases in the block still required a whole
+# body and a landscape:
+#
+#     a ground plane across the bottom third, a horizon line, open sky
+#     two legs; each leg bends once at the knee
+#     both arms are visible in every figure
+#     PROPORTION IS FIXED: the head is one third of the whole figure's height
+#
+# None of those can be drawn inside a head-and-shoulders frame. The FIGURE
+# half was written, every sentence of it, for a full-body mid-shot — so the
+# style did not need a better sentence about distance, it needed the rules
+# that assume distance to stop shipping when there is none.
+#
+# Same mechanism, second pair of markers.
+STYLE_FARSHOT_OPEN = "--- WIDE OR MID ONLY ---"
+STYLE_FARSHOT_CLOSE = "--- /WIDE OR MID ONLY ---"
+
+_CLOSE_SHOT_RE = re.compile(
+    r"\b(close shot|close detail|close ?-?up|close on|extreme close)\b", re.I)
+
+
+def is_close_shot(prompt: str) -> bool:
+    """Whether this shot comes in close enough that legs leave the frame."""
+    return bool(_CLOSE_SHOT_RE.search(prompt or ""))
+
+
+def _strip_region(text: str, opener: str, closer: str, drop: bool) -> str:
+    """Remove every opener..closer region, or just the markers themselves.
+
+    Every occurrence, not the first: the far-shot rules sit in two places —
+    the place geometry in the shared half and the body geometry in the figure
+    half — and a resolver that handled one would leave a raw marker line in
+    the prompt, which is a defect this file has already shipped once.
+    """
+    if opener not in text:
+        return text
+    out: list[str] = []
+    rest = text
+    while opener in rest:
+        head, _, tail = rest.partition(opener)
+        inner, _, rest = tail.partition(closer)
+        out.append(head.strip())
+        if not drop:
+            out.append(inner.strip())
+    out.append(rest.strip())
+    return " ".join(p for p in out if p)
+
+
+def _resolve_framing(tail: str, framed: bool, close: bool) -> str:
+    """The style text left once this shot's own distance has had its say.
 
     A style with no markers is returned untouched — every preset that predates
     this, and every literal RUFUS_STILLS_DETAIL, keeps its old behaviour.
     """
-    if STYLE_SCALE_OPEN not in tail:
-        return tail
-    head, _, rest = tail.partition(STYLE_SCALE_OPEN)
-    default, _, after = rest.partition(STYLE_SCALE_CLOSE)
-    keep = "" if framed else default.strip()
-    return " ".join(p for p in (head.strip(), keep, after.strip()) if p)
+    tail = _strip_region(tail, STYLE_SCALE_OPEN, STYLE_SCALE_CLOSE, drop=framed)
+    return _strip_region(tail, STYLE_FARSHOT_OPEN, STYLE_FARSHOT_CLOSE, drop=close)
 
 # GPT tags each prompt with the kind of shot it wrote. The tag never reaches
 # the image model — it is stripped here, after it has chosen the style.
@@ -1018,7 +1069,8 @@ def strip_shot_tag(prompt: str) -> str:
     return _SHOT_TAG_RE.sub("", prompt or "", count=1).strip()
 
 
-def _detail_for_shot(kind: str, framed: bool = False) -> str:
+def _detail_for_shot(kind: str, framed: bool = False,
+                     close: bool = False) -> str:
     """The style text this shot should actually receive.
 
     WHY THE STYLE HAS TO KNOW. The block is appended byte for byte to every
@@ -1029,7 +1081,7 @@ def _detail_for_shot(kind: str, framed: bool = False) -> str:
     A style block has no meta level: every word in it is a word in the prompt,
     and the only reliable way not to get a figure is not to mention one.
     """
-    tail = _resolve_scale(_detail_suffix(), framed)
+    tail = _resolve_framing(_detail_suffix(), framed, close)
     if STYLE_FIGURE_MARKER not in tail:
         return tail
     shared, _, figure = tail.partition(STYLE_FIGURE_MARKER)
@@ -1089,7 +1141,8 @@ def _with_detail(prompt: str) -> str:
     style is a channel-wide decision and must never lose to one stray line."""
     kind = shot_kind(prompt)
     prompt = strip_shot_tag(prompt)
-    tail = _detail_for_shot(kind, names_own_distance(prompt))
+    tail = _detail_for_shot(kind, names_own_distance(prompt),
+                            is_close_shot(prompt))
     if not tail:
         return prompt
     low = prompt.lower()
