@@ -1,0 +1,25 @@
+{
+  "name": "a mine head",
+  "when": null,
+  "keywords": [
+    "mine",
+    "mined",
+    "ore",
+    "seam",
+    "shaft",
+    "dig",
+    "pit",
+    "silver",
+    "gold",
+    "rush",
+    "prospector",
+    "claim"
+  ],
+  "light": "daylight at the shaft mouth",
+  "ground_y": 0.74,
+  "figure_height": 0.44,
+  "safe_x": [
+    0.3,
+    0.72
+  ]
+}

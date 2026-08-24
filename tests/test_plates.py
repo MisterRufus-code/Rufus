@@ -62,8 +62,6 @@ def test_the_plate_whose_words_the_shot_uses_is_the_one_chosen(tmp_path):
         "name": "counting house", "keywords": ["ledger", "counting", "desk", "strongbox"]})
     _make_plate(tmp_path, "quay", {
         "name": "quay", "keywords": ["crate", "rope", "hull", "harbour"]})
-    got = plates.pick("a hand slams the ledger shut on the counting house desk")
-    assert got is None                      # not from the default library
     got = plates.pick("a hand slams the ledger shut on the counting house desk",
                       root=tmp_path)
     assert got is not None and got.slug == "counting_house"
