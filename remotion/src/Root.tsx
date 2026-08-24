@@ -1,6 +1,7 @@
 import React from 'react';
 import {Composition} from 'remotion';
 import {Short, ShortProps, FPS, WIDTH, HEIGHT} from './Short';
+import {MascotShowreel, MascotWalk, MascotIdle, MascotInspect, MascotEntrance} from './MascotScenes';
 
 const defaultProps: ShortProps = {
   job: '',
@@ -14,6 +15,7 @@ const defaultProps: ShortProps = {
 
 export const Root: React.FC = () => {
   return (
+    <>
     <Composition
       id="RufusShort"
       component={Short}
@@ -31,5 +33,14 @@ export const Root: React.FC = () => {
         height: props.height && props.height > 0 ? Math.round(props.height) : HEIGHT,
       })}
     />
+    {/* The mascot renders on its own so it can be reviewed and iterated on
+        without waiting for a full job — and so a scene can be dropped into a
+        video as a finished clip rather than rebuilt each time. */}
+    <Composition id="MascotShowreel" component={MascotShowreel} fps={FPS} width={WIDTH} height={HEIGHT} durationInFrames={Math.round(15.2 * FPS)} />
+    <Composition id="MascotWalk" component={MascotWalk} fps={FPS} width={WIDTH} height={HEIGHT} durationInFrames={Math.round(6 * FPS)} />
+    <Composition id="MascotIdle" component={MascotIdle} fps={FPS} width={WIDTH} height={HEIGHT} durationInFrames={Math.round(5 * FPS)} />
+    <Composition id="MascotInspect" component={MascotInspect} fps={FPS} width={WIDTH} height={HEIGHT} durationInFrames={Math.round(4 * FPS)} />
+    <Composition id="MascotEntrance" component={MascotEntrance} fps={FPS} width={WIDTH} height={HEIGHT} durationInFrames={Math.round(4 * FPS)} />
+    </>
   );
 };
