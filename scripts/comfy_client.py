@@ -1184,6 +1184,76 @@ def _shrink(graph: dict, px: int) -> dict:
     return out
 
 
+_PLATE_YEAR = re.compile(r"\b(1[0-9]{3}|20[0-2][0-9])\b")
+
+# What the renderer is asked for when the place is already drawn. This REMOVES
+# instructions rather than adding them: the style block's own place-building
+# region is cut out, because a plate makes it not just redundant but harmful —
+# a room drawn behind the figure would be composited on top of the real one.
+_FIGURE_ONLY_TAIL = (
+    " The figure is ALONE on a plain flat background of one single colour, "
+    "edge to edge. Nothing else is in the frame: no room, no scenery, no "
+    "furniture, no ground line, no horizon, no shadow on the ground, and "
+    "nothing at all behind the figure."
+)
+
+
+def _figure_only_prompt(prompt: str) -> str:
+    """The shot, asked for as a figure on nothing."""
+    stripped = _strip_region(prompt, STYLE_FARSHOT_OPEN, STYLE_FARSHOT_CLOSE,
+                             drop=True)
+    return stripped.rstrip().rstrip(".") + "." + _FIGURE_ONLY_TAIL
+
+
+def _plate_for(prompt: str):
+    """The plate this shot belongs in, or None to render it the old way."""
+    try:
+        import plates
+    except Exception:
+        return None
+    try:
+        years = _PLATE_YEAR.findall(prompt or "")
+        year = int(years[0]) if years else None
+        return plates.pick(prompt, year)
+    except Exception as e:
+        print(f"[comfy] plate lookup skipped (non-fatal): {e}")
+        return None
+
+
+def _render_on_plate(plate, prompt: str, seed: int, client_id: str,
+                     niche: str | None) -> bytes | None:
+    """One figure, cut out and stood in `plate`'s place. None to fall back.
+
+    Every step here fails open. A figure that came back with scenery around it
+    cannot be cut out cleanly, and half-cutting it would paste torn background
+    into a room that is otherwise perfect — so the beat is rendered the way it
+    always was instead.
+    """
+    import io
+    try:
+        import plates as _plates
+        from PIL import Image
+    except Exception:
+        return None
+
+    raw = _render_image(_figure_only_prompt(prompt), seed, client_id, niche=niche)
+    if not raw:
+        return None
+    try:
+        fig = _plates.cutout(Image.open(io.BytesIO(raw)))
+        if fig is None:
+            print(f"[comfy] plate \"{plate.slug}\" skipped: the figure came "
+                  f"back with scenery around it")
+            return None
+        out = _plates.compose(plate, fig, seed=seed)
+        buf = io.BytesIO()
+        out.save(buf, format="PNG")
+        return buf.getvalue()
+    except Exception as e:
+        print(f"[comfy] plate composite skipped (non-fatal): {e}")
+        return None
+
+
 def _render_image(prompt: str, seed: int, client_id: str,
                   niche: str | None = None, px: int | None = None) -> bytes | None:
     """Render one still → raw PNG bytes, or None.
@@ -1811,6 +1881,13 @@ def generate_clips(queries: list[str], n: int = 4,
         while len(prompts) < n:
             prompts.append(base[len(prompts) % len(base)] + ", different angle, wider shot")
     prompts = prompts[:n]
+    # Chosen from the shot itself, before the style block is appended: the tail
+    # is the same six hundred words on every beat, and matching a place against
+    # it would match every place equally.
+    beat_plates = [_plate_for(p) for p in prompts]
+    if any(beat_plates):
+        named = {p.slug for p in beat_plates if p}
+        print(f"[comfy] background plate(s) in play: {', '.join(sorted(named))}")
     prompts = [_with_detail(p) for p in prompts]
 
     # pid in the stamp: with per-channel locks two channels may run
@@ -1900,8 +1977,13 @@ def generate_clips(queries: list[str], n: int = 4,
                 attempt_prompt = prompt
                 if gate_hints:
                     attempt_prompt = f"{prompt} {' '.join(gate_hints)}"
-                img_bytes = _render_image(attempt_prompt, seed, client_id,
-                                          niche=niche)
+                plate = beat_plates[i] if i < len(beat_plates) else None
+                if plate is not None:
+                    img_bytes = _render_on_plate(plate, attempt_prompt, seed,
+                                                 client_id, niche)
+                if img_bytes is None:
+                    img_bytes = _render_image(attempt_prompt, seed, client_id,
+                                              niche=niche)
             if not img_bytes:
                 # A hard generation error (vs. a plain duplicate) is often a
                 # transient GPU/model-loading hiccup on the ComfyUI side —
