@@ -90,6 +90,40 @@ def _brief() -> str:
         return "a 40-second vertical documentary Short"
 
 
+def _hold_clause() -> str:
+    """Whether consecutive shots may hold one scene, which depends on how many
+    shots there are.
+
+    At ten shots in forty seconds, every shot is a new place and holding one
+    would spend a tenth of the video standing still. At sixty shots in nine
+    minutes it is the opposite: a brand-new scene every seven seconds is what
+    makes a long video exhausting to watch, and the fix costs nothing — keep
+    the frame and move the face.
+
+    Rule 3a still applies across the sequence as a whole. Holding a scene is
+    not permission to draw the same picture twice; it is permission to let ONE
+    moment take the two or three lines it actually takes.
+    """
+    try:
+        import video_format
+        if video_format.profile()["id"] != "long":
+            return ""
+    except Exception:
+        return ""
+    return (
+        "3-HOLD. LET A MOMENT TAKE THE LINES IT TAKES. When two or three "
+        "consecutive lines are about the same moment, keep the SAME scene for "
+        "them and change one thing: the face, the posture, or one object "
+        "entering or leaving the frame. A brand-new place every line is what "
+        "makes a long video tiring, and it also throws away the only thing "
+        "that makes a sequence feel like it is going somewhere — the viewer "
+        "recognising where they already are. Do not hold a scene for a line "
+        "that has genuinely moved on, and never hold one by drawing the same "
+        "picture again: if nothing in the frame changed, the shot did not "
+        "need to be held, it needed to be cut.\n"
+    )
+
+
 def _prompt(script: str, beats: list[str], era_tags: list[str],
             character_clause: str = "", scene: str = "",
             carry: str = "", setting: str = "", through: str = "",
@@ -166,6 +200,21 @@ def _prompt(script: str, beats: list[str], era_tags: list[str],
         "written as a verb, the line has not been turned into a picture yet — "
         "so find what happened one second before it or one second after it, "
         "and draw THAT.\n"
+        + _hold_clause() +
+        "3-FORCE. WHEN THE LINE IS ABOUT A FORCE AND NOT A PERSON, GIVE THE "
+        "FORCE A BODY. Inflation, a debt, a tax, a shortage, a market, a run on "
+        "a bank — none of these has a shape, and a shot written about one comes "
+        "back as a room with nobody in it, which is rule 3c's failure arriving "
+        "by a different road. Draw the force as a THING WITH A FACE AND A "
+        "POSTURE that is doing something to somebody: a swollen coin with brows "
+        "angled down leaning its whole weight on a figure's shoulders, a sack "
+        "that has grown arms and is lifting bread off a table, a ledger with a "
+        "face biting a purse shut. Now it is a character the viewer can watch "
+        "act, which is exactly what 3-EVENT is asking for and what an "
+        "abstraction can never supply. NOT a symbol on its own: a graph, an "
+        "arrow, a pair of scales, a percent sign or a question mark standing in "
+        "an empty frame is a diagram, and a diagram is the picture people "
+        "scroll past.\n"
         "3-FRAME. ONE SCENE, ONE CAMERA, ONE MOMENT. A single picture of one "
         "place at one instant — never a grid, never side-by-side panels, never "
         "a row of the same figure in different poses, never a character sheet "

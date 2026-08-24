@@ -48,8 +48,21 @@ every figure floats in front of everything.
 ## Making a plate
 
 Any tool will do — the plate is a fixed asset, so it is worth iterating on until
-it is right. Produce it at **1080×1920** (vertical) and, where the place is also
-wanted for long-form, **1920×1080**.
+it is right. Produce it at **1080×1920** — this channel is vertical, and the
+plate is what a phone held upright will show.
+
+**A vertical place is stacked, not spread.** There is no horizontal room for
+eight objects in a row, so build the place in three bands: the floor across the
+bottom, the furniture that says where this is through the middle and low sides,
+and the wall, window or sky closing it off at the top. Keep a clear vertical
+lane down the centre for the figure — anything drawn there will be covered by
+it. A landscape composition scaled into 9:16 loses its sides and reads as a
+close-up of a wall, which is the one way a plate can be technically correct and
+useless.
+
+Where a place is also wanted for long-form, draw a **separate** 1920×1080
+version rather than resizing this one; the band layout does not survive the
+crop in either direction.
 
 ### The prompt
 

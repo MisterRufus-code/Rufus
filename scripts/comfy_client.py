@@ -1190,11 +1190,19 @@ _PLATE_YEAR = re.compile(r"\b(1[0-9]{3}|20[0-2][0-9])\b")
 # instructions rather than adding them: the style block's own place-building
 # region is cut out, because a plate makes it not just redundant but harmful —
 # a room drawn behind the figure would be composited on top of the real one.
+# The colour is NAMED rather than left to the model. The cutout takes the
+# background from what the four corners agree on and floods inward, so a
+# background that drifts across the frame — a wash, a vignette, a soft gradient
+# the model added because backgrounds usually have one — is the thing that makes
+# a clean figure uncuttable. Mid-blue because the figures are white fill inside
+# a black outline, and a background has to be far from BOTH.
 _FIGURE_ONLY_TAIL = (
-    " The figure is ALONE on a plain flat background of one single colour, "
-    "edge to edge. Nothing else is in the frame: no room, no scenery, no "
-    "furniture, no ground line, no horizon, no shadow on the ground, and "
-    "nothing at all behind the figure."
+    " The figure is ALONE on a plain flat mid-blue background: ONE single flat "
+    "colour, exactly the same shade edge to edge and corner to corner, with no "
+    "gradient, no vignette, no texture, no paper grain and no lighting across "
+    "it. Nothing else is in the frame: no room, no scenery, no furniture, no "
+    "ground line, no horizon, no shadow under the figure, and nothing at all "
+    "behind it."
 )
 
 

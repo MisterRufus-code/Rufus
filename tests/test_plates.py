@@ -177,3 +177,27 @@ def test_the_foreground_layer_passes_in_front_of_the_figure(tmp_path):
     plate = plates.library(tmp_path)[0]
     out = plates.compose(plate, plates.cutout(_figure()), seed=0)
     assert out.getpixel((100, 330)) == (90, 60, 30), "the figure is over the counter"
+
+
+# ── what the figure-only render is asked for ────────────────────────────────
+def test_the_figure_only_prompt_names_one_flat_colour_and_forbids_a_gradient():
+    """The cutout takes the background from what the corners agree on and
+    floods inward, so a wash or a vignette across the frame is exactly what
+    makes an otherwise clean figure uncuttable."""
+    import comfy_client
+    got = comfy_client._figure_only_prompt("A hand slams the ledger shut.").lower()
+    assert "flat mid-blue" in got
+    assert "no gradient" in got and "no vignette" in got
+    assert "no shadow under the figure" in got
+
+
+def test_the_figure_only_prompt_drops_the_place_building_region():
+    """A room drawn behind the figure would be composited on top of the real
+    one, so the style block's own place-building block has to come out."""
+    import comfy_client
+    prompt = ("A hand slams the ledger shut. "
+              f"{comfy_client.STYLE_FARSHOT_OPEN} BUILD THE WHOLE PLACE: a "
+              f"surface for the subject to stand on. {comfy_client.STYLE_FARSHOT_CLOSE}")
+    got = comfy_client._figure_only_prompt(prompt)
+    assert "BUILD THE WHOLE PLACE" not in got
+    assert "slams the ledger shut" in got
