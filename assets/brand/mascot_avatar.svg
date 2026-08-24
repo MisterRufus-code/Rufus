@@ -1,0 +1,105 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 11 500 500" width="512" height="512">
+  <!-- The Paper Trails mascot: a green banknote whose FACE IS THE NOTE.
+       No separate head. Arms and legs come out of the note itself. -->
+  <defs>
+    <style>
+      .ink   { fill:none; stroke:#141414; stroke-width:5; stroke-linecap:round; stroke-linejoin:round; }
+      .thin  { fill:none; stroke:#1E5C39; stroke-width:2.5; stroke-linecap:round; }
+      .limbO { fill:none; stroke:#141414; stroke-width:18; stroke-linecap:round; stroke-linejoin:round; }
+      .limbI { fill:none; stroke:#3E9160; stroke-width:9;  stroke-linecap:round; stroke-linejoin:round; }
+    </style>
+    <!-- the fixed symbol: a footprint. ours, not any country's -->
+    <g id="foot">
+      <ellipse cx="0" cy="2.5" rx="4.6" ry="6.6"/>
+      <circle cx="-3.6" cy="-5.6" r="1.7"/>
+      <circle cx="0.6"  cy="-7.4" r="1.8"/>
+      <circle cx="4.4"  cy="-5.2" r="1.6"/>
+    </g>
+  </defs>
+  <circle cx="250" cy="261" r="249" fill="#F2F7F2"/>
+
+
+  <!-- ================= legs + shoes ================= -->
+  <g>
+    <path class="limbO" d="M208,340 L198,392 L206,418"/>
+    <path class="limbO" d="M306,340 L318,392 L310,418"/>
+    <path class="limbI" d="M208,340 L198,392 L206,418"/>
+    <path class="limbI" d="M306,340 L318,392 L310,418"/>
+    <!-- big vintage shoes: the only brown at the bottom of the frame,
+         splayed outward the way a silent-film walk reads at any size -->
+    <path d="M206,406 v18 c0,9 -7,13 -17,13 h-24 c-11,0 -16,-5 -16,-12 c0,-8 7,-11 16,-14 l18,-7 z"
+          fill="#33312E" stroke="#141414" stroke-width="5" stroke-linejoin="round"/>
+    <path d="M310,406 v18 c0,9 7,13 17,13 h24 c11,0 16,-5 16,-12 c0,-8 -7,-11 -16,-14 l-18,-7 z"
+          fill="#33312E" stroke="#141414" stroke-width="5" stroke-linejoin="round"/>
+  </g>
+
+  <!-- ================= right arm (open hand) ================= -->
+  <g>
+    <path class="limbO" d="M400,238 L436,256 L442,292"/>
+    <path class="limbI" d="M400,238 L436,256 L442,292"/>
+    <circle cx="444" cy="298" r="15" fill="#3E9160" stroke="#141414" stroke-width="5"/>
+  </g>
+
+  <!-- ================= the note = the body ================= -->
+  <g>
+    <rect x="108" y="168" width="296" height="176" rx="12"
+          fill="#2F7D4E" stroke="#141414" stroke-width="5"/>
+    <rect x="122" y="182" width="268" height="148" rx="7" class="thin"/>
+    <rect x="130" y="190" width="252" height="132" rx="5" class="thin" opacity="0.55"/>
+
+    <!-- guilloche: wordless ruled lines, never letters -->
+    <g class="thin" opacity="0.7">
+      <path d="M150,232 q14,-12 28,0 q14,12 28,0"/>
+      <path d="M150,246 q14,-12 28,0 q14,12 28,0"/>
+      <path d="M306,232 q14,-12 28,0 q14,12 28,0"/>
+      <path d="M306,246 q14,-12 28,0 q14,12 28,0"/>
+      <path d="M152,282 h56 M152,292 h44 M304,282 h56 M316,292 h44"/>
+    </g>
+
+    <!-- corner rosettes carrying the fixed symbol -->
+    <g>
+      <circle cx="150" cy="204" r="13" fill="#E8F5EA" stroke="#141414" stroke-width="3.5"/>
+      <circle cx="362" cy="204" r="13" fill="#E8F5EA" stroke="#141414" stroke-width="3.5"/>
+      <circle cx="150" cy="308" r="13" fill="#E8F5EA" stroke="#141414" stroke-width="3.5"/>
+      <circle cx="362" cy="308" r="13" fill="#E8F5EA" stroke="#141414" stroke-width="3.5"/>
+      <g fill="#1E5C39">
+        <use href="#foot" transform="translate(150,204) scale(0.9)"/>
+        <use href="#foot" transform="translate(362,204) scale(0.9)"/>
+        <use href="#foot" transform="translate(150,308) scale(0.9)"/>
+        <use href="#foot" transform="translate(362,308) scale(0.9)"/>
+      </g>
+    </g>
+
+    <!-- ================= THE FACE, inside the portrait frame ================= -->
+    <ellipse cx="256" cy="256" rx="56" ry="66" fill="#E8F5EA" stroke="#141414" stroke-width="5"/>
+    <ellipse cx="256" cy="256" rx="49" ry="59" class="thin" opacity="0.8"/>
+    <g fill="#141414">
+      <ellipse cx="238" cy="248" rx="6" ry="7.5"/>
+      <ellipse cx="275" cy="248" rx="6" ry="7.5"/>
+    </g>
+    <path class="ink" stroke-width="4.5" d="M227,228 q10,-6 20,-2"/>
+    <path class="ink" stroke-width="4.5" d="M265,231 q10,-4 20,0"/>
+    <path class="ink" stroke-width="4.5" d="M238,282 q18,14 36,-2"/>
+  </g>
+
+  <!-- ================= vintage bowler: the history tell ================= -->
+  <g transform="rotate(-7 256 170)">
+    <path d="M212,170 C210,138 224,114 256,114 C288,114 302,138 300,170 Z"
+          fill="#3B3227" stroke="#141414" stroke-width="5" stroke-linejoin="round"/>
+    <path d="M211,158 C232,150 280,150 301,158 L301,170 L211,170 Z" fill="#241D16"/>
+    <ellipse cx="256" cy="170" rx="63" ry="12"
+             fill="#3B3227" stroke="#141414" stroke-width="5"/>
+  </g>
+
+  <!-- ================= left arm + magnifying glass ================= -->
+  <g>
+    <path class="limbO" d="M112,230 L90,248 L86,214"/>
+    <path class="limbI" d="M112,230 L90,248 L86,214"/>
+    <line x1="88" y1="190" x2="96" y2="204" stroke="#141414" stroke-width="17" stroke-linecap="round"/>
+    <line x1="88" y1="190" x2="96" y2="204" stroke="#6B4A2B" stroke-width="9" stroke-linecap="round"/>
+    <circle cx="78" cy="168" r="31" fill="#E8F5EA" fill-opacity="0.5" stroke="#141414" stroke-width="5"/>
+    <circle cx="78" cy="168" r="31" fill="none" stroke="#C9A227" stroke-width="7"/>
+    <path d="M64,156 q9,-11 22,-9" fill="none" stroke="#FFFFFF" stroke-width="5" stroke-linecap="round" opacity="0.75"/>
+    <circle cx="88" cy="208" r="15" fill="#3E9160" stroke="#141414" stroke-width="5"/>
+  </g>
+</svg>
