@@ -372,10 +372,19 @@ def _prompt(script: str, beats: list[str], era_tags: list[str],
         'unemployment and its impact on society\\" is an essay title and is '
         'wrong>",\n'
         ' "shots": [{"n": 1, "visual": "...", "carries_over": null, '
-        '"in_setting": true, "framing": "wide|mid|close|detail"}, ...]}\n'
+        '"in_setting": true, "framing": "wide|mid|close|detail", '
+        '"kind": "figure|object"}, ...]}\n'
         f"Exactly {len(beats)} shots, n from 1 to {len(beats)}. Set "
         f"`in_setting` false only for a shot that deliberately leaves the "
-        f"place, and give every shot a `framing`."
+        f"place, and give every shot a `framing`.\n"
+        "`kind` is \"object\" when NO PERSON AND NO PART OF A PERSON is in "
+        "the frame — a coin on a table, a ledger, a door, an empty street — "
+        "and \"figure\" for everything else, including a shot that shows only "
+        "a pair of hands. It decides whether the renderer is told how to draw "
+        "a body at all, so guessing \"figure\" on an object shot costs six "
+        "hundred words of instructions about heads and limbs, and the model "
+        "draws them: one live frame came back as a document on a floor with a "
+        "face on its corner."
     )
 
 
@@ -497,6 +506,36 @@ def _in_setting_flags(raw: dict, n: int) -> list[bool]:
         if isinstance(entry, dict) and entry.get("in_setting") is False:
             flags[i] = False
     return flags
+
+
+def _kind_flags(raw: dict, n: int) -> list[str]:
+    """Per-shot "figure" or "object", defaulting to "figure".
+
+    THE TAG EXISTED AND NOTHING EVER WROTE IT. comfy_client has carried a
+    [SHOT=figure|object] tag for as long as the style block has had two halves:
+    shot_kind reads it, _detail_for_shot drops the whole figure half on
+    "object", and the saving is not marginal — 865 words down to 230 on a
+    stickman_lean beat, 15 chunks of conditioning down to 4.
+
+    The string "SHOT=" did not appear in this file even once, and shot_kind
+    defaults to "figure" when untagged, so EVERY beat shipped 635 words about
+    oval heads and five separate limbs. One live frame is a document lying on a
+    wooden floor with a head drawn on its corner and a figure standing beside
+    it — which is what that paragraph asks for, on a beat that never mentioned
+    a person.
+
+    Defaults to "figure" for the same reason shot_kind does: a missing or
+    malformed field must never silently strip the body rules from a shot that
+    needed them.
+    """
+    shots = raw.get("shots")
+    kinds = ["figure"] * n
+    if not isinstance(shots, list):
+        return kinds
+    for i, entry in enumerate(shots[:n]):
+        if isinstance(entry, dict) and str(entry.get("kind", "")).lower() == "object":
+            kinds[i] = "object"
+    return kinds
 
 
 def _is_a_place(setting: str) -> bool:
@@ -1350,6 +1389,7 @@ def plan(script: str, beats: list[str], era_tags: list[str] | None = None,
             print(f"[storyboard] {len(beats)} shots — planning in "
                   f"{len(windows)} passes of up to {CHUNK_BEATS}")
         visuals: list[str] | None = []
+        kinds: list[str] = []
         raw: dict = {}
         carry = ""          # the last shot of the previous window
         for offset, window in windows:
@@ -1378,6 +1418,10 @@ def plan(script: str, beats: list[str], era_tags: list[str] | None = None,
             # arriving one level up.
             if not raw:
                 raw = part
+            # Per WINDOW, not from `raw`: kind is a property of each shot, and
+            # taking it from the first window only would tag a nine-minute
+            # video's later passes with the first pass's answers.
+            kinds.extend(_kind_flags(part, len(got)))
             visuals.extend(got)
             carry = got[-1]
         if visuals is not None and len(visuals) != len(beats):
@@ -1431,6 +1475,19 @@ def plan(script: str, beats: list[str], era_tags: list[str] | None = None,
                     print(f"[storyboard] restated the location in {n_placed} "
                           f"shot(s) that assumed it")
                 visuals = placed
+
+            # LAST, after _revary, _pin_character and _pin_setting have all
+            # read the shot: the tag is two words this pipeline prepends, and
+            # dominant_subject counting them would be measuring our own writing
+            # — the same mistake the setting pin was moved to avoid.
+            if len(kinds) == len(visuals):
+                n_obj = sum(1 for k in kinds if k == "object")
+                if n_obj:
+                    print(f"[storyboard] {n_obj} of {len(visuals)} shot(s) have "
+                          f"no person in them — the body rules are dropped for "
+                          f"those")
+                visuals = [f"[SHOT=object] {v}" if k == "object" else v
+                           for v, k in zip(visuals, kinds)]
     except Exception as e:
         print(f"[storyboard] skipped (non-fatal): {e}")
         return None

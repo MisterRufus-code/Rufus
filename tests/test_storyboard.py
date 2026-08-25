@@ -1290,3 +1290,44 @@ def test_the_framing_phrase_is_not_a_subject():
 def test_no_framing_phrase_contributes_any_subject_word(framing):
     from run_review import _subject_words
     assert _subject_words(storyboard._FRAMINGS[framing] + ". A coin.") <= {"coin"}
+
+
+# ── the shot kind: a tag that existed and nothing ever wrote ─────────────────
+#
+# comfy_client has carried [SHOT=figure|object] for as long as the style block
+# has had two halves. shot_kind reads it, _detail_for_shot drops the entire
+# figure half on "object", and the saving is enormous: 856 words down to 231 on
+# a stickman_lean beat, 15 chunks of CLIP conditioning down to 4.
+#
+# The string "SHOT=" did not appear in storyboard.py even once. shot_kind
+# defaults to "figure" when untagged, so every beat ever planned shipped six
+# hundred words about oval heads and five separate limbs — including the beats
+# with nobody in them. One live frame is a document lying on a wooden floor
+# with a face drawn on its corner and a figure standing beside it, which is
+# precisely what that paragraph asks for.
+
+def test_a_shot_with_nobody_in_it_is_marked_object():
+    raw = {"shots": [{"n": 1, "kind": "object"}, {"n": 2, "kind": "figure"}]}
+    assert storyboard._kind_flags(raw, 2) == ["object", "figure"]
+
+
+def test_a_missing_or_malformed_kind_keeps_the_body_rules():
+    """Defaulting the other way would silently strip the limb rules from a
+    shot that needed them — the same reason shot_kind defaults to figure."""
+    assert storyboard._kind_flags({"shots": [{"n": 1}]}, 1) == ["figure"]
+    assert storyboard._kind_flags({"shots": [{"kind": "nonsense"}]}, 1) == ["figure"]
+    assert storyboard._kind_flags({}, 3) == ["figure"] * 3
+    assert storyboard._kind_flags({"shots": "not a list"}, 2) == ["figure"] * 2
+
+
+def test_the_storyboard_is_asked_which_shots_have_a_person_in_them():
+    p = storyboard._prompt("script", ["a beat"], ["[1944]"])
+    assert '"kind": "figure|object"' in p
+    assert "NO PERSON AND NO PART OF A PERSON" in p
+
+
+def test_a_shot_showing_only_hands_is_still_a_figure_shot():
+    """Hands are the channel's most common close subject, and the hand rules
+    live in the figure half — tagging those object would drop them."""
+    p = storyboard._prompt("script", ["a beat"], ["[1944]"])
+    assert "including a shot that shows only a pair of hands" in p
