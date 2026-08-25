@@ -51,9 +51,26 @@ def load_template(path: Path) -> dict | None:
 
     Accepts both a bare graph ({"1": {...}, ...}) and the occasional wrapper
     ({"prompt": {...}}) some exporters produce."""
+    # utf-8-SIG, and the two failures named rather than swallowed. Windows is
+    # where these files are exported: Notepad writes UTF-8 with a BOM, which
+    # json.loads rejects, and PowerShell's `>` writes UTF-16, which does not
+    # even decode. Both used to end here as a bare None, and the caller then
+    # reported "no stills model configured" — true, unhelpful, and it cost a
+    # live session to a workflow the owner had saved correctly by every measure
+    # they could see. Fail-open without fail-loud is fail-silent.
+    name = Path(path).name
     try:
-        data = json.loads(Path(path).read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+        raw = Path(path).read_text(encoding="utf-8-sig")
+    except UnicodeDecodeError:
+        print(f"[template] ⚠ {name} is not UTF-8 text — PowerShell's `>` "
+              f"writes UTF-16 by default. Re-save it as UTF-8.")
+        return None
+    except OSError:
+        return None
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError as e:
+        print(f"[template] ⚠ {name} is not valid JSON: {e}")
         return None
     if isinstance(data, dict) and isinstance(data.get("prompt"), dict):
         data = data["prompt"]

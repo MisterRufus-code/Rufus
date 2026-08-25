@@ -345,3 +345,36 @@ def test_the_warning_is_said_once_not_per_beat(capsys):
     for _ in range(5):
         ct.prepare(_sampler_graph(False), prompt="x", negative="text")
     assert capsys.readouterr().out.count("landed NOWHERE") == 1
+
+
+# ── the file is exported on Windows, and Windows writes three encodings ──────
+#
+# "no stills model configured" for a workflow the owner had saved correctly by
+# every measure visible to them. load_template read the file as strict utf-8 and
+# caught only OSError and JSONDecodeError, so a BOM came back as a bare None and
+# UTF-16 raised straight through. Notepad writes the first; PowerShell's `>`
+# writes the second.
+
+def test_a_workflow_saved_by_notepad_still_loads(tmp_path):
+    """UTF-8 with a BOM is what Notepad writes, and json.loads rejects it."""
+    p = tmp_path / "stills_api.json"
+    body = '{"1": {"class_type": "CLIPTextEncode", "inputs": {"text": "RUFUS_PROMPT"}}}'
+    p.write_bytes(b"\xef\xbb\xbf" + body.encode("utf-8"))
+    g = ct.load_template(p)
+    assert g is not None and ct.has_placeholder(g)
+
+
+def test_a_utf16_export_is_refused_by_name_not_by_traceback(tmp_path, capsys):
+    """PowerShell's `>` writes UTF-16. This used to raise UnicodeDecodeError
+    out of a function whose contract is "returns the graph or None"."""
+    p = tmp_path / "stills_api.json"
+    p.write_bytes('{"1": {"class_type": "X", "inputs": {}}}'.encode("utf-16"))
+    assert ct.load_template(p) is None
+    assert "not UTF-8" in capsys.readouterr().out
+
+
+def test_malformed_json_says_what_is_wrong_with_it(tmp_path, capsys):
+    p = tmp_path / "stills_api.json"
+    p.write_text("{not json", encoding="utf-8")
+    assert ct.load_template(p) is None
+    assert "not valid JSON" in capsys.readouterr().out
