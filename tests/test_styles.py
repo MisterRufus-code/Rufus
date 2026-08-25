@@ -1393,3 +1393,42 @@ def test_the_role_rule_names_no_garment(stick):
                     "helmet", "crown", "badge", "trousers", "coat"):
         assert garment not in s, garment
     assert "taken from the shot's own words" in _looks()[stick]
+
+
+# THE BLOCK DESCRIBES PARTS AND NEVER THE JOINTS BETWEEN THEM.
+#
+# Three frames from one live gallery, one failure:
+#
+#   · a head drawn alone, with no body, resting on the corner of a white shape
+#     lying on a wooden floor — the owner called it "a face appearing out of
+#     the floor", and that is exactly what it is;
+#   · a shoulder with a hole in it (see round four above);
+#   · a background figure whose head is an empty oval with no eyes, no brows
+#     and no mouth, standing among figures that have all three.
+#
+# The head had a whole sentence of detail and nothing anywhere saying it sits
+# on a body. The arm had four ways of saying it was separate and none saying it
+# was attached. "Every figure in frame" turned out not to reach the figures at
+# the back. A text encoder draws what it is told and nothing it is not.
+#
+# Worth recording as a suspect for the empty oval specifically: NO LETTERING
+# says a surface that would carry writing is "drawn BLANK", and a head in this
+# style is a white oval. That contradiction is not settled here.
+
+@pytest.mark.parametrize("stick", _STICK)
+def test_the_head_is_told_it_sits_on_a_body(stick):
+    """A head described in full and never attached to anything gets drawn on
+    whatever white shape is nearest."""
+    s = _looks()[stick]
+    assert "THE HEAD SITS ON THE BODY" in s
+    assert "never drawn on its own" in s
+
+
+@pytest.mark.parametrize("stick", _STICK)
+def test_the_face_marks_are_required_at_the_back_of_the_frame_too(stick):
+    """"Every figure in frame" did not reach the figures at the back: one
+    gallery has a suited figure in the middle distance with an empty oval for a
+    head, among figures that all have eyes."""
+    s = _looks()[stick]
+    assert "THE THREE MARKS ARE ALWAYS DRAWN" in s
+    assert "at the back of the frame exactly as on the ones at the front" in s
