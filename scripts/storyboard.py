@@ -1031,6 +1031,21 @@ def _apply_framing(visual: str, framing: str) -> str:
     return f"{phrase}. {visual}"
 
 
+def _framing_prefix_of(visual: str) -> str:
+    """The distance phrase a planned shot already carries, or "".
+
+    _clean puts the framing on; the re-plan pass replaces the shot text and had
+    no way to put it back, so every re-planned shot lost its distance. One live
+    run reported "framing: mid×5, wide×4, detail×4, close×3" over sixteen shots
+    and shipped twelve with a prefix — the tally was measuring the plan, not the
+    prompts.
+    """
+    for phrase in _FRAMINGS.values():
+        if visual.startswith(phrase):
+            return phrase
+    return ""
+
+
 def _vary_framings(chosen: list[str]) -> list[str]:
     """Break a run of the same distance, deterministically.
 
@@ -1290,6 +1305,14 @@ def _revary(client, model: str, script: str, beats: list[str],
         # keeps running into.
         if word in _subject_of(new):
             continue
+        # Keep the distance this shot was planned at. The variety across the
+        # sequence was chosen once, in _clean; a replacement that arrives
+        # without a framing silently spends that choice, and downstream
+        # names_own_distance() then ships the default-distance rules the
+        # framing exists to displace.
+        keep = _framing_prefix_of(visuals[i])
+        if keep and not _framing_prefix_of(new):
+            new = f"{keep}. {new}"
         out[i] = new
         changed += 1
     after = dominant_subject(out)

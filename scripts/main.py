@@ -1895,7 +1895,14 @@ def run(skip_upload: bool = False, niche_override: str = None, output_dir: Path 
                 from comfy_client import generate_clips as comfy_generate
                 candidates = comfy_generate(prompts, n=len(prompts), niche=active)
                 if not candidates:
-                    print("           ⚠ ComfyUI offline — trying A1111 SD...")
+                    # NOT NECESSARILY OFFLINE, and saying so cost a live
+                    # debugging session: generate_clips returns nothing for a
+                    # missing template, a kill-switch, a failed render and an
+                    # unreachable server alike, and it prints the real reason
+                    # itself one line above. Asserting a cause we did not check
+                    # sent the owner to restart a ComfyUI that was already up.
+                    print("           ⚠ ComfyUI produced no stills — see the "
+                          "[comfy] line above for the reason. Trying A1111 SD...")
                     from sd_client import generate_clips as sd_generate
                     candidates = sd_generate(prompts, n=len(prompts), prebuilt=True)
                     if not candidates:

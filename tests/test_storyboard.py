@@ -1331,3 +1331,32 @@ def test_a_shot_showing_only_hands_is_still_a_figure_shot():
     live in the figure half — tagging those object would drop them."""
     p = storyboard._prompt("script", ["a beat"], ["[1944]"])
     assert "including a shot that shows only a pair of hands" in p
+
+
+# ── the re-plan pass used to spend the framing it was handed ─────────────────
+#
+# _clean puts the distance in front of every shot and the sequence's variety is
+# decided there, once. _revary then replaces the shots that repeat the dominant
+# object with fresh text from the model — and wrote that text straight in.
+#
+# A live run: "framing: mid×5, wide×4, detail×4, close×3" over sixteen shots,
+# "re-planned 4 shot(s)", and exactly four of the sixteen prompts shipped with
+# no distance phrase on them. The tally was reporting the plan, not the prompts.
+# Downstream that matters twice: the variety is gone, and names_own_distance()
+# goes false, so comfy_client ships the default-distance rules that a stated
+# framing exists to displace.
+
+def test_a_replanned_shot_keeps_the_distance_it_was_planned_at():
+    wide = storyboard._FRAMINGS["wide"]
+    assert storyboard._framing_prefix_of(f"{wide}. Delegates gather.") == wide
+
+
+def test_a_shot_with_no_framing_reports_none():
+    assert storyboard._framing_prefix_of("A hand reaches for a book.") == ""
+
+
+def test_every_framing_phrase_is_recognised():
+    """The four phrasings _clean can apply are the four this must detect, or a
+    re-planned shot silently loses whichever one is missed."""
+    for name, phrase in storyboard._FRAMINGS.items():
+        assert storyboard._framing_prefix_of(f"{phrase}. A shot.") == phrase, name
