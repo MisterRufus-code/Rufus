@@ -413,7 +413,7 @@ SETTINGS_GROUPS = [
         # the tests below build the same list from config/styles.json, so the
         # two cannot drift again.
         ("RUFUS_STYLE", "Style preset",
-         "select:stickman,stickman_lean,ink_explainer,flat_vector,ink_woodcut,"
+         "select:stickman,stickman_lean,stickman_micro,ink_explainer,flat_vector,ink_woodcut,"
          "paper_cut,chalkboard,retro_print,storybook,thumbnail",
          "Named look from config/styles.json, appended to every image prompt "
          "byte for byte. Leave at (default) to use the niche's own style_suffix. "

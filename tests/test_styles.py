@@ -41,6 +41,33 @@ def _looks() -> dict:
 # it bare, read at thumbnail size — not exempted from them.
 _SEQUENCE_ONLY = {"thumbnail"}
 
+# THE ONE PRESET THAT DELIBERATELY DOES NOT LEGISLATE THE PLACE.
+#
+# The owner ran a control the pipeline could not: the same model, the same
+# workflow, the same cfg, and a hand-written sixty-word prompt from Gemini —
+#
+#   "A 2D flat minimalist cartoon illustration featuring three iconic starter
+#    Pokemon ... standing together side by side on a simple grassy field ...
+#    Squirtle is smiling. Simple facial expressions, clean thick black
+#    outlines, flat solid colors, bright sunny day, light blue sky ..."
+#
+# It came back excellent. The same workflow fed 859 words of stickman_lean
+# came back poor, and the measurement says why: 859 words is fifteen chunks of
+# 77-token CLIP conditioning, and the shot itself is one of them.
+#
+# Note what carries the place in the prompt that worked: "a simple grassy
+# field", "bright sunny day, light blue sky" — the SHOT names it. Nothing in
+# that prompt legislates backgrounds in general.
+#
+# stickman_micro is that bet, kept as a separate preset so it can be A/B'd
+# against stickman_lean on the same topic without touching a single rule that
+# was won the hard way. It keeps every cheap non-negotiable — the lettering
+# ban, the photographic tells, the background-is-simpler-not-fainter clause —
+# and drops only the twenty-five words that build a place, because the shot is
+# supposed to do that. If the galleries say otherwise, delete the preset; the
+# tests below are what it promises in the meantime.
+_MICRO = {"stickman_micro"}
+
 
 # EVERY PRESET THAT DRAWS THIS CHANNEL'S STICK-FIGURE LOOK.
 #
@@ -55,7 +82,8 @@ _STICK = ["stickman", "stickman_lean"]
 
 
 def _story_looks() -> dict:
-    return {k: v for k, v in _looks().items() if k not in _SEQUENCE_ONLY}
+    return {k: v for k, v in _looks().items()
+            if k not in _SEQUENCE_ONLY and k not in _MICRO}
 
 
 def test_every_preset_is_one_block_of_text():
@@ -1432,3 +1460,33 @@ def test_the_face_marks_are_required_at_the_back_of_the_frame_too(stick):
     s = _looks()[stick]
     assert "THE THREE MARKS ARE ALWAYS DRAWN" in s
     assert "at the back of the frame exactly as on the ones at the front" in s
+
+
+@pytest.mark.parametrize("clause", [
+    "NO LETTERING ANYWHERE IN THE FRAME",
+    "drawn BLANK",
+    "no gradients",
+    "no depth of field",
+    "no film grain",
+    "because it is simpler",
+])
+def test_the_micro_preset_keeps_every_cheap_non_negotiable(clause):
+    """Short is the point, but these cost eight words between them and each
+    one is a gallery this channel has already shipped."""
+    assert clause in _looks()["stickman_micro"]
+
+
+def test_the_micro_preset_still_splits_at_the_figure_marker():
+    """[SHOT=object] drops the figure half. A preset without the marker sends
+    the stick-figure rules on a beat whose subject is a ledger."""
+    s = _looks()["stickman_micro"]
+    assert "--- FIGURE ONLY ---" in s
+    shared, _, figure = s.partition("--- FIGURE ONLY ---")
+    assert "stick figures" in figure and "stick figures" not in shared
+
+
+def test_the_micro_preset_is_actually_micro():
+    """It exists to be short. A hundred and fifty words is not an experiment,
+    it is stickman_lean with a haircut."""
+    assert len(_looks()["stickman_micro"].split()) < 110
+    assert len(_looks()["stickman_lean"].split()) > 700, "the control moved"
