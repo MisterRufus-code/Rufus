@@ -1363,6 +1363,11 @@ def replenish_wiki_topics(niche_name: str, count: int = WIKI_REPLENISH_COUNT) ->
     return len(validated)
 
 
+_DISAMBIG_OPENER = re.compile(
+    r"\b(?:may|can|could|might)\s+(?:also\s+)?refer\s+to\b"
+    r"|\brefers?\s+to\s+the\s+following\b")
+
+
 def _is_disambiguation(data: dict, extract: str) -> bool:
     """A page that is a LIST of other pages, not an article.
 
@@ -1381,11 +1386,21 @@ def _is_disambiguation(data: dict, extract: str) -> bool:
     Two signals, because the REST summary API is not consistent about the
     first: an explicit type, and the sentence every one of these pages opens
     with.
+
+    THE OPENING SENTENCE IS NOT ALWAYS "MAY". A live run asked for Bretton
+    Woods and got:
+
+        → Quote: "Bretton Woods can refer to: Bretton Woods, New Hampshire, a
+          village in the Unite" — Wikipedia
+
+    which this missed by one word, and the whole run was written on a page
+    with no facts in it. Wikipedia's disambiguation pages open with "may",
+    "can" and "could", and some say "refer to the following" instead.
     """
     if (data.get("type") or "").lower() == "disambiguation":
         return True
     head = " ".join(extract.split())[:200].lower()
-    return "may refer to" in head or "may also refer to" in head
+    return bool(_DISAMBIG_OPENER.search(head))
 
 
 def fetch_wikipedia_story(niche_name: str, used_ids: set | None = None) -> dict | None:
@@ -1489,6 +1504,15 @@ def fetch_wikipedia_by_title(query: str) -> dict | None:
             return None
         extract = _clean_text(data.get("extract") or "")
         if len(extract) < WIKI_MIN_EXTRACT:
+            return None
+        # A disambiguation page is long enough to pass the length check and
+        # contains no facts at all, so accepting it here ends the resolution
+        # early and the search fallback below — the half that turns "bretton
+        # woods" into "Bretton Woods Conference" — never runs. That is exactly
+        # how one live run came to be written on a list of village names.
+        if _is_disambiguation(data, extract):
+            print(f"[research] \"{title}\" is a disambiguation page — "
+                  f"searching for the article it points at")
             return None
         body = fetch_wikipedia_fulltext(url_title)
         return {

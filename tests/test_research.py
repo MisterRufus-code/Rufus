@@ -1204,3 +1204,64 @@ def test_hyperinflation_matches_despite_having_no_word_boundary():
     the moment the test existed."""
     assert research._is_on_subject("the German hyperinflation", "money_history")
     assert research._is_on_subject("stagflation in the 1970s", "money_history")
+
+
+# ── disambiguation pages: a list of village names is not a source ────────────
+
+def test_a_disambiguation_page_that_says_can_refer_to_is_caught():
+    """The detector looked for "may refer to" and this page said "can". A live
+    run asked for Bretton Woods, got the list of places called that, and wrote
+    three whole scripts on a page with no facts in it — every one of them
+    capped to 4/10 by the fact gate for reaching into abstraction, because
+    abstraction was all the source had left it."""
+    head = ("Bretton Woods can refer to: Bretton Woods, New Hampshire, a "
+            "village in the United States")
+    assert research._is_disambiguation({}, head)
+
+
+def test_the_other_openers_wikipedia_actually_uses_are_caught():
+    for head in ("Potosi or Potosi may refer to the following topics",
+                 "Sterling could refer to several currencies",
+                 "Franc may also refer to these units",
+                 "Mark refers to the following units of account"):
+        assert research._is_disambiguation({}, head), head
+
+
+def test_a_real_article_is_not_mistaken_for_one():
+    assert not research._is_disambiguation(
+        {}, "The Bretton Woods Conference was held in July 1944 and "
+            "established the International Monetary Fund.")
+
+
+def test_a_chosen_topic_resolving_onto_a_disambiguation_page_falls_through(monkeypatch):
+    """--topic tried the query as an exact title and RETURNED on the first hit.
+    A disambiguation page is long enough to pass the length check, so the hit
+    succeeded and the search step — the half that turns "bretton woods" into
+    "Bretton Woods Conference" — never ran at all."""
+    listing = ("Bretton Woods can refer to: Bretton Woods, New Hampshire; "
+               "Bretton Woods system; Bretton Woods Conference. " * 4)
+    article = ("The Bretton Woods Conference, held in July 1944 in New "
+               "Hampshire, established the International Monetary Fund and "
+               "fixed exchange rates against the dollar at 35 dollars an "
+               "ounce of gold. " * 3)
+
+    def fake_get(url, **kw):
+        resp = MagicMock()
+        resp.raise_for_status = MagicMock()
+        if "Bretton_Woods_Conference" in url:
+            resp.json.return_value = {"title": "Bretton Woods Conference",
+                                      "extract": article}
+        elif "/summary/Bretton_Woods" in url:
+            resp.json.return_value = {"title": "Bretton Woods", "extract": listing}
+        else:                                   # the search API
+            resp.json.return_value = {"query": {"search": [
+                {"title": "Bretton Woods Conference"}]}}
+        return resp
+
+    monkeypatch.setattr(research, "fetch_wikipedia_fulltext", lambda t: "")
+    with patch.object(research.httpx, "get", side_effect=fake_get):
+        seed = research.fetch_wikipedia_by_title("Bretton Woods")
+
+    assert seed is not None
+    assert seed["title"] == "Bretton Woods Conference"
+    assert "1944" in seed["content"]
