@@ -798,6 +798,56 @@ def _face_variety(visuals: list[str]) -> dict:
     return dict(counts)
 
 
+# Which words in a shot mean there is a person in it to put a face on.
+_PERSON_RE = re.compile(
+    r"\b(figure|figures|person|people|man|men|woman|women|child|children|"
+    r"crowd|queue|worker|workers|clerk|clerks|delegate|delegates|trader|"
+    r"traders|guard|guards|soldier|soldiers|farmer|farmers|merchant|"
+    r"merchants|official|officials|banker|bankers|customer|customers|"
+    r"villager|villagers|passenger|passengers|sailor|sailors)\b", re.I)
+
+
+def _needs_a_good_face(visuals: list[str]) -> int | None:
+    """The shot to put the delight face on, or None if the sequence has one.
+
+    MEASURED OVER THREE LIVE RUNS, and it is not close:
+
+        faces: anger×2, grief×2
+        faces: shock×1, grief×1
+        faces: cold×1, grief×1, shock×1
+
+    Not one upturned mouth in any of them. Four of the five faces are dark or
+    blank and only one is not, so a sequence picked without thinking is grim by
+    default — the brief already says so in words, and the words have now lost
+    three times running. A fall needs a height to fall from, and a video that
+    is grim in every frame has drawn the aftermath without the loss.
+
+    The shot chosen is the EARLIEST one with a person and no face of its own.
+    Earliest is where the before lives: the boom, the deal signed, the year the
+    plan was working. Returns None when the sequence already has a good face,
+    when nobody is in it, or when it is too short to have an arc to spend one
+    on.
+    """
+    if len(visuals) < 4:
+        return None
+    if _face_variety(visuals).get("delight"):
+        return None
+    named = {g.split(" over ")[0] for g in _FACE_GEOMETRY.values()}
+    for i, v in enumerate(visuals):
+        if not _PERSON_RE.search(v):
+            continue
+        if any(n in v for n in named):
+            continue          # this shot chose its own face; leave it alone
+        return i
+    return None
+
+
+def _pin_good_face(visual: str) -> str:
+    """Put the upturned face on a shot that named no face of its own."""
+    return (f"{visual.rstrip().rstrip('.')}. The faces show "
+            f"{_FACE_GEOMETRY['delight']}.")
+
+
 def _strip_abstraction(visual: str) -> str:
     """Cut the "…, embodying X" tail off a shot description.
 
@@ -1498,6 +1548,16 @@ def plan(script: str, beats: list[str], era_tags: list[str] | None = None,
                     print(f"[storyboard] restated the location in {n_placed} "
                           f"shot(s) that assumed it")
                 visuals = placed
+
+            # A sequence that is grim in every frame has drawn the aftermath
+            # without the loss. Three live runs in a row came back with no
+            # upturned mouth anywhere, so the brief's own words about putting
+            # one on the BEFORE are not enough on their own.
+            good = _needs_a_good_face(visuals)
+            if good is not None:
+                visuals[good] = _pin_good_face(visuals[good])
+                print(f"[storyboard] no face in the sequence was glad — put "
+                      f"the upturned one on shot {good + 1}")
 
             # LAST, after _revary, _pin_character and _pin_setting have all
             # read the shot: the tag is two words this pipeline prepends, and

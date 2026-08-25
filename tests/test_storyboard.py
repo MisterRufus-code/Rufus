@@ -1360,3 +1360,60 @@ def test_every_framing_phrase_is_recognised():
     re-planned shot silently loses whichever one is missed."""
     for name, phrase in storyboard._FRAMINGS.items():
         assert storyboard._framing_prefix_of(f"{phrase}. A shot.") == phrase, name
+
+
+# ── three live runs, not one glad face between them ─────────────────────────
+#
+#     faces: anger×2, grief×2
+#     faces: shock×1, grief×1
+#     faces: cold×1, grief×1, shock×1
+#
+# Four of the five faces are dark or blank and only one is not, so a sequence
+# picked without thinking is grim by default. The brief already says to put the
+# upturned one on the BEFORE — the boom, the deal signed, the year the plan was
+# working — and those words have now lost three times running. A fall needs a
+# height to fall from.
+
+def _grim(n=6):
+    g = storyboard._FACE_GEOMETRY["grief"]
+    return ["Delegates gather around a large table.",
+            "A hand signs a document.",
+            f"A clerk with {g} looks down.",
+            "Workers queue outside a bank.",
+            "A coin lies on a stone floor.",
+            "A merchant closes a shutter."][:n]
+
+
+def test_a_sequence_with_no_glad_face_gets_one():
+    i = storyboard._needs_a_good_face(_grim())
+    assert i == 0, "the earliest shot with a person is where the before lives"
+    assert "upturned" in storyboard._pin_good_face(_grim()[i])
+
+
+def test_a_sequence_that_already_smiles_is_left_alone():
+    v = _grim()
+    v[1] = f"A trader with {storyboard._FACE_GEOMETRY['delight']} laughs."
+    assert storyboard._needs_a_good_face(v) is None
+
+
+def test_a_shot_that_chose_its_own_face_is_not_overwritten():
+    """Only a shot that named no face is eligible — the storyboard's own
+    choice for a beat always wins. It skips shot 0 (angry clerk, already chose),
+    shot 1 ("a hand signs a document" — no face to put an expression on, and
+    hand shots are this channel's commonest close subject) and shot 2 (grieving
+    clerk, also chose), landing on the queue."""
+    v = [f"A clerk with {storyboard._FACE_GEOMETRY['anger']} slams a ledger."] + _grim()[1:]
+    assert storyboard._needs_a_good_face(v) == 3
+
+
+def test_a_shot_of_hands_alone_is_not_given_a_face():
+    assert storyboard._needs_a_good_face(
+        ["A hand signs a document."] * 3 + ["A clerk waits at a counter."] * 2) == 3
+
+
+def test_a_sequence_with_nobody_in_it_gets_no_face():
+    assert storyboard._needs_a_good_face(["A coin on a table."] * 6) is None
+
+
+def test_a_sequence_too_short_to_have_an_arc_is_left_alone():
+    assert storyboard._needs_a_good_face(_grim(3)) is None
