@@ -927,13 +927,49 @@ def test_the_body_is_described_as_separate_parts(stick):
     assert "never merged into a single silhouette" in s
 
 
+# ROUND FOUR, AND THIS ONE OVERSHOT.
+#
+# The three rounds above each pushed harder on SEPARATION, and the block ended
+# up saying it four times in one sentence: separate parts, drawn apart, daylight
+# between them, clear of the torso. It never once said the arm was ATTACHED.
+#
+# The channel owner reported figures with a hole in the shoulder. A text encoder
+# has no meta level — this block has been caught believing otherwise five times
+# — so "daylight between the torso and the arms", rendered literally at the
+# shoulder, IS a hole in the shoulder. The model was obeying the only
+# instruction it had.
+#
+# So the shoulder now states the join and the separation moves to where it
+# actually earns its keep: the flared-outline clause, which still says the arms
+# are clear of a garment outline. That is the case separation was introduced
+# for. Diagnosed from the owner's description, not yet from a frame.
+
 @pytest.mark.parametrize("stick", _STICK)
 def test_the_arms_are_required_to_be_visible(stick):
     """A gallery of armless figures is what happens when the block says what
     an arm is made of and never says there has to be one."""
     s = _looks()[stick]
     assert "both arms are visible in every figure" in s
-    assert "clear of the torso" in s
+
+
+@pytest.mark.parametrize("stick", _STICK)
+def test_the_arm_is_told_where_it_joins_the_body(stick):
+    """Four ways of saying the arm is separate and none saying it is attached
+    is how a shoulder ends up with a hole in it."""
+    s = _looks()[stick]
+    assert "GROWS OUT OF the torso at the shoulder" in s
+    assert "closing against it" in s
+    assert "daylight between them" not in s
+
+
+@pytest.mark.parametrize("stick", _STICK)
+def test_separation_still_survives_where_it_was_won(stick):
+    """It is removed from the shoulder, not from the block: the garment outline
+    that swallows the arms is the failure separation was introduced against, and
+    that clause still states it."""
+    s = _looks()[stick]
+    assert "arms clear of it" in s
+    assert "never merged into a single silhouette" in s
 
 
 # ── two rules the 37% cut lost, and no test noticed ──────────────────────────
