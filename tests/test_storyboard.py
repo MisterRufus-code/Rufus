@@ -1417,3 +1417,37 @@ def test_a_sequence_with_nobody_in_it_gets_no_face():
 
 def test_a_sequence_too_short_to_have_an_arc_is_left_alone():
     assert storyboard._needs_a_good_face(_grim(3)) is None
+
+
+# ── the model said object and wrote a delegate ──────────────────────────────
+#
+# First live run with the tag on:
+#
+#     3. [SHOT=object] Close shot ... A delegate signs a contract at the table.
+#
+# The tag is the switch that drops six hundred words of limb and face rules, so
+# a wrong "object" is not a wasted saving — it is a figure drawn with no
+# instructions about how a figure is drawn. The shot's own words are better
+# evidence than the model's own label: it names a person or it does not.
+
+def test_an_object_tag_loses_to_a_person_in_the_shot():
+    kinds = ["object", "object"]
+    visuals = ["A delegate signs a contract at the table.",
+               "A close-up of a gold coin on the table."]
+    assert storyboard._kinds_agree_with_the_shots(kinds, visuals) == ["figure", "object"]
+
+
+def test_the_guard_only_ever_tightens():
+    """A shot the model called figure stays figure even with nobody in it —
+    that is the safe direction, and shot_kind already defaults there."""
+    assert storyboard._kinds_agree_with_the_shots(
+        ["figure"], ["A coin lies on a stone floor."]) == ["figure"]
+
+
+@pytest.mark.parametrize("shot", [
+    "A hand slams the ledger shut.",
+    "Gold bars stacked neatly in a vault.",
+    "An empty conference room, chairs pushed back.",
+])
+def test_a_shot_with_genuinely_nobody_in_it_keeps_its_saving(shot):
+    assert storyboard._kinds_agree_with_the_shots(["object"], [shot]) == ["object"]

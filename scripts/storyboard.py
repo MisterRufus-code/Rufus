@@ -538,6 +538,30 @@ def _kind_flags(raw: dict, n: int) -> list[str]:
     return kinds
 
 
+def _kinds_agree_with_the_shots(kinds: list[str], visuals: list[str]) -> list[str]:
+    """Overrule an "object" tag on a shot that has a person in it.
+
+    THE MODEL SAID OBJECT AND WROTE A DELEGATE. Live, first run with the tag
+    on:
+
+        3. [SHOT=object] Close shot ... A delegate signs a contract at the table.
+
+    The tag is the switch that drops six hundred words of limb and face rules,
+    so a wrong "object" is not a wasted saving — it is a figure drawn with no
+    instructions about how a figure is drawn. The shot's own words are the
+    better evidence: it names a person or it does not.
+
+    Only ever tightens. A shot the model called "figure" stays "figure" even
+    with nobody in it, because that is the safe direction and shot_kind already
+    defaults there.
+    """
+    out = list(kinds)
+    for i, (k, v) in enumerate(zip(kinds, visuals)):
+        if k == "object" and _PERSON_RE.search(v):
+            out[i] = "figure"
+    return out
+
+
 def _is_a_place(setting: str) -> bool:
     """Whether `setting` describes a room a camera could stand in.
 
@@ -1564,6 +1588,12 @@ def plan(script: str, beats: list[str], era_tags: list[str] | None = None,
             # dominant_subject counting them would be measuring our own writing
             # — the same mistake the setting pin was moved to avoid.
             if len(kinds) == len(visuals):
+                fixed = _kinds_agree_with_the_shots(kinds, visuals)
+                n_over = sum(1 for a, b in zip(kinds, fixed) if a != b)
+                if n_over:
+                    print(f"[storyboard] {n_over} shot(s) tagged as having "
+                          f"nobody in them name a person — kept the body rules")
+                kinds = fixed
                 n_obj = sum(1 for k in kinds if k == "object")
                 if n_obj:
                     print(f"[storyboard] {n_obj} of {len(visuals)} shot(s) have "
