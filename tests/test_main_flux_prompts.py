@@ -512,3 +512,33 @@ def test_the_blank_surface_clause_still_follows():
         "A protest sign reading 'Stop Police Brutality' held in a crowd.")
     assert "Stop Police Brutality" not in out
     assert main._DETEXT_SENTINEL in out.lower()
+
+
+# ── text surfaces this list did not know it had ─────────────────────────────
+#
+# One live storyboard named three in a row and none of them triggered the
+# blank-surfaces clause: an exchange BOARD "flashing a blur of numbers", a TV
+# carrying a broadcast, and a hand STAMPING an agreement with a SEAL. Each is a
+# plane the model covers in garbled glyphs, which is the single clearest sign a
+# machine drew the picture — and a clock face was the commonest artefact in a
+# competitor's gallery measured frame by frame: fifteen of twenty-four.
+
+@pytest.mark.parametrize("shot", [
+    "Currency exchange boards flash with constantly changing rates, a blur of numbers.",
+    "A televised image of the president announces changes, viewed around a TV.",
+    "A hand stamps the agreement with an official seal.",
+    "A clock on the wall, the hands moving swiftly.",
+    "The same coin is now shown as a plain paper bill.",
+])
+def test_a_surface_that_would_carry_glyphs_gets_the_blank_clause(shot):
+    assert main._defuse_readable_text(shot) != shot
+
+
+@pytest.mark.parametrize("shot", [
+    "A hand slams a wooden crate shut on a stone quay.",
+    "Two figures haul a sack of grain up a hillside.",
+])
+def test_a_shot_with_no_writable_surface_is_left_alone(shot):
+    """The clause is forty words. Appending it to every prompt is the dilution
+    this pipeline is already fighting, so it has to stay conditional."""
+    assert main._defuse_readable_text(shot) == shot

@@ -724,7 +724,7 @@ _TEXT_PROP_RE = re.compile(
     r"protest|protesters|demonstration|rally|march|picket|strike|"
     r"storefront|shopfront|shop front|store front|marquee|"
     r"stock exchange|trading floor|newsstand|classroom|blackboard|whiteboard|"
-    r"memorial|gravestone|headstone|plaque|map|signpost|signboard)\b"
+    r"memorial|gravestone|headstone|plaque|map|signpost|signboard|board|boards|scoreboard|tv|television|televised|broadcast|stamp|stamped|stamps|seal|sealed|agreement|treaty|receipt|invoice|cheque|banknote|bill|bills|note|notes|clock|clocks|dial|gauge|numeral|numerals|digit|digits|numbers)\b"
     # THE CONSTRUCTION, not just the object. "A signpost reading 'Marshalltown,
     # Iowa'" slipped through a net that had `sign` in it, because \bsign\b does
     # not match "signpost" — and the giveaway was never the noun anyway. A shot
