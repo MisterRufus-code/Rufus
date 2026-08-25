@@ -542,3 +542,37 @@ def test_a_shot_with_no_writable_surface_is_left_alone(shot):
     """The clause is forty words. Appending it to every prompt is the dilution
     this pipeline is already fighting, so it has to stay conditional."""
     assert main._defuse_readable_text(shot) == shot
+
+
+# ── the freshness gates regenerate, and none of them compared ───────────────
+#
+# Live: a script scored 8/10 and passed its fact check. The topic-clustering
+# gate found its subject 90% similar to a recent video, the rewrite came back
+# at 4/10, and the 4/10 shipped — held for review, because anything under seven
+# is. Freshness is worth spending a rewrite on; it is not worth shipping a
+# script the scorer has already rejected.
+
+def test_a_worse_rewrite_does_not_replace_the_script_it_was_meant_to_improve():
+    prior = {"score": 8, "script": "the eight"}
+    fresh = {"score": 4, "script": "the four"}
+    assert main._keep_the_better_script(prior, fresh, "topic") is prior
+
+
+def test_a_better_rewrite_wins():
+    prior = {"score": 6, "script": "the six"}
+    fresh = {"score": 9, "script": "the nine"}
+    assert main._keep_the_better_script(prior, fresh, "topic") is fresh
+
+
+def test_a_tie_goes_to_the_fresh_one():
+    """Not repeating the last video is the whole point of the regeneration, and
+    an equal score means it cost nothing to get."""
+    prior = {"score": 8, "script": "the repeat"}
+    fresh = {"score": 8, "script": "the fresh one"}
+    assert main._keep_the_better_script(prior, fresh, "similarity") is fresh
+
+
+def test_the_reason_names_both_scores(capsys):
+    main._keep_the_better_script({"score": 8}, {"score": 4}, "topic")
+    out = capsys.readouterr().out
+    assert "4/10" in out and "8/10" in out and "topic" in out

@@ -960,6 +960,31 @@ def _remember_image_prompts(prompts: list[str], cap_runs: int = 24) -> None:
         print(f"[fresh] couldn't save image-prompt history: {e}")
 
 
+def _keep_the_better_script(prior: dict, fresh: dict, why: str) -> dict:
+    """The regenerated script, unless it scores worse than the one it replaces.
+
+    THE FRESHNESS GATES REGENERATE AND NOT ONE OF THEM COMPARED. Live: a script
+    scored 8/10 and passed its fact check, the topic-clustering gate found the
+    subject 90% similar to a recent video, the rewrite came back at 4/10 — and
+    the 4/10 shipped, held for review, because anything under seven is.
+
+    Freshness is worth spending a rewrite on. It is not worth shipping a script
+    the scorer has already rejected, and nothing was choosing between the two.
+
+    Ties go to the fresh one: not repeating the last video is the whole point of
+    the regeneration, and an equal score means it cost nothing to get.
+
+    NOT used for the fact-check rewrite. A draft rejected as factually wrong has
+    to go whatever it scored — that gate is about truth, not taste.
+    """
+    if fresh.get("score", 0) >= prior.get("score", 0):
+        return fresh
+    print(f"           → the {why} rewrite scored {fresh.get('score')}/10 "
+          f"against the original's {prior.get('score')}/10 — keeping the "
+          f"original and its repeat")
+    return prior
+
+
 def _freshness_block() -> str:
     """DO-NOT-REPEAT block for the prompt-writer, or '' on a channel's first runs."""
     recent = _recent_image_prompts()
@@ -1663,10 +1688,11 @@ def run(skip_upload: bool = False, niche_override: str = None, output_dir: Path 
         elif check_blacklist(script):
             print("           ⚠ Similar script already used – regenerating...")
             try:
-                result = write_script(scene + " (make it different from previous versions)",
+                _fresh = write_script(scene + " (make it different from previous versions)",
                                       seed=seed,
                                       precomputed_analysis=seed_analysis or None,
                                       run_id=script_run_id)
+                result = _keep_the_better_script(result, _fresh, "blacklist")
                 script = result["script"]
             except Exception as _regen_err:
                 print(f"           ⚠ Blacklist regen failed ({_regen_err}) — using original script")
@@ -1680,13 +1706,16 @@ def run(skip_upload: bool = False, niche_override: str = None, output_dir: Path 
         if is_dup:
             print(f"           ⚠ Script is {sim:.0%} similar to a recent video — regenerating...")
             try:
-                result = write_script(
+                _fresh = write_script(
                     scene + " (a recent video already covered this angle — take a "
                             "DIFFERENT angle: different hook, different examples, "
                             "different framing of the same facts)",
                     seed=seed, precomputed_analysis=seed_analysis or None,
                     run_id=script_run_id)
+                result = _keep_the_better_script(result, _fresh, "similarity")
                 script = result["script"]
+                # Measured off whichever script survived, so the embedding that
+                # gets recorded is the one that actually ships.
                 _, sim2, script_vec = check_similarity(script, channel.id)
                 print(f"           → regenerated ({sim2:.0%} similar now)")
             except Exception as _sim_err:
@@ -1706,12 +1735,13 @@ def run(skip_upload: bool = False, niche_override: str = None, output_dir: Path 
                 print(f"           ⚠ Topic \"{core_topic[:60]}\" covered "
                       f"{topic_sim:.0%} similarly in the last {TOPIC_WINDOW_DAYS} days — regenerating...")
                 try:
-                    result = write_script(
+                    _fresh = write_script(
                         scene + f" (a recent video already covered this same core "
                                 f"topic — \"{core_topic}\" — pick a genuinely DIFFERENT "
                                 f"topic from the source, not just different wording)",
                         seed=seed, precomputed_analysis=seed_analysis or None,
                         run_id=script_run_id)
+                    result = _keep_the_better_script(result, _fresh, "topic")
                     script = result["script"]
                     # Measure the REGENERATED script, not the frozen
                     # pre-analysis — seed_analysis doesn't change on regen, so
