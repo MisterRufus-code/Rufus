@@ -251,3 +251,67 @@ def test_a_set_reads_best_first(db):
     _three(db)
     scores = [r["score"] for r in db.candidates(proposal_id=1)]
     assert scores == sorted(scores, reverse=True)
+
+
+# ── the gates label, they do not reject ──────────────────────────────────────
+#
+# "Why do all the good scripts get blocked" was the complaint that started this
+# whole flow. write_script_until_good escalates: a cycle below the score bar or
+# failing the fact gate is binned and a completely fresh attempt runs on a
+# different angle. That is right when one script is being written and nobody
+# will look at it until it is done. Here it is wrong twice — three styles times
+# three cycles is nine attempts for three cards, and the retry is trying to do
+# the job the person is about to do. The different angle IS the other two.
+
+def test_a_candidate_set_does_not_escalate(monkeypatch):
+    """One cycle each. The person is the retry."""
+    seen = {}
+    monkeypatch.delenv("RUFUS_CANDIDATE_CYCLES", raising=False)
+    monkeypatch.setenv("RUFUS_SCRIPT_CYCLES", "3")
+    with sc._relaxed_gates():
+        seen["inside"] = os.environ["RUFUS_SCRIPT_CYCLES"]
+    assert seen["inside"] == "1"
+    assert os.environ["RUFUS_SCRIPT_CYCLES"] == "3", "the caller's value is put back"
+
+
+def test_the_old_escalation_can_be_asked_for(monkeypatch):
+    monkeypatch.setenv("RUFUS_CANDIDATE_CYCLES", "3")
+    with sc._relaxed_gates():
+        assert os.environ["RUFUS_SCRIPT_CYCLES"] == "3"
+
+
+def test_a_low_scoring_script_is_still_offered(db, monkeypatch):
+    """The score is shown, not enforced. A 5/10 a person likes beats an 8/10
+    they do not, and this page is where that gets decided."""
+    _writer(monkeypatch, [{"script": "Weak.\nBut interesting.", "score": 4,
+                           "cost_usd": 0.02}] * 3)
+    sc.write_for("T", proposal_id=1)
+    rows = db.candidates(proposal_id=1)
+    assert len(rows) == 3
+    assert all(r["score"] == 4 for r in rows)
+
+
+def test_a_script_the_fact_gate_failed_is_shown_with_its_reason(db, monkeypatch):
+    """REPORTED, NOT REMOVED, and the asymmetry is deliberate. A reviewer can
+    tell which of three is better written. They cannot tell whether the
+    denarius really lost ninety per cent of its silver by 250 AD — the source
+    is the only thing that knows and the gate is the only thing that reads it.
+    So it is still offered, and it says which claim."""
+    _writer(monkeypatch, [{
+        "script": "A claim.\nBody.", "score": 8, "cost_usd": 0.02,
+        "fact_ok": False,
+        "fact_reason": "the source does not give a silver percentage"}] * 3)
+    sc.write_for("T", proposal_id=1)
+    row = db.candidates(proposal_id=1)[0]
+    assert row["fact_ok"] == 0
+    assert "silver percentage" in row["fact_reason"]
+
+
+def test_a_clean_script_is_recorded_as_clean(db, monkeypatch):
+    """The default has to be "fine" rather than "unknown": write_script's
+    documented return shape has no fact_ok key when nothing checked, and a
+    missing key that reads as a failure would put a red warning on every card
+    the moment the gate is skipped."""
+    _writer(monkeypatch, [{"script": "A.\nB.", "score": 8, "cost_usd": 0.02}] * 3)
+    sc.write_for("T", proposal_id=1)
+    assert db.candidates(proposal_id=1)[0]["fact_ok"] == 1

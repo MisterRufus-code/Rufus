@@ -1,7 +1,7 @@
 wrote docs/ENVIRONMENT.md
 enerated by `python scripts/env_doctor.py --markdown`. Do not edit by hand — there are more than a hundred of these and a hand-kept list is wrong within a month.
 
-145 variables, 58 of them described nowhere else.
+146 variables, 59 of them described nowhere else.
 
 `python scripts/env_doctor.py --check` reports variables you have SET that nothing reads — a typo or a renamed flag looks exactly like one that works.
 
@@ -13,6 +13,7 @@ enerated by `python scripts/env_doctor.py --markdown`. Do not edit by hand — t
 | `RUFUS_AUTO_UPLOAD` | `0` | `main.py` |
 | `RUFUS_BEAT_MOTION` | — | `comfy_client.py`, `svd_client.py` |
 | `RUFUS_BUBBLE_GAIN` | — | `audio_gen.py` |
+| `RUFUS_CANDIDATE_CYCLES` | `1` | `script_candidates.py` |
 | `RUFUS_CANDIDATE_MAX_COST` | — | `script_candidates.py` |
 | `RUFUS_CANDIDATE_STYLES` | — | `script_candidates.py` |
 | `RUFUS_CHANNEL` | `main_en` | `channel_config.py`, `main.py`, `script_writer.py` |
@@ -94,7 +95,7 @@ enerated by `python scripts/env_doctor.py --markdown`. Do not edit by hand — t
 | `RUFUS_SCOUT_MAX_COST` | — | `scout.py` |
 | `RUFUS_SCOUT_MAX_PENDING` | — | `scout.py` |
 | `RUFUS_SCRIPT_ARCHITECT` | `1` | `script_writer.py` |
-| `RUFUS_SCRIPT_CYCLES` | `3` | `script_writer.py` |
+| `RUFUS_SCRIPT_CYCLES` | `3` | `script_candidates.py`, `script_writer.py` |
 | `RUFUS_SCRIPT_MAX_COST` | `0.30` | `script_writer.py` |
 | `RUFUS_SEED_TRIES` | `4` | `main.py` |
 | `RUFUS_SFX` | `1` | `audio_gen.py` |

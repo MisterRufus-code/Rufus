@@ -1563,3 +1563,29 @@ def test_a_title_with_an_apostrophe_does_not_break_the_button(client):
     import json
     inner = _html.unescape(attr)[len("return confirm("):-len(");")]
     assert json.loads(inner).endswith("to YouTube now?")
+
+
+def test_a_fact_gate_failure_is_visible_on_the_card(client):
+    """The one warning that survives a person reading the script. They can
+    judge the writing; they cannot check the figure against the source."""
+    db_manager.save_candidate(
+        proposal_id=7, channel="main_en", niche="money_history", topic="Rome",
+        hook_style="shocking_stat", hook="Ninety per cent gone.",
+        script="Ninety per cent gone.\nBody.", score=9, cost_usd=0.02,
+        fact_ok=False, fact_reason="the source gives no silver percentage")
+    page = client.get("/scripts").get_data(as_text=True)
+    assert "the source does not support this" in page
+    assert "no silver percentage" in page
+
+
+def test_a_low_score_is_shown_and_not_hidden(client):
+    """Nothing is withheld for missing a bar — that is the reviewer's call, and
+    a threshold binning good scripts is the complaint this flow answers."""
+    db_manager.save_candidate(
+        proposal_id=8, channel="main_en", niche="money_history", topic="Tulips",
+        hook_style="warning", hook="A weak one.", script="A weak one.\nBody.",
+        score=4, cost_usd=0.02)
+    page = client.get("/scripts").get_data(as_text=True)
+    assert "4/10" in page
+    assert "A weak one." in page
+    assert "Make this one" in page

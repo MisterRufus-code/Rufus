@@ -3316,20 +3316,36 @@ def scripts_page():
                           f'<button class="btn save" type="submit">'
                           f'Make this one</button></form>')
             words = len((c["script"] or "").split())
+            # THE GATES LABEL, THEY DO NOT REJECT. A score below the bar used
+            # to throw a script away and retry on a different angle — deciding
+            # the thing this page exists for, and binning good scripts on the
+            # way. The number is shown instead. The fact gate is the one that
+            # still matters after a person has read the script, because they
+            # can judge the writing and cannot check the figure against the
+            # source, so its warning is loud and names the claim.
+            warn = ""
+            if not c.get("fact_ok", 1):
+                warn = (f'<div class="msg error" style="margin:8px 0">'
+                        f'⚠ the source does not support this: '
+                        f'{_esc(c.get("fact_reason") or "unstated")}</div>')
             cards += (
                 f'<div class="card" style="width:100%;margin-bottom:10px">'
                 f'<div style="display:flex;justify-content:space-between;'
                 f'gap:12px"><strong>{_esc(c["hook"] or "—")}</strong>'
                 f'<span class="muted">{_esc(c["hook_style"] or "unpinned")} · '
                 f'{c["score"]}/10 · {words}w · ${c["cost_usd"]:.3f}</span></div>'
+                f'{warn}'
                 f'<pre style="white-space:pre-wrap;font-size:13px;'
                 f'margin:8px 0">{_esc(c["script"] or "")}</pre>'
                 f'<div>{button}</div></div>')
         blocks += (f'<h2 style="margin-top:22px">{_esc(topic or "—")}</h2>'
                    f'<p class="muted">{len(rows)} script(s) — one per hook '
-                   f'style. Choosing one records the other(s) as passed over, '
-                   f'which is the only labelled preference this channel can '
-                   f'collect before it has view counts.</p>{cards}')
+                   f'style. The score is shown, not enforced: nothing here was '
+                   f'thrown away for missing a bar, because that is your call. '
+                   f'A red warning means the source does not support a claim '
+                   f'in it — the one thing reading it cannot tell you. '
+                   f'Choosing one records the other(s) as passed over.</p>'
+                   f'{cards}')
 
     if not sets:
         blocks = ('<p class="muted">Nothing waiting. Pick a topic on '

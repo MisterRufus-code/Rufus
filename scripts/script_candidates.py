@@ -27,8 +27,31 @@ THE SEED IS FETCHED AND ANALYSED ONCE. All three candidates are about the same
 topic and check against the same source, so the research call and the
 pre-analysis are shared. Only the prose is paid for three times.
 
+ONE CYCLE EACH, NOT THREE. write_script_until_good escalates: a cycle that
+scores below the bar or fails the fact gate is thrown away and a COMPLETELY
+fresh attempt runs on a different angle, up to RUFUS_SCRIPT_CYCLES times. That
+is the right shape when one script is being written and nobody will look at it
+until it is finished. It is the wrong shape here twice over — three styles
+times three cycles is nine full attempts for three cards, and more importantly
+the retry is trying to do the job the person is about to do. The different
+angle IS the other two candidates.
+
+So the gates stop rejecting and start labelling. The score and the fact gate
+still run, and both land on the card where a reviewer can weigh them; what
+stops happening is a threshold quietly binning a script nobody was shown. Good
+scripts being blocked is the complaint this whole flow exists to answer.
+
+THE FACT GATE IS REPORTED, NOT REMOVED, and that is a deliberate asymmetry. A
+person reading three scripts can tell which is better written. They cannot tell
+whether the denarius really lost ninety per cent of its silver by 250 AD — the
+source is the only thing that knows, the gate is the only thing that reads it,
+and a channel about history that ships invented figures has nothing left to
+sell. So a candidate that fails it is still shown, still choosable, and carries
+a warning that says which claim.
+
     RUFUS_CANDIDATE_STYLES    3      how many candidates to write
     RUFUS_CANDIDATE_MAX_COST  0.60   hard USD ceiling across the whole set
+    RUFUS_CANDIDATE_CYCLES    1      retries per candidate (the person is the retry)
 """
 
 import os
@@ -72,6 +95,33 @@ def styles_for(niche_cfg: dict, n: int) -> list[str]:
     while len(out) < n:
         out.extend(declared)
     return out[:n]
+
+
+class _relaxed_gates:
+    """RUFUS_SCRIPT_CYCLES pinned low for the duration of a candidate set.
+
+    Set through the environment rather than a parameter because that is where
+    write_script_until_good reads it, and threading a "how hard should you try"
+    argument down through three call layers to reach the same variable would be
+    the same decision written twice. An explicit RUFUS_CANDIDATE_CYCLES wins if
+    someone wants the old escalation back for a set.
+    """
+
+    def __init__(self):
+        self.before = None
+
+    def __enter__(self):
+        self.before = os.environ.get("RUFUS_SCRIPT_CYCLES")
+        os.environ["RUFUS_SCRIPT_CYCLES"] = str(
+            os.environ.get("RUFUS_CANDIDATE_CYCLES", "1"))
+        return self
+
+    def __exit__(self, *exc):
+        if self.before is None:
+            os.environ.pop("RUFUS_SCRIPT_CYCLES", None)
+        else:
+            os.environ["RUFUS_SCRIPT_CYCLES"] = self.before
+        return False
 
 
 class _pinned_style:
@@ -147,7 +197,7 @@ def write_for(topic: str, *, proposal_id: int | None = None,
                   f"${ceiling:.2f} — stopping at {len(saved)} candidate(s)")
             break
         try:
-            with _pinned_style(style):
+            with _pinned_style(style), _relaxed_gates():
                 result = script_writer.write_script_until_good(
                     scene, seed=seed, precomputed_analysis=analysis,
                     run_id=run_id)
@@ -165,16 +215,20 @@ def write_for(topic: str, *, proposal_id: int | None = None,
         # writer's documented return shape has no "hook" key, and asking for
         # one returns "" forever. scout.py makes the same derivation for the
         # same reason.
+        fact_ok = bool(result.get("fact_ok", True))
+        fact_reason = str(result.get("fact_reason") or "")
         row_id = db_manager.save_candidate(
             proposal_id=proposal_id, channel=channel, niche=niche, topic=topic,
             hook_style=style, hook=script_text.split("\n")[0][:300],
             script=script_text, score=int(result.get("score", 0) or 0),
-            run_id=run_id, cost_usd=cost)
+            run_id=run_id, cost_usd=cost,
+            fact_ok=fact_ok, fact_reason=fact_reason)
         saved.append({"id": row_id, "hook_style": style,
                       "score": int(result.get("score", 0) or 0),
-                      "cost_usd": cost})
+                      "fact_ok": fact_ok, "cost_usd": cost})
+        flag = "" if fact_ok else f" ⚠ {fact_reason[:80]}"
         print(f"[candidates] #{row_id} {style or 'unpinned'} — "
-              f"{result.get('score', 0)}/10 — ${cost:.3f}")
+              f"{result.get('score', 0)}/10 — ${cost:.3f}{flag}")
 
     print(f"[candidates] {len(saved)} candidate(s) for {topic!r}, "
           f"${spent:.2f} total")

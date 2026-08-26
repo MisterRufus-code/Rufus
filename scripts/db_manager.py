@@ -201,11 +201,25 @@ def init_db():
                 run_id      TEXT,
                 cost_usd    REAL DEFAULT 0,
                 status      TEXT DEFAULT 'pending',
-                decided_at  TEXT
+                decided_at  TEXT,
+                fact_ok     INTEGER DEFAULT 1,
+                fact_reason TEXT
             )
         """)
         c.execute("CREATE INDEX IF NOT EXISTS idx_cand_proposal "
                   "ON script_candidates(proposal_id, status)")
+        # A GATE THAT LABELS INSTEAD OF REJECTING. With a person ruling between
+        # three finished scripts, a threshold that silently discards one is
+        # deciding something the person is here to decide — and it was
+        # discarding good scripts, which is the complaint that started this.
+        # The score and the fact gate still run; they land in the row and on
+        # the card, where a reviewer can weigh them.
+        for ddl in ("ALTER TABLE script_candidates ADD COLUMN fact_ok INTEGER DEFAULT 1",
+                    "ALTER TABLE script_candidates ADD COLUMN fact_reason TEXT"):
+            try:
+                c.execute(ddl)
+            except Exception:
+                pass  # column already exists
         c.execute("""
             CREATE TABLE IF NOT EXISTS script_attempts (
                 id                INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -492,20 +506,23 @@ def decide_proposal(proposal_id: int, status: str) -> bool:
 
 def save_candidate(*, proposal_id: int | None, channel: str, niche: str,
                    topic: str, hook_style: str, hook: str, script: str,
-                   score: int, run_id: str = "", cost_usd: float = 0.0) -> int:
+                   score: int, run_id: str = "", cost_usd: float = 0.0,
+                   fact_ok: bool = True, fact_reason: str = "") -> int:
     with _conn() as c:
         cur = c.execute(
             "INSERT INTO script_candidates (proposal_id, channel, niche, "
-            "topic, hook_style, hook, script, score, run_id, cost_usd) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?)",
+            "topic, hook_style, hook, script, score, run_id, cost_usd, "
+            "fact_ok, fact_reason) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
             (proposal_id, channel, niche, topic, hook_style, hook, script,
-             int(score), run_id, float(cost_usd)))
+             int(score), run_id, float(cost_usd), 1 if fact_ok else 0,
+             fact_reason))
         return cur.lastrowid
 
 
 _CANDIDATE_COLS = ["id", "created_at", "proposal_id", "channel", "niche",
                    "topic", "hook_style", "hook", "script", "score", "run_id",
-                   "cost_usd", "status", "decided_at"]
+                   "cost_usd", "status", "decided_at", "fact_ok",
+                   "fact_reason"]
 
 
 def candidates(proposal_id: int | None = None,
