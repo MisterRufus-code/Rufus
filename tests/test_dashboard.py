@@ -1734,3 +1734,23 @@ def test_a_low_score_is_shown_and_not_hidden(client):
     assert "4/10" in page
     assert "A weak one." in page
     assert "Make this one" in page
+
+
+def test_a_topic_with_three_scripts_counts_as_one_decision(client):
+    """The flow badge counts DECISIONS, not cards. Three scripts on one topic
+    is one thing to rule on; counting the rows would say 3 and send somebody
+    looking for three topics."""
+    for style in ("counterintuitive", "shocking_stat", "warning"):
+        db_manager.save_candidate(
+            proposal_id=42, channel="c", niche="n", topic="One topic",
+            hook_style=style, hook="h", script="s", score=8)
+    assert dashboard._flow_counts()["/scripts"] == 1
+
+
+def test_the_home_page_leads_with_what_is_waiting(client):
+    """What a person opening this needs in the first second is not how many
+    videos exist — it is which of the four decisions wants them."""
+    page = client.get("/").get_data(as_text=True)
+    body = page.split("</header>", 1)[1]
+    assert 'class="flow"' in body
+    assert body.index('class="flow"') < body.index("Score trend")

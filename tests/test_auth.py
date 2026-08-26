@@ -978,14 +978,17 @@ def test_an_owner_still_reaches_every_registered_page(client):
 def test_an_empty_group_is_omitted_rather_than_rendered_bare(client):
     """A heading over an empty column advertises pages and then refuses them.
 
-    A VIEWER is the case that empties one: Make holds generate, thumbnail and
-    settings permissions and a viewer has none of the three. A partner is not
-    the test — they keep `view`, so System still contains Logs.
+    A VIEWER is the case that empties one: Setup holds styles, bench, system
+    and settings, and a viewer has none of those permissions. It used to be
+    Make — until the four choosing pages moved there out of Measure, where a
+    permission technicality rather than any reader's expectation had put them.
+    Make is view-level now and a viewer sees it, which is correct: they can
+    read the decisions, and each page's own buttons still check `generate`.
     """
     import re
     client.get(f"/?token={VIEWER_TOKEN}")
     header = client.get("/").data.decode("utf-8", "replace") \
         .split("<header>", 1)[1].split("</header>", 1)[0]
     groups = re.findall(r'navgroup-t">([^<]+)<', header)
-    assert "Make" not in groups
+    assert "Setup" not in groups
     assert "Review" in groups, "a viewer can still review"

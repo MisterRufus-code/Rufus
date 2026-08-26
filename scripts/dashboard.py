@@ -1513,6 +1513,32 @@ PAGE_STYLE = """<!doctype html><html><head><meta charset="utf-8">
   label { font-size: 11px; color: var(--dim); text-transform: uppercase;
           letter-spacing: 0.06em; }
 
+  /* The four decisions. A row of equal words tells you nothing about order or
+     state, so this carries both: a number for the step and a badge for how
+     many choices are actually waiting behind it. Scrolls sideways rather than
+     wrapping — on a phone four steps that reflow into two rows stop reading as
+     a sequence, which is the only thing this element is for. */
+  .flow { display: flex; gap: 4px; margin: 0 0 20px; overflow-x: auto;
+          padding-bottom: 4px; -webkit-overflow-scrolling: touch; }
+  .flow-step { display: flex; align-items: center; gap: 8px; flex: 0 0 auto;
+               padding: 8px 12px; border-radius: var(--radius-sm);
+               border: 1px solid var(--border); background: var(--surface);
+               color: var(--dim); text-decoration: none; font-size: 13px;
+               white-space: nowrap; }
+  .flow-step:hover { color: inherit; border-color: var(--accent); }
+  .flow-step.here { color: inherit; border-color: var(--accent);
+                    background: var(--bg); font-weight: 600; }
+  .flow-i { display: inline-flex; align-items: center; justify-content: center;
+            width: 18px; height: 18px; border-radius: 50%; font-size: 11px;
+            background: var(--border); color: var(--dim); }
+  .flow-step.here .flow-i { background: var(--accent); color: #06122a; }
+  .flow-n { min-width: 18px; text-align: center; padding: 1px 6px;
+            border-radius: 999px; font-size: 11px; font-weight: 600;
+            background: var(--accent); color: #06122a; }
+  /* A zero is information too — it says "nothing waiting here", which is
+     different from a badge that is simply absent and could mean anything. */
+  .flow-n.zero { background: transparent; color: var(--dim); font-weight: 400; }
+
   .filters { margin: 12px 0; }
   .filters a { margin-right: 10px; font-size: 13px; text-decoration: none; }
   .back { text-decoration: none; font-size: 14px; }
@@ -1691,16 +1717,85 @@ NAV_ITEMS = [
 # VIEW of it. The invariant that matters is that every registered page appears
 # somewhere here — a page that exists and is unreachable is worse than one
 # that was never written, and a test enforces it.
-NAV_PRIMARY = ("/generate", "/gallery", "/tracking")
+NAV_PRIMARY = ("/scout", "/gallery", "/tracking")
 
+# GROUPED BY WHAT YOU CAME HERE TO DO, and the four choosing pages had been
+# filed under Measure — next to the analytics, because that is where a
+# permission technicality put them rather than where anybody would look. They
+# are not measurements. They are the four decisions a video is made of, in
+# order, and Make is where a person goes to make one.
+#
+# Nine links under one heading is also not a group, it is a list. Measure holds
+# five now, and the pipeline reads as a sequence rather than an alphabet.
+#
+# /logs moved to Review for the same reason: a log is the record of a run, and
+# the question it answers ("what happened to that video") is the one Review
+# asks. It also leaves Setup holding nothing a viewer may open, which is what
+# keeps the empty-group rule testable with a real case.
 NAV_GROUPS = (
-    ("Make",    ("/generate", "/thumbnails", "/styles")),
-    ("Review",  ("/gallery", "/history", "/failures")),
+    ("Make",    ("/scout", "/scripts", "/galleries", "/voice", "/generate",
+                 "/thumbnails")),
+    ("Review",  ("/gallery", "/history", "/failures", "/logs")),
     ("Measure", ("/tracking", "/performance", "/insights", "/advice",
-                 "/trending", "/scout", "/scripts", "/galleries",
-                 "/voice")),
-    ("System",  ("/bench", "/logs", "/system", "/settings")),
+                 "/trending")),
+    ("Setup",   ("/styles", "/bench", "/system", "/settings")),
 )
+
+# ── the four decisions, and which of them is waiting for you ─────────────────
+#
+# THE PROBLEM A TAB LIST CANNOT SOLVE. The pipeline is sequential — a topic
+# becomes three scripts, a script becomes two galleries, a gallery becomes
+# three reads — and a nav bar renders that as four equal words with no order
+# and no state. So you open /voice, find it empty, and have no way to tell
+# whether that means "nothing to do" or "you have not done step three yet".
+#
+# The bar below is the answer: the same four steps in order, on every page they
+# concern, each carrying the number of decisions actually waiting behind it.
+# A person can see where they are needed without opening anything.
+FLOW_STEPS = (
+    ("/scout",     "Topic"),
+    ("/scripts",   "Script"),
+    ("/galleries", "Pictures"),
+    ("/voice",     "Voice"),
+)
+
+
+def _flow_counts() -> dict:
+    """How many decisions are waiting at each step.
+
+    Fail-open to zeros and never raises: this renders at the top of six pages,
+    and a database hiccup must cost the badges, not the page.
+    """
+    out = {"/scout": 0, "/scripts": 0, "/galleries": 0, "/voice": 0}
+    try:
+        import db_manager as dbm
+        out["/scout"] = dbm.pending_proposal_count()
+        # SETS, NOT ROWS. Three scripts on one topic is ONE decision; counting
+        # the cards would say 3 and send someone looking for three topics.
+        out["/scripts"] = len({(c["proposal_id"], c["topic"])
+                               for c in dbm.candidates(status="pending",
+                                                       limit=200)})
+        out["/galleries"] = len(dbm.gallery_sets(status="pending", limit=50))
+        out["/voice"] = len({t["set_id"] for t in
+                             dbm.voice_takes(status="pending", limit=200)})
+    except Exception:
+        pass
+    return out
+
+
+def _flow_bar(current: str = "") -> str:
+    """The four steps in order, with what is waiting at each."""
+    counts = _flow_counts()
+    cells = []
+    for i, (href, label) in enumerate(FLOW_STEPS, start=1):
+        n = counts.get(href, 0)
+        here = " here" if href == current else ""
+        badge = (f'<span class="flow-n">{n}</span>' if n
+                 else '<span class="flow-n zero">0</span>')
+        cells.append(f'<a class="flow-step{here}" href="{href}">'
+                     f'<span class="flow-i">{i}</span>{label}{badge}</a>')
+    return f'<nav class="flow" aria-label="the four decisions">{"".join(cells)}</nav>'
+
 
 
 # Polls /api/status and rewrites the bar in place. Vanilla JS and inline —
@@ -2072,7 +2167,12 @@ def index():
                         '<p class="muted">Nothing is waiting on you. Queue a '
                         'topic below, or leave it to the schedule.</p>')
 
+    # THE FLOW BAR FIRST, above everything else on the home page. What a
+    # person opening this dashboard needs to know in the first second is not
+    # how many videos exist — it is which of the four decisions is waiting for
+    # them. Every other block here answers a question you have to already have.
     body = f"""
+    {_flow_bar()}
     {_msg_banner()}
     {_failure_notice()}
     {advice_html}
@@ -3282,6 +3382,7 @@ def scout_page():
     body = f"""
     <a class="back" href="/">← back</a>
     <h2 style="margin-top:14px">Scout</h2>
+    {_flow_bar("/scout")}
     {_msg_banner()}
     <p class="muted">Watches the channels in <code>config/competitors.json</code>,
        scores every video against <em>its own channel's median</em> — 20k views
@@ -3440,6 +3541,7 @@ def scripts_page():
     body = f"""
     <a class="back" href="/">← back</a>
     <h2 style="margin-top:14px">Choose a script</h2>
+    {_flow_bar("/scripts")}
     {_msg_banner()}
     {blocks}
     {old_html}
@@ -3569,6 +3671,7 @@ def galleries_page():
     body = f"""
     <a class="back" href="/">← back</a>
     <h2 style="margin-top:14px">Choose the pictures</h2>
+    {_flow_bar("/galleries")}
     {_msg_banner()}
     {blocks}
     """
@@ -3707,6 +3810,7 @@ def voice_page():
     body = f"""
     <a class="back" href="/">← back</a>
     <h2 style="margin-top:14px">Choose how it opens</h2>
+    {_flow_bar("/voice")}
     {_msg_banner()}
     {blocks}
     """

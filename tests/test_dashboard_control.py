@@ -1254,3 +1254,59 @@ def test_the_filter_box_does_not_scroll_away_with_its_table():
 
 def test_motion_is_dropped_for_anyone_who_asked_for_less_of_it():
     assert "prefers-reduced-motion" in dashboard.PAGE_STYLE
+
+
+# ── the four decisions, grouped where a person would look for them ──────────
+#
+# The choosing pages shipped filed under Measure, next to the analytics — not
+# because anyone would look there but because a permission test wanted Make to
+# hold nothing a viewer could open. That is a technicality deciding an
+# information architecture, and the owner felt it immediately: "the info is
+# good but not organized".
+
+FLOW = ("/scout", "/scripts", "/galleries", "/voice")
+
+
+def test_the_four_decisions_live_under_make():
+    """They are not measurements. They are the four decisions a video is made
+    of, and Make is where somebody goes to make one."""
+    groups = dict(dashboard.NAV_GROUPS)
+    for href in FLOW:
+        assert href in groups["Make"], href
+        assert href not in groups["Measure"], href
+
+
+def test_the_flow_reads_in_the_order_it_happens():
+    """A topic becomes scripts, a script becomes galleries, a gallery becomes
+    reads. Listed in any other order the group is an alphabet, not a sequence."""
+    make = [h for h in dict(dashboard.NAV_GROUPS)["Make"] if h in FLOW]
+    assert make == list(FLOW)
+    assert [h for h, _label in dashboard.FLOW_STEPS] == list(FLOW)
+
+
+def test_no_group_is_a_list_instead_of_a_group():
+    """Nine links under one heading is not a group. Measure had nine."""
+    for title, hrefs in dashboard.NAV_GROUPS:
+        assert len(hrefs) <= 6, f"{title} has {len(hrefs)}"
+
+
+def test_every_step_of_the_flow_carries_a_count(client):
+    """A nav bar renders four equal words with no order and no state, so you
+    open the last one, find it empty, and cannot tell whether that means
+    "nothing to do" or "you have not done step three yet"."""
+    bar = dashboard._flow_bar("/scripts")
+    for href, label in dashboard.FLOW_STEPS:
+        assert f'href="{href}"' in bar
+        assert label in bar
+    assert bar.count("flow-n") == 4, "a zero is information too"
+    assert 'flow-step here' in bar
+
+
+def test_the_flow_bar_survives_a_database_that_will_not_answer(monkeypatch):
+    """It renders at the top of six pages. A database hiccup must cost the
+    badges, not every page in the dashboard."""
+    import db_manager
+    monkeypatch.setattr(db_manager, "pending_proposal_count",
+                        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("x")))
+    counts = dashboard._flow_counts()
+    assert counts == {"/scout": 0, "/scripts": 0, "/galleries": 0, "/voice": 0}
