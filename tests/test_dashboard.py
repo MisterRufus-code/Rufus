@@ -1525,28 +1525,91 @@ def test_a_set_with_an_unpicked_shot_will_not_render(client, monkeypatch):
     assert rendered == []
 
 
-def test_a_complete_set_renders_from_the_chosen_pictures(client, monkeypatch):
-    """Nothing is redrawn — that is the whole point of having spent forty
-    minutes drawing and choosing."""
-    launched = {}
+def test_a_settled_set_records_the_hook_rather_than_rendering(client, monkeypatch):
+    """The render waits for the LAST judgement, not the second-to-last. There
+    is one more thing to choose after the pictures."""
+    started, rendered = {}, []
+    monkeypatch.setattr(dashboard, "_launch_voice_takes",
+                        lambda **kw: started.update(kw) or Path("v.log"))
     monkeypatch.setattr(dashboard, "_launch_run",
-                        lambda **kw: launched.update(kw) or (None, Path("r.log")))
+                        lambda **kw: rendered.append(kw) or (None, Path("r.log")))
     sid = _gallery()
     client.post(f"/galleries/{sid}/base/0")
     client.post(f"/galleries/{sid}/use")
-    assert launched["gallery_id"] == sid
-    assert launched["script_file"].endswith("candidate_1.txt")
+    assert started["set_id"] == sid
+    assert rendered == []
 
 
-def test_a_gallery_cannot_be_sent_to_render_twice(client, monkeypatch):
+def test_a_gallery_cannot_be_settled_twice(client, monkeypatch):
     calls = []
-    monkeypatch.setattr(dashboard, "_launch_run",
-                        lambda **kw: calls.append(kw) or (None, Path("r.log")))
+    monkeypatch.setattr(dashboard, "_launch_voice_takes",
+                        lambda **kw: calls.append(kw) or Path("v.log"))
     sid = _gallery()
     client.post(f"/galleries/{sid}/base/0")
     client.post(f"/galleries/{sid}/use")
     client.post(f"/galleries/{sid}/use")
     assert len(calls) == 1
+
+
+# ── choosing how it opens ───────────────────────────────────────────────────
+
+def _takes(set_id, topic="Rome"):
+    return [db_manager.save_voice_take(
+        set_id=set_id, channel="main_en", topic=topic, tone=tone,
+        text="You checked your portfolio today.", path=f"/nope/{tone}.mp3")
+        for tone in ("curiosity", "tension", "revelation")]
+
+
+def test_the_page_offers_a_player_per_read(client):
+    sid = _gallery()
+    _takes(sid)
+    page = client.get("/voice").get_data(as_text=True)
+    for tone in ("curiosity", "tension", "revelation"):
+        assert tone in page
+    assert page.count("<audio") == 3
+
+
+def test_choosing_a_read_starts_the_render_with_every_earlier_choice(
+        client, monkeypatch):
+    """The last click is where the irreversible step finally happens, and it
+    carries the script, the pictures and the tone — none of them regenerated."""
+    launched = {}
+    monkeypatch.setattr(dashboard, "_launch_run",
+                        lambda **kw: launched.update(kw) or (None, Path("r.log")))
+    sid = _gallery()
+    client.post(f"/galleries/{sid}/base/0")
+    ids = _takes(sid)
+    client.post(f"/voice/{ids[1]}/choose")
+    assert launched["gallery_id"] == sid
+    assert launched["hook_tone"] == "tension"
+    assert launched["script_file"].endswith("candidate_1.txt")
+
+
+def test_choosing_a_read_records_the_others_as_passed_over(client, monkeypatch):
+    monkeypatch.setattr(dashboard, "_launch_run",
+                        lambda **kw: (None, Path("r.log")))
+    sid = _gallery()
+    ids = _takes(sid)
+    client.post(f"/voice/{ids[0]}/choose")
+    rows = {t["id"]: t["status"] for t in db_manager.voice_takes(set_id=sid)}
+    assert rows[ids[0]] == "chosen"
+    assert rows[ids[1]] == rows[ids[2]] == "rejected"
+
+
+def test_a_read_cannot_be_chosen_twice(client, monkeypatch):
+    calls = []
+    monkeypatch.setattr(dashboard, "_launch_run",
+                        lambda **kw: calls.append(kw) or (None, Path("r.log")))
+    sid = _gallery()
+    ids = _takes(sid)
+    client.post(f"/voice/{ids[0]}/choose")
+    client.post(f"/voice/{ids[0]}/choose")
+    assert len(calls) == 1
+
+
+def test_an_empty_voice_page_says_where_reads_come_from(client):
+    page = client.get("/voice").get_data(as_text=True)
+    assert "Nothing waiting" in page and "/galleries" in page
 
 
 def test_an_empty_gallery_page_says_where_pictures_come_from(client):

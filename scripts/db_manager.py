@@ -266,6 +266,35 @@ def init_db():
         """)
         c.execute("CREATE INDEX IF NOT EXISTS idx_gimg_set "
                   "ON gallery_images(set_id, beat_index, variant)")
+        # THREE READS OF THE HOOK, AND ONLY THE HOOK.
+        #
+        # Audio is the one thing on this list that cannot be skimmed — it plays
+        # at one times speed and there is no glancing at it. Three full
+        # forty-five-second takes is two and a half minutes of listening; three
+        # eight-second hooks is twenty-four seconds, and if the hook read lands
+        # the rest follows it. So the take is the opening line.
+        #
+        # The VOICE is not what varies. A channel whose narrator changes every
+        # video has no narrator, and that is channel identity rather than a
+        # per-video decision. What varies is the tone the director assigns
+        # beat 0 — the same lever that already sizes its pauses and grades its
+        # picture.
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS voice_takes (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                created_at  TEXT DEFAULT (datetime('now')),
+                set_id      INTEGER,
+                channel     TEXT,
+                topic       TEXT,
+                tone        TEXT,
+                text        TEXT,
+                path        TEXT,
+                status      TEXT DEFAULT 'pending',
+                decided_at  TEXT
+            )
+        """)
+        c.execute("CREATE INDEX IF NOT EXISTS idx_vtake_set "
+                  "ON voice_takes(set_id, status)")
         c.execute("""
             CREATE TABLE IF NOT EXISTS script_attempts (
                 id                INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -746,6 +775,65 @@ def decide_gallery_set(set_id: int, status: str = "chosen") -> bool:
             "UPDATE gallery_sets SET status=?, decided_at=datetime('now') "
             "WHERE id=? AND status='pending'", (status, int(set_id)))
         return cur.rowcount > 0
+
+
+# ── voice takes ──────────────────────────────────────────────────────────────
+
+_VTAKE_COLS = ["id", "created_at", "set_id", "channel", "topic", "tone",
+               "text", "path", "status", "decided_at"]
+
+
+def save_voice_take(*, set_id: int, channel: str, topic: str, tone: str,
+                    text: str, path: str) -> int:
+    with _conn() as c:
+        cur = c.execute(
+            "INSERT INTO voice_takes (set_id, channel, topic, tone, text, "
+            "path) VALUES (?,?,?,?,?,?)",
+            (int(set_id), channel, topic, tone, text, str(path)))
+        return cur.lastrowid
+
+
+def voice_takes(set_id: int | None = None, status: str | None = None,
+                limit: int = 60) -> list[dict]:
+    q = f"SELECT {', '.join(_VTAKE_COLS)} FROM voice_takes"
+    where, args = [], []
+    if set_id is not None:
+        where.append("set_id = ?")
+        args.append(int(set_id))
+    if status:
+        where.append("status = ?")
+        args.append(status)
+    if where:
+        q += " WHERE " + " AND ".join(where)
+    q += " ORDER BY set_id DESC, id ASC LIMIT ?"
+    args.append(int(limit))
+    with _conn() as c:
+        rows = c.execute(q, args).fetchall()
+    return [dict(zip(_VTAKE_COLS, r)) for r in rows]
+
+
+def choose_voice_take(take_id: int) -> dict | None:
+    """Mark one take chosen and its siblings passed over. Returns it.
+
+    Same shape as choose_candidate, and for the same reason: the pair is what
+    makes a click worth recording. Returns None for an unknown or already
+    decided id, so a double tap on a phone cannot re-decide which read lost.
+    """
+    with _conn() as c:
+        row = c.execute(
+            f"SELECT {', '.join(_VTAKE_COLS)} FROM voice_takes "
+            f"WHERE id = ? AND status = 'pending'", (int(take_id),)).fetchone()
+        if not row:
+            return None
+        take = dict(zip(_VTAKE_COLS, row))
+        c.execute("UPDATE voice_takes SET status='chosen', "
+                  "decided_at=datetime('now') WHERE id=?", (int(take_id),))
+        c.execute("UPDATE voice_takes SET status='rejected', "
+                  "decided_at=datetime('now') "
+                  "WHERE set_id=? AND id<>? AND status='pending'",
+                  (int(take["set_id"]), int(take_id)))
+        take["status"] = "chosen"
+        return take
 
 
 def proposal_cost_today() -> float:

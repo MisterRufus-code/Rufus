@@ -618,7 +618,8 @@ _LAUNCHED: dict[str, subprocess.Popen] = {}
 
 def _launch_run(*, niche: str | None = None, topic: str | None = None,
                 channel: str | None = None, script_file: str | None = None,
-                gallery_id: int | None = None) -> tuple[subprocess.Popen, Path]:
+                gallery_id: int | None = None,
+                hook_tone: str | None = None) -> tuple[subprocess.Popen, Path]:
     """Fire-and-forget: a genuinely separate OS process, not an in-process
     call — this Flask app runs threaded=False (see approve_video's
     _scoped_env note), so a call that blocks for the 5-45+ minutes a video
@@ -650,6 +651,8 @@ def _launch_run(*, niche: str | None = None, topic: str | None = None,
         # left in the settings file would quietly render every future video
         # from one old set of pictures.
         env["RUFUS_GALLERY"] = str(gallery_id)
+    if hook_tone:
+        env["RUFUS_HOOK_TONE"] = hook_tone
     # THE CHILD'S STDOUT IS A FILE, so Python has no console to ask and falls
     # back to the system ANSI code page — cp1255 here, which has no ✗ and no
     # em-dash. A real run died mid-report on exactly that. The .bat launchers
@@ -715,6 +718,31 @@ def _launch_galleries(*, script_file: str, candidate_id: int | None,
     log_dir = ROOT / "logs"
     log_dir.mkdir(parents=True, exist_ok=True)
     log_path = log_dir / f"galleries_{int(time.time())}.log"
+    with open(log_path, "wb") as logf:
+        subprocess.Popen(cmd, cwd=str(ROOT), stdout=logf, env=env,
+                         stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL)
+    return log_path
+
+
+def _launch_voice_takes(*, script_file: str, set_id: int,
+                        topic: str = "") -> Path:
+    """Record the three hook reads in a separate process.
+
+    Shorter than the other two launches — three eight-second lines is seconds,
+    not minutes — but still out of the request, because a TTS backend that
+    stalls would hang the page rather than the take.
+    """
+    cmd = [sys.executable, str(ROOT / "scripts" / "voice_takes.py"),
+           script_file, "--set", str(set_id)]
+    if topic:
+        cmd += ["--topic", topic]
+    env = os.environ.copy()
+    env.update(_load_settings())
+    env.setdefault("PYTHONUTF8", "1")
+    env.setdefault("PYTHONIOENCODING", "utf-8")
+    log_dir = ROOT / "logs"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    log_path = log_dir / f"voice_takes_{int(time.time())}.log"
     with open(log_path, "wb") as logf:
         subprocess.Popen(cmd, cwd=str(ROOT), stdout=logf, env=env,
                          stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL)
@@ -1636,6 +1664,7 @@ NAV_ITEMS = [
     ("/scout",      "🛰 Scout",                           "view"),
     ("/scripts",    "📝 Choose a script",                 "view"),
     ("/galleries",  "🖼 Choose the pictures",             "view"),
+    ("/voice",      "🎙 Choose how it opens",             "view"),
     ("/bench",      "🔬 Workflow bench",                  "settings"),
     ("/failures",   "⚠ Failures &amp; rejected attempts", "view"),
     ("/performance", "📈 Performance",                    "view"),
@@ -1668,7 +1697,8 @@ NAV_GROUPS = (
     ("Make",    ("/generate", "/thumbnails", "/styles")),
     ("Review",  ("/gallery", "/history", "/failures")),
     ("Measure", ("/tracking", "/performance", "/insights", "/advice",
-                 "/trending", "/scout", "/scripts", "/galleries")),
+                 "/trending", "/scout", "/scripts", "/galleries",
+                 "/voice")),
     ("System",  ("/bench", "/logs", "/system", "/settings")),
 )
 
@@ -3590,7 +3620,7 @@ def galleries_swap(set_id: int, beat: int, variant: int):
 
 @app.route("/galleries/<int:set_id>/use", methods=["POST"])
 def galleries_use(set_id: int):
-    """Render the video from the chosen pictures — nothing regenerated.
+    """Pictures settled → three reads of the hook, the last thing to choose.
 
     Refuses a set with a beat nobody picked. clip[i] belongs to beat[i] all the
     way downstream, so a short list does not lose one picture — it slides every
@@ -3609,13 +3639,129 @@ def galleries_use(set_id: int):
             return redirect("/galleries?error=" + _urlquote("no such set"))
         if not dbm.decide_gallery_set(set_id, "chosen"):
             return redirect("/galleries?error=" + _urlquote("already decided"))
-        _, log_path = _launch_run(script_file=gs["script_file"],
-                                  channel=gs["channel"], gallery_id=set_id)
+        log_path = _launch_voice_takes(script_file=gs["script_file"],
+                                       set_id=set_id,
+                                       topic=gs["topic"] or "")
     except Exception as e:
         return redirect("/galleries?error=" + _urlquote(f"could not start: {e}"))
-    return redirect("/galleries?msg=" + _urlquote(
-        f'Rendering with your {len(rows)} chosen picture(s) — nothing is '
-        f'redrawn. Log: logs/{log_path.name}'))
+    return redirect("/voice?msg=" + _urlquote(
+        f'{len(rows)} picture(s) settled. Recording three reads of the hook — '
+        f'seconds, not minutes. Log: logs/{log_path.name}'))
+
+
+# ── Choosing how it opens ────────────────────────────────────────────────────
+
+@app.route("/voice")
+def voice_page():
+    """Three reads of the opening line. Twenty-four seconds of listening.
+
+    ONLY THE HOOK, because audio is the one thing on this list that cannot be
+    skimmed — it plays at one times speed. Three full takes is two and a half
+    minutes; three hooks is twenty-four seconds, and if the opening read lands
+    the rest follows it.
+
+    The VOICE is not what varies and should not: a channel whose narrator
+    changes every video has no narrator. What varies is the tone beat 0 is read
+    in — the same lever that sizes its pauses and grades its picture.
+    """
+    auth.require("view")
+    try:
+        import db_manager as dbm
+        takes = dbm.voice_takes(status="pending", limit=30)
+    except Exception as e:
+        body = (f'<a class="back" href="/">← back</a><h2 style="margin-top:14px">'
+                f'Choose how it opens</h2><div class="msg error">'
+                f'{_esc(str(e))}</div>')
+        return _head() + body + PAGE_TAIL
+
+    sets: dict = {}
+    for t in takes:
+        sets.setdefault((t["set_id"], t["topic"]), []).append(t)
+
+    blocks = ""
+    for (set_id, topic), rows in sets.items():
+        cards = ""
+        for t in rows:
+            button = ""
+            if auth.can("generate"):
+                button = (f'<form method="post" action="/voice/{t["id"]}/choose"'
+                          f' style="display:inline"><button class="btn save" '
+                          f'type="submit">Open like this</button></form>')
+            cards += (
+                f'<div class="card" style="width:100%;margin-bottom:10px">'
+                f'<strong>{_esc(t["tone"] or "—")}</strong>'
+                f'<audio controls preload="none" style="display:block;'
+                f'width:100%;margin:8px 0" src="/voice/audio/{t["id"]}">'
+                f'</audio><div>{button}</div></div>')
+        blocks += (f'<h2 style="margin-top:22px">{_esc(topic or "—")}</h2>'
+                   f'<p class="muted">“{_esc((rows[0]["text"] or "")[:200])}” — '
+                   f'{len(rows)} read(s). The tone you pick sizes this beat\'s '
+                   f'pauses and grades its picture too, so it is one decision '
+                   f'about what the opening IS rather than three.</p>{cards}')
+
+    if not sets:
+        blocks = ('<p class="muted">Nothing waiting. Settle the pictures on '
+                  '<a href="/galleries">Choose the pictures</a> and three '
+                  'reads of the hook are recorded here.</p>')
+
+    body = f"""
+    <a class="back" href="/">← back</a>
+    <h2 style="margin-top:14px">Choose how it opens</h2>
+    {_msg_banner()}
+    {blocks}
+    """
+    return _head() + body + PAGE_TAIL
+
+
+@app.route("/voice/audio/<int:take_id>")
+def voice_audio(take_id: int):
+    """One take. Addressed by row id rather than filename, so nothing in a
+    query string can reach a file outside the takes directory."""
+    auth.require("view")
+    try:
+        import db_manager as dbm
+        row = next((t for t in dbm.voice_takes(limit=200)
+                    if t["id"] == take_id), None)
+    except Exception:
+        row = None
+    if not row:
+        abort(404)
+    p = Path(row["path"])
+    if not p.exists():
+        abort(404)
+    return send_from_directory(str(p.parent), p.name, max_age=_IMAGE_MAX_AGE)
+
+
+@app.route("/voice/<int:take_id>/choose", methods=["POST"])
+def voice_choose(take_id: int):
+    """The last choice → the render, with everything a person picked.
+
+    This is where the irreversible expensive step finally happens, and it has
+    every human answer behind it: the topic, the script, the pictures shot by
+    shot, and now the read. Nothing in the run regenerates any of them.
+    """
+    auth.require("generate")
+    try:
+        import db_manager as dbm
+        take = dbm.choose_voice_take(take_id)
+        if not take:
+            return redirect("/voice?error=" + _urlquote(
+                "that read is not pending — already decided?"))
+        gs = next((g for g in dbm.gallery_sets(status=None, limit=40)
+                   if g["id"] == take["set_id"]), None)
+        if not gs:
+            return redirect("/voice?error=" + _urlquote(
+                "the picture set behind this read is gone"))
+        _, log_path = _launch_run(script_file=gs["script_file"],
+                                  channel=gs["channel"],
+                                  gallery_id=take["set_id"],
+                                  hook_tone=take["tone"])
+    except Exception as e:
+        return redirect("/voice?error=" + _urlquote(f"could not start: {e}"))
+    return redirect("/voice?msg=" + _urlquote(
+        f'Making it — your script, your pictures, opening in {take["tone"]}. '
+        f'It lands in the review queue like any other video. '
+        f'Log: logs/{log_path.name}'))
 
 
 # ── The workflow bench ───────────────────────────────────────────────────────

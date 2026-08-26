@@ -1,5 +1,6 @@
 """Tests for audio_gen.py – timestamp formatting and word clustering."""
 
+import os
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -300,3 +301,24 @@ def test_a_command_near_the_windows_ceiling_says_so(capsys):
 def test_an_ordinary_command_says_nothing(capsys):
     audio_gen._warn_if_command_is_too_long(["ffmpeg", "-i", "a.mp4", "out.mp4"])
     assert capsys.readouterr().out == ""
+
+
+# ── the hook read a person already chose ────────────────────────────────────
+
+def test_the_chosen_hook_tone_overrides_beat_zero(monkeypatch):
+    """/voice records the opening line in three tones and one is picked;
+    RUFUS_HOOK_TONE carries that answer into the render."""
+    import emotional_map
+    monkeypatch.setenv("RUFUS_HOOK_TONE", "tension")
+    tones = ["neutral", "curiosity", "weight"]
+    picked = emotional_map.normalise(os.environ["RUFUS_HOOK_TONE"])
+    tones[0] = picked
+    assert tones == ["tension", "curiosity", "weight"]
+
+
+def test_an_unknown_hook_tone_falls_back_to_neutral():
+    """normalise is the guard: a tone name that is not in the map must not
+    reach the grade filters, where an unknown key is a KeyError mid-render."""
+    import emotional_map
+    assert emotional_map.normalise("shouty") == emotional_map.NEUTRAL
+    assert emotional_map.normalise("tension") == "tension"

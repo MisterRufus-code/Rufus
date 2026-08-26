@@ -1428,6 +1428,28 @@ def render(script: str, bg_paths: "Path | list[Path]", out_dir: Path,
     except Exception as e:
         print(f"[grade] emotional map unavailable (non-fatal): {e}")
 
+    # A HOOK READ A PERSON ALREADY CHOSE. /voice records the opening line in
+    # three tones and one is picked; RUFUS_HOOK_TONE carries that answer here.
+    # Beat 0 only, because that is all that was listened to — overriding beats
+    # nobody heard would be substituting a guess for the director's reading of
+    # the actual sentence.
+    #
+    # It reaches the grade and the pauses as well as the voice, and that is
+    # correct rather than incidental: the tone is one decision about what this
+    # beat IS, and a hook spoken as a warning that is graded as curiosity is
+    # two directors arguing inside one shot.
+    _hook_tone = (os.environ.get("RUFUS_HOOK_TONE") or "").strip()
+    if _hook_tone and plan_tones:
+        try:
+            import emotional_map as _em
+            picked = _em.normalise(_hook_tone)
+            if picked != plan_tones[0]:
+                print(f"[grade] hook tone: {plan_tones[0]} → {picked} "
+                      f"(chosen at /voice)")
+            plan_tones[0] = picked
+        except Exception as e:
+            print(f"[grade] hook tone {_hook_tone!r} ignored ({e})")
+
     font_name = _ensure_font()
 
     out_dir.mkdir(parents=True, exist_ok=True)
