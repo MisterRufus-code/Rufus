@@ -373,6 +373,49 @@ def test_defuse_clause_never_names_text_in_the_positive_prompt():
         assert banned not in clause, f"positive clause must not contain {banned!r}"
 
 
+# ── the inventory was deleted from the style block and left standing here ────
+#
+# tests/test_styles.py::test_no_preset_lists_the_things_that_carry_writing
+# forbids every preset from naming "a page", "a coin face", "a ledger" inside
+# its no-lettering rule: the gallery that prompted it was full of gold coins
+# nobody had asked for, because a forbidden object is still an object in the
+# prompt. That fix went into config/styles.json and stopped there. This clause
+# is appended to the SAME prompt a few words later and it named four of them —
+# page, sign, coin face, screen — which is two live defects at once:
+#
+#   · whole frames that are one empty sheet: the clause commissioned a page,
+#     told the sampler it was blank, and a "detail" framing said one object
+#     fills the frame edge to edge;
+#   · heads drawn as empty ovals: "coin FACE ... is BLANK and unmarked ...
+#     EMPTY surfaces" reaches a bag-of-concepts encoder as face, blank, empty.
+
+_OBJECTS_A_BLANKING_CLAUSE_MUST_NOT_NAME = [
+    "page", "coin", "face", "screen", "sign", "ledger", "book", "document",
+    "banner", "paper", "poster", "newspaper",
+]
+
+
+@pytest.mark.parametrize("noun", _OBJECTS_A_BLANKING_CLAUSE_MUST_NOT_NAME)
+def test_the_blanking_clause_names_no_object(noun):
+    """Same rule as the style block, same reason. This clause rides on every
+    prompt that trips the text net — 13 of 15 prompts in one live run — so a
+    noun in it is a noun in thirteen pictures."""
+    import main
+    import re as _re
+    assert not _re.search(rf"\b{noun}s?\b", main._DETEXT_CLAUSE.lower()), (
+        f"the blanking clause names {noun!r}; appended to every triggered "
+        f"prompt, a forbidden object is still an object in the prompt")
+
+
+def test_the_blanking_clause_still_blanks_the_surface():
+    """Deleting the inventory must not delete the instruction — the lettering
+    it exists to stop cost two galleries."""
+    import main
+    clause = main._DETEXT_CLAUSE.lower()
+    assert "blank and unmarked" in clause
+    assert "shape, color and wear" in clause
+
+
 def test_defuse_leaves_clean_prompts_untouched():
     import main
     clean = "A wide establishing shot of a misty mountain valley at dawn"

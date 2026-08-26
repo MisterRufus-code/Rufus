@@ -745,11 +745,37 @@ _TEXT_PROP_RE = re.compile(
 # comfy_template into the sampler's own negative wire); what stays here is a
 # POSITIVE description of the surface we want — blank paper — which the
 # sampler can actually render.
+#
+# AND THE INVENTORY WAS DELETED FROM THE STYLE BLOCK AND LEFT STANDING HERE.
+# tests/test_styles.py forbids every preset from naming "a page", "a coin
+# face", "a ledger" inside its no-lettering rule, because a forbidden object is
+# still an object in the prompt and the gallery came back full of coins. That
+# lesson was applied to config/styles.json and never to this clause — which is
+# appended to the same prompt, a few words later, and named four of them:
+# page, sign, coin FACE, screen. Two live defects fall straight out of it:
+#
+#   · frames that are nothing but an empty sheet — a page was commissioned by
+#     the very clause meant to keep it quiet, and the framing said one object
+#     fills the frame edge to edge;
+#   · figures whose heads are empty ovals — "coin face ... is blank and
+#     unmarked ... empty surfaces" reaches a bag-of-concepts encoder as face,
+#     blank, empty, and a head in this style is a white oval.
+#
+# So it says what the style block says: name nothing, and describe the surface
+# this shot already has.
 _DETEXT_SENTINEL = "blank and unmarked"
+# "Made thing" and not "surface": a surface is what a head is, in a style whose
+# heads are white ovals, and this clause has to be able to reach a ledger
+# without reaching a face.
+#
+# "could CARRY A MARK" and not "could be marked", which is the phrasing this
+# was first written with: _NAMED_WORDS_RE strips \bmarked\b and everything
+# after it, so the clause ate its own sentinel on the second pass and got
+# appended twice. The two idempotence tests caught it immediately.
 _DETEXT_CLAUSE = (
-    " Every page, sign, coin face, and screen in the frame is blank and "
-    "unmarked — plain smooth empty surfaces, angled away or seen at a "
-    "distance, described by shape, color and wear alone.")
+    " Every made thing in the frame that could carry a mark is blank and "
+    "unmarked — plain smooth surfaces, angled away or seen at a distance, "
+    "described by shape, color and wear alone.")
 
 
 # THE WORDS THEMSELVES, DELETED — not argued with.

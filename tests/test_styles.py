@@ -1540,3 +1540,17 @@ def test_the_suppression_goes_in_the_negative_not_the_style():
     import comfy_client
     for name, text in _looks().items():
         assert "human figure" not in text, name
+
+
+def test_the_micro_preset_marks_the_figures_at_the_back_too():
+    """The empty oval, in the preset that had no sentence about it.
+
+    stickman and stickman_lean each carry "THE THREE MARKS ARE ALWAYS DRAWN, on
+    the figures at the back of the frame exactly as on the ones at the front" —
+    written after a gallery came back with a suited figure in the middle
+    distance whose head had no eyes. stickman_micro was written afterwards,
+    from scratch, and inherited none of it; the first micro gallery had the
+    same defect in a room of seated figures. Nine words is the shortest form
+    that says it."""
+    s = _looks()["stickman_micro"]
+    assert "the figures at the back marked exactly as the ones in front" in s

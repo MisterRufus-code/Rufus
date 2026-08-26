@@ -1139,6 +1139,48 @@ def _vary_framings(chosen: list[str]) -> list[str]:
     return out
 
 
+# A FRAME THAT IS NOTHING BUT AN EMPTY SHEET.
+#
+# Two rules that are each right on their own, multiplied: "detail" means one
+# single object fills the frame almost edge to edge, and every writable surface
+# in the frame is drawn blank. Put them on the same shot — a shot whose subject
+# IS a document — and the picture is a blank rectangle. The owner saw it in a
+# live gallery: "sometimes you just see an empty page". advisor.py had already
+# written the sentence ("a shot built around a document is a weak shot even
+# with blank surfaces") without anything acting on it.
+#
+# Only flat writable surfaces are grounded. A detail on a coin, a lock, a scale
+# or a key is the shot this ladder exists for and stays untouched; it is the
+# ones with nothing to look at once the writing is gone that need a pair of
+# hands in the frame to be a picture at all.
+_FLAT_SURFACE_RE = re.compile(
+    r"(?i)\b(page|pages|paper|sheet|sheets|document|documents|ledger|ledgers|"
+    r"newspaper|newspapers|letter|letters|scroll|scrolls|parchment|"
+    r"certificate|certificates|contract|contracts|statement|statements|"
+    r"receipt|receipts|invoice|invoices|cheque|check|banknote|banknotes|"
+    r"note|notes|bill|bills|poster|posters|placard|placards|sign|signs|"
+    r"signpost|banner|banners|map|maps|chart|charts|screen|screens|"
+    r"book|books|manuscript|manuscripts)\b")
+
+
+def _no_detail_on_a_flat_surface(framings: list[str],
+                                 visuals: list[str]) -> list[str]:
+    """Demote "detail" to "close" where the subject is a writable surface.
+
+    "close" is head-and-shoulders OR two hands and the object they hold, so the
+    object survives at nearly the same size and the frame keeps something in it
+    that is not the blank part.
+    """
+    out = list(framings)
+    for i, framing in enumerate(out):
+        if framing != "detail":
+            continue
+        visual = visuals[i] if i < len(visuals) else ""
+        if _FLAT_SURFACE_RE.search(visual):
+            out[i] = "close"
+    return out
+
+
 def _clean(plan: dict, n_beats: int,
            beats: list[str] | None = None) -> list[str] | None:
     """The visuals in beat order, or None if the reply can't be trusted.
@@ -1155,8 +1197,14 @@ def _clean(plan: dict, n_beats: int,
     # The distance each shot asked for, collected first so a run of four wides
     # can be broken before any of them is written into a prompt.
     wanted = [_framing_of(e) if isinstance(e, dict) else "" for e in shots]
-    framings = _vary_framings(wanted)
-    n_varied = sum(1 for a, b in zip(wanted, framings) if a != b)
+    raw_visuals = [str(e.get("visual", "")) if isinstance(e, dict) else ""
+                   for e in shots]
+    # Ground the blank-sheet shots BEFORE breaking runs, so the run-breaker
+    # sees the distances that will actually ship rather than the ones asked for.
+    grounded = _no_detail_on_a_flat_surface(wanted, raw_visuals)
+    n_grounded = sum(1 for a, b in zip(wanted, grounded) if a != b)
+    framings = _vary_framings(grounded)
+    n_varied = sum(1 for a, b in zip(grounded, framings) if a != b)
 
     # HOW OFTEN THE THREAD MAY BE RESTATED. See _already_shows for the failure.
     thread_budget = max(2, round(n_beats * THREAD_SHARE))
@@ -1202,6 +1250,9 @@ def _clean(plan: dict, n_beats: int,
         counts = Counter(chosen)
         shown = ", ".join(f"{k}×{v}" for k, v in counts.most_common())
         print(f"[storyboard] framing: {shown}")
+        if n_grounded:
+            print(f"[storyboard] {n_grounded} shot(s) asked for one blank "
+                  f"surface edge to edge — pulled back to hands and object")
         if n_varied:
             print(f"[storyboard] broke {n_varied} run(s) of the same distance")
         if len(counts) == 1 and len(chosen) >= 4:

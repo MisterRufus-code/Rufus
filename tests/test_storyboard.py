@@ -1451,3 +1451,74 @@ def test_the_guard_only_ever_tightens():
 ])
 def test_a_shot_with_genuinely_nobody_in_it_keeps_its_saving(shot):
     assert storyboard._kinds_agree_with_the_shots(["object"], [shot]) == ["object"]
+
+
+# ── a frame that is nothing but an empty sheet ───────────────────────────────
+#
+# Two rules that are each correct alone, multiplied on one shot: "detail" means
+# one single object fills the frame almost edge to edge, and every writable
+# surface in the frame is drawn blank. When the subject IS a document, the
+# picture that follows is a blank rectangle — the owner saw it in a live
+# gallery and called it what it is, an empty page. advisor.py had already
+# written the sentence ("a shot built around a document is a weak shot even
+# with blank surfaces") and nothing acted on it.
+
+def test_a_detail_on_a_document_is_pulled_back_to_the_hands():
+    import storyboard as sb
+    out = sb._no_detail_on_a_flat_surface(
+        ["detail"], ["A ledger open on a desk, its columns ruled"])
+    assert out == ["close"], (
+        "one blank sheet edge to edge is not a picture; close keeps the hands")
+
+
+@pytest.mark.parametrize("visual", [
+    "A newspaper folded on a bench",
+    "A single sheet of paper on a table",
+    "A contract laid out ready to be signed",
+    "A poster pasted to a brick wall",
+    "A screen glowing on a trading desk",
+])
+def test_every_flat_writable_subject_is_grounded(visual):
+    import storyboard as sb
+    assert sb._no_detail_on_a_flat_surface(["detail"], [visual]) == ["close"]
+
+
+@pytest.mark.parametrize("visual", [
+    "A gold coin lying on dark cloth",
+    "An iron padlock hanging from a door",
+    "A brass balance scale, its pans level",
+    "A key turning in a lock",
+])
+def test_the_detail_shot_this_ladder_exists_for_survives(visual):
+    """The fix must not cost the distance. A detail on a coin or a lock is the
+    shot the framing ladder was added to get, and it has nothing to lose once
+    the writing is gone."""
+    import storyboard as sb
+    assert sb._no_detail_on_a_flat_surface(["detail"], [visual]) == ["detail"]
+
+
+def test_grounding_leaves_the_other_distances_alone():
+    import storyboard as sb
+    framings = ["wide", "mid", "close"]
+    docs = ["A ledger"] * 3
+    assert sb._no_detail_on_a_flat_surface(framings, docs) == framings
+
+
+def test_grounding_runs_before_the_run_breaker_sees_the_distances():
+    """Order matters: _vary_framings breaks three of the same distance in a
+    row, and it has to count the distances that will actually ship. A demotion
+    applied afterwards could hand the renderer close-close-close."""
+    import storyboard as sb
+    plan = {"shots": [
+        {"visual": "Two clerks counting coins at a long counter in a hall",
+         "framing": "close"},
+        {"visual": "A clerk leaning over the counter, lamp above him",
+         "framing": "close"},
+        {"visual": "A ledger open on the counter, columns ruled down it",
+         "framing": "detail"},
+    ]}
+    shots = sb._clean(plan, 3)
+    assert shots is not None
+    third = shots[2]
+    assert not third.startswith(sb._FRAMINGS["close"]), (
+        "three closes in a row is the run the breaker exists to stop")
