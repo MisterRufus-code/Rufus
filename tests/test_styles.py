@@ -1488,8 +1488,25 @@ def test_the_micro_preset_still_splits_at_the_figure_marker():
 def test_the_micro_preset_is_actually_micro():
     """It exists to be short. A hundred and fifty words is not an experiment,
     it is stickman_lean with a haircut."""
-    assert len(_looks()["stickman_micro"].split()) < 110
+    assert len(_looks()["stickman_micro"].split()) < 140
     assert len(_looks()["stickman_lean"].split()) > 700, "the control moved"
+
+
+def test_the_micro_preset_asks_for_a_place_after_all():
+    """FIRST GALLERY, AND THE PLACE WAS THE ONE THING IT LOST.
+
+    Dropping the twenty-five words that build a place was the whole bet, on the
+    grounds that the shot names its own. Three of five frames came back as an
+    object on a flat colour field. The shot does name the place — it just does
+    not get drawn unless something says the place gets drawn.
+
+    So it comes back in twenty-two words instead of twenty-five, and still
+    without the four-to-eight inventory or the persistence clause: the gallery
+    complained about emptiness, not about drift."""
+    s = _looks()["stickman_micro"]
+    assert "BEHIND THE SUBJECT IS THE PLACE THIS SHOT NAMES" in s
+    assert "built from its own words and nothing else" in s
+    assert "BUILD THE WHOLE PLACE" not in s, "that is the long block's clause"
 
 
 # ── an object shot has no house style for a person, so it must not draw one ──
