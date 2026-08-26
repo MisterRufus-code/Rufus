@@ -187,31 +187,26 @@ def test_a_proposal_carries_the_evidence_that_chose_it(db, monkeypatch):
         "channel_median": 10_000, "outperformance": 9.0}])
     monkeypatch.setattr(scout, "subject_of", lambda t, n: "Panic of 1893")
 
-    import research
-    import script_writer
-    monkeypatch.setattr(research, "get_seed",
-                        lambda niche, topic=None: {"content": "a real source",
-                                                   "title": topic})
-    monkeypatch.setattr(script_writer, "preanalyze",
-                        lambda seed, scene="": ("analysis", "run1", 0.01))
-    monkeypatch.setattr(script_writer, "write_script_until_good",
-                        lambda scene, seed=None, precomputed_analysis=None,
-                        run_id=None: {"script": "the script", "hook": "the hook",
-                                      "score": 9, "cost_usd": 0.04})
-
     out = scout.pass_once()
     assert out["proposal_id"]
     row = db.proposals()[0]
-    assert row["score"] == 9
     assert row["topic"] == "Panic of 1893"
     assert "Neighbour" in row["evidence"]
     assert "9.0x" in row["evidence"]
-    assert row["cost_usd"] == pytest.approx(0.05)
 
 
-def test_a_writer_failure_is_a_skipped_pass_not_a_crash(db, monkeypatch):
-    """This runs in a scheduled task every few hours. A raise is a dead agent
-    and a log nobody reads."""
+def test_a_proposal_buys_no_prose(db, monkeypatch):
+    """WHAT THIS COST BEFORE, AND FOR NOTHING.
+
+    The scout wrote a full script for every proposal, the dashboard showed it
+    inside a <details>, and scout_approve then launched an ordinary run with
+    topic= alone — which writes its own script from scratch. Every one of those
+    scripts was paid for and thrown away, including the approved one. Six
+    pending proposals meant six scripts bought and six discarded.
+
+    A proposal is a topic and the evidence that chose it. Prose is bought once
+    a person has picked the topic — three scripts on the one that survived
+    instead of one each on the five that did not."""
     _unblocked(monkeypatch)
     monkeypatch.setattr(scout, "observe_and_remember", lambda: 1)
     db.record_observations([{
@@ -219,12 +214,50 @@ def test_a_writer_failure_is_a_skipped_pass_not_a_crash(db, monkeypatch):
         "title": "The Panic of 1893", "published_at": "", "views": 9,
         "channel_median": 1, "outperformance": 9.0}])
     monkeypatch.setattr(scout, "subject_of", lambda t, n: "Panic")
-    import research
-    monkeypatch.setattr(research, "get_seed", lambda *a, **k: (_ for _ in ())
-                        .throw(RuntimeError("no article")))
+
+    import script_writer
+    def _must_not_run(*a, **k):
+        raise AssertionError("a proposal must not write a script")
+    monkeypatch.setattr(script_writer, "write_script_until_good", _must_not_run)
+    monkeypatch.setattr(script_writer, "preanalyze", _must_not_run)
+
+    assert scout.pass_once()["proposal_id"]
+    row = db.proposals()[0]
+    assert not (row["script"] or "")
+    assert row["cost_usd"] == pytest.approx(0.0)
+
+
+def test_a_research_failure_is_a_skipped_pass_not_a_crash(db, monkeypatch):
+    """This runs in a scheduled task every few hours. A raise is a dead agent
+    and a log nobody reads. The writer moved out of this path, so what is left
+    to fail here is the subject lookup — and it has to fail the same way."""
+    _unblocked(monkeypatch)
+    monkeypatch.setattr(scout, "observe_and_remember", lambda: 1)
+    db.record_observations([{
+        "video_id": "v1", "channel_id": "c", "channel_title": "N",
+        "title": "The Panic of 1893", "published_at": "", "views": 9,
+        "channel_median": 1, "outperformance": 9.0}])
+    monkeypatch.setattr(scout, "subject_of",
+                        lambda t, n: (_ for _ in ()).throw(
+                            RuntimeError("model down")))
     out = scout.pass_once()
     assert out["proposal_id"] is None
-    assert "no article" in out["skipped"]
+    assert "model down" in out["skipped"]
+
+
+def test_a_busy_gpu_does_not_stop_a_topic_being_proposed(monkeypatch):
+    """A render takes hours and the scout runs every few. The GPU gate was
+    written when this path bought a script; it does not any more, and an empty
+    topic queue for the length of every render is the one thing a
+    choose-from-several design cannot survive. The gate still guards writing."""
+    import db_manager
+    monkeypatch.setattr(db_manager, "init_db", lambda: None)
+    monkeypatch.setattr(db_manager, "pending_proposal_count", lambda: 0)
+    monkeypatch.setattr(db_manager, "proposal_cost_today", lambda: 0.0)
+    import run_review
+    monkeypatch.setattr(run_review, "_gpu_is_busy", lambda: "a render")
+    assert scout.blocked(for_writing=False) == ""
+    assert "using the GPU" in scout.blocked()
 
 
 def test_observing_never_raises(monkeypatch):
@@ -266,42 +299,6 @@ def test_the_subject_falls_back_to_the_title_without_a_model(monkeypatch):
     monkeypatch.setattr(llm, "usable", lambda: False)
     assert scout.subject_of("The Panic of 1893", "money_history") == \
         "The Panic of 1893"
-
-
-def test_the_hook_is_taken_from_the_script(db, monkeypatch):
-    """write_script_until_good's documented return shape has no "hook" key —
-    script, run_id, score, criterion_scores, attempts_used, final_temperature,
-    reasoning, cost_usd. Asking for one returns "" forever, and an empty column
-    nobody displays is the kind of wrong that survives for months. The hook is
-    the script's first line, which is how metadata_writer and the uploader's
-    legacy path both get it."""
-    _unblocked(monkeypatch)
-    monkeypatch.setattr(scout, "observe_and_remember", lambda: 1)
-    db.record_observations([{
-        "video_id": "v1", "channel_id": "c", "channel_title": "N",
-        "title": "The Panic of 1893", "published_at": "", "views": 9,
-        "channel_median": 1, "outperformance": 9.0}])
-    monkeypatch.setattr(scout, "subject_of", lambda t, n: "Panic")
-
-    import research
-    import script_writer
-    monkeypatch.setattr(research, "get_seed",
-                        lambda niche, topic=None: {"content": "src"})
-    monkeypatch.setattr(script_writer, "preanalyze",
-                        lambda seed, scene="": ("a", "r1", 0.0))
-    # The REAL return shape, with no "hook" in it.
-    monkeypatch.setattr(script_writer, "write_script_until_good",
-                        lambda *a, **k: {
-                            "script": "You checked your portfolio today.\n"
-                                      "That is the problem.",
-                            "run_id": "r1", "score": 9, "criterion_scores": {},
-                            "attempts_used": 1, "final_temperature": 0.9,
-                            "reasoning": "", "cost_usd": 0.03})
-
-    scout.pass_once()
-    row = db.proposals()[0]
-    assert row["hook"] == "You checked your portfolio today."
-    assert row["script"].startswith("You checked your portfolio")
 
 
 def test_scout_only_reads_keys_the_writer_actually_returns():

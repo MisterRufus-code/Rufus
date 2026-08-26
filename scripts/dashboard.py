@@ -661,6 +661,33 @@ def _launch_run(*, niche: str | None = None, topic: str | None = None,
     return proc, log_path
 
 
+def _launch_candidates(*, topic: str, proposal_id: int | None,
+                       channel: str | None = None) -> Path:
+    """Write the script candidates for `topic` in a separate OS process.
+
+    A SUBPROCESS FOR THE SAME REASON A RUN IS ONE. This Flask app runs
+    threaded=False, and three scripts is one to three minutes of model calls —
+    long enough that doing it inline freezes every other request, including the
+    page the person is waiting on. They come back to /scripts when it is done,
+    which is also why the page has to say plainly that nothing is there yet
+    rather than looking empty and finished.
+    """
+    cmd = [sys.executable, str(ROOT / "scripts" / "script_candidates.py"), topic]
+    if proposal_id is not None:
+        cmd += ["--proposal", str(proposal_id)]
+    env = os.environ.copy()
+    env.update(_load_settings())
+    env.setdefault("PYTHONUTF8", "1")
+    env.setdefault("PYTHONIOENCODING", "utf-8")
+    log_dir = ROOT / "logs"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    log_path = log_dir / f"candidates_{int(time.time())}.log"
+    with open(log_path, "wb") as logf:
+        subprocess.Popen(cmd, cwd=str(ROOT), stdout=logf, env=env,
+                         stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL)
+    return log_path
+
+
 def _cancel_run(channel: str | None = None) -> bool:
     """Terminate a run this dashboard launched. Returns False (no-op) for a
     run it has no handle to, or one that already finished."""
@@ -1574,6 +1601,7 @@ NAV_ITEMS = [
     ("/thumbnails", "🎨 Thumbnails",                      "thumbnail"),
     ("/styles",     "🎨 Style",                           "settings"),
     ("/scout",      "🛰 Scout",                           "view"),
+    ("/scripts",    "📝 Choose a script",                 "view"),
     ("/bench",      "🔬 Workflow bench",                  "settings"),
     ("/failures",   "⚠ Failures &amp; rejected attempts", "view"),
     ("/performance", "📈 Performance",                    "view"),
@@ -1606,7 +1634,7 @@ NAV_GROUPS = (
     ("Make",    ("/generate", "/thumbnails", "/styles")),
     ("Review",  ("/gallery", "/history", "/failures")),
     ("Measure", ("/tracking", "/performance", "/insights", "/advice",
-                 "/trending", "/scout")),
+                 "/trending", "/scout", "/scripts")),
     ("System",  ("/bench", "/logs", "/system", "/settings")),
 )
 
@@ -3143,20 +3171,23 @@ def scout_page():
             buttons = (
                 f'<form method="post" action="/scout/{p["id"]}/approve" '
                 f'style="display:inline"><button class="btn save" '
-                f'type="submit">Make this</button></form> '
+                f'type="submit">Write 3 scripts</button></form> '
                 f'<form method="post" action="/scout/{p["id"]}/reject" '
                 f'style="display:inline"><button type="submit">Not this'
                 f'</button></form>')
+        # NO SCRIPT ON THIS CARD ANY MORE. It used to show "the script it
+        # wrote" in a <details> — prose bought for every proposal, displayed,
+        # and then thrown away even on approval, because approving launched an
+        # ordinary run that writes its own. A proposal is a topic and the
+        # evidence that chose it; the writing happens once, on the one that
+        # survives this page.
         cards += (
             f'<div class="card" style="width:100%;margin-bottom:12px">'
             f'<div style="display:flex;justify-content:space-between;gap:12px">'
             f'<strong>{_esc(p["topic"] or "—")}</strong>'
-            f'<span class="muted">{p["score"]}/10 · ${p["cost_usd"]:.3f}</span>'
+            f'<span class="muted">{_esc((p["created_at"] or "")[:16])}</span>'
             f'</div>'
             f'<p class="muted" style="margin:6px 0">{_esc(p["evidence"] or "")}</p>'
-            f'<details><summary class="muted">the script it wrote</summary>'
-            f'<pre style="white-space:pre-wrap;font-size:13px">'
-            f'{_esc(p["script"] or "")}</pre></details>'
             f'<div style="margin-top:10px">{buttons}</div></div>')
 
     if not pending:
@@ -3191,8 +3222,10 @@ def scout_page():
     <p class="muted">Watches the channels in <code>config/competitors.json</code>,
        scores every video against <em>its own channel's median</em> — 20k views
        on a channel that averages 3k is the interesting one, not 50k on a
-       channel that averages 200k — and proposes what to make. It writes
-       scripts and stops there; approving one starts a normal run.</p>
+       channel that averages 200k — and proposes what to make. A proposal is a
+       topic and its evidence, and costs almost nothing. Choosing one writes
+       three scripts about it, one per hook style, and they land on
+       <a href="/scripts">Choose a script</a>.</p>
     {cards}
     {seen_html}
     {old_html}
@@ -3202,12 +3235,13 @@ def scout_page():
 
 @app.route("/scout/<int:proposal_id>/approve", methods=["POST"])
 def scout_approve(proposal_id: int):
-    """Approve a proposal → an ordinary run on its topic.
+    """Approve a topic → three scripts about it, for a person to rule between.
 
-    Reuses the same launch path as /request-topic rather than growing a second
-    one: a scout-approved video must go through every gate any other video goes
-    through, and the surest way to guarantee that is for it to BE the same
-    path.
+    THIS NO LONGER STARTS A RENDER, and that is the whole point of the split. A
+    render is hours of the 3090 and it used to be committed to here, from a
+    topic card, with the only script anyone had seen already discarded. Now the
+    expensive irreversible step sits one page further on, behind a choice
+    between three finished scripts.
     """
     auth.require("generate")
     try:
@@ -3219,12 +3253,14 @@ def scout_approve(proposal_id: int):
                 "that proposal is not pending — already decided?"))
         if not dbm.decide_proposal(proposal_id, "approved"):
             return redirect("/scout?error=" + _urlquote("could not record it"))
-        _, log_path = _launch_run(topic=row["topic"], channel=row["channel"])
+        log_path = _launch_candidates(topic=row["topic"],
+                                      proposal_id=proposal_id,
+                                      channel=row["channel"])
     except Exception as e:
         return redirect("/scout?error=" + _urlquote(f"could not start: {e}"))
-    return redirect("/scout?msg=" + _urlquote(
-        f'Making "{row["topic"]}" — it lands in the review queue like any '
-        f'other video. Log: logs/{log_path.name}'))
+    return redirect("/scripts?msg=" + _urlquote(
+        f'Writing three scripts about "{row["topic"]}" — a minute or two. '
+        f'Reload this page. Log: logs/{log_path.name}'))
 
 
 @app.route("/scout/<int:proposal_id>/reject", methods=["POST"])
@@ -3237,6 +3273,129 @@ def scout_reject(proposal_id: int):
         return redirect("/scout?error=" + _urlquote("already decided"))
     return redirect("/scout?msg=" + _urlquote(
         "Rejected — it will not be proposed again."))
+
+
+# ── Choosing a script ────────────────────────────────────────────────────────
+
+@app.route("/scripts")
+def scripts_page():
+    """Three scripts on one topic. Pick the one that gets made.
+
+    WHAT THIS PAGE IS ACTUALLY FOR, beyond the obvious. Nothing published
+    through this pipeline has view counts yet, so feedback_analyzer has never
+    run and config/learnings.json does not exist — which means the only
+    judgement anywhere in the script loop is a score the writer assigns itself
+    against thresholds it also owns. Every click here is the thing that score
+    cannot be: a person comparing three finished scripts and preferring one.
+    The two that lose are kept, because a preference is a pair.
+    """
+    auth.require("view")
+    try:
+        import db_manager as dbm
+        pending = dbm.candidates(status="pending", limit=60)
+    except Exception as e:
+        body = (f'<a class="back" href="/">← back</a><h2 style="margin-top:14px">'
+                f'Choose a script</h2><div class="msg error">{_esc(str(e))}</div>')
+        return _head() + body + PAGE_TAIL
+
+    # Grouped by the topic they are alternatives for. A flat list of nine
+    # scripts across three topics is not three choices, it is one confusing
+    # one — the whole value is in seeing the siblings side by side.
+    sets: dict = {}
+    for c in pending:
+        sets.setdefault((c["proposal_id"], c["topic"]), []).append(c)
+
+    blocks = ""
+    for (prop_id, topic), rows in sets.items():
+        cards = ""
+        for c in rows:
+            button = ""
+            if auth.can("generate"):
+                button = (f'<form method="post" action="/scripts/{c["id"]}'
+                          f'/choose" style="display:inline">'
+                          f'<button class="btn save" type="submit">'
+                          f'Make this one</button></form>')
+            words = len((c["script"] or "").split())
+            cards += (
+                f'<div class="card" style="width:100%;margin-bottom:10px">'
+                f'<div style="display:flex;justify-content:space-between;'
+                f'gap:12px"><strong>{_esc(c["hook"] or "—")}</strong>'
+                f'<span class="muted">{_esc(c["hook_style"] or "unpinned")} · '
+                f'{c["score"]}/10 · {words}w · ${c["cost_usd"]:.3f}</span></div>'
+                f'<pre style="white-space:pre-wrap;font-size:13px;'
+                f'margin:8px 0">{_esc(c["script"] or "")}</pre>'
+                f'<div>{button}</div></div>')
+        blocks += (f'<h2 style="margin-top:22px">{_esc(topic or "—")}</h2>'
+                   f'<p class="muted">{len(rows)} script(s) — one per hook '
+                   f'style. Choosing one records the other(s) as passed over, '
+                   f'which is the only labelled preference this channel can '
+                   f'collect before it has view counts.</p>{cards}')
+
+    if not sets:
+        blocks = ('<p class="muted">Nothing waiting. Pick a topic on '
+                  '<a href="/scout">Scout</a> and three scripts about it land '
+                  'here in a minute or two — or use '
+                  '<a href="/generate">Make a video</a> for a topic of your '
+                  'own.</p>')
+
+    try:
+        import db_manager as dbm
+        decided = [c for c in dbm.candidates(limit=60)
+                   if c["status"] != "pending"][:12]
+    except Exception:
+        decided = []
+    old = ""
+    for c in decided:
+        old += (f'<tr><td>{_esc((c["topic"] or "")[:40])}</td>'
+                f'<td class="muted">{_esc(c["hook_style"] or "")}</td>'
+                f'<td class="muted">{_esc((c["hook"] or "")[:60])}</td>'
+                f'<td class="muted">{c["score"]}/10</td>'
+                f'<td class="muted">{_esc(c["status"])}</td></tr>')
+    old_html = (f'<h2 style="margin-top:26px">Already ruled on</h2>'
+                f'<p class="muted">Kept on purpose — the one that lost is half '
+                f'of every pair.</p><table><tr><th>Topic</th><th>Style</th>'
+                f'<th>Hook</th><th>Score</th><th></th></tr>{old}</table>'
+                if old else "")
+
+    body = f"""
+    <a class="back" href="/">← back</a>
+    <h2 style="margin-top:14px">Choose a script</h2>
+    {_msg_banner()}
+    {blocks}
+    {old_html}
+    """
+    return _head() + body + PAGE_TAIL
+
+
+@app.route("/scripts/<int:candidate_id>/choose", methods=["POST"])
+def scripts_choose(candidate_id: int):
+    """Chosen → an ordinary run built from THIS script.
+
+    --script rather than --topic, which is the fix for the thing that made the
+    old flow wasteful: main.py skips its writer for a run given a script file,
+    so the script a person actually read is the script that gets made. Passing
+    the topic instead would have the writer produce a fourth one nobody chose.
+    Everything after that — fact gate, storyboard, render, review queue — is
+    the ordinary path.
+    """
+    auth.require("generate")
+    try:
+        import db_manager as dbm
+        chosen = dbm.choose_candidate(candidate_id)
+        if not chosen:
+            return redirect("/scripts?error=" + _urlquote(
+                "that one is not pending — already decided?"))
+        out_dir = ROOT / "logs" / "chosen_scripts"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        script_file = out_dir / f"candidate_{candidate_id}.txt"
+        script_file.write_text(chosen["script"] or "", encoding="utf-8")
+        _, log_path = _launch_run(script_file=str(script_file),
+                                  channel=chosen["channel"])
+    except Exception as e:
+        return redirect("/scripts?error=" + _urlquote(f"could not start: {e}"))
+    return redirect("/scripts?msg=" + _urlquote(
+        f'Making "{chosen["topic"]}" from the script you chose — it lands in '
+        f'the review queue like any other video. Log: logs/{log_path.name}'))
 
 
 # ── The workflow bench ───────────────────────────────────────────────────────

@@ -1372,6 +1372,19 @@ def _hook_styles_block(niche_cfg: dict) -> str:
     slightly different to a language model than they do to whoever typed them.
     """
     styles = [str(x).strip() for x in (niche_cfg.get("hook_styles") or []) if str(x).strip()]
+
+    # ONE CANDIDATE, ONE STYLE. When a person is shown three scripts to choose
+    # between, three samples from the same distribution are three versions of
+    # one script — the model reaches for its favourite opening whatever the
+    # temperature. Narrowing to a single declared style per candidate is what
+    # makes the set a real choice rather than three haircuts, and it is why the
+    # closing sentence below has to change too: "cover more than one of them"
+    # is the opposite instruction when the whole point is that this one does
+    # not.
+    forced = (os.environ.get("RUFUS_HOOK_STYLE") or "").strip()
+    if forced:
+        styles = [forced]
+
     if not styles:
         return ""
     known = {
@@ -1385,8 +1398,12 @@ def _hook_styles_block(niche_cfg: dict) -> str:
     lines = ["THIS CHANNEL'S HOOK STYLES — bias the candidates toward these:"]
     for st in styles:
         lines.append(f"- {st}: {known.get(st, 'as the name suggests')}")
-    lines.append("Cover more than one of them across the set; eight variations of "
-                 "a single style is one hook with eight haircuts.\n\n")
+    if forced:
+        lines.append("Every candidate opens in THIS style. The variation you "
+                     "are looking for is in the claim, not the shape.\n\n")
+    else:
+        lines.append("Cover more than one of them across the set; eight variations of "
+                     "a single style is one hook with eight haircuts.\n\n")
     return "\n".join(lines)
 
 

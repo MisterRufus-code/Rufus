@@ -174,6 +174,38 @@ def init_db():
                 cost_usd    REAL DEFAULT 0
             )
         """)
+        # WHAT WAS CHOSEN, AND WHAT IT WAS CHOSEN OVER. script_attempts already
+        # records every draft the writer made on its way to one answer; this
+        # records the drafts a PERSON was shown and ruled between. The
+        # difference matters: an attempt the writer discarded says the writer
+        # scored it low, and a candidate the owner passed over says a human
+        # looked at both and preferred the other one.
+        #
+        # That is the labelled preference pair this channel cannot get any
+        # other way yet. feedback_analyzer needs view counts and there are
+        # none; a rejected sibling needs nothing but the click that already
+        # happened. Rejected rows are therefore kept, not deleted — they are
+        # half of every pair.
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS script_candidates (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                created_at  TEXT DEFAULT (datetime('now')),
+                proposal_id INTEGER,
+                channel     TEXT,
+                niche       TEXT,
+                topic       TEXT,
+                hook_style  TEXT,
+                hook        TEXT,
+                script      TEXT,
+                score       INTEGER DEFAULT 0,
+                run_id      TEXT,
+                cost_usd    REAL DEFAULT 0,
+                status      TEXT DEFAULT 'pending',
+                decided_at  TEXT
+            )
+        """)
+        c.execute("CREATE INDEX IF NOT EXISTS idx_cand_proposal "
+                  "ON script_candidates(proposal_id, status)")
         c.execute("""
             CREATE TABLE IF NOT EXISTS script_attempts (
                 id                INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -399,8 +431,18 @@ def recent_titles(limit: int = 200, channel: str | None = None) -> list[str]:
         return [r[0] for r in c.execute(q, args).fetchall() if r[0]]
 
 
-def save_proposal(*, channel: str, niche: str, topic: str, hook: str,
-                  script: str, score: int, evidence: str,
+# A PROPOSAL IS A TOPIC, and for a long time it was a topic with a script
+# stapled to it that nothing ever read. The scout wrote a full script for every
+# proposal; the dashboard showed it inside a <details>; and scout_approve then
+# launched an ordinary run with topic= alone — which writes its own script from
+# scratch. Six proposals meant six scripts paid for and six discarded, and the
+# column was decoration the whole time.
+#
+# So the script arguments are optional now. The scout proposes topics, a person
+# chooses one, and only then is prose paid for — against the one topic that
+# survived rather than the five that did not.
+def save_proposal(*, channel: str, niche: str, topic: str, evidence: str,
+                  hook: str = "", script: str = "", score: int = 0,
                   cost_usd: float = 0.0) -> int:
     with _conn() as c:
         cur = c.execute(
@@ -446,6 +488,84 @@ def decide_proposal(proposal_id: int, status: str) -> bool:
             "UPDATE proposals SET status=?, decided_at=datetime('now') "
             "WHERE id=? AND status='pending'", (status, int(proposal_id)))
         return cur.rowcount > 0
+
+
+def save_candidate(*, proposal_id: int | None, channel: str, niche: str,
+                   topic: str, hook_style: str, hook: str, script: str,
+                   score: int, run_id: str = "", cost_usd: float = 0.0) -> int:
+    with _conn() as c:
+        cur = c.execute(
+            "INSERT INTO script_candidates (proposal_id, channel, niche, "
+            "topic, hook_style, hook, script, score, run_id, cost_usd) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?)",
+            (proposal_id, channel, niche, topic, hook_style, hook, script,
+             int(score), run_id, float(cost_usd)))
+        return cur.lastrowid
+
+
+_CANDIDATE_COLS = ["id", "created_at", "proposal_id", "channel", "niche",
+                   "topic", "hook_style", "hook", "script", "score", "run_id",
+                   "cost_usd", "status", "decided_at"]
+
+
+def candidates(proposal_id: int | None = None,
+               status: str | None = None, limit: int = 50) -> list[dict]:
+    """The scripts a person was shown, newest first.
+
+    Ordered by score within a proposal so the set reads best-first, because a
+    list of three scripts in generation order buries the one most likely to be
+    picked under two that were not.
+    """
+    q = f"SELECT {', '.join(_CANDIDATE_COLS)} FROM script_candidates"
+    where, args = [], []
+    if proposal_id is not None:
+        where.append("proposal_id = ?")
+        args.append(int(proposal_id))
+    if status:
+        where.append("status = ?")
+        args.append(status)
+    if where:
+        q += " WHERE " + " AND ".join(where)
+    q += " ORDER BY proposal_id DESC, score DESC, id ASC LIMIT ?"
+    args.append(int(limit))
+    with _conn() as c:
+        rows = c.execute(q, args).fetchall()
+    return [dict(zip(_CANDIDATE_COLS, r)) for r in rows]
+
+
+def choose_candidate(candidate_id: int) -> dict | None:
+    """Mark one candidate chosen and every sibling rejected. Returns it.
+
+    BOTH SIDES IN ONE CALL, and that is the point rather than a convenience:
+    the value here is the PAIR. A chosen row on its own says a script was made;
+    a chosen row beside the two it beat says a person compared three and
+    preferred this one, which is the only labelled preference this channel can
+    collect before it has view counts.
+
+    Returns None for an unknown id or one already decided, so a double-click on
+    a slow page cannot re-decide a set and overwrite which sibling lost.
+    """
+    with _conn() as c:
+        row = c.execute(
+            f"SELECT {', '.join(_CANDIDATE_COLS)} FROM script_candidates "
+            f"WHERE id = ? AND status = 'pending'", (int(candidate_id),)
+        ).fetchone()
+        if not row:
+            return None
+        chosen = dict(zip(_CANDIDATE_COLS, row))
+        c.execute("UPDATE script_candidates SET status='chosen', "
+                  "decided_at=datetime('now') WHERE id=?", (int(candidate_id),))
+        # Siblings share the proposal. A candidate written with no proposal
+        # behind it (a manual topic) has no siblings to reject, and NULL = NULL
+        # is not true in SQL — so guard rather than let the UPDATE quietly
+        # match nothing and call that a set of one.
+        if chosen["proposal_id"] is not None:
+            c.execute("UPDATE script_candidates SET status='rejected', "
+                      "decided_at=datetime('now') "
+                      "WHERE proposal_id=? AND id<>? AND status='pending'",
+                      (int(chosen["proposal_id"]), int(candidate_id)))
+        chosen["status"] = "chosen"
+        return chosen
 
 
 def proposal_cost_today() -> float:

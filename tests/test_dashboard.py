@@ -1360,53 +1360,130 @@ def test_a_proposal_shows_the_evidence_that_chose_it(client):
     a person can disagree with."""
     db_manager.save_proposal(
         channel="main_en", niche="money_history", topic="The Panic of 1893",
-        hook="A hook", script="The script itself", score=9,
         evidence="Neighbour published X · 90,000 views — 9.0x that channel's "
-                 "own median", cost_usd=0.05)
+                 "own median")
     page = client.get("/scout").get_data(as_text=True)
     assert "The Panic of 1893" in page
     assert "9.0x that channel" in page
-    assert "The script itself" in page
-    assert "9/10" in page
 
 
-def test_approving_a_proposal_starts_an_ordinary_run(client, monkeypatch):
-    """A scout-approved video must go through every gate any other video goes
-    through, and the surest way to guarantee that is for it to be the same
-    path."""
-    launched = {}
+def test_the_scout_card_no_longer_carries_a_script(client):
+    """It used to show "the script it wrote" inside a <details>. That prose was
+    bought for every proposal and thrown away even on approval, because
+    approving launched an ordinary run with topic= alone — which writes its
+    own. Six pending proposals meant six scripts paid for and six discarded."""
+    db_manager.save_proposal(channel="c", niche="n", topic="Tulips",
+                             evidence="e")
+    page = client.get("/scout").get_data(as_text=True)
+    assert "the script it wrote" not in page
+    assert "Write 3 scripts" in page
 
-    def fake_launch(*, niche=None, topic=None, channel=None):
-        launched.update(topic=topic, channel=channel)
-        return (None, Path("logs/x.log"))
 
-    monkeypatch.setattr(dashboard, "_launch_run", fake_launch)
+def test_approving_a_topic_buys_scripts_and_not_a_render(client, monkeypatch):
+    """THE EXPENSIVE STEP MOVED ONE PAGE FURTHER ON, and that is the point of
+    the split. A render is hours of the 3090 and it used to be committed to
+    from a topic card — with the only script anyone had seen already discarded.
+    Approving a topic now buys three scripts, and the render waits behind a
+    choice between them."""
+    started, rendered = {}, []
+    monkeypatch.setattr(dashboard, "_launch_candidates",
+                        lambda **kw: started.update(kw) or Path("logs/c.log"))
+    monkeypatch.setattr(dashboard, "_launch_run",
+                        lambda **kw: rendered.append(kw) or (None, Path("r.log")))
     pid = db_manager.save_proposal(
         channel="main_en", niche="money_history", topic="The Panic of 1893",
-        hook="h", script="s", score=9, evidence="e")
+        evidence="e")
     r = client.post(f"/scout/{pid}/approve", follow_redirects=False)
     assert r.status_code in (301, 302)
-    assert launched == {"topic": "The Panic of 1893", "channel": "main_en"}
+    assert started == {"topic": "The Panic of 1893", "proposal_id": pid,
+                       "channel": "main_en"}
+    assert rendered == [], "approving a topic must not start a render"
     assert db_manager.proposals(status="approved")[0]["id"] == pid
 
 
 def test_a_proposal_cannot_be_approved_twice(client, monkeypatch):
-    """Two clicks on a phone with a slow connection must not make two videos."""
+    """Two clicks on a phone with a slow connection must not write two sets."""
     calls = []
-    monkeypatch.setattr(dashboard, "_launch_run",
-                        lambda **kw: calls.append(kw) or (None, Path("l.log")))
-    pid = db_manager.save_proposal(channel="c", niche="n", topic="t", hook="h",
-                                   script="s", score=9, evidence="e")
+    monkeypatch.setattr(dashboard, "_launch_candidates",
+                        lambda **kw: calls.append(kw) or Path("l.log"))
+    pid = db_manager.save_proposal(channel="c", niche="n", topic="t",
+                                   evidence="e")
     client.post(f"/scout/{pid}/approve")
     client.post(f"/scout/{pid}/approve")
     assert len(calls) == 1
+
+
+# ── choosing between three finished scripts ─────────────────────────────────
+
+def _candidates(topic="The Panic of 1893", proposal_id=1):
+    return [db_manager.save_candidate(
+        proposal_id=proposal_id, channel="main_en", niche="money_history",
+        topic=topic, hook_style=style, hook=f"Hook {i}",
+        script=f"Hook {i}\nBody of script {i}.", score=7 + i, cost_usd=0.02)
+        for i, style in enumerate(["counterintuitive", "shocking_stat",
+                                   "warning"])]
+
+
+def test_the_page_shows_every_candidate_and_its_style(client):
+    """A flat list of three hooks is not a choice — what makes it one is seeing
+    the whole script and which opening shape it is."""
+    _candidates()
+    page = client.get("/scripts").get_data(as_text=True)
+    for style in ("counterintuitive", "shocking_stat", "warning"):
+        assert style in page
+    assert "Body of script 1." in page
+
+
+def test_choosing_one_runs_that_script_rather_than_the_topic(client, monkeypatch):
+    """--script, not --topic. main.py skips its writer for a run given a script
+    file, so the script a person read is the script that gets made; passing the
+    topic would have the writer produce a fourth one nobody chose."""
+    launched = {}
+    monkeypatch.setattr(dashboard, "_launch_run",
+                        lambda **kw: launched.update(kw) or (None, Path("r.log")))
+    ids = _candidates()
+    client.post(f"/scripts/{ids[1]}/choose", follow_redirects=False)
+    assert "script_file" in launched and "topic" not in launched
+    assert Path(launched["script_file"]).read_text(
+        encoding="utf-8").startswith("Hook 1")
+
+
+def test_choosing_one_records_the_others_as_passed_over(client, monkeypatch):
+    """The pair is the product. Nothing published here has view counts, so a
+    click is the only labelled preference this channel can collect."""
+    monkeypatch.setattr(dashboard, "_launch_run",
+                        lambda **kw: (None, Path("r.log")))
+    ids = _candidates()
+    client.post(f"/scripts/{ids[0]}/choose")
+    rows = {c["id"]: c["status"] for c in db_manager.candidates(proposal_id=1)}
+    assert rows[ids[0]] == "chosen"
+    assert rows[ids[1]] == rows[ids[2]] == "rejected"
+
+
+def test_a_script_cannot_be_chosen_twice(client, monkeypatch):
+    """A slow page invites a double click, and the second one would start a
+    second render of the same video."""
+    calls = []
+    monkeypatch.setattr(dashboard, "_launch_run",
+                        lambda **kw: calls.append(kw) or (None, Path("r.log")))
+    ids = _candidates()
+    client.post(f"/scripts/{ids[0]}/choose")
+    client.post(f"/scripts/{ids[0]}/choose")
+    assert len(calls) == 1
+
+
+def test_an_empty_choose_page_says_where_scripts_come_from(client):
+    """A page that is empty because the work has not finished yet looks exactly
+    like a page that is empty because it is broken."""
+    page = client.get("/scripts").get_data(as_text=True)
+    assert "Nothing waiting" in page and "/scout" in page
 
 
 def test_rejecting_keeps_the_row(client):
     """Rejected proposals are what stop the scout proposing the same idea
     again next pass — deleting them would make it forget."""
     pid = db_manager.save_proposal(channel="c", niche="n", topic="Tulips",
-                                   hook="h", script="s", score=9, evidence="e")
+                                   evidence="e")
     client.post(f"/scout/{pid}/reject")
     assert db_manager.proposals(status="rejected")[0]["topic"] == "Tulips"
     assert db_manager.proposals(status="pending") == []

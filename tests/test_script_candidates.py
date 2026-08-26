@@ -1,0 +1,253 @@
+"""Three scripts on one topic, and the record of which one a person preferred.
+
+WHY THIS LAYER EXISTS AT ALL. Nothing published through this pipeline has view
+counts, so feedback_analyzer has never run and config/learnings.json does not
+exist — the writer scores its own homework against thresholds it also owns. A
+person ruling between three finished scripts produces the one thing the score
+cannot: a labelled preference pair, on the day it is clicked. Which is why the
+two that lose are kept, and why choose_candidate marks both sides in one call.
+"""
+
+import os
+import sys
+from pathlib import Path
+
+import pytest
+
+sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
+
+import db_manager  # noqa: E402
+import script_candidates as sc  # noqa: E402
+
+
+@pytest.fixture
+def db(tmp_path, monkeypatch):
+    monkeypatch.setattr(db_manager, "DB_FILE", tmp_path / "t.db")
+    db_manager.init_db()
+    return db_manager
+
+
+# ── one style each ───────────────────────────────────────────────────────────
+
+def test_each_candidate_is_pinned_to_a_different_style():
+    """Three samples from one prompt are three versions of one script — the
+    model reaches for its favourite opening whatever the temperature. The set
+    is only a choice if the candidates differ in shape."""
+    cfg = {"hook_styles": ["counterintuitive", "shocking_stat", "warning"]}
+    assert sc.styles_for(cfg, 3) == ["counterintuitive", "shocking_stat",
+                                     "warning"]
+
+
+def test_more_candidates_than_styles_cycles_rather_than_truncating():
+    cfg = {"hook_styles": ["a", "b"]}
+    assert sc.styles_for(cfg, 3) == ["a", "b", "a"]
+
+
+def test_a_niche_with_no_styles_still_gets_a_choice():
+    """Fail-open: three from one distribution is what every script in this repo
+    got before hook_styles was wired at all. Refusing to write any is worse."""
+    assert sc.styles_for({}, 3) == ["", "", ""]
+
+
+def test_the_pin_is_put_back_and_not_deleted():
+    """The dashboard may run this in a process that already had the variable
+    set. A helper that silently clears its caller's environment is a bug that
+    only appears on the second call."""
+    os.environ["RUFUS_HOOK_STYLE"] = "warning"
+    try:
+        with sc._pinned_style("shocking_stat"):
+            assert os.environ["RUFUS_HOOK_STYLE"] == "shocking_stat"
+        assert os.environ["RUFUS_HOOK_STYLE"] == "warning"
+    finally:
+        os.environ.pop("RUFUS_HOOK_STYLE", None)
+
+
+def test_an_unset_pin_is_left_unset():
+    os.environ.pop("RUFUS_HOOK_STYLE", None)
+    with sc._pinned_style("warning"):
+        assert os.environ["RUFUS_HOOK_STYLE"] == "warning"
+    assert "RUFUS_HOOK_STYLE" not in os.environ
+
+
+def test_the_style_block_narrows_to_the_pinned_one():
+    """The pin has to reach the prompt, not just the environment. money_history
+    declares three styles; a pinned candidate must be shown one."""
+    import script_writer
+    cfg = {"hook_styles": ["counterintuitive", "shocking_stat", "warning"]}
+    with sc._pinned_style("warning"):
+        block = script_writer._hook_styles_block(cfg)
+    assert "warning" in block
+    assert "shocking_stat" not in block
+    assert "Cover more than one" not in block, (
+        "the multi-style instruction is the opposite of what a pinned "
+        "candidate is for")
+
+
+# ── writing the set ──────────────────────────────────────────────────────────
+
+def _writer(monkeypatch, results):
+    """Feed write_for a queue of writer results, one per candidate."""
+    import research
+    import script_writer
+    monkeypatch.setattr(research, "get_seed",
+                        lambda niche, topic=None: {"content": "a real source"})
+    monkeypatch.setattr(research, "_load_niche", lambda: ({}, "money_history"))
+    monkeypatch.setattr(script_writer, "_load_niche",
+                        lambda: ({"hook_styles": ["a", "b", "c"]}, "n"))
+    monkeypatch.setattr(script_writer, "preanalyze",
+                        lambda seed, scene="": ("analysis", "run1", 0.01))
+    queue = list(results)
+
+    def _write(*a, **k):
+        item = queue.pop(0)
+        if isinstance(item, Exception):
+            raise item
+        return item
+    monkeypatch.setattr(script_writer, "write_script_until_good", _write)
+
+
+def test_the_seed_is_researched_once_for_the_whole_set(db, monkeypatch):
+    """All three are about the same topic and check against the same source.
+    Paying for the research and the pre-analysis three times buys nothing."""
+    import research
+    import script_writer
+    calls = {"seed": 0, "pre": 0}
+    monkeypatch.setattr(script_writer, "_load_niche",
+                        lambda: ({"hook_styles": ["a", "b", "c"]}, "n"))
+    monkeypatch.setattr(research, "_load_niche", lambda: ({}, "money_history"))
+
+    def _seed(niche, topic=None):
+        calls["seed"] += 1
+        return {"content": "src"}
+
+    def _pre(seed, scene=""):
+        calls["pre"] += 1
+        return ("a", "r1", 0.0)
+    monkeypatch.setattr(research, "get_seed", _seed)
+    monkeypatch.setattr(script_writer, "preanalyze", _pre)
+    monkeypatch.setattr(script_writer, "write_script_until_good",
+                        lambda *a, **k: {"script": "Line one.\nRest.",
+                                         "score": 8, "cost_usd": 0.02})
+
+    sc.write_for("Panic of 1893", proposal_id=1)
+    assert calls == {"seed": 1, "pre": 1}
+    assert len(db.candidates(proposal_id=1)) == 3
+
+
+def test_one_style_that_fails_does_not_cost_the_other_two(db, monkeypatch):
+    """Fail-open per candidate, like the rest of the pipeline. Two candidates
+    with a printed reason is a smaller loss than none."""
+    _writer(monkeypatch, [
+        {"script": "First line.\nBody.", "score": 8, "cost_usd": 0.02},
+        RuntimeError("the fact gate rejected every cycle"),
+        {"script": "Third line.\nBody.", "score": 7, "cost_usd": 0.02},
+    ])
+    saved = sc.write_for("T", proposal_id=1)
+    assert len(saved) == 2
+    assert len(db.candidates(proposal_id=1)) == 2
+
+
+def test_an_empty_script_is_not_saved_as_a_candidate(db, monkeypatch):
+    """A blank card in a choose-one page is a choice a person cannot make and
+    a row that scores zero forever."""
+    _writer(monkeypatch, [
+        {"script": "   ", "score": 9, "cost_usd": 0.02},
+        {"script": "Real.\nBody.", "score": 7, "cost_usd": 0.02},
+        {"script": "Also real.\nBody.", "score": 6, "cost_usd": 0.02},
+    ])
+    assert len(sc.write_for("T", proposal_id=1)) == 2
+
+
+def test_the_set_stops_at_its_cost_ceiling(db, monkeypatch):
+    """An agent with a model and no ceiling is a runaway bill. Three scripts
+    are cheap; three scripts on every proposal in a queue nobody read is not."""
+    monkeypatch.setenv("RUFUS_CANDIDATE_MAX_COST", "0.03")
+    _writer(monkeypatch, [
+        {"script": "One.\nB.", "score": 8, "cost_usd": 0.02},
+        {"script": "Two.\nB.", "score": 8, "cost_usd": 0.02},
+        {"script": "Three.\nB.", "score": 8, "cost_usd": 0.02},
+    ])
+    assert len(sc.write_for("T", proposal_id=1)) < 3
+
+
+def test_the_hook_is_the_scripts_first_line(db, monkeypatch):
+    """write_script_until_good's documented return shape has no "hook" key —
+    script, run_id, score, criterion_scores, attempts_used, final_temperature,
+    reasoning, cost_usd. Asking for one returns "" forever, and an empty column
+    nobody displays is the kind of wrong that survives for months. This is how
+    metadata_writer and the uploader's legacy path both get it."""
+    _writer(monkeypatch, [
+        {"script": "You checked your portfolio today.\nThat is the problem.",
+         "run_id": "r1", "score": 9, "criterion_scores": {},
+         "attempts_used": 1, "final_temperature": 0.9, "reasoning": "",
+         "cost_usd": 0.03}] * 3)
+    sc.write_for("T", proposal_id=1)
+    row = db.candidates(proposal_id=1)[0]
+    assert row["hook"] == "You checked your portfolio today."
+
+
+# ── the choice, and what it was chosen over ──────────────────────────────────
+
+def _three(db, proposal_id=1):
+    ids = []
+    for i, style in enumerate(["counterintuitive", "shocking_stat", "warning"]):
+        ids.append(db.save_candidate(
+            proposal_id=proposal_id, channel="main_en", niche="money_history",
+            topic="T", hook_style=style, hook=f"h{i}", script=f"s{i}",
+            score=7 + i, cost_usd=0.02))
+    return ids
+
+
+def test_choosing_one_rejects_its_siblings(db):
+    """The value is the PAIR. A chosen row alone says a script was made; a
+    chosen row beside the two it beat says a person compared three."""
+    ids = _three(db)
+    got = db.choose_candidate(ids[1])
+    assert got["id"] == ids[1] and got["status"] == "chosen"
+    rows = {r["id"]: r["status"] for r in db.candidates(proposal_id=1)}
+    assert rows[ids[1]] == "chosen"
+    assert rows[ids[0]] == rows[ids[2]] == "rejected"
+
+
+def test_the_losers_are_kept_not_deleted(db):
+    """They are half of every preference pair, and the only training signal
+    this channel can collect before it has view counts."""
+    ids = _three(db)
+    db.choose_candidate(ids[0])
+    assert len(db.candidates(proposal_id=1)) == 3
+
+
+def test_a_second_click_cannot_re_decide_a_set(db):
+    """A slow page invites a double click. Without this the second one flips
+    which sibling lost, and the pair records the wrong preference."""
+    ids = _three(db)
+    assert db.choose_candidate(ids[0])
+    assert db.choose_candidate(ids[1]) is None
+    rows = {r["id"]: r["status"] for r in db.candidates(proposal_id=1)}
+    assert rows[ids[0]] == "chosen" and rows[ids[1]] == "rejected"
+
+
+def test_choosing_an_unknown_candidate_is_a_none_not_a_crash(db):
+    assert db.choose_candidate(9999) is None
+
+
+def test_a_candidate_with_no_proposal_has_no_siblings_to_reject(db):
+    """A manually requested topic writes candidates with proposal_id NULL, and
+    NULL = NULL is not true in SQL — so the sibling UPDATE would match nothing
+    and quietly call that a set of one. Two manual sets must not collide."""
+    a = db.save_candidate(proposal_id=None, channel="c", niche="n", topic="A",
+                          hook_style="", hook="h", script="s", score=8)
+    b = db.save_candidate(proposal_id=None, channel="c", niche="n", topic="B",
+                          hook_style="", hook="h", script="s", score=8)
+    db.choose_candidate(a)
+    rows = {r["id"]: r["status"] for r in db.candidates()}
+    assert rows[a] == "chosen"
+    assert rows[b] == "pending", "another topic's candidate is not a sibling"
+
+
+def test_a_set_reads_best_first(db):
+    """Three scripts in generation order buries the likeliest pick under two
+    that were not."""
+    _three(db)
+    scores = [r["score"] for r in db.candidates(proposal_id=1)]
+    assert scores == sorted(scores, reverse=True)

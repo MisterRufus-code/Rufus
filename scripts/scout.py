@@ -17,18 +17,24 @@ ONE PASS, IN SIX STEPS:
                each scored against ITS OWN channel's median
     remember   db_manager.record_observations() — appended, never updated
     choose     the strongest outperformer this channel has NOT already covered
-    ground     research.get_seed(topic=...) resolves it to a real Wikipedia
-               article, so the fact gate has something to check against
-    write      script_writer.write_script_until_good() — already scored,
-               fact-gated, cost-capped
+    name       subject_of() turns a headline into a groundable subject
     propose    a row in `proposals`, with the evidence that chose it
 
-IT NEVER RENDERS. A script is cents and seconds; a render is hours of the 3090.
-The human approves a proposal and a normal run makes the video — which is what
-makes it affordable for this to be wrong sometimes.
+IT NEVER WRITES AND IT NEVER RENDERS. It used to write: a full script for every
+proposal, shown on the card in a <details>, and then discarded — because
+approving one launched an ordinary run with topic= alone, which writes its own
+from scratch. Six pending proposals meant six scripts bought and six thrown
+away, the approved one included.
+
+A proposal is now what the card always displayed: a topic and the evidence that
+chose it, for about a cent. Prose is bought once a person has picked the topic
+— script_candidates.write_for gives three scripts on the ONE that survived,
+one per declared hook style, and the render waits behind a choice between them.
 
     RUFUS_SCOUT_MAX_PENDING   6      stop proposing when this many are waiting
     RUFUS_SCOUT_MAX_COST      1.00   USD per day across every pass
+    RUFUS_CANDIDATE_STYLES    3      scripts written once a topic is chosen
+    RUFUS_CANDIDATE_MAX_COST  0.60   USD ceiling for one candidate set
     python scripts/scout.py --once --dry-run   choose and explain, spend nothing
 
 THE THING THIS CANNOT DO YET, said plainly: nothing published through this
@@ -192,8 +198,16 @@ def evidence_of(candidate: dict, trend_note: str = "") -> str:
 
 # ── the pass ─────────────────────────────────────────────────────────────────
 
-def blocked() -> str:
-    """Why this pass should not run, or "". Checked before anything is spent."""
+def blocked(for_writing: bool = True) -> str:
+    """Why this pass should not run, or "". Checked before anything is spent.
+
+    `for_writing` is what separates the two things this gate now guards. A pass
+    that only PROPOSES a topic spends a cent on a subject lookup and touches no
+    GPU; the writing happens later, once a person has chosen. Standing a topic
+    proposal down because a render is using the 3090 would leave the queue
+    empty for the hours the render lasts — and an empty queue is the one thing
+    the whole choose-from-several design cannot survive.
+    """
     try:
         import db_manager
         db_manager.init_db()
@@ -208,14 +222,15 @@ def blocked() -> str:
                     f"${max_cost():.2f}")
     except Exception as e:
         return f"the database could not be read ({e})"
-    try:
-        import run_review
-        busy = run_review._gpu_is_busy()
-        if busy:
-            return (f"a render is using the GPU ({busy}) — the writer competes "
-                    f"for it when a local model serves it")
-    except Exception:
-        pass
+    if for_writing:
+        try:
+            import run_review
+            busy = run_review._gpu_is_busy()
+            if busy:
+                return (f"a render is using the GPU ({busy}) — the writer "
+                        f"competes for it when a local model serves it")
+        except Exception:
+            pass
     return ""
 
 
@@ -241,7 +256,7 @@ def pass_once(dry_run: bool = False) -> dict:
     out: dict = {"observed": 0, "candidate": None, "proposal_id": None,
                  "skipped": ""}
 
-    why = blocked()
+    why = blocked(for_writing=False)
     if why:
         print(f"[scout] standing down: {why}")
         out["skipped"] = why
@@ -294,46 +309,41 @@ def pass_once(dry_run: bool = False) -> dict:
         print(f"[scout] {out['skipped']}")
         return out
 
-    subject = subject_of(pick["title"], niche)
-    print(f"[scout] subject: {subject}")
-
+    # "Always returns a dict; never raises" was the docstring, and the tail of
+    # this function was outside every try in it. While a script was being
+    # written here the writer's own except caught most of what could go wrong;
+    # with the writer gone, the subject lookup and the insert are the last two
+    # things that touch the outside world and neither was covered. A scheduled
+    # task that raises is a dead agent and a log nobody reads.
     try:
-        import script_writer
-        seed = research.get_seed(niche, topic=subject)
-        analysis, run_id, cost = script_writer.preanalyze(
-            seed, seed.get("content", "")[:400])
-        result = script_writer.write_script_until_good(
-            seed.get("content", "")[:400], seed=seed,
-            precomputed_analysis=analysis, run_id=run_id)
+        subject = subject_of(pick["title"], niche)
+        print(f"[scout] subject: {subject}")
+
+        try:
+            from channel_config import load_channel
+            channel_id = load_channel().id
+        except Exception:
+            channel_id = "main_en"
+
+    # NO SCRIPT HERE ANY MORE, and the reason is not thrift.
+    #
+    # This wrote a full script for every proposal, the dashboard showed it
+    # inside a <details>, and scout_approve then launched an ordinary run with
+    # topic= alone — which writes its own script from scratch. Every one of
+    # those scripts was paid for and discarded, including the approved one.
+    # Six pending proposals meant six scripts bought and six thrown away.
+    #
+    # A proposal is now what it always displayed as: a topic and the evidence
+    # that chose it. Prose is bought once a person has picked the topic, from
+    # script_candidates.write_for — three scripts on the ONE topic that
+    # survived, instead of one apiece on the five that did not.
+        out["proposal_id"] = db_manager.save_proposal(
+            channel=channel_id, niche=niche, topic=subject, evidence=evidence)
+        print(f"[scout] proposal #{out['proposal_id']} — {subject} — "
+              f"waiting for a topic decision at /scout")
     except Exception as e:
-        out["skipped"] = f"could not write a script for {subject!r}: {e}"
+        out["skipped"] = f"could not propose {pick.get('title', '')!r}: {e}"
         print(f"[scout] {out['skipped']}")
-        return out
-
-    try:
-        from channel_config import load_channel
-        channel_id = load_channel().id
-    except Exception:
-        channel_id = "main_en"
-
-    # THE HOOK IS THE SCRIPT'S FIRST LINE, and is derived rather than read from
-    # the result: write_script_until_good's documented return shape has no
-    # "hook" key at all (script, run_id, score, criterion_scores,
-    # attempts_used, final_temperature, reasoning, cost_usd). Asking for one
-    # returns "" forever, and an empty column nobody displays is the kind of
-    # wrong that survives for months. This is how metadata_writer and the
-    # uploader's legacy path both get it.
-    script_text = result.get("script", "") or ""
-    hook = script_text.strip().split("\n")[0][:300]
-
-    out["proposal_id"] = db_manager.save_proposal(
-        channel=channel_id, niche=niche, topic=subject,
-        hook=hook, script=script_text,
-        score=int(result.get("score", 0) or 0),
-        evidence=evidence,
-        cost_usd=float(cost or 0) + float(result.get("cost_usd", 0) or 0))
-    print(f"[scout] proposal #{out['proposal_id']} — "
-          f"{result.get('score', 0)}/10 — waiting for approval at /scout")
     return out
 
 
