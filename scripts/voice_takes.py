@@ -110,6 +110,11 @@ def build(script_file: str, *, set_id: int, channel: str = "main_en",
         return []
 
     n = n or how_many()
+    try:
+        import emotional_map
+        print(f"[takes] this backend varies {emotional_map.speaks_tone()}")
+    except Exception:
+        pass
     out_dir = takes_dir(set_id)
     out_dir.mkdir(parents=True, exist_ok=True)
     saved: list[dict] = []

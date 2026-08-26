@@ -3754,6 +3754,28 @@ def galleries_use(set_id: int):
 
 # ── Choosing how it opens ────────────────────────────────────────────────────
 
+def _tone_reach_note() -> str:
+    """What the live voice backend can actually do with a tone.
+
+    A CHOICE BETWEEN THREE READS IS THEATRE IF THE BACKEND RENDERS THEM THE
+    SAME, and which backend is live is a runtime fact — RUFUS_TTS, plus
+    ElevenLabs falling back to Kokoro on a free-tier library voice, which is
+    every run here. Telling somebody that up front is cheaper than letting them
+    listen three times for a difference that is not there.
+    """
+    try:
+        import emotional_map
+        reach = emotional_map.speaks_tone()
+    except Exception:
+        return ""
+    if "rate, pitch and volume" in reach:
+        return ""
+    return (f'<div class="msg" style="margin:8px 0">Your voice backend varies '
+            f'<strong>{_esc(reach)}</strong>, so these reads differ in pace '
+            f'rather than in colour. <code>RUFUS_TTS=edge</code> varies rate, '
+            f'pitch and volume — bigger differences, a different voice.</div>')
+
+
 @app.route("/voice")
 def voice_page():
     """Three reads of the opening line. Twenty-four seconds of listening.
@@ -3800,7 +3822,8 @@ def voice_page():
                    f'<p class="muted">“{_esc((rows[0]["text"] or "")[:200])}” — '
                    f'{len(rows)} read(s). The tone you pick sizes this beat\'s '
                    f'pauses and grades its picture too, so it is one decision '
-                   f'about what the opening IS rather than three.</p>{cards}')
+                   f'about what the opening IS rather than three.</p>'
+                   f'{_tone_reach_note()}{cards}')
 
     if not sets:
         blocks = ('<p class="muted">Nothing waiting. Settle the pictures on '

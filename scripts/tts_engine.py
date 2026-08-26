@@ -147,6 +147,30 @@ def _missing_kokoro_deps() -> list[str]:
             if importlib.util.find_spec(m) is None]
 
 
+def _kokoro_speed_for(tones: list[str] | None, base: float) -> float:
+    """The one speed this Kokoro call should run at.
+
+    Applied only when every supplied tone agrees. One call carries one speed,
+    so a script whose beats differ would otherwise have whichever tone won the
+    tie decide the pace of all of them; that case keeps the inter-beat pauses
+    it always had. A take is a single beat, which is exactly the uniform case.
+
+    Split out of _kokoro so it can be tested without numpy, soundfile and the
+    kokoro package present — the decision is arithmetic, and pinning it should
+    not require the model.
+    """
+    if not tones:
+        return base
+    wanted = {t for t in tones if t}
+    if len(wanted) != 1:
+        return base
+    try:
+        import emotional_map
+        return emotional_map.kokoro_speed(wanted.pop(), base)
+    except Exception:
+        return base
+
+
 def _kokoro(script: str, out_path: Path,
             tones: list[str] | None = None) -> None:
     """Synthesize with Kokoro-82M (Apache 2.0, runs on CPU). Outputs mp3."""
@@ -168,6 +192,22 @@ def _kokoro(script: str, out_path: Path,
         speed = float(KOKORO_SPEED)
     except ValueError:
         speed = 1.0
+
+    # THE TONE HAD EXACTLY ONE WAY INTO THIS VOICE AND IT WAS INAUDIBLE.
+    #
+    # Below, a tone adds silence AFTER a chunk — and only between chunks, so a
+    # text short enough to be one chunk gets nothing at all. A hook is one
+    # chunk. Three "different" reads of an opening line came back identical
+    # because of it: the emotional map was live in the grade and in the pauses
+    # and silent in the actual speech.
+    #
+    # Kokoro exposes one knob, speed, so the rate half of the tone can reach
+    # it. Applied only when every supplied tone agrees — one call carries one
+    # speed, and a script whose beats differ would otherwise have its loudest
+    # beat decide the pace of all of them. That case still gets the pauses,
+    # which is what it had before; the uniform case (a take, a single beat)
+    # gets a voice that actually changes.
+    speed = _kokoro_speed_for(tones, speed)
 
     def _as_numpy(audio):
         """Kokoro yields torch Tensors; everything below here is numpy.

@@ -159,3 +159,26 @@ def test_another_sets_reads_are_not_siblings(db):
 def test_how_many_defaults_to_three(monkeypatch):
     monkeypatch.delenv("RUFUS_VOICE_TAKES", raising=False)
     assert vt.how_many() == 3
+
+
+def test_a_uniform_tone_reaches_the_kokoro_speed():
+    """The bug this stage shipped with. A take is one chunk, the tone only
+    added silence BETWEEN chunks, and three reads came back identical."""
+    import emotional_map
+    import tts_engine
+    assert tts_engine._kokoro_speed_for(["weight"], 1.0) == \
+        emotional_map.kokoro_speed("weight", 1.0)
+
+
+def test_beats_that_disagree_keep_the_base_speed():
+    """One call carries one speed. A script whose beats differ would otherwise
+    have whichever tone won the tie decide the pace of all of them — that case
+    keeps the inter-beat pauses it always had."""
+    import tts_engine
+    assert tts_engine._kokoro_speed_for(["weight", "curiosity"], 1.0) == 1.0
+
+
+def test_no_tones_at_all_is_the_voice_that_always_shipped():
+    import tts_engine
+    assert tts_engine._kokoro_speed_for(None, 1.1) == 1.1
+    assert tts_engine._kokoro_speed_for([], 1.1) == 1.1

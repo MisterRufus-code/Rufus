@@ -290,6 +290,45 @@ def voice(tone: object, base_rate_pct: int = 0) -> dict[str, str]:
             "volume": f"{volume:+d}%"}
 
 
+# Kokoro exposes ONE knob — speed — and no pitch or volume at all. The rate
+# delta is therefore the only part of a tone that can reach it, and this is the
+# conversion: a -8% rate is a 0.92 multiplier on the base speed.
+#
+# WHY THIS EXISTS AT ALL. Before it, a tone reached the Kokoro voice through
+# exactly one mechanism: extra silence between chunks. That is inaudible on any
+# text short enough to be a single chunk — a hook, a take, a one-line beat —
+# and it is the whole reason three "different" reads of an opening line came
+# back byte-similar. The emotional map was live in the grade and the pauses and
+# silent in the voice on the backend this channel actually runs.
+_KOKORO_SPEED_RANGE = (0.7, 1.3)
+
+
+def kokoro_speed(tone: object, base: float = 1.0) -> float:
+    """Kokoro's speed for one beat's tone. `base` is RUFUS_KOKORO_SPEED."""
+    rate = _VOICE.get(normalise(tone), _VOICE[NEUTRAL])[0]
+    return round(_clamp(base * (1.0 + rate / 100.0), _KOKORO_SPEED_RANGE), 3)
+
+
+def speaks_tone() -> str:
+    """What the ACTIVE voice backend can actually do with a tone, in words.
+
+    A choice between three reads is theatre if the backend renders all three
+    identically, and which backend is live is decided at runtime by
+    RUFUS_TTS plus whatever falls back to what. Saying so is cheaper than
+    letting somebody listen three times for a difference that is not there.
+    """
+    import os
+    backend = (os.environ.get("RUFUS_TTS") or "kokoro").strip().lower()
+    if backend == "edge":
+        return "rate, pitch and volume"
+    if backend in ("kokoro", "kokoro_api", "elevenlabs"):
+        # elevenlabs is in this list because it does not receive tones at all
+        # and falls back to Kokoro on any failure, which on a free-tier library
+        # voice is every run.
+        return "pace only — Kokoro has no pitch or volume control"
+    return "nothing this module knows about"
+
+
 def voice_is_neutral(tones: list[str] | None) -> bool:
     """True when varying the voice would change nothing.
 

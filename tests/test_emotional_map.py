@@ -481,3 +481,57 @@ def test_an_all_neutral_run_takes_the_single_request_path():
     assert em.voice_is_neutral([]) is True
     assert em.voice_is_neutral(["neutral", "neutral"]) is True
     assert em.voice_is_neutral(["neutral", "weight"]) is False
+
+
+# ── the tone was live in the grade and silent in the voice ──────────────────
+#
+# A tone reached the Kokoro voice through exactly one mechanism: extra silence
+# between chunks. That is inaudible on any text short enough to be a single
+# chunk — a hook, a take, a one-line beat — which is why three "different"
+# reads of an opening line came back the same. Kokoro exposes one knob, speed,
+# so the rate half of a tone can reach it.
+
+def test_a_tone_changes_the_kokoro_speed():
+    import emotional_map as em
+    assert em.kokoro_speed("weight") < em.kokoro_speed("neutral")
+    assert em.kokoro_speed("curiosity") > em.kokoro_speed("neutral")
+
+
+def test_every_tone_is_distinguishable_by_pace():
+    """Three takes a person cannot tell apart is not a choice."""
+    import emotional_map as em
+    speeds = {em.kokoro_speed(t) for t in em.TONES}
+    assert len(speeds) == len(em.TONES)
+
+
+def test_neutral_is_exactly_the_base_speed():
+    """Neutral is a zero delta — the voice the pipeline already ships."""
+    import emotional_map as em
+    assert em.kokoro_speed("neutral", 1.0) == 1.0
+    assert em.kokoro_speed("neutral", 1.15) == 1.15
+
+
+def test_an_unknown_tone_does_not_change_the_pace():
+    import emotional_map as em
+    assert em.kokoro_speed("shouty", 1.0) == 1.0
+
+
+def test_a_fast_base_speed_cannot_be_pushed_out_of_range():
+    """RUFUS_KOKORO_SPEED is an owner setting and stacking a tone on top of an
+    already-fast base is how a voice ends up unlistenable."""
+    import emotional_map as em
+    assert 0.7 <= em.kokoro_speed("curiosity", 1.6) <= 1.3
+    assert 0.7 <= em.kokoro_speed("weight", 0.5) <= 1.3
+
+
+def test_the_backend_says_what_it_can_do_with_a_tone(monkeypatch):
+    """A choice between three reads is theatre if the backend renders them the
+    same, and which backend is live is a runtime fact."""
+    import emotional_map as em
+    monkeypatch.setenv("RUFUS_TTS", "edge")
+    assert "pitch" in em.speaks_tone()
+    monkeypatch.setenv("RUFUS_TTS", "kokoro")
+    assert "pace only" in em.speaks_tone()
+    monkeypatch.setenv("RUFUS_TTS", "elevenlabs")
+    assert "pace only" in em.speaks_tone(), (
+        "elevenlabs is never handed tones and falls back to Kokoro anyway")
