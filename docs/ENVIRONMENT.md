@@ -132,7 +132,7 @@ enerated by `python scripts/env_doctor.py --markdown`. Do not edit by hand — t
 | `RUFUS_TELEGRAM_CHAT` | — | `notify.py` |
 | `RUFUS_TELEGRAM_TOKEN` | — | `notify.py` |
 | `RUFUS_TREND_TOPICS` | `1` | `research.py` |
-| `RUFUS_TTS` | `edge` | `emotional_map.py`, `health_check.py`, `tts_engine.py` |
+| `RUFUS_TTS` | `edge` | `dashboard.py`, `emotional_map.py`, `health_check.py` +1 |
 | `RUFUS_TTS_LANG` | `en` | `tts_engine.py` |
 | `RUFUS_TTS_VOICE` | — | `tts_engine.py` |
 | `RUFUS_VIDEO_SOURCE` | `sd` | `health_check.py`, `main.py` |

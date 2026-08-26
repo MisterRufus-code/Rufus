@@ -1691,6 +1691,12 @@ NAV_ITEMS = [
     ("/scripts",    "📝 Choose a script",                 "view"),
     ("/galleries",  "🖼 Choose the pictures",             "view"),
     ("/voice",      "🎙 Choose how it opens",             "view"),
+    # "settings" and not "view", to match /styles exactly. Both are rare
+    # identity decisions that change every future run, and a page whose every
+    # button a viewer would get a 403 from is a page they should not be
+    # offered. It is also what keeps Setup empty for a viewer, which is the
+    # case the empty-group rule is tested against.
+    ("/voices",     "🗣 Narrator",                        "settings"),
     ("/bench",      "🔬 Workflow bench",                  "settings"),
     ("/failures",   "⚠ Failures &amp; rejected attempts", "view"),
     ("/performance", "📈 Performance",                    "view"),
@@ -1738,7 +1744,7 @@ NAV_GROUPS = (
     ("Review",  ("/gallery", "/history", "/failures", "/logs")),
     ("Measure", ("/tracking", "/performance", "/insights", "/advice",
                  "/trending")),
-    ("Setup",   ("/styles", "/bench", "/system", "/settings")),
+    ("Setup",   ("/styles", "/voices", "/bench", "/system", "/settings")),
 )
 
 # ── the four decisions, and which of them is waiting for you ─────────────────
@@ -3750,6 +3756,154 @@ def galleries_use(set_id: int):
     return redirect("/voice?msg=" + _urlquote(
         f'{len(rows)} picture(s) settled. Recording three reads of the hook — '
         f'seconds, not minutes. Log: logs/{log_path.name}'))
+
+
+# ── Choosing the narrator ────────────────────────────────────────────────────
+
+@app.route("/voices")
+def voices_page():
+    """The same line in every voice. Chosen once, then left alone.
+
+    THE AUDIO TWIN OF /styles, and rare for the same reason. /voice varies the
+    tone of one video's opening; this varies the NARRATOR, and a channel whose
+    narrator changes every video has no narrator — the voice is the one thing a
+    returning viewer recognises before they have read a word.
+
+    One fixed line for every voice, because a voice compared against a
+    different sentence than the one before it is not being compared: half of
+    what you hear is the writing.
+    """
+    auth.require("settings")
+    import voice_audition as va
+
+    backend = (request.args.get("backend") or "kokoro").strip().lower()
+    if backend not in va.BACKENDS:
+        backend = "kokoro"
+    current = (os.environ.get(va.VOICE_VAR.get(backend, "")) or "").strip()
+
+    out_dir = va.audition_dir() / backend
+    cards = ""
+    for voice, label in va.catalogue(backend):
+        mp3 = out_dir / f"{voice}.mp3"
+        here = voice == current
+        player = (f'<audio controls preload="none" style="display:block;'
+                  f'width:100%;margin:8px 0" '
+                  f'src="/voices/audio/{backend}/{voice}"></audio>'
+                  if mp3.exists() else
+                  '<p class="muted" style="margin:8px 0">not recorded yet — '
+                  'use the button below</p>')
+        button = ""
+        if auth.can("settings") and mp3.exists() and not here:
+            button = (f'<form method="post" action="/voices/use" '
+                      f'style="display:inline">'
+                      f'<input type="hidden" name="backend" value="{backend}">'
+                      f'<input type="hidden" name="voice" value="{voice}">'
+                      f'<button class="btn save" type="submit">'
+                      f'Narrate with this</button></form>')
+        cards += (
+            f'<div class="card" style="width:100%;margin-bottom:10px;'
+            f'border-color:{"var(--accent)" if here else "var(--border)"}">'
+            f'<div style="display:flex;justify-content:space-between;gap:12px">'
+            f'<strong>{_esc(label)}</strong>'
+            f'<span class="muted">{_esc(voice)}'
+            f'{" · in use" if here else ""}</span></div>'
+            f'{player}<div>{button}</div></div>')
+
+    tabs = ""
+    for b in sorted(va.BACKENDS):
+        on = " style=\"font-weight:600\"" if b == backend else ""
+        tabs += f'<a href="/voices?backend={b}"{on}>{b}</a> '
+
+    record = ""
+    if auth.can("settings"):
+        record = (f'<form method="post" action="/voices/record" '
+                  f'style="margin:10px 0">'
+                  f'<input type="hidden" name="backend" value="{backend}">'
+                  f'<button type="submit">Record the sheet '
+                  f'({len(va.catalogue(backend))} voices)</button></form>')
+
+    body = f"""
+    <a class="back" href="/">← back</a>
+    <h2 style="margin-top:14px">Choose the narrator</h2>
+    {_msg_banner()}
+    <p class="muted">One line, every voice, same words:
+       “{_esc(va.SAMPLE)}”</p>
+    <p class="muted"><strong>Kokoro</strong> is the only backend here that is
+       local, free <em>and</em> clear to monetise (Apache&nbsp;2.0). Edge is
+       free and good but it is a Microsoft <em>network</em> service written for
+       a browser's read-aloud feature. XTTS runs locally and is licensed
+       non-commercially. ElevenLabs is cloud and paid.</p>
+    <div class="filters">{tabs}</div>
+    {record}
+    {cards}
+    """
+    return _head() + body + PAGE_TAIL
+
+
+@app.route("/voices/audio/<backend>/<voice>")
+def voices_audio(backend: str, voice: str):
+    """One audition sample. The backend and voice are matched against the
+    catalogue rather than used as a path, so nothing in the URL can address a
+    file outside the audition directory."""
+    auth.require("settings")
+    import voice_audition as va
+    if voice not in {v for v, _l in va.catalogue(backend)}:
+        abort(404)
+    d = va.audition_dir() / backend
+    name = f"{voice}.mp3"
+    if not (d / name).exists():
+        abort(404)
+    return send_from_directory(str(d), name, max_age=_IMAGE_MAX_AGE)
+
+
+@app.route("/voices/record", methods=["POST"])
+def voices_record():
+    """Record the sheet. Inline, not a subprocess.
+
+    Unlike the galleries this is seconds of CPU for a handful of short lines,
+    and a person who just clicked the button is looking at the page it fills —
+    handing them a redirect and a log file to go and read would be worse than
+    the wait.
+    """
+    auth.require("settings")
+    import voice_audition as va
+    backend = (request.form.get("backend") or "kokoro").strip().lower()
+    if backend not in va.BACKENDS:
+        return redirect("/voices?error=" + _urlquote("unknown backend"))
+    try:
+        done = va.build(backend)
+    except Exception as e:
+        return redirect(f"/voices?backend={backend}&error="
+                        + _urlquote(f"could not record: {e}"))
+    if not done:
+        return redirect(f"/voices?backend={backend}&error=" + _urlquote(
+            "no voice recorded — the [audition] lines in the console say why"))
+    return redirect(f"/voices?backend={backend}&msg=" + _urlquote(
+        f"Recorded {len(done)} voice(s)."))
+
+
+@app.route("/voices/use", methods=["POST"])
+def voices_use():
+    """Save the narrator the way every launch path reads it — same shape as
+    /styles/use, because it is the same kind of decision."""
+    auth.require("settings")
+    import voice_audition as va
+    backend = (request.form.get("backend") or "").strip().lower()
+    voice = (request.form.get("voice") or "").strip()
+    if backend not in va.BACKENDS:
+        return redirect("/voices?error=" + _urlquote("unknown backend"))
+    if voice not in {v for v, _l in va.catalogue(backend)}:
+        return redirect(f"/voices?backend={backend}&error="
+                        + _urlquote("unknown voice"))
+    var = va.VOICE_VAR[backend]
+    values = _load_settings()
+    values["RUFUS_TTS"] = backend
+    values[var] = voice
+    _save_settings(values)
+    os.environ["RUFUS_TTS"] = backend
+    os.environ[var] = voice
+    return redirect(f"/voices?backend={backend}&msg=" + _urlquote(
+        f"{voice} narrates from the next run on."))
 
 
 # ── Choosing how it opens ────────────────────────────────────────────────────
