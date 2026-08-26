@@ -812,13 +812,43 @@ DEFAULT_STILLS_NEGATIVE = (
 )
 
 
-def _stills_negative() -> str:
-    """Negative conditioning for stills, or "" when disabled."""
+# What an OBJECT shot must not come back with.
+#
+# The tag drops the whole figure half, which is correct — a beat about a ledger
+# does not need six hundred words on limbs. But it leaves the prompt saying
+# NOTHING about how this channel draws a person, and one live frame is two
+# flat-vector men with hair and jackets standing in front of a stack of gold
+# bars, on a shot reading "Gold bars being stacked neatly in a vault". The
+# model added them and had no house style to add them in.
+#
+# It goes in the NEGATIVE and not the positive, because this file has learned
+# the hard way that the only reliable way not to get a figure is not to mention
+# one — and the negative is the one side of the conditioning where naming a
+# thing pushes it away instead of summoning it.
+OBJECT_SHOT_NEGATIVE = (
+    "person, people, human figure, man, woman, crowd, hands, arms, "
+    "hair, hairstyle, detailed clothing, jacket, suit, skin, portrait"
+)
+
+
+def _stills_negative(kind: str = "figure") -> str:
+    """Negative conditioning for stills, or "" when disabled.
+
+    `kind` is the shot's own [SHOT=figure|object] tag. An object shot adds the
+    suppression above; a figure shot must not, or the channel loses its
+    figures.
+    """
     raw = os.environ.get("RUFUS_STILLS_NEGATIVE")
     if raw is None:
-        return DEFAULT_STILLS_NEGATIVE
-    raw = raw.strip()
-    return "" if raw.lower() in ("0", "false", "no", "off") else raw
+        base = DEFAULT_STILLS_NEGATIVE
+    else:
+        raw = raw.strip()
+        if raw.lower() in ("0", "false", "no", "off"):
+            return ""
+        base = raw
+    if kind == "object":
+        return f"{base}, {OBJECT_SHOT_NEGATIVE}" if base else OBJECT_SHOT_NEGATIVE
+    return base
 
 
 STYLES_FILE = Path(__file__).parent.parent / "config" / "styles.json"
@@ -1263,7 +1293,8 @@ def _render_on_plate(plate, prompt: str, seed: int, client_id: str,
 
 
 def _render_image(prompt: str, seed: int, client_id: str,
-                  niche: str | None = None, px: int | None = None) -> bytes | None:
+                  niche: str | None = None, px: int | None = None,
+                  kind: str = "figure") -> bytes | None:
     """Render one still → raw PNG bytes, or None.
 
     Tries the recurring-character path first when the niche has one
@@ -1294,7 +1325,7 @@ def _render_image(prompt: str, seed: int, client_id: str,
     import comfy_template
     g = comfy_template.prepare(tpl, prompt=prompt, seed=seed,
                                save_prefix="rufus_stills",
-                               negative=_stills_negative())
+                               negative=_stills_negative(kind))
     if px:
         g = _shrink(g, px)
     pid = _submit(g, client_id)
@@ -1893,6 +1924,11 @@ def generate_clips(queries: list[str], n: int = 4,
     # is the same six hundred words on every beat, and matching a place against
     # it would match every place equally.
     beat_plates = [_plate_for(p) for p in prompts]
+    # Read BEFORE _with_detail, which strips the tag once it has chosen the
+    # style. The renderer needs it too: an object shot suppresses people in the
+    # negative, because dropping the figure half also drops every word saying
+    # how this channel draws one.
+    beat_kinds = [shot_kind(p) for p in prompts]
     if any(beat_plates):
         named = {p.slug for p in beat_plates if p}
         print(f"[comfy] background plate(s) in play: {', '.join(sorted(named))}")
@@ -1991,7 +2027,10 @@ def generate_clips(queries: list[str], n: int = 4,
                                                  client_id, niche)
                 if img_bytes is None:
                     img_bytes = _render_image(attempt_prompt, seed, client_id,
-                                              niche=niche)
+                                              niche=niche,
+                                              kind=(beat_kinds[i]
+                                                    if i < len(beat_kinds)
+                                                    else "figure"))
             if not img_bytes:
                 # A hard generation error (vs. a plain duplicate) is often a
                 # transient GPU/model-loading hiccup on the ComfyUI side —

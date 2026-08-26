@@ -434,7 +434,7 @@ def test_two_phase_all_renders_before_any_motion(monkeypatch, tmp_path):
         clip.write_bytes(b"x" * 60_000)
         return True
 
-    def fake_render(prompt, seed, client_id, niche=None):
+    def fake_render(prompt, seed, client_id, niche=None, **_kw):
         order.append(("render", None))
         return b"PNG"
 
@@ -464,7 +464,7 @@ def test_failed_image_reuses_previous_still_for_beat_alignment(monkeypatch, tmp_
     keeps matching beat[i]."""
     calls = {"n": 0}
 
-    def fake_render(prompt, seed, client_id, niche=None):
+    def fake_render(prompt, seed, client_id, niche=None, **_kw):
         calls["n"] += 1
         # Fail every render attempt for the SECOND prompt only
         if "SECOND" in prompt:
@@ -651,7 +651,7 @@ def test_generate_clips_sends_the_detailed_prompt(monkeypatch):
     monkeypatch.delenv("RUFUS_STILLS_DETAIL", raising=False)
     seen = []
 
-    def fake_render(prompt, seed, client_id, niche=None):
+    def fake_render(prompt, seed, client_id, niche=None, **_kw):
         seen.append(prompt)
         return b"PNG"
 
@@ -862,7 +862,7 @@ def test_generate_clips_threads_niche_into_render(monkeypatch):
     logic itself (covered above)."""
     seen_niches = []
 
-    def fake_render(prompt, seed, client_id, niche=None):
+    def fake_render(prompt, seed, client_id, niche=None, **_kw):
         seen_niches.append(niche)
         return b"PNG"
 
@@ -945,7 +945,7 @@ def test_multiframe_renders_n_frames_per_beat_at_one_seed(monkeypatch):
     _multiframe_env(monkeypatch, 3)
     calls = []
 
-    def fake_render(prompt, seed, client_id, niche=None):
+    def fake_render(prompt, seed, client_id, niche=None, **_kw):
         calls.append((prompt, seed))
         return b"PNG"
 
@@ -978,7 +978,7 @@ def test_multiframe_orders_frames_earlier_peak_later(monkeypatch):
     # Identify each frame by CONTENT, not filename: the temp stamp itself
     # contains an underscore ("<epoch>_<pid>"), so the base frame's name also
     # ends in "_<beat>.png" and cannot be told apart from a sub-frame by suffix.
-    def fake_render(prompt, seed, client_id, niche=None):
+    def fake_render(prompt, seed, client_id, niche=None, **_kw):
         low = prompt.lower()
         return b"EARLIER" if "earlier" in low else (
             b"LATER" if "later" in low else b"PEAK")
@@ -1059,7 +1059,7 @@ def test_multiframe_survives_a_failed_sub_frame(monkeypatch):
     _multiframe_env(monkeypatch, 3)
     calls = {"n": 0}
 
-    def flaky(prompt, seed, client_id, niche=None):
+    def flaky(prompt, seed, client_id, niche=None, **_kw):
         calls["n"] += 1
         return None if calls["n"] == 2 else b"PNG"
 
@@ -1504,7 +1504,7 @@ def _gate_run(monkeypatch, tmp_path, verdicts, prompts=("the table goes over",),
         calls["n"] += 1
         return verdicts[i]
 
-    def fake_render(prompt, seed, client_id, niche=None, px=None):
+    def fake_render(prompt, seed, client_id, niche=None, px=None, **_kw):
         seen_prompts.append(prompt)
         return b"PNG"
 
@@ -1587,7 +1587,7 @@ def test_with_the_gate_off_nothing_changes(monkeypatch, tmp_path):
     monkeypatch.setattr(frame_gate, "enabled", lambda: False)
     seen = []
 
-    def fake_render(prompt, seed, client_id, niche=None, px=None):
+    def fake_render(prompt, seed, client_id, niche=None, px=None, **_kw):
         seen.append(prompt)
         return b"PNG"
 

@@ -1490,3 +1490,36 @@ def test_the_micro_preset_is_actually_micro():
     it is stickman_lean with a haircut."""
     assert len(_looks()["stickman_micro"].split()) < 110
     assert len(_looks()["stickman_lean"].split()) > 700, "the control moved"
+
+
+# ── an object shot has no house style for a person, so it must not draw one ──
+#
+# The [SHOT=object] tag drops the whole figure half, which is right: a beat
+# about a ledger does not need six hundred words on limbs. But it leaves the
+# prompt saying NOTHING about how this channel draws a person — and one live
+# frame from the first stickman_micro gallery is two flat-vector men with hair
+# and jackets standing in front of a stack of gold bars, on a shot that read
+# "Gold bars being stacked neatly in a vault". The model added them and had no
+# house style to add them in.
+
+def test_an_object_shot_suppresses_people_in_the_negative():
+    import comfy_client
+    neg = comfy_client._stills_negative("object")
+    for term in ("human figure", "hair", "detailed clothing"):
+        assert term in neg, term
+
+
+def test_a_figure_shot_does_not_suppress_people():
+    """Obvious, and worth pinning: the same clause on a figure shot would take
+    the channel's figures out of its own videos."""
+    import comfy_client
+    assert "human figure" not in comfy_client._stills_negative("figure")
+
+
+def test_the_suppression_goes_in_the_negative_not_the_style():
+    """This file has been caught five times believing a style block has a meta
+    level. The only reliable way not to get a figure is not to mention one, and
+    the negative is the one side where naming a thing pushes it away."""
+    import comfy_client
+    for name, text in _looks().items():
+        assert "human figure" not in text, name
