@@ -220,6 +220,52 @@ def init_db():
                 c.execute(ddl)
             except Exception:
                 pass  # column already exists
+        # TWO FULL GALLERIES, AND THE SWAP THAT MAKES TWO ENOUGH.
+        #
+        # A gallery of sixteen pictures is sixteen independent draws, not one
+        # artefact. Variant A comes back best on shot 3 and worst on shot 9;
+        # variant B the other way round. Choosing a whole bundle throws away
+        # the good half of the other one — so the unit of choice is the SHOT,
+        # and a set is picked as a base and then corrected per shot.
+        #
+        # Two rather than three because of what that buys: at a defect rate
+        # around one in five, the chance both variants fail the same shot is
+        # about four per cent, so a sixteen-shot set expects well under one
+        # unfixable shot. A third variant takes that to under a sixth of a shot
+        # for another thirteen minutes of the 3090, which is not a trade worth
+        # making.
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS gallery_sets (
+                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                created_at   TEXT DEFAULT (datetime('now')),
+                candidate_id INTEGER,
+                channel      TEXT,
+                niche        TEXT,
+                topic        TEXT,
+                script_file  TEXT,
+                n_variants   INTEGER DEFAULT 2,
+                status       TEXT DEFAULT 'pending',
+                decided_at   TEXT
+            )
+        """)
+        # status per IMAGE, the same idiom script_candidates uses and for the
+        # same reason: the row that lost is half of a labelled preference pair,
+        # and here there is one per shot rather than one per video. Sixteen
+        # judgements a person makes anyway, recorded instead of discarded.
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS gallery_images (
+                id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                set_id     INTEGER,
+                variant    INTEGER,
+                beat_index INTEGER,
+                path       TEXT,
+                prompt     TEXT,
+                seed       INTEGER,
+                status     TEXT DEFAULT 'pending'
+            )
+        """)
+        c.execute("CREATE INDEX IF NOT EXISTS idx_gimg_set "
+                  "ON gallery_images(set_id, beat_index, variant)")
         c.execute("""
             CREATE TABLE IF NOT EXISTS script_attempts (
                 id                INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -583,6 +629,123 @@ def choose_candidate(candidate_id: int) -> dict | None:
                       (int(chosen["proposal_id"]), int(candidate_id)))
         chosen["status"] = "chosen"
         return chosen
+
+
+# ── galleries ────────────────────────────────────────────────────────────────
+
+_GSET_COLS = ["id", "created_at", "candidate_id", "channel", "niche", "topic",
+              "script_file", "n_variants", "status", "decided_at"]
+_GIMG_COLS = ["id", "set_id", "variant", "beat_index", "path", "prompt",
+              "seed", "status"]
+
+
+def save_gallery_set(*, candidate_id: int | None, channel: str, niche: str,
+                     topic: str, script_file: str, n_variants: int) -> int:
+    with _conn() as c:
+        cur = c.execute(
+            "INSERT INTO gallery_sets (candidate_id, channel, niche, topic, "
+            "script_file, n_variants) VALUES (?,?,?,?,?,?)",
+            (candidate_id, channel, niche, topic, script_file,
+             int(n_variants)))
+        return cur.lastrowid
+
+
+def save_gallery_image(*, set_id: int, variant: int, beat_index: int,
+                       path: str, prompt: str, seed: int) -> int:
+    with _conn() as c:
+        cur = c.execute(
+            "INSERT INTO gallery_images (set_id, variant, beat_index, path, "
+            "prompt, seed) VALUES (?,?,?,?,?,?)",
+            (int(set_id), int(variant), int(beat_index), str(path), prompt,
+             int(seed)))
+        return cur.lastrowid
+
+
+def gallery_sets(status: str | None = "pending", limit: int = 20) -> list[dict]:
+    q = f"SELECT {', '.join(_GSET_COLS)} FROM gallery_sets"
+    args: list = []
+    if status:
+        q += " WHERE status = ?"
+        args.append(status)
+    q += " ORDER BY id DESC LIMIT ?"
+    args.append(int(limit))
+    with _conn() as c:
+        rows = c.execute(q, args).fetchall()
+    return [dict(zip(_GSET_COLS, r)) for r in rows]
+
+
+def gallery_images(set_id: int, status: str | None = None) -> list[dict]:
+    """Every image in a set, in beat then variant order — which is the order
+    the page lays them out: one row per shot, the variants side by side."""
+    q = f"SELECT {', '.join(_GIMG_COLS)} FROM gallery_images WHERE set_id = ?"
+    args: list = [int(set_id)]
+    if status:
+        q += " AND status = ?"
+        args.append(status)
+    q += " ORDER BY beat_index ASC, variant ASC"
+    with _conn() as c:
+        rows = c.execute(q, args).fetchall()
+    return [dict(zip(_GIMG_COLS, r)) for r in rows]
+
+
+def choose_gallery_base(set_id: int, variant: int) -> int:
+    """Take every shot from `variant`. Returns how many beats were set.
+
+    THE BASE IS ONE CLICK AND THE SWAPS ARE THE CORRECTIONS. Marking the whole
+    variant chosen first, then letting individual beats be swapped, is what
+    keeps this to one judgement plus a handful — rather than sixteen.
+    """
+    with _conn() as c:
+        c.execute("UPDATE gallery_images SET status='rejected' "
+                  "WHERE set_id=?", (int(set_id),))
+        cur = c.execute("UPDATE gallery_images SET status='chosen' "
+                        "WHERE set_id=? AND variant=?",
+                        (int(set_id), int(variant)))
+        return cur.rowcount
+
+
+def swap_gallery_beat(set_id: int, beat_index: int, variant: int) -> bool:
+    """Take this one shot from `variant` instead. False if there is no such
+    image — a beat one variant failed to render has nothing to swap to."""
+    with _conn() as c:
+        exists = c.execute(
+            "SELECT 1 FROM gallery_images WHERE set_id=? AND beat_index=? "
+            "AND variant=?", (int(set_id), int(beat_index), int(variant))
+        ).fetchone()
+        if not exists:
+            return False
+        c.execute("UPDATE gallery_images SET status='rejected' "
+                  "WHERE set_id=? AND beat_index=?",
+                  (int(set_id), int(beat_index)))
+        c.execute("UPDATE gallery_images SET status='chosen' "
+                  "WHERE set_id=? AND beat_index=? AND variant=?",
+                  (int(set_id), int(beat_index), int(variant)))
+        return True
+
+
+def chosen_gallery(set_id: int) -> list[dict]:
+    """The picked image per beat, in beat order, with nothing missing.
+
+    A beat with no chosen row is a hole the renderer would fill with the wrong
+    picture — clip[i] belongs to beat[i] and everything downstream assumes it —
+    so this returns [] rather than a short list, and the caller says why.
+    """
+    rows = gallery_images(set_id, status="chosen")
+    by_beat = {r["beat_index"]: r for r in rows}
+    if not by_beat:
+        return []
+    wanted = range(max(by_beat) + 1)
+    if any(i not in by_beat for i in wanted):
+        return []
+    return [by_beat[i] for i in wanted]
+
+
+def decide_gallery_set(set_id: int, status: str = "chosen") -> bool:
+    with _conn() as c:
+        cur = c.execute(
+            "UPDATE gallery_sets SET status=?, decided_at=datetime('now') "
+            "WHERE id=? AND status='pending'", (status, int(set_id)))
+        return cur.rowcount > 0
 
 
 def proposal_cost_today() -> float:

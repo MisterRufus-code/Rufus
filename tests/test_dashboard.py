@@ -1434,17 +1434,23 @@ def test_the_page_shows_every_candidate_and_its_style(client):
     assert "Body of script 1." in page
 
 
-def test_choosing_one_runs_that_script_rather_than_the_topic(client, monkeypatch):
+def test_choosing_one_draws_galleries_for_that_script(client, monkeypatch):
     """--script, not --topic. main.py skips its writer for a run given a script
-    file, so the script a person read is the script that gets made; passing the
-    topic would have the writer produce a fourth one nobody chose."""
-    launched = {}
+    file, so the script a person read is the script the video is built from;
+    passing the topic would have the writer produce a fourth one nobody chose.
+
+    And the render still does not start here — the same principle one stage on:
+    the irreversible expensive step waits behind the LAST human judgement."""
+    started, rendered = {}, []
+    monkeypatch.setattr(dashboard, "_launch_galleries",
+                        lambda **kw: started.update(kw) or Path("g.log"))
     monkeypatch.setattr(dashboard, "_launch_run",
-                        lambda **kw: launched.update(kw) or (None, Path("r.log")))
+                        lambda **kw: rendered.append(kw) or (None, Path("r.log")))
     ids = _candidates()
     client.post(f"/scripts/{ids[1]}/choose", follow_redirects=False)
-    assert "script_file" in launched and "topic" not in launched
-    assert Path(launched["script_file"]).read_text(
+    assert "script_file" in started and "topic" in started
+    assert rendered == [], "choosing a script must not start a render"
+    assert Path(started["script_file"]).read_text(
         encoding="utf-8").startswith("Hook 1")
 
 
@@ -1461,15 +1467,91 @@ def test_choosing_one_records_the_others_as_passed_over(client, monkeypatch):
 
 
 def test_a_script_cannot_be_chosen_twice(client, monkeypatch):
-    """A slow page invites a double click, and the second one would start a
-    second render of the same video."""
+    """A slow page invites a double click, and the second one would draw
+    another forty minutes of galleries for the same script."""
     calls = []
-    monkeypatch.setattr(dashboard, "_launch_run",
-                        lambda **kw: calls.append(kw) or (None, Path("r.log")))
+    monkeypatch.setattr(dashboard, "_launch_galleries",
+                        lambda **kw: calls.append(kw) or Path("g.log"))
     ids = _candidates()
     client.post(f"/scripts/{ids[0]}/choose")
     client.post(f"/scripts/{ids[0]}/choose")
     assert len(calls) == 1
+
+
+# ── choosing the pictures ───────────────────────────────────────────────────
+
+def _gallery(beats=3, variants=2, topic="Rome"):
+    set_id = db_manager.save_gallery_set(
+        candidate_id=1, channel="main_en", niche="money_history", topic=topic,
+        script_file="logs/chosen_scripts/candidate_1.txt", n_variants=variants)
+    for v in range(variants):
+        for b in range(beats):
+            db_manager.save_gallery_image(
+                set_id=set_id, variant=v, beat_index=b,
+                path=f"/nope/v{v}_{b}.png", prompt=f"shot {b}", seed=100 + b)
+    return set_id
+
+
+def test_taking_a_base_picks_every_shot_from_one_draw(client):
+    """One click, then corrections. Sixteen separate judgements is not a
+    workflow anybody finishes."""
+    sid = _gallery()
+    client.post(f"/galleries/{sid}/base/1")
+    rows = db_manager.gallery_images(sid, status="chosen")
+    assert len(rows) == 3
+    assert {r["variant"] for r in rows} == {1}
+
+
+def test_swapping_one_shot_leaves_the_rest_alone(client):
+    """The good half of the other draw is exactly what a whole-bundle choice
+    throws away."""
+    sid = _gallery()
+    client.post(f"/galleries/{sid}/base/0")
+    client.post(f"/galleries/{sid}/swap/1/1")
+    chosen = {r["beat_index"]: r["variant"]
+              for r in db_manager.gallery_images(sid, status="chosen")}
+    assert chosen == {0: 0, 1: 1, 2: 0}
+
+
+def test_a_set_with_an_unpicked_shot_will_not_render(client, monkeypatch):
+    """clip[i] belongs to beat[i] all the way downstream. A short list does not
+    lose one picture — it slides every later one onto the wrong sentence."""
+    rendered = []
+    monkeypatch.setattr(dashboard, "_launch_run",
+                        lambda **kw: rendered.append(kw) or (None, Path("r.log")))
+    sid = _gallery()
+    r = client.post(f"/galleries/{sid}/use", follow_redirects=False)
+    assert r.status_code in (301, 302)
+    assert rendered == []
+
+
+def test_a_complete_set_renders_from_the_chosen_pictures(client, monkeypatch):
+    """Nothing is redrawn — that is the whole point of having spent forty
+    minutes drawing and choosing."""
+    launched = {}
+    monkeypatch.setattr(dashboard, "_launch_run",
+                        lambda **kw: launched.update(kw) or (None, Path("r.log")))
+    sid = _gallery()
+    client.post(f"/galleries/{sid}/base/0")
+    client.post(f"/galleries/{sid}/use")
+    assert launched["gallery_id"] == sid
+    assert launched["script_file"].endswith("candidate_1.txt")
+
+
+def test_a_gallery_cannot_be_sent_to_render_twice(client, monkeypatch):
+    calls = []
+    monkeypatch.setattr(dashboard, "_launch_run",
+                        lambda **kw: calls.append(kw) or (None, Path("r.log")))
+    sid = _gallery()
+    client.post(f"/galleries/{sid}/base/0")
+    client.post(f"/galleries/{sid}/use")
+    client.post(f"/galleries/{sid}/use")
+    assert len(calls) == 1
+
+
+def test_an_empty_gallery_page_says_where_pictures_come_from(client):
+    page = client.get("/galleries").get_data(as_text=True)
+    assert "Nothing waiting" in page and "/scripts" in page
 
 
 def test_an_empty_choose_page_says_where_scripts_come_from(client):

@@ -1,0 +1,191 @@
+#!/usr/bin/env python3
+"""
+gallery_variants.py — two complete galleries for one script, so a person picks.
+
+WHY A WHOLE GALLERY AND NOT A SAMPLE. What is being chosen is the set of
+pictures this video ships with, sixteen or so of them, in beat order. A
+three-image probe answers "which look" — a different question, answered rarely,
+and config/styles.json already owns it. This answers "which draws came out",
+which has to be asked of the real prompts because that is where the empty faces
+and the blank sheets actually happen.
+
+WHY THE SHOT IS THE UNIT OF CHOICE. A gallery of sixteen pictures is sixteen
+independent draws, not one artefact. Variant A comes back best on shot 3 and
+worst on shot 9; variant B the other way round. Picking a whole bundle throws
+away the good half of the other one. So a set is chosen as a BASE in one click
+and then corrected shot by shot — one judgement plus a handful, instead of
+sixteen.
+
+WHY TWO AND NOT THREE. At a defect rate around one in five, the chance both
+variants fail the same shot is about four per cent — a sixteen-shot set expects
+well under one unfixable shot. A third variant takes that under a sixth of a
+shot and costs another thirteen minutes of the 3090. Two draws with a swap
+already kill the great majority of what a third would.
+
+THE PROMPTS ARE BUILT ONCE AND STORED. The storyboard is a model call and does
+not repeat itself, so rebuilding the prompts at render time would mean the
+pictures a person chose were drawn for a different set of beats than the ones
+that ship. Every image row carries the prompt it came from, and the run that
+uses the set reads those rather than planning again.
+
+    RUFUS_GALLERY_VARIANTS  2   how many complete galleries to draw
+"""
+
+import os
+import random
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parent))
+
+import paths
+
+DEFAULT_VARIANTS = 2
+
+
+def how_many() -> int:
+    try:
+        return max(1, int(os.environ.get("RUFUS_GALLERY_VARIANTS",
+                                         DEFAULT_VARIANTS)))
+    except ValueError:
+        return DEFAULT_VARIANTS
+
+
+def gallery_dir(set_id: int) -> Path:
+    return paths.media_root() / "galleries" / str(set_id)
+
+
+def build(script_file: str, *, candidate_id: int | None = None,
+          niche: str | None = None, channel: str | None = None,
+          topic: str = "", n_variants: int | None = None) -> int | None:
+    """Draw `n_variants` complete galleries for the script. Returns the set id.
+
+    Fail-open per image, like every other render loop here: a beat that will
+    not draw in one variant leaves that variant short and the other one still
+    covers the shot. A set with a hole in BOTH variants is the caller's problem
+    to see, and chosen_gallery refuses to hand back a short list for exactly
+    that reason.
+    """
+    import comfy_client
+    import db_manager
+    import main as rufus_main
+
+    script = Path(script_file).read_text(encoding="utf-8")
+    if niche is None:
+        try:
+            import research
+            niche = research._load_niche()[1]
+        except Exception:
+            niche = "money_history"
+    if channel is None:
+        try:
+            from channel_config import load_channel
+            channel = load_channel().id
+        except Exception:
+            channel = "main_en"
+
+    n_variants = n_variants or how_many()
+    beats = rufus_main._target_beats(script)
+    prompts = rufus_main._build_sd_prompts(script, niche, max_scenes=beats)
+    if not prompts:
+        print("[galleries] no prompts were planned — nothing to draw")
+        return None
+
+    set_id = db_manager.save_gallery_set(
+        candidate_id=candidate_id, channel=channel, niche=niche,
+        topic=topic or (script.strip().split("\n")[0][:120]),
+        script_file=str(script_file), n_variants=n_variants)
+    out_dir = gallery_dir(set_id)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    print(f"[galleries] set #{set_id}: {n_variants} × {len(prompts)} "
+          f"picture(s) → {out_dir}")
+
+    drawn = 0
+    for variant in range(n_variants):
+        # ONE BASE SEED PER VARIANT, offset by beat. Two variants that shared a
+        # seed would draw the same picture twice and the choice would be
+        # between a thing and itself; a seed re-rolled per image would make the
+        # variant meaningless as a unit, which is what the base click selects.
+        base_seed = random.randint(1, 2**31 - 1)
+        print(f"[galleries] variant {variant} — base_seed={base_seed}")
+        for i, prompt in enumerate(prompts):
+            png = out_dir / f"v{variant}_{i:02d}.png"
+            seed = (base_seed + i) % (2**31 - 1)
+            ok = comfy_client.render_one_beat(prompt, png, seed=seed,
+                                              niche=niche)
+            if not ok:
+                print(f"[galleries] variant {variant} beat {i}: no image — "
+                      f"the other variant still covers this shot")
+                continue
+            db_manager.save_gallery_image(
+                set_id=set_id, variant=variant, beat_index=i, path=str(png),
+                prompt=prompt, seed=seed)
+            drawn += 1
+
+    print(f"[galleries] set #{set_id}: {drawn} picture(s) drawn — "
+          f"choose at /galleries")
+    return set_id
+
+
+def clips_from(set_id: int, clip_duration: float = 8.0) -> list[Path]:
+    """The chosen picture per beat, animated into clips the renderer can use.
+
+    THE HANDOFF BACK INTO THE ORDINARY PIPELINE. Everything downstream of
+    generate_clips expects a list of mp4s where clip[i] belongs to beat[i], so
+    that is what a chosen set becomes — via the same Ken Burns step the normal
+    path uses for a still, rather than a second animation route that would
+    drift from it.
+
+    Returns [] when the set has a beat with nothing chosen. A short list would
+    silently slide every later picture onto the wrong sentence, which is the
+    one failure this whole stage exists to prevent.
+    """
+    import db_manager
+    from sd_client import _animate_to_clip
+
+    rows = db_manager.chosen_gallery(set_id)
+    if not rows:
+        print(f"[galleries] set #{set_id} has no complete choice — every beat "
+              f"needs a picked picture before it can be rendered")
+        return []
+
+    out_dir = gallery_dir(set_id) / "clips"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    clips: list[Path] = []
+    for row in rows:
+        png = Path(row["path"])
+        if not png.exists():
+            print(f"[galleries] beat {row['beat_index']}: {png} is gone")
+            return []
+        clip = out_dir / f"{row['beat_index']:02d}.mp4"
+        if not _animate_to_clip(png, clip, duration=clip_duration,
+                                idx=row["beat_index"]):
+            print(f"[galleries] beat {row['beat_index']}: could not animate")
+            return []
+        clips.append(clip)
+    print(f"[galleries] set #{set_id}: {len(clips)} chosen clip(s) ready")
+    return clips
+
+
+def prompts_of(set_id: int) -> list[str]:
+    """The prompts the chosen pictures were actually drawn from.
+
+    The storyboard is a model call and does not repeat itself. A run that
+    rebuilt its prompts would be describing different beats than the ones a
+    person looked at, so it reads them back instead of planning again.
+    """
+    import db_manager
+    rows = db_manager.chosen_gallery(set_id)
+    return [r["prompt"] or "" for r in rows]
+
+
+if __name__ == "__main__":
+    import argparse
+    ap = argparse.ArgumentParser(description=__doc__.split("\n")[1])
+    ap.add_argument("script_file")
+    ap.add_argument("--candidate", type=int, default=None)
+    ap.add_argument("--topic", default="")
+    ap.add_argument("--variants", type=int, default=None)
+    a = ap.parse_args()
+    build(a.script_file, candidate_id=a.candidate, topic=a.topic,
+          n_variants=a.variants)

@@ -617,8 +617,8 @@ _LAUNCHED: dict[str, subprocess.Popen] = {}
 
 
 def _launch_run(*, niche: str | None = None, topic: str | None = None,
-                channel: str | None = None,
-                script_file: str | None = None) -> tuple[subprocess.Popen, Path]:
+                channel: str | None = None, script_file: str | None = None,
+                gallery_id: int | None = None) -> tuple[subprocess.Popen, Path]:
     """Fire-and-forget: a genuinely separate OS process, not an in-process
     call — this Flask app runs threaded=False (see approve_video's
     _scoped_env note), so a call that blocks for the 5-45+ minutes a video
@@ -644,6 +644,12 @@ def _launch_run(*, niche: str | None = None, topic: str | None = None,
         cmd += ["--script", script_file]
     env = os.environ.copy()
     env.update(_load_settings())
+    if gallery_id is not None:
+        # AFTER _load_settings, deliberately. A saved setting is a default for
+        # every run; this is a fact about THIS one, and a stale RUFUS_GALLERY
+        # left in the settings file would quietly render every future video
+        # from one old set of pictures.
+        env["RUFUS_GALLERY"] = str(gallery_id)
     # THE CHILD'S STDOUT IS A FILE, so Python has no console to ask and falls
     # back to the system ANSI code page — cp1255 here, which has no ✗ and no
     # em-dash. A real run died mid-report on exactly that. The .bat launchers
@@ -682,6 +688,33 @@ def _launch_candidates(*, topic: str, proposal_id: int | None,
     log_dir = ROOT / "logs"
     log_dir.mkdir(parents=True, exist_ok=True)
     log_path = log_dir / f"candidates_{int(time.time())}.log"
+    with open(log_path, "wb") as logf:
+        subprocess.Popen(cmd, cwd=str(ROOT), stdout=logf, env=env,
+                         stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL)
+    return log_path
+
+
+def _launch_galleries(*, script_file: str, candidate_id: int | None,
+                      topic: str = "") -> Path:
+    """Draw the gallery variants for a chosen script, in a separate process.
+
+    Two complete galleries is about forty minutes of the 3090 — far past the
+    point where doing it inline would freeze the dashboard, and past the point
+    where a person should sit and watch. They come back to /galleries.
+    """
+    cmd = [sys.executable, str(ROOT / "scripts" / "gallery_variants.py"),
+           script_file]
+    if candidate_id is not None:
+        cmd += ["--candidate", str(candidate_id)]
+    if topic:
+        cmd += ["--topic", topic]
+    env = os.environ.copy()
+    env.update(_load_settings())
+    env.setdefault("PYTHONUTF8", "1")
+    env.setdefault("PYTHONIOENCODING", "utf-8")
+    log_dir = ROOT / "logs"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    log_path = log_dir / f"galleries_{int(time.time())}.log"
     with open(log_path, "wb") as logf:
         subprocess.Popen(cmd, cwd=str(ROOT), stdout=logf, env=env,
                          stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL)
@@ -1602,6 +1635,7 @@ NAV_ITEMS = [
     ("/styles",     "🎨 Style",                           "settings"),
     ("/scout",      "🛰 Scout",                           "view"),
     ("/scripts",    "📝 Choose a script",                 "view"),
+    ("/galleries",  "🖼 Choose the pictures",             "view"),
     ("/bench",      "🔬 Workflow bench",                  "settings"),
     ("/failures",   "⚠ Failures &amp; rejected attempts", "view"),
     ("/performance", "📈 Performance",                    "view"),
@@ -1634,7 +1668,7 @@ NAV_GROUPS = (
     ("Make",    ("/generate", "/thumbnails", "/styles")),
     ("Review",  ("/gallery", "/history", "/failures")),
     ("Measure", ("/tracking", "/performance", "/insights", "/advice",
-                 "/trending", "/scout", "/scripts")),
+                 "/trending", "/scout", "/scripts", "/galleries")),
     ("System",  ("/bench", "/logs", "/system", "/settings")),
 )
 
@@ -3385,14 +3419,17 @@ def scripts_page():
 
 @app.route("/scripts/<int:candidate_id>/choose", methods=["POST"])
 def scripts_choose(candidate_id: int):
-    """Chosen → an ordinary run built from THIS script.
+    """Chosen → two galleries drawn for THIS script, to choose between next.
 
-    --script rather than --topic, which is the fix for the thing that made the
-    old flow wasteful: main.py skips its writer for a run given a script file,
-    so the script a person actually read is the script that gets made. Passing
-    the topic instead would have the writer produce a fourth one nobody chose.
-    Everything after that — fact gate, storyboard, render, review queue — is
-    the ordinary path.
+    The script is written to a file because that is the seam main.py already
+    has: --script makes it skip its writer, so the script a person actually
+    read is the one the video is built from. Passing a topic instead would have
+    the writer produce a fourth script nobody chose.
+
+    The render still does not start here. It starts once the pictures have been
+    chosen too — which is the same principle one stage further on: the
+    irreversible expensive step waits behind the last human judgement, not the
+    first.
     """
     auth.require("generate")
     try:
@@ -3405,13 +3442,180 @@ def scripts_choose(candidate_id: int):
         out_dir.mkdir(parents=True, exist_ok=True)
         script_file = out_dir / f"candidate_{candidate_id}.txt"
         script_file.write_text(chosen["script"] or "", encoding="utf-8")
-        _, log_path = _launch_run(script_file=str(script_file),
-                                  channel=chosen["channel"])
+        log_path = _launch_galleries(script_file=str(script_file),
+                                     candidate_id=candidate_id,
+                                     topic=chosen["topic"] or "")
     except Exception as e:
         return redirect("/scripts?error=" + _urlquote(f"could not start: {e}"))
-    return redirect("/scripts?msg=" + _urlquote(
-        f'Making "{chosen["topic"]}" from the script you chose — it lands in '
-        f'the review queue like any other video. Log: logs/{log_path.name}'))
+    return redirect("/galleries?msg=" + _urlquote(
+        f'Drawing two galleries for "{chosen["topic"]}" — about forty minutes '
+        f'of the GPU, so come back rather than wait. Log: logs/{log_path.name}'))
+
+
+# ── Choosing the pictures ────────────────────────────────────────────────────
+
+@app.route("/galleries")
+def galleries_page():
+    """Two complete galleries, side by side, one row per shot.
+
+    THE SHOT IS THE UNIT OF CHOICE, and that is what makes two variants enough.
+    A gallery of sixteen pictures is sixteen independent draws — A comes back
+    best on shot 3 and worst on shot 9, B the other way round — so picking a
+    whole bundle throws away the good half of the other. Pick a base in one
+    click, then correct the shots where the other one won.
+    """
+    auth.require("view")
+    try:
+        import db_manager as dbm
+        sets = dbm.gallery_sets(status="pending", limit=6)
+    except Exception as e:
+        body = (f'<a class="back" href="/">← back</a><h2 style="margin-top:14px">'
+                f'Choose the pictures</h2><div class="msg error">'
+                f'{_esc(str(e))}</div>')
+        return _head() + body + PAGE_TAIL
+
+    blocks = ""
+    for gs in sets:
+        try:
+            images = dbm.gallery_images(gs["id"])
+        except Exception:
+            images = []
+        by_beat: dict = {}
+        for im in images:
+            by_beat.setdefault(im["beat_index"], []).append(im)
+
+        bases = ""
+        if auth.can("generate"):
+            for v in range(int(gs["n_variants"] or 2)):
+                bases += (f'<form method="post" action="/galleries/{gs["id"]}'
+                          f'/base/{v}" style="display:inline">'
+                          f'<button type="submit">Take all from {chr(65+v)}'
+                          f'</button></form> ')
+            bases += (f'<form method="post" action="/galleries/{gs["id"]}/use" '
+                      f'style="display:inline"><button class="btn save" '
+                      f'type="submit">Make the video with this set</button>'
+                      f'</form>')
+
+        rows = ""
+        for beat in sorted(by_beat):
+            cells = ""
+            for im in sorted(by_beat[beat], key=lambda r: r["variant"]):
+                picked = im["status"] == "chosen"
+                swap = ""
+                if auth.can("generate") and not picked:
+                    swap = (f'<form method="post" action="/galleries/{gs["id"]}'
+                            f'/swap/{beat}/{im["variant"]}"><button '
+                            f'type="submit">use this one</button></form>')
+                cells += (
+                    f'<td style="vertical-align:top;padding:6px;'
+                    f'border:2px solid {"#4caf50" if picked else "transparent"}">'
+                    f'<img src="/galleries/image/{im["id"]}" '
+                    f'style="width:150px;max-width:40vw;display:block" '
+                    f'alt="shot {beat+1} variant {chr(65+im["variant"])}">'
+                    f'<div class="muted" style="font-size:12px">'
+                    f'{chr(65+im["variant"])}{" · chosen" if picked else ""}'
+                    f'</div>{swap}</td>')
+            prompt = (by_beat[beat][0]["prompt"] or "")[:150]
+            rows += (f'<tr><td class="muted" style="vertical-align:top">'
+                     f'{beat+1}<br><span style="font-size:11px">'
+                     f'{_esc(prompt)}</span></td>{cells}</tr>')
+
+        blocks += (f'<h2 style="margin-top:22px">{_esc(gs["topic"] or "—")}</h2>'
+                   f'<p class="muted">{len(by_beat)} shot(s), '
+                   f'{gs["n_variants"]} draw(s) each. Take a base, then swap '
+                   f'the shots where the other one came out better — a green '
+                   f'border is what ships. Every swap is recorded: the picture '
+                   f'you passed over is half of a labelled pair, one per shot '
+                   f'rather than one per video.</p>'
+                   f'<div style="margin:10px 0">{bases}</div>'
+                   f'<div style="overflow-x:auto"><table>{rows}</table></div>')
+
+    if not sets:
+        blocks = ('<p class="muted">Nothing waiting. Choose a script on '
+                  '<a href="/scripts">Choose a script</a> and two galleries '
+                  'for it are drawn here — about forty minutes of the GPU, so '
+                  'come back rather than wait.</p>')
+
+    body = f"""
+    <a class="back" href="/">← back</a>
+    <h2 style="margin-top:14px">Choose the pictures</h2>
+    {_msg_banner()}
+    {blocks}
+    """
+    return _head() + body + PAGE_TAIL
+
+
+@app.route("/galleries/image/<int:image_id>")
+def galleries_image(image_id: int):
+    """One gallery still. Served by row id rather than by path, so a filename
+    from the query string can never address a file outside the set."""
+    auth.require("view")
+    try:
+        import db_manager as dbm
+        row = next((r for s in dbm.gallery_sets(status=None, limit=40)
+                    for r in dbm.gallery_images(s["id"])
+                    if r["id"] == image_id), None)
+    except Exception:
+        row = None
+    if not row:
+        abort(404)
+    p = Path(row["path"])
+    if not p.exists():
+        abort(404)
+    return send_from_directory(str(p.parent), p.name, max_age=_IMAGE_MAX_AGE)
+
+
+@app.route("/galleries/<int:set_id>/base/<int:variant>", methods=["POST"])
+def galleries_base(set_id: int, variant: int):
+    auth.require("generate")
+    import db_manager as dbm
+    n = dbm.choose_gallery_base(set_id, variant)
+    if not n:
+        return redirect("/galleries?error=" + _urlquote("no such variant"))
+    return redirect("/galleries?msg=" + _urlquote(
+        f"Taking all {n} shot(s) from {chr(65+variant)} — now swap the ones "
+        f"the other draw won."))
+
+
+@app.route("/galleries/<int:set_id>/swap/<int:beat>/<int:variant>",
+           methods=["POST"])
+def galleries_swap(set_id: int, beat: int, variant: int):
+    auth.require("generate")
+    import db_manager as dbm
+    if not dbm.swap_gallery_beat(set_id, beat, variant):
+        return redirect("/galleries?error=" + _urlquote(
+            "that draw has no picture for this shot"))
+    return redirect("/galleries?msg=" + _urlquote(f"Shot {beat+1} swapped."))
+
+
+@app.route("/galleries/<int:set_id>/use", methods=["POST"])
+def galleries_use(set_id: int):
+    """Render the video from the chosen pictures — nothing regenerated.
+
+    Refuses a set with a beat nobody picked. clip[i] belongs to beat[i] all the
+    way downstream, so a short list does not lose one picture — it slides every
+    later one onto the wrong sentence.
+    """
+    auth.require("generate")
+    try:
+        import db_manager as dbm
+        rows = dbm.chosen_gallery(set_id)
+        if not rows:
+            return redirect("/galleries?error=" + _urlquote(
+                "every shot needs a picked picture first — take a base"))
+        gs = next((g for g in dbm.gallery_sets(status=None, limit=40)
+                   if g["id"] == set_id), None)
+        if not gs:
+            return redirect("/galleries?error=" + _urlquote("no such set"))
+        if not dbm.decide_gallery_set(set_id, "chosen"):
+            return redirect("/galleries?error=" + _urlquote("already decided"))
+        _, log_path = _launch_run(script_file=gs["script_file"],
+                                  channel=gs["channel"], gallery_id=set_id)
+    except Exception as e:
+        return redirect("/galleries?error=" + _urlquote(f"could not start: {e}"))
+    return redirect("/galleries?msg=" + _urlquote(
+        f'Rendering with your {len(rows)} chosen picture(s) — nothing is '
+        f'redrawn. Log: logs/{log_path.name}'))
 
 
 # ── The workflow bench ───────────────────────────────────────────────────────

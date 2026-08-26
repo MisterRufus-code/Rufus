@@ -1,7 +1,7 @@
 wrote docs/ENVIRONMENT.md
 enerated by `python scripts/env_doctor.py --markdown`. Do not edit by hand — there are more than a hundred of these and a hand-kept list is wrong within a month.
 
-146 variables, 59 of them described nowhere else.
+148 variables, 61 of them described nowhere else.
 
 `python scripts/env_doctor.py --check` reports variables you have SET that nothing reads — a typo or a renamed flag looks exactly like one that works.
 
@@ -44,6 +44,8 @@ enerated by `python scripts/env_doctor.py --markdown`. Do not edit by hand — t
 | `RUFUS_FRAMES_PER_BEAT` | `1` | `comfy_client.py` |
 | `RUFUS_FRAME_GATE` | `0` | `frame_gate.py` |
 | `RUFUS_FRESH_IMAGES` | `1` | `comfy_client.py` |
+| `RUFUS_GALLERY` | — | `main.py` |
+| `RUFUS_GALLERY_VARIANTS` | — | `gallery_variants.py` |
 | `RUFUS_GPU` | — | `audio_gen.py`, `diffusers_client.py`, `musicgen_gen.py` +1 |
 | `RUFUS_HERO_OTHER_FRAMES` | — | `comfy_client.py` |
 | `RUFUS_HIT_GAIN` | `0.45` | `audio_gen.py` |

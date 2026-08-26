@@ -1944,6 +1944,37 @@ def run(skip_upload: bool = False, niche_override: str = None, output_dir: Path 
             except Exception as e:
                 print(f"           ⚠ image-prompt history save failed (non-fatal): {e}")
 
+            # A GALLERY A PERSON ALREADY CHOSE, and the whole point is that
+            # the expensive irreversible half of the run does not redo it.
+            # RUFUS_GALLERY names a set from /galleries whose pictures were
+            # drawn, compared two at a time and picked shot by shot; using them
+            # skips generation entirely and animates what was chosen.
+            #
+            # The prompts come back from the set too, not from a fresh plan.
+            # The storyboard is a model call and does not repeat itself, so
+            # re-planning here would caption the chosen pictures with a
+            # different set of beats than the ones they were drawn for.
+            gallery_id = (os.environ.get("RUFUS_GALLERY") or "").strip()
+            if gallery_id:
+                try:
+                    import gallery_variants
+                    picked = gallery_variants.clips_from(int(gallery_id))
+                    if picked:
+                        stored = gallery_variants.prompts_of(int(gallery_id))
+                        if stored:
+                            prompts = stored
+                        candidates = picked
+                        print(f"           using gallery #{gallery_id} — "
+                              f"{len(picked)} chosen picture(s), nothing "
+                              f"regenerated")
+                        video_source = "gallery"
+                    else:
+                        print(f"           ⚠ gallery #{gallery_id} is not "
+                              f"complete — falling back to generating stills")
+                except Exception as e:
+                    print(f"           ⚠ gallery #{gallery_id} unusable ({e}) "
+                          f"— falling back to generating stills")
+
             if video_source == "comfy":
                 # ComfyUI stills (best quality, needs ~24GB VRAM / RTX 3090) —
                 # model is whatever's exported to config/stills_api.json
@@ -1971,7 +2002,12 @@ def run(skip_upload: bool = False, niche_override: str = None, output_dir: Path 
             elif video_source == "diffusers":
                 from diffusers_client import generate_clips as diffusers_generate
                 candidates = diffusers_generate(prompts)
-            else:
+            elif video_source != "gallery":
+                # NOT `else`, and the difference is the whole feature. A chosen
+                # gallery has already filled `candidates`; falling into the
+                # default arm would regenerate every picture with A1111 and
+                # throw away the set a person spent forty minutes rendering and
+                # choosing between.
                 from sd_client import generate_clips as sd_generate
                 candidates = sd_generate(prompts, n=len(prompts), prebuilt=True)
 
