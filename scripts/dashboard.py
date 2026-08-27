@@ -1699,13 +1699,10 @@ NAV_ITEMS = [
     ("/voices",     "🗣 Narrator",                        "settings"),
     ("/bench",      "🔬 Workflow bench",                  "settings"),
     ("/failures",   "⚠ Failures &amp; rejected attempts", "view"),
-    ("/performance", "📈 Performance",                    "view"),
     ("/trending",   "🔥 Trending",                        "view"),
     ("/gallery",    "🖼 Gallery",                         "view"),
-    ("/advice",     "💡 What to change",                  "view"),
-    ("/tracking",   "📊 Tracking",                        "view"),
+    ("/measure",    "📊 Measure",                         "view"),
     ("/history",    "🕰 History",                         "view"),
-    ("/insights",   "🔬 Insights",                        "view"),
     ("/logs",       "📜 Logs",                            "view"),
     ("/system",     "🖥 System",                          "system"),
     ("/settings",   "⚙ Settings",                         "settings"),
@@ -1723,7 +1720,7 @@ NAV_ITEMS = [
 # VIEW of it. The invariant that matters is that every registered page appears
 # somewhere here — a page that exists and is unreachable is worse than one
 # that was never written, and a test enforces it.
-NAV_PRIMARY = ("/scout", "/gallery", "/tracking")
+NAV_PRIMARY = ("/scout", "/gallery", "/measure")
 
 # GROUPED BY WHAT YOU CAME HERE TO DO, and the four choosing pages had been
 # filed under Measure — next to the analytics, because that is where a
@@ -1742,8 +1739,7 @@ NAV_GROUPS = (
     ("Make",    ("/scout", "/scripts", "/galleries", "/voice", "/generate",
                  "/thumbnails")),
     ("Review",  ("/gallery", "/history", "/failures", "/logs")),
-    ("Measure", ("/tracking", "/performance", "/insights", "/advice",
-                 "/trending")),
+    ("Measure", ("/measure", "/trending")),
     ("Setup",   ("/styles", "/voices", "/bench", "/system", "/settings")),
 )
 
@@ -2282,8 +2278,95 @@ def failures():
     return _head() + body + PAGE_TAIL
 
 
+# ── one page for one question ────────────────────────────────────────────────
+#
+# FOUR PAGES ASKING VARIATIONS OF "WHAT DOES THE DATA SAY". Tracking asks
+# whether the loop is even closed, Performance asks whether the score predicts
+# anything, Insights asks what keeps going wrong, Advice asks what to change.
+# Each is a good page. Four tabs is four places to look for one answer, and the
+# owner said so plainly: the info is good but not organised.
+#
+# So they compose into one, in the order a person actually asks — what should I
+# do, what keeps breaking, do the numbers agree, is there any data at all. The
+# old routes still exist and redirect to the matching section, because a
+# bookmark that 404s is a worse tidy-up than four tabs.
+_BACK_LINKS = ('<a class="back" href="/">← back</a>',
+               '<a class="back" href="/">&larr; back</a>')
+
+
+def _section(anchor: str, title: str, body: str) -> str:
+    """One former page as a section of the merged one.
+
+    The back link is stripped rather than edited out of each body: these four
+    functions still each own their own markup, and reaching into all of them to
+    delete the same line four times is how the next person ends up with three
+    of them fixed.
+    """
+    for link in _BACK_LINKS:
+        body = body.replace(link, "")
+    return (f'<section id="{anchor}" style="margin-top:26px">'
+            f'<h2 style="margin-top:0">{title}</h2>{body}</section>')
+
+
+_MEASURE_SECTIONS = (
+    ("what-to-change", "What to change", "_advice_body"),
+    ("what-goes-wrong", "What keeps going wrong", "_insights_body"),
+    ("does-score-predict", "Does the score predict anything", "_performance_body"),
+    ("is-the-loop-closed", "Is the loop closed", "_tracking_body"),
+)
+
+
+@app.route("/measure")
+def measure_page():
+    """Everything the numbers say, in the order a person asks it.
+
+    Fail-open per section: one that raises is reported in place and the other
+    three still render. Four questions behind one link is only an improvement
+    if a single broken query cannot take all four down with it — which is
+    exactly what merging them would otherwise buy.
+    """
+    auth.require("view")
+    jump = " · ".join(f'<a href="#{a}">{t}</a>' for a, t, _fn in _MEASURE_SECTIONS)
+    parts = []
+    for anchor_id, title, fn_name in _MEASURE_SECTIONS:
+        try:
+            parts.append(_section(anchor_id, title, globals()[fn_name]()))
+        except Exception as e:
+            parts.append(_section(anchor_id, title,
+                                  f'<div class="msg error">{_esc(str(e))}</div>'))
+    body = f"""
+    <a class="back" href="/">← back</a>
+    <h2 style="margin-top:14px">Measure</h2>
+    {_msg_banner()}
+    <p class="muted">{jump}</p>
+    {"".join(parts)}
+    """
+    return _head() + body + PAGE_TAIL
+
+
+# The old links, kept alive. A tidy-up that breaks every bookmark and every
+# link in a log line is not a tidy-up.
+@app.route("/advice")
+def advice_page():
+    return redirect("/measure#what-to-change")
+
+
+@app.route("/insights")
+def insights_page():
+    return redirect("/measure#what-goes-wrong")
+
+
 @app.route("/performance")
 def performance():
+    return redirect("/measure#does-score-predict")
+
+
+@app.route("/tracking")
+def tracking_page():
+    return redirect("/measure#is-the-loop-closed")
+
+
+def _performance_body():
     """Score vs real audience performance — does the internal 1-10 gate
     actually predict views/watch%? analytics_fetcher.py already fetches this
     data and report.py's correlate() already computes this same signal for
@@ -2335,7 +2418,7 @@ def performance():
     {filt_html}
     {table_html}
     """
-    return _head() + body + PAGE_TAIL
+    return body
 
 
 @app.route("/system")
@@ -4368,8 +4451,7 @@ def _learnings(channel: str | None = None) -> dict:
         return {}
 
 
-@app.route("/tracking")
-def tracking_page():
+def _tracking_body():
     """How much of the feedback loop is real, and what is missing from it.
 
     A youtube_id means a video CAN be tracked; a metrics row means it has
@@ -4385,7 +4467,7 @@ def tracking_page():
     except Exception as e:
         body = (f'<a class="back" href="/">← back</a><h2 style="margin-top:14px">'
                 f'Tracking</h2><div class="msg error">{_esc(str(e))}</div>')
-        return _head() + body + PAGE_TAIL
+        return body
 
     videos = _recent_videos(limit=500, channel=channel)
     live = [v for v in videos if v.get("youtube_id")]
@@ -4499,7 +4581,7 @@ def tracking_page():
     <h2>Published, not yet measured</h2>
     {untracked_html}
     """
-    return _head() + body + PAGE_TAIL
+    return body
 
 
 # ── Advice ───────────────────────────────────────────────────────────────────
@@ -4518,8 +4600,7 @@ def _advice_now() -> tuple[list[dict], dict]:
         return [], {"state": "unmeasured", "detail": str(e)}
 
 
-@app.route("/advice")
-def advice_page():
+def _advice_body():
     """What to change before the next video, and a button that changes it.
 
     THE GAP THIS CLOSES. Insights says what happened; this says what to do
@@ -4545,7 +4626,7 @@ def advice_page():
                 f'<h2 style="margin-top:14px">What to change</h2>{header}'
                 f'<p class="muted">Nothing to suggest — every measured run is '
                 f'inside its thresholds.</p>')
-        return _head() + body + PAGE_TAIL
+        return body
 
     cards = ""
     for it in items:
@@ -4580,7 +4661,7 @@ def advice_page():
        people learn to scroll past.</p>
     {cards}
     """
-    return _head() + body + PAGE_TAIL
+    return body
 
 
 @app.route("/advice/apply", methods=["POST"])
@@ -4626,8 +4707,7 @@ def _severity_badge(sev: str) -> str:
     return f'<span class="badge {cls}">{_esc(sev)}</span>'
 
 
-@app.route("/insights")
-def insights_page():
+def _insights_body():
     """What keeps going wrong, measured rather than remembered.
 
     THE PROBLEM THIS PAGE IS FOR. Every fix to this pipeline in recent memory
@@ -4649,7 +4729,7 @@ def insights_page():
         body = (f'<a class="back" href="/">← back</a>'
                 f'<h2 style="margin-top:14px">Insights</h2>'
                 f'<div class="msg error">Review data unavailable: {_esc(str(e))}</div>')
-        return _head() + body + PAGE_TAIL
+        return body
 
     rows = data.get("rows", [])
     if not rows:
@@ -4660,7 +4740,7 @@ def insights_page():
            own review from here on; to measure the ones already on disk, run
            <code>python scripts/run_review.py --all</code> once.</p>
         """
-        return _head() + body + PAGE_TAIL
+        return body
 
     # What recurs, worst first.
     recurring = ""
@@ -4714,7 +4794,7 @@ def insights_page():
     <h2>Run by run</h2>
     {per_run}
     """
-    return _head() + body + PAGE_TAIL
+    return body
 
 
 # ── Logs ─────────────────────────────────────────────────────────────────────

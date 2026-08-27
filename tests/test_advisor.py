@@ -176,7 +176,7 @@ def test_the_page_offers_the_button_for_an_applicable_suggestion(client, monkeyp
           "why": "w", "action": "a", "severity": "high", "evidence": "3 of 6",
           "setting": "SD_CLIPS", "value": "24"}],
         {"state": "needs work", "detail": "Pictures are held too long"}))
-    page = client.get("/advice").get_data(as_text=True)
+    page = client.get("/measure").get_data(as_text=True)
     assert "Set SD_CLIPS = 24" in page
     assert "needs work" in page
 
@@ -207,8 +207,17 @@ def test_an_unknown_key_is_refused(client):
     assert "error=" in r.headers["Location"]
 
 
-def test_advice_is_in_the_nav():
-    assert any(href == "/advice" for href, _l, _p in dashboard.NAV_ITEMS)
+def test_advice_is_reachable_as_a_section():
+    """REACHABLE, WHICH IS NOW A DIFFERENT ASSERTION THAN IT WAS.
+
+    This page is a SECTION of /measure rather than a tab of its own — four
+    pages asking variations of "what does the data say" was four places to
+    look for one answer. What has to stay true is that the section is reachable
+    and that the old link still leads to it, because a tidy-up that breaks
+    every bookmark is not a tidy-up.
+    """
+    assert any(href == "/measure" for href, _l, _p in dashboard.NAV_ITEMS)
+    assert ("what-to-change", "What to change", "_advice_body") in dashboard._MEASURE_SECTIONS
 
 
 # ── advice that would undo the last fix ─────────────────────────────────────
@@ -262,7 +271,7 @@ def test_the_page_shows_the_clear_label(client, monkeypatch):
           "severity": "high", "evidence": "e", "setting": "SD_CLIPS",
           "value": "", "clear_label": "Clear SD_CLIPS (currently 24)"}],
         {"state": "needs work", "detail": "t"}))
-    page = client.get("/advice").get_data(as_text=True)
+    page = client.get("/measure").get_data(as_text=True)
     assert "Clear SD_CLIPS (currently 24)" in page
 
 

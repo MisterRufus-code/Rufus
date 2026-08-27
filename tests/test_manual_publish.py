@@ -122,7 +122,7 @@ def test_the_tracking_page_separates_can_be_tracked_from_is_tracked(client, db):
     a = db.save_video("money_history", "a", "s", "/tmp/a.mp4")
     db.save_video("money_history", "b", "s", "/tmp/b.mp4")
     db.mark_published(a, "dQw4w9WgXcQ")
-    page = client.get("/tracking").get_data(as_text=True)
+    page = client.get("/measure").get_data(as_text=True)
     assert "published (trackable)" in page
     assert "with view counts" in page
     assert "never published" in page
@@ -130,12 +130,21 @@ def test_the_tracking_page_separates_can_be_tracked_from_is_tracked(client, db):
 
 def test_a_channel_with_nothing_published_is_told_plainly(client, db):
     db.save_video("money_history", "a", "s", "/tmp/a.mp4")
-    page = client.get("/tracking").get_data(as_text=True)
+    page = client.get("/measure").get_data(as_text=True)
     assert "learning loop has never had any data" in page
 
 
-def test_tracking_is_in_the_nav():
-    assert any(href == "/tracking" for href, _l, _p in dashboard.NAV_ITEMS)
+def test_tracking_is_reachable_as_a_section():
+    """REACHABLE, WHICH IS NOW A DIFFERENT ASSERTION THAN IT WAS.
+
+    This page is a SECTION of /measure rather than a tab of its own — four
+    pages asking variations of "what does the data say" was four places to
+    look for one answer. What has to stay true is that the section is reachable
+    and that the old link still leads to it, because a tidy-up that breaks
+    every bookmark is not a tidy-up.
+    """
+    assert any(href == "/measure" for href, _l, _p in dashboard.NAV_ITEMS)
+    assert ("is-the-loop-closed", "Is the loop closed", "_tracking_body") in dashboard._MEASURE_SECTIONS
 
 
 # ── closing the loop from the page ──────────────────────────────────────────
@@ -176,7 +185,7 @@ def test_it_says_how_far_off_the_learning_threshold_is(client, db):
     a = db.save_video("money_history", "a", "s", "/tmp/a.mp4")
     db.mark_published(a, "dQw4w9WgXcQ")
     db.save_metrics(a, views=10, watch_pct=30.0, ctr=0.0, likes=1)
-    page = client.get("/tracking").get_data(as_text=True)
+    page = client.get("/measure").get_data(as_text=True)
     assert "there is 1" in page
     assert "guess about what works" in page
 
@@ -185,7 +194,7 @@ def test_learned_hooks_are_shown_when_they_exist(client, db, monkeypatch):
     monkeypatch.setattr(dashboard, "_learnings", lambda channel=None: {
         "winning_hooks": ["The coin that broke a kingdom"],
         "losing_hooks": ["A brief history of money"]})
-    page = client.get("/tracking").get_data(as_text=True)
+    page = client.get("/measure").get_data(as_text=True)
     assert "The coin that broke a kingdom" in page
     assert "A brief history of money" in page
     assert "the loop actually closing" in page

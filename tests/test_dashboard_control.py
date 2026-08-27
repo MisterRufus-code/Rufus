@@ -200,8 +200,17 @@ def test_the_dashboard_url_is_settable_so_alerts_can_deep_link():
 
 # ── insights ────────────────────────────────────────────────────────────────
 
-def test_insights_is_in_the_nav():
-    assert any(href == "/insights" for href, _l, _p in dashboard.NAV_ITEMS)
+def test_insights_is_reachable_as_a_section():
+    """REACHABLE, WHICH IS NOW A DIFFERENT ASSERTION THAN IT WAS.
+
+    This page is a SECTION of /measure rather than a tab of its own — four
+    pages asking variations of "what does the data say" was four places to
+    look for one answer. What has to stay true is that the section is reachable
+    and that the old link still leads to it, because a tidy-up that breaks
+    every bookmark is not a tidy-up.
+    """
+    assert any(href == "/measure" for href, _l, _p in dashboard.NAV_ITEMS)
+    assert ("what-goes-wrong", "What keeps going wrong", "_insights_body") in dashboard._MEASURE_SECTIONS
 
 
 def test_insights_says_what_to_do_when_nothing_is_measured_yet(client, monkeypatch):
@@ -209,7 +218,7 @@ def test_insights_says_what_to_do_when_nothing_is_measured_yet(client, monkeypat
     import run_review
     monkeypatch.setattr(run_review, "patterns", lambda limit=30: {
         "runs_reviewed": 0, "recurring": [], "rows": []})
-    page = client.get("/insights").get_data(as_text=True)
+    page = client.get("/measure").get_data(as_text=True)
     assert "run_review.py --all" in page
 
 
@@ -226,7 +235,7 @@ def test_insights_shows_recurring_findings_before_single_runs(client, monkeypatc
                   "cuts": {"longest_hold_s": 6.4},
                   "findings": [{"severity": "high", "text": "half the shots"}]}],
     })
-    page = client.get("/insights").get_data(as_text=True)
+    page = client.get("/measure").get_data(as_text=True)
     assert page.index("What keeps happening") < page.index("Run by run")
     assert "setting_clause_everywhere" in page
     assert "4 of 6 runs" in page
@@ -238,7 +247,7 @@ def test_a_review_failure_does_not_break_the_page(client, monkeypatch):
     def _boom(limit=30):
         raise RuntimeError("no debug folder")
     monkeypatch.setattr(run_review, "patterns", _boom)
-    page = client.get("/insights")
+    page = client.get("/measure")
     assert page.status_code == 200
     assert "no debug folder" in page.get_data(as_text=True)
 
@@ -1310,3 +1319,47 @@ def test_the_flow_bar_survives_a_database_that_will_not_answer(monkeypatch):
                         lambda *a, **k: (_ for _ in ()).throw(RuntimeError("x")))
     counts = dashboard._flow_counts()
     assert counts == {"/scout": 0, "/scripts": 0, "/galleries": 0, "/voice": 0}
+
+
+# ── four pages asking variations of one question ────────────────────────────
+
+def test_the_old_links_still_lead_somewhere(client):
+    """A tidy-up that breaks every bookmark and every link in a log line is not
+    a tidy-up. The four routes survive as redirects into their section."""
+    for old, anchor in (("/advice", "what-to-change"),
+                        ("/insights", "what-goes-wrong"),
+                        ("/performance", "does-score-predict"),
+                        ("/tracking", "is-the-loop-closed")):
+        r = client.get(old, follow_redirects=False)
+        assert r.status_code in (301, 302), old
+        assert r.headers["Location"].endswith(f"/measure#{anchor}"), old
+
+
+def test_one_broken_section_does_not_take_the_other_three_down(client,
+                                                               monkeypatch):
+    """Four questions behind one link is only an improvement if a single
+    failing query cannot cost all four — which is exactly what merging them
+    would otherwise buy."""
+    monkeypatch.setattr(dashboard, "_insights_body",
+                        lambda: (_ for _ in ()).throw(RuntimeError("boom")))
+    page = client.get("/measure").get_data(as_text=True)
+    assert "boom" in page
+    for anchor in ("what-to-change", "does-score-predict", "is-the-loop-closed"):
+        assert f'id="{anchor}"' in page
+
+
+def test_the_measure_page_leads_with_the_actionable_section(client):
+    """What should I do, what keeps breaking, do the numbers agree, is there
+    any data at all — the order a person actually asks."""
+    order = [a for a, _t, _fn in dashboard._MEASURE_SECTIONS]
+    assert order[0] == "what-to-change"
+    page = client.get("/measure").get_data(as_text=True)
+    body = page.split("</header>", 1)[1]
+    assert body.index('id="what-to-change"') < body.index('id="is-the-loop-closed"')
+
+
+def test_no_section_keeps_its_own_back_link(client):
+    """Four "← back" links stacked down one page is the seam showing."""
+    page = client.get("/measure").get_data(as_text=True)
+    body = page.split("</header>", 1)[1]
+    assert body.count('class="back"') == 1

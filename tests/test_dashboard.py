@@ -842,7 +842,7 @@ def test_approve_upload_failure_records_mark_upload_failed(client, tmp_path, mon
 # ── /performance — real analytics, surfaced for the first time ──────────────
 
 def test_performance_page_loads_empty(client):
-    r = client.get("/performance")
+    r = client.get("/measure")
     assert r.status_code == 200
     assert b"No uploaded videos" in r.data
 
@@ -852,7 +852,7 @@ def test_performance_page_shows_score_and_views(client):
                                 scene_desc="s", video_file="v.mp4",
                                 score=9, youtube_id="yt0", upload_status="approved")
     db_manager.save_metrics(vid, views=12345, watch_pct=54.2, ctr=0.0, likes=99)
-    r = client.get("/performance")
+    r = client.get("/measure")
     body = r.data.decode()
     assert "Gold shock" in body
     assert "12345" in body
@@ -865,7 +865,7 @@ def test_performance_page_handles_videos_with_no_metrics_yet(client):
     db_manager.save_video(niche="finance", script_hook="Brand new upload",
                           scene_desc="s", video_file="v.mp4",
                           score=8, youtube_id="yt1", upload_status="approved")
-    r = client.get("/performance")
+    r = client.get("/measure")
     body = r.data.decode()
     assert "Brand new upload" in body
     assert "—" in body   # blank views/watch%/likes rendered, not a crash
@@ -880,7 +880,7 @@ def test_performance_page_channel_filter(client):
                               youtube_id="yt3", channel="chan_b", upload_status="approved")
     db_manager.save_metrics(a, views=100, watch_pct=50, ctr=0, likes=1)
     db_manager.save_metrics(b, views=200, watch_pct=50, ctr=0, likes=1)
-    r = client.get("/performance?channel=chan_a")
+    r = client.get("/measure?channel=chan_a")
     body = r.data.decode()
     assert "Chan A video" in body
     assert "Chan B video" not in body
@@ -891,7 +891,7 @@ def test_performance_correlation_needs_minimum_sample(client):
                                 scene_desc="s", video_file="v.mp4",
                                 score=9, youtube_id="yt4", upload_status="approved")
     db_manager.save_metrics(vid, views=500, watch_pct=60, ctr=0, likes=5)
-    r = client.get("/performance")
+    r = client.get("/measure")
     assert b"Need" in r.data and b"to correlate" in r.data
 
 
@@ -901,7 +901,7 @@ def test_performance_correlation_shows_avg_views_once_enough_data(client):
                                     scene_desc="s", video_file=f"v{i}.mp4",
                                     score=9, youtube_id=f"yt{i}", upload_status="approved")
         db_manager.save_metrics(vid, views=1000, watch_pct=50, ctr=0, likes=1)
-    r = client.get("/performance")
+    r = client.get("/measure")
     body = r.data.decode()
     assert "9/10" in body
     assert "avg views" in body
@@ -1318,7 +1318,7 @@ def test_tracking_lists_what_is_waiting_to_go_live(client):
                                 scene_desc="s", video_file="v.mp4", score=9,
                                 youtube_id="abcdefghijk", title="The panic")
     db_manager.set_publish_at(vid, "2099-01-01T12:00:00Z")
-    page = client.get("/tracking").get_data(as_text=True)
+    page = client.get("/measure").get_data(as_text=True)
     assert "Waiting to go live" in page
     assert "2099-01-01T12:00:00Z" in page
     assert "The panic" in page
@@ -1328,7 +1328,7 @@ def test_tracking_says_nothing_about_scheduling_when_nothing_is_scheduled(client
     """An empty section that looks broken is worse than no section."""
     db_manager.save_video(niche="money_history", script_hook="A hook",
                           scene_desc="s", video_file="v.mp4", score=9)
-    page = client.get("/tracking").get_data(as_text=True)
+    page = client.get("/measure").get_data(as_text=True)
     assert "Waiting to go live" not in page
 
 
