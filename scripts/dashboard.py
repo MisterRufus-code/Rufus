@@ -2290,20 +2290,26 @@ def index():
                         '<p class="muted">Nothing is waiting on you. Queue a '
                         'topic below, or leave it to the schedule.</p>')
 
-    # THE FLOW BAR FIRST, above everything else on the home page. What a
-    # person opening this dashboard needs to know in the first second is not
-    # how many videos exist — it is which of the four decisions is waiting for
-    # them. Every other block here answers a question you have to already have.
+    # WHERE YOU CAN GO, THEN HOW IT IS GOING. The tiles carry the same four
+    # waiting-counts the flow bar did, plus /create and the six pages the flow
+    # bar never covered, so stacking both put the identical four numbers in two
+    # rows one above the other — the duplication this dashboard keeps growing
+    # and keeps having to be cut back out. The flow bar stays on the four stage
+    # pages, where its `current` marks which step you are standing on and the
+    # tiles are not drawn; here it had nothing left to say.
+    #
+    # The stat cards move up beside the tiles because "general details" is half
+    # of what a home page is for, and four numbers sitting five blocks down,
+    # under a full review table, are details nobody scrolls to.
     body = f"""
-    {_flow_bar()}
     {_home_tiles(stats)}
+    {cards}
     {_msg_banner()}
     {_failure_notice()}
     {advice_html}
     {review_block}
     {topic_form}
     {filt_html}
-    {cards}
     <h2>Score trend (oldest → newest)</h2>
     {_sparkline_svg(scored)}
     <div class="grid2">

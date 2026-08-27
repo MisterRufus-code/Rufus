@@ -1756,8 +1756,28 @@ def test_a_topic_with_three_scripts_counts_as_one_decision(client):
 
 def test_the_home_page_leads_with_what_is_waiting(client):
     """What a person opening this needs in the first second is not how many
-    videos exist — it is which of the four decisions wants them."""
+    videos exist — it is which of the decisions wants them. The tile grid
+    carries that now; the flow bar used to, and stacking both put the same
+    four counts in two rows."""
     page = client.get("/").get_data(as_text=True)
     body = page.split("</header>", 1)[1]
-    assert 'class="flow"' in body
-    assert body.index('class="flow"') < body.index("Score trend")
+    assert 'class="tiles"' in body
+    assert body.index('class="tiles"') < body.index("Score trend")
+
+
+def test_the_home_page_does_not_repeat_the_flow_bar_under_the_tiles(client):
+    """Two rows of the identical four waiting-counts is the duplication this
+    dashboard keeps regrowing. The flow bar belongs on the stage pages, where
+    it marks which step you are standing on."""
+    body = client.get("/").get_data(as_text=True).split("</header>", 1)[1]
+    assert 'class="flow"' not in body
+    stage = client.get("/scripts").get_data(as_text=True)
+    assert 'class="flow"' in stage
+
+
+def test_the_home_page_puts_the_general_numbers_beside_the_tiles(client):
+    """"Access to the functions and general details" is one screen, not a
+    scroll: the four totals sat below the review table, where nobody reaches
+    them."""
+    body = client.get("/").get_data(as_text=True).split("</header>", 1)[1]
+    assert body.index('class="cards"') < body.index("Awaiting your review")
