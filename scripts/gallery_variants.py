@@ -176,6 +176,11 @@ def build(script_file: str, *, candidate_id: int | None = None,
         except Exception as e:
             print(f"[galleries] could not store the merged shot lengths ({e})")
 
+    # The target, recorded before the first picture: the progress panel reads
+    # it rather than counting what has arrived, so a set with nothing drawn yet
+    # reads as 0 of 32 instead of as finished.
+    db_manager.set_gallery_beats(set_id, len(prompts))
+
     print(f"[galleries] set #{set_id}: {n_variants} × {len(prompts)} "
           f"picture(s) → {out_dir}")
 

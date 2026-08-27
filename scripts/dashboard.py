@@ -3912,17 +3912,26 @@ def _project_progress(p: dict) -> dict:
                            None)
             if sid:
                 images = dbm.gallery_images(sid)
-                beats = len({im["beat_index"] for im in images})
-                # n_variants COMES FROM THE SET, not from the pictures. The
-                # first variant is drawn to completion before the second
-                # starts, so counting distinct variants in a half-drawn set
-                # answers 1 — and one times the beats equals what is already
-                # there, which reads as finished while half the work is still
-                # queued.
+                # THE TARGET COMES FROM THE PLAN, NOT FROM THE OUTPUT. Both
+                # halves of it were inferred from the pictures already drawn,
+                # and both were wrong at the moment it mattered most: with
+                # nothing drawn yet the target was zero, which reads as
+                # finished — so the wizard showed the completed gallery view
+                # over an empty table while ComfyUI was still rendering. And
+                # counting distinct variants in a half-drawn set answers 1,
+                # because the first variant finishes before the second starts.
                 row = next((g for g in dbm.gallery_sets(status=None, limit=40)
                             if g["id"] == sid), None)
                 variants = int((row or {}).get("n_variants") or 2)
-                total = max(len(images), beats * variants)
+                planned = int((row or {}).get("n_beats") or 0)
+                if planned:
+                    total = planned * variants
+                else:
+                    # A set from before n_beats existed, or one whose prompts
+                    # are still being planned. Fall back to the widest row seen
+                    # so far rather than to zero.
+                    beats = len({im["beat_index"] for im in images})
+                    total = max(len(images), beats * variants)
                 out.update(done=len(images), total=total,
                            label="pictures drawn")
         elif stage == "voice":
@@ -3932,7 +3941,10 @@ def _project_progress(p: dict) -> dict:
     except Exception:
         return out
 
-    out["working"] = 0 < out["total"] and out["done"] < out["total"]
+    # `done < total` alone said False for a set with a target it had not
+    # started, which is exactly the state a person is looking at when they
+    # press the button and go and watch the ComfyUI console.
+    out["working"] = out["total"] > 0 and out["done"] < out["total"]
     if not out["working"] or not out["done"] or not started:
         return out
     try:

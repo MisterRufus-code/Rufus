@@ -256,9 +256,20 @@ def init_db():
                 script_file  TEXT,
                 n_variants   INTEGER DEFAULT 2,
                 status       TEXT DEFAULT 'pending',
-                decided_at   TEXT
+                decided_at   TEXT,
+                n_beats      INTEGER DEFAULT 0
             )
         """)
+        # HOW MANY PICTURES THIS SET INTENDS TO DRAW, known before the first
+        # one exists. Progress was inferred from the images already drawn, so
+        # a set with none yet reported a target of zero — which reads as
+        # finished, and the wizard showed the completed gallery view over an
+        # empty table while ComfyUI was still rendering. A target has to come
+        # from the plan, not from the output.
+        try:
+            c.execute("ALTER TABLE gallery_sets ADD COLUMN n_beats INTEGER DEFAULT 0")
+        except Exception:
+            pass
         # status per IMAGE, the same idiom script_candidates uses and for the
         # same reason: the row that lost is half of a labelled preference pair,
         # and here there is one per shot rather than one per video. Sixteen
@@ -897,20 +908,34 @@ def choose_project_topic(topic_id: int) -> dict | None:
 # ── galleries ────────────────────────────────────────────────────────────────
 
 _GSET_COLS = ["id", "created_at", "candidate_id", "channel", "niche", "topic",
-              "script_file", "n_variants", "status", "decided_at"]
+              "script_file", "n_variants", "status", "decided_at", "n_beats"]
 _GIMG_COLS = ["id", "set_id", "variant", "beat_index", "path", "prompt",
               "seed", "status"]
 
 
 def save_gallery_set(*, candidate_id: int | None, channel: str, niche: str,
-                     topic: str, script_file: str, n_variants: int) -> int:
+                     topic: str, script_file: str, n_variants: int,
+                     n_beats: int = 0) -> int:
     with _conn() as c:
         cur = c.execute(
             "INSERT INTO gallery_sets (candidate_id, channel, niche, topic, "
-            "script_file, n_variants) VALUES (?,?,?,?,?,?)",
+            "script_file, n_variants, n_beats) VALUES (?,?,?,?,?,?,?)",
             (candidate_id, channel, niche, topic, script_file,
-             int(n_variants)))
+             int(n_variants), int(n_beats)))
         return cur.lastrowid
+
+
+def set_gallery_beats(set_id: int, n_beats: int) -> None:
+    """The picture count, once the prompts are planned.
+
+    The set row is written before the prompts exist — it has to be, because the
+    images reference it — and the count only settles after the shots that talk
+    about the same thing have been merged. So it is filled in a moment later,
+    and the progress panel reads it rather than counting what has arrived.
+    """
+    with _conn() as c:
+        c.execute("UPDATE gallery_sets SET n_beats=? WHERE id=?",
+                  (int(n_beats), int(set_id)))
 
 
 def save_gallery_image(*, set_id: int, variant: int, beat_index: int,

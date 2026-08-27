@@ -598,3 +598,76 @@ def test_the_gallery_builder_records_the_voice_before_it_draws():
     assert src.index("voice_takes.build") < src.index("render_one_beat"), (
         "the takes have to exist before the pictures, or there is nothing to "
         "measure the shot lengths against")
+
+
+def test_a_gallery_with_nothing_drawn_yet_is_working_not_finished(db):
+    """THE ONE THE OWNER CAUGHT. ComfyUI was rendering, and the wizard showed
+    the completed gallery view over an empty table — because the target was
+    inferred from the pictures already drawn, so a set with none reported a
+    target of zero, and zero reads as finished."""
+    import dashboard
+    pid = _project(db)
+    sid = db.save_gallery_set(candidate_id=9, channel="c", niche="n",
+                              topic="T", script_file="s", n_variants=2)
+    db.set_gallery_beats(sid, 16)
+    db.update_project(pid, title="T", script_id=9, script_file="s",
+                      stage="gallery")
+    prog = dashboard._project_progress(db.project(pid))
+    assert prog["working"] is True
+    assert (prog["done"], prog["total"]) == (0, 32)
+
+
+def test_the_target_comes_from_the_plan_not_the_output(db):
+    """Counting distinct variants in a half-drawn set answers 1, because the
+    first variant finishes before the second starts."""
+    import dashboard
+    pid = _project(db)
+    sid = db.save_gallery_set(candidate_id=9, channel="c", niche="n",
+                              topic="T", script_file="s", n_variants=2)
+    db.set_gallery_beats(sid, 5)
+    db.update_project(pid, title="T", script_id=9, script_file="s",
+                      stage="gallery", gallery_id=sid)
+    for b in range(5):
+        db.save_gallery_image(set_id=sid, variant=0, beat_index=b,
+                              path=f"/a{b}.png", prompt="p", seed=1)
+    prog = dashboard._project_progress(db.project(pid))
+    assert prog["total"] == 10 and prog["done"] == 5
+    assert prog["working"] is True, "half of it has not been drawn"
+
+
+def test_a_set_from_before_the_target_existed_still_reports_something(db):
+    """An old row has n_beats 0. Falling back to the widest row seen so far is
+    worse than the plan and much better than zero."""
+    import dashboard
+    pid = _project(db)
+    sid = db.save_gallery_set(candidate_id=9, channel="c", niche="n",
+                              topic="T", script_file="s", n_variants=2)
+    db.update_project(pid, title="T", script_id=9, script_file="s",
+                      stage="gallery", gallery_id=sid)
+    for b in range(3):
+        db.save_gallery_image(set_id=sid, variant=0, beat_index=b,
+                              path=f"/a{b}.png", prompt="p", seed=1)
+    assert dashboard._project_progress(db.project(pid))["total"] == 6
+
+
+def test_the_page_shows_the_bar_before_the_first_picture(client):
+    pid = _start(client)
+    sid = db_manager.save_gallery_set(candidate_id=4, channel="c", niche="n",
+                                      topic="T", script_file="s.txt",
+                                      n_variants=2)
+    db_manager.set_gallery_beats(sid, 16)
+    db_manager.update_project(pid, title="T", script_id=4,
+                              script_file="s.txt", stage="gallery")
+    page = client.get(f"/create?project={pid}").get_data(as_text=True)
+    assert "Drawing the pictures" in page
+    assert "0 of 32" in page
+    assert "Which pictures?" not in page
+
+
+def test_the_builder_records_its_target_before_drawing():
+    src = (Path(__file__).parent.parent / "scripts" / "gallery_variants.py"
+           ).read_text(encoding="utf-8")
+    assert "set_gallery_beats" in src
+    assert src.index("set_gallery_beats") < src.index("render_one_beat"), (
+        "the target has to exist before the first picture, or the panel "
+        "reports finished while nothing has been drawn")
