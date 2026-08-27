@@ -3901,11 +3901,15 @@ def _project_progress(p: dict) -> dict:
             started = rows[0]["created_at"] if rows else None
         elif stage == "gallery":
             sid = p.get("gallery_id")
+            sets = [g for g in dbm.gallery_sets(status=None, limit=30)
+                    if g.get("candidate_id") == p.get("script_id")]
             if not sid:
-                sets = [g for g in dbm.gallery_sets(status=None, limit=30)
-                        if g.get("candidate_id") == p.get("script_id")]
                 sid = sets[0]["id"] if sets else None
-                started = sets[0]["created_at"] if sets else None
+            # created_at comes from the SET whichever way it was found — the
+            # elapsed time is what the estimate divides by, and reading it only
+            # on the not-yet-chosen path left every in-progress set with no ETA.
+            started = next((g["created_at"] for g in sets if g["id"] == sid),
+                           None)
             if sid:
                 images = dbm.gallery_images(sid)
                 beats = len({im["beat_index"] for im in images})
@@ -4226,6 +4230,21 @@ def _wizard_gallery(p: dict) -> str:
         rows += (f'<tr><td class="muted" style="vertical-align:top">{beat + 1}'
                  f'{secs}<br><span style="font-size:11px">{_esc(prompt)}'
                  f'</span></td>{cells}</tr>')
+    # STILL DRAWING? SHOW IT, AND SHOW WHAT HAS ARRIVED. The set row is written
+    # before the first picture, so as soon as drawing starts this branch is the
+    # one that renders — and it used to render a half-empty table with nothing
+    # to say that more was coming. Forty minutes of that reads as broken.
+    prog = _project_progress(p)
+    if prog.get("working"):
+        return (
+            _working_panel(p, prog, "Drawing the pictures")
+            + '<p class="muted">They appear here as they finish &mdash; the '
+              'first draw completes before the second starts, so expect one '
+              'column to fill before the other begins.</p>'
+            + f'<div style="margin:10px 0">'
+              f'{_regen(p["id"], "gallery", "Start again")}</div>'
+            + f'<div style="overflow-x:auto"><table>{rows}</table></div>')
+
     return (
         '<h2 style="margin-top:22px">Which pictures?</h2>'
         '<p class="muted">Two complete draws of the same shots. Take one as a '

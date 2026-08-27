@@ -520,3 +520,81 @@ def test_the_progress_endpoint_is_cheap_and_answers_json(client):
 
 def test_the_progress_endpoint_says_so_for_a_project_that_is_gone(client):
     assert client.get("/api/create/99999").status_code == 404
+
+
+# ── watching the pictures arrive ────────────────────────────────────────────
+
+def test_a_gallery_still_drawing_shows_progress_not_a_half_empty_table(client):
+    """The set row is written before the first picture, so as soon as drawing
+    starts that branch renders — and it used to render a half-empty table with
+    nothing to say more was coming. Forty minutes of that reads as broken."""
+    pid = _start(client)
+    sid = db_manager.save_gallery_set(candidate_id=5, channel="c", niche="n",
+                                      topic="T", script_file="s.txt",
+                                      n_variants=2)
+    db_manager.update_project(pid, title="T", script_id=5,
+                              script_file="s.txt", stage="gallery")
+    for b in range(3):
+        db_manager.save_gallery_image(set_id=sid, variant=0, beat_index=b,
+                                      path=f"/a{b}.png", prompt="p", seed=1)
+    page = client.get(f"/create?project={pid}").get_data(as_text=True)
+    assert 'id="wizard-progress"' in page
+    assert "Drawing the pictures" in page
+    assert "These pictures" not in page, "nothing to settle while it is drawing"
+
+
+def test_the_pictures_drawn_so_far_are_shown_while_it_works(client):
+    pid = _start(client)
+    sid = db_manager.save_gallery_set(candidate_id=6, channel="c", niche="n",
+                                      topic="T", script_file="s.txt",
+                                      n_variants=2)
+    db_manager.update_project(pid, title="T", script_id=6,
+                              script_file="s.txt", stage="gallery")
+    img = db_manager.save_gallery_image(set_id=sid, variant=0, beat_index=0,
+                                        path="/a.png", prompt="p", seed=1)
+    page = client.get(f"/create?project={pid}").get_data(as_text=True)
+    assert f"/galleries/image/{img}" in page
+
+
+def test_a_finished_gallery_offers_the_choice(client):
+    pid = _start(client)
+    sid = db_manager.save_gallery_set(candidate_id=7, channel="c", niche="n",
+                                      topic="T", script_file="s.txt",
+                                      n_variants=2)
+    db_manager.update_project(pid, title="T", script_id=7,
+                              script_file="s.txt", stage="gallery")
+    for v in range(2):
+        for b in range(2):
+            db_manager.save_gallery_image(set_id=sid, variant=v, beat_index=b,
+                                          path=f"/v{v}{b}.png", prompt="p",
+                                          seed=1)
+    page = client.get(f"/create?project={pid}").get_data(as_text=True)
+    assert "Which pictures?" in page and "These pictures" in page
+
+
+def test_an_in_progress_set_gets_an_eta(db):
+    """created_at was read only on the not-yet-chosen path, so every set the
+    project already pointed at reported no estimate at all."""
+    import dashboard
+    pid = _project(db)
+    sid = db.save_gallery_set(candidate_id=8, channel="c", niche="n",
+                              topic="T", script_file="s.txt", n_variants=2)
+    db.update_project(pid, script_id=8, gallery_id=sid, stage="gallery")
+    for b in range(3):
+        db.save_gallery_image(set_id=sid, variant=0, beat_index=b,
+                              path=f"/a{b}.png", prompt="p", seed=1)
+    prog = dashboard._project_progress(db.project(pid))
+    assert prog["working"] is True
+    assert prog["eta_seconds"] is not None
+
+
+def test_the_gallery_builder_records_the_voice_before_it_draws():
+    """The page promised "the seconds beside each shot are measured from the
+    recorded voice" while nothing had been recorded to measure — the takes were
+    only made at the voice stage, one step later."""
+    src = (Path(__file__).parent.parent / "scripts" / "gallery_variants.py"
+           ).read_text(encoding="utf-8")
+    assert "voice_takes.build" in src
+    assert src.index("voice_takes.build") < src.index("render_one_beat"), (
+        "the takes have to exist before the pictures, or there is nothing to "
+        "measure the shot lengths against")

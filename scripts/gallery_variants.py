@@ -57,7 +57,8 @@ def gallery_dir(set_id: int) -> Path:
 
 def build(script_file: str, *, candidate_id: int | None = None,
           niche: str | None = None, channel: str | None = None,
-          topic: str = "", n_variants: int | None = None) -> int | None:
+          topic: str = "", n_variants: int | None = None,
+          with_voice: bool = True) -> int | None:
     """Draw `n_variants` complete galleries for the script. Returns the set id.
 
     Fail-open per image, like every other render loop here: a beat that will
@@ -97,6 +98,28 @@ def build(script_file: str, *, candidate_id: int | None = None,
         script_file=str(script_file), n_variants=n_variants)
     out_dir = gallery_dir(set_id)
     out_dir.mkdir(parents=True, exist_ok=True)
+
+    # THE VOICE FIRST, AND THE PAGE ALREADY SAID SO. Shot lengths come from
+    # Whisper reading real audio; until a take exists there is nothing to
+    # measure, and the gallery stage was promising "shot 3, 4.2s" beside every
+    # picture while nothing had been recorded to measure. The takes are cheap
+    # and quick next to forty minutes of drawing, and doing them here rather
+    # than at the voice stage is the whole reason the ordering was changed.
+    #
+    # Fail-open: a TTS backend that will not start costs the shot lengths, not
+    # the pictures. The voice stage will record them later and the render still
+    # works — you simply choose images without knowing how long each is up.
+    if with_voice:
+        try:
+            import voice_takes
+            print(f"[galleries] recording the voice first, so the shot "
+                  f"lengths are measured rather than guessed")
+            voice_takes.build(str(script_file), set_id=set_id, topic=topic,
+                              n_beats=len(prompts))
+        except Exception as e:
+            print(f"[galleries] no voice takes ({e}) — the pictures will be "
+                  f"drawn without shot lengths beside them")
+
     print(f"[galleries] set #{set_id}: {n_variants} × {len(prompts)} "
           f"picture(s) → {out_dir}")
 
@@ -194,6 +217,8 @@ if __name__ == "__main__":
     ap.add_argument("--candidate", type=int, default=None)
     ap.add_argument("--topic", default="")
     ap.add_argument("--variants", type=int, default=None)
+    ap.add_argument("--no-voice", action="store_true",
+                    help="skip the takes; the pictures get no shot lengths")
     a = ap.parse_args()
     build(a.script_file, candidate_id=a.candidate, topic=a.topic,
-          n_variants=a.variants)
+          n_variants=a.variants, with_voice=not a.no_voice)
