@@ -1056,18 +1056,30 @@ def _split_merged_prompts(blob: str, n: int) -> list[str]:
 
 
 def _build_sd_prompts(script: str, niche: str, max_scenes: int = 10,
-                      grow: bool = False) -> list[str]:
+                      grow: bool = False,
+                      beats: list[str] | None = None) -> list[str]:
     """One ultra-detailed SD prompt per spoken beat, in narration order.
 
     Each prompt's SUBJECT depicts what the narrator says during that beat (a
     photo of stocks while he talks about stocks), so when the renderer cuts on
-    sentence boundaries the on-screen image tracks the voice-over. Prompts use
-    pro Realistic-Vision token language with a rotating camera anchor for visual
-    variety and the niche's color grade. Returns one prompt per beat (≤max_scenes).
+    sentence boundaries the on-screen image tracks the voice-over.
+
+    `beats` IS THE POINT OF THAT SENTENCE ACTUALLY BEING TRUE. Left None, the
+    beats are split out of the script TEXT — while the renderer cuts on
+    sentence boundaries found in the AUDIO, and nothing ever made those two
+    agree. Shot 7's picture was drawn for the seventh chunk of the text while
+    shot 7 on screen covered whatever was said between the sixth and seventh
+    cut; the promise above held by luck.
+
+    Passing the words actually spoken under each shot — which the pipeline now
+    knows, because the voice is recorded before the pictures — removes the luck.
+    Prompts use pro Realistic-Vision token language with a rotating camera
+    anchor for visual variety and the niche's color grade.
     """
     import re
 
-    beats = _split_beats(script, max_scenes=max_scenes, grow=grow)
+    if beats is None:
+        beats = _split_beats(script, max_scenes=max_scenes, grow=grow)
     if not beats:
         beats = [f"{niche} concept"]
     n = len(beats)

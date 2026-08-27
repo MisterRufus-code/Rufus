@@ -131,3 +131,69 @@ def test_how_many_defaults_to_two(monkeypatch):
 def test_a_nonsense_variant_count_falls_back_rather_than_raising(monkeypatch):
     monkeypatch.setenv("RUFUS_GALLERY_VARIANTS", "lots")
     assert gv.how_many() == 2
+
+
+# ── the picture matches the words playing over it ───────────────────────────
+
+def test_the_prompts_are_planned_from_the_spoken_words(tmp_path, monkeypatch):
+    """The whole reason the voice moved first. Prompts planned from a split of
+    the script describe beat i of the TEXT; the renderer cuts beat i of the
+    AUDIO, and nothing made those agree."""
+    import main as rufus_main
+    import voice_takes
+    import beat_timing
+    import comfy_client
+    import db_manager as dbm
+
+    script = tmp_path / "s.txt"
+    script.write_text("One. Two. Three.", encoding="utf-8")
+    monkeypatch.setattr(dbm, "DB_FILE", tmp_path / "t.db")
+    dbm.init_db()
+    monkeypatch.setattr(gv, "gallery_dir", lambda sid: tmp_path / str(sid))
+    monkeypatch.setattr(rufus_main, "_target_beats", lambda s: 3)
+    monkeypatch.setattr(voice_takes, "build",
+                        lambda *a, **k: [{"path": "/take.mp3", "tone": "n"}])
+    monkeypatch.setattr(beat_timing, "spoken_shots", lambda mp3, n, *a: [
+        {"index": 0, "start": 0, "end": 5, "seconds": 5, "text": "a computer"},
+        {"index": 1, "start": 5, "end": 10, "seconds": 5, "text": "a cucumber"},
+        {"index": 2, "start": 10, "end": 15, "seconds": 5, "text": "a coin"}])
+    seen = {}
+    monkeypatch.setattr(rufus_main, "_build_sd_prompts",
+                        lambda s, n, max_scenes=10, grow=False, beats=None:
+                        seen.update(beats=beats) or ["p1", "p2", "p3"])
+    monkeypatch.setattr(comfy_client, "render_one_beat",
+                        lambda *a, **k: False)
+
+    gv.build(str(script), niche="money_history", channel="c", n_variants=1)
+    assert seen["beats"] == ["a computer", "a cucumber", "a coin"]
+
+
+def test_a_shot_with_no_words_falls_back_rather_than_sliding_everything(
+        tmp_path, monkeypatch):
+    """A partial list would silently slide every later picture onto the wrong
+    window — worse than the text split it falls back to."""
+    import main as rufus_main
+    import voice_takes
+    import beat_timing
+    import comfy_client
+    import db_manager as dbm
+
+    script = tmp_path / "s.txt"
+    script.write_text("One. Two. Three.", encoding="utf-8")
+    monkeypatch.setattr(dbm, "DB_FILE", tmp_path / "t2.db")
+    dbm.init_db()
+    monkeypatch.setattr(gv, "gallery_dir", lambda sid: tmp_path / f"g{sid}")
+    monkeypatch.setattr(rufus_main, "_target_beats", lambda s: 3)
+    monkeypatch.setattr(voice_takes, "build",
+                        lambda *a, **k: [{"path": "/take.mp3", "tone": "n"}])
+    monkeypatch.setattr(beat_timing, "spoken_shots", lambda mp3, n, *a: [
+        {"index": 0, "text": "words"}, {"index": 1, "text": ""},
+        {"index": 2, "text": "more"}])
+    seen = {}
+    monkeypatch.setattr(rufus_main, "_build_sd_prompts",
+                        lambda s, n, max_scenes=10, grow=False, beats=None:
+                        seen.update(beats=beats) or ["p1", "p2", "p3"])
+    monkeypatch.setattr(comfy_client, "render_one_beat", lambda *a, **k: False)
+
+    gv.build(str(script), niche="money_history", channel="c", n_variants=1)
+    assert seen["beats"] is None, "a hole means use the text split, not a short list"

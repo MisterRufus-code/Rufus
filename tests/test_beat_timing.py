@@ -145,3 +145,81 @@ def test_it_measures_the_same_way_the_render_cuts(tmp_path, monkeypatch):
            ).read_text(encoding="utf-8")
     assert "audio_gen._plan_cuts" in src
     assert "audio_gen._sentence_ends" in src
+
+
+# ── the words under each shot ───────────────────────────────────────────────
+#
+# THE GAP THE OWNER HAS BEEN DESCRIBING SINCE THE FIRST GALLERY. Image prompts
+# were planned from _split_beats — a split of the SCRIPT TEXT. The renderer
+# cuts on sentence boundaries found in the AUDIO. Nothing ever made those two
+# agree, so shot 7's picture was drawn for the seventh chunk of the text while
+# shot 7 on screen covered whatever was said between the sixth and seventh cut.
+# _build_sd_prompts' own docstring promised "the on-screen image tracks the
+# voice-over"; it was true only by luck.
+
+class _W:
+    def __init__(self, word, start, end):
+        self.word, self.start, self.end = word, start, end
+
+
+class _Seg:
+    def __init__(self, words):
+        self.words = words
+
+
+def _spoken(monkeypatch, duration, words, ends=None):
+    import audio_gen
+    segs = [_Seg([_W(w, s, e) for w, s, e in words])]
+    monkeypatch.setattr(audio_gen, "_transcribe",
+                        lambda mp3: (segs, _Info(duration)))
+    monkeypatch.setattr(audio_gen, "_sentence_ends",
+                        lambda s: ends if ends is not None else [10.0, 20.0])
+
+
+def test_each_shot_carries_the_words_spoken_over_it(tmp_path, monkeypatch):
+    """Say "cucumber" at 12.4s and the picture covering 12.4s is drawn from a
+    sentence containing cucumber."""
+    mp3 = tmp_path / "t.mp3"
+    mp3.write_bytes(b"x")
+    _spoken(monkeypatch, 30.0, [
+        ("a", 1.0, 1.4), ("computer", 2.0, 2.6),
+        ("cucumber", 12.0, 12.8),
+        ("later", 25.0, 25.5)])
+    shots = beat_timing.spoken_shots(mp3, 3)
+    assert len(shots) == 3
+    assert "computer" in shots[0]["text"]
+    assert "cucumber" in shots[1]["text"]
+    assert "later" in shots[2]["text"]
+
+
+def test_a_word_straddling_a_cut_goes_where_it_mostly_is(tmp_path, monkeypatch):
+    """Assigning by start would put a word that is almost entirely under the
+    next picture with the previous one."""
+    mp3 = tmp_path / "t.mp3"
+    mp3.write_bytes(b"x")
+    _spoken(monkeypatch, 30.0, [("straddler", 9.6, 10.9)], ends=[10.0, 20.0])
+    shots = beat_timing.spoken_shots(mp3, 3)
+    joined = [s["text"] for s in shots]
+    assert joined.count("straddler") == 1, "it belongs to exactly one shot"
+    assert "straddler" in joined[1], "its midpoint is past the cut"
+
+
+def test_a_shot_sitting_in_a_pause_is_named(tmp_path, monkeypatch, capsys):
+    """It has nothing to depict, and a prompt written from nothing is a
+    picture that cannot match the narration because there is none."""
+    mp3 = tmp_path / "t.mp3"
+    mp3.write_bytes(b"x")
+    _spoken(monkeypatch, 30.0, [("only", 1.0, 1.5)])
+    shots = beat_timing.spoken_shots(mp3, 3)
+    assert shots[2]["text"] == ""
+    assert "no words under them" in capsys.readouterr().out
+
+
+def test_no_word_timings_still_returns_the_spans(tmp_path, monkeypatch, capsys):
+    """Fail-open: without words you lose the precision, not the pictures."""
+    mp3 = tmp_path / "t.mp3"
+    mp3.write_bytes(b"x")
+    _fake_audio(monkeypatch, duration=30.0)      # segments with no .words
+    shots = beat_timing.spoken_shots(mp3, 3)
+    assert len(shots) == 3
+    assert all("text" not in s or s["text"] == "" for s in shots)

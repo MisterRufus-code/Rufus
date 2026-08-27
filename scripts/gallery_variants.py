@@ -87,10 +87,6 @@ def build(script_file: str, *, candidate_id: int | None = None,
 
     n_variants = n_variants or how_many()
     beats = rufus_main._target_beats(script)
-    prompts = rufus_main._build_sd_prompts(script, niche, max_scenes=beats)
-    if not prompts:
-        print("[galleries] no prompts were planned — nothing to draw")
-        return None
 
     set_id = db_manager.save_gallery_set(
         candidate_id=candidate_id, channel=channel, niche=niche,
@@ -109,16 +105,45 @@ def build(script_file: str, *, candidate_id: int | None = None,
     # Fail-open: a TTS backend that will not start costs the shot lengths, not
     # the pictures. The voice stage will record them later and the render still
     # works — you simply choose images without knowing how long each is up.
+    spoken: list[dict] = []
     if with_voice:
         try:
             import voice_takes
             print(f"[galleries] recording the voice first, so the shot "
                   f"lengths are measured rather than guessed")
-            voice_takes.build(str(script_file), set_id=set_id, topic=topic,
-                              n_beats=len(prompts))
+            takes = voice_takes.build(str(script_file), set_id=set_id,
+                                      topic=topic, n_beats=beats)
+            # THE WORDS UNDER EACH SHOT, from the take we just recorded.
+            # Prompts planned from a split of the script text describe beat i
+            # of the TEXT; the renderer cuts beat i of the AUDIO. Nothing made
+            # those agree, so a picture could be drawn for a sentence that is
+            # not the one playing over it. Reading the words back off the
+            # audio removes the guess entirely.
+            if takes:
+                import beat_timing
+                spoken = beat_timing.spoken_shots(takes[0]["path"], beats)
         except Exception as e:
             print(f"[galleries] no voice takes ({e}) — the pictures will be "
-                  f"drawn without shot lengths beside them")
+                  f"drawn from a split of the script instead, and without "
+                  f"shot lengths beside them")
+
+    said = [r["text"] for r in spoken if r.get("text")]
+    if spoken and len(said) == len(spoken):
+        print(f"[galleries] planning {len(spoken)} shot(s) from the words "
+              f"actually spoken over each one")
+        prompts = rufus_main._build_sd_prompts(script, niche, max_scenes=beats,
+                                               beats=said)
+    else:
+        # A shot sitting in a pause has no words to draw from, and a partial
+        # list would silently slide every later picture onto the wrong window
+        # — worse than the text split this falls back to.
+        if spoken:
+            print(f"[galleries] {len(spoken) - len(said)} shot(s) have no "
+                  f"words under them — falling back to the script split")
+        prompts = rufus_main._build_sd_prompts(script, niche, max_scenes=beats)
+    if not prompts:
+        print("[galleries] no prompts were planned — nothing to draw")
+        return None
 
     print(f"[galleries] set #{set_id}: {n_variants} × {len(prompts)} "
           f"picture(s) → {out_dir}")

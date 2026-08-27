@@ -81,6 +81,63 @@ def measure(mp3, script: str, n: int,
     return spans
 
 
+def spoken_shots(mp3, n: int, tones: list[str] | None = None) -> list[dict]:
+    """Per-shot spans WITH the words actually spoken over each one.
+
+    THE GAP THIS CLOSES, and it is the one the owner has been describing since
+    the first gallery. Image prompts were planned from _split_beats — a split
+    of the SCRIPT TEXT. The renderer cuts on sentence boundaries found in the
+    AUDIO. Nothing ever made those two agree, so shot 7's picture was drawn for
+    the seventh chunk of the text while shot 7 on screen covered whatever
+    happened to be said between the sixth and seventh cut. _build_sd_prompts'
+    own docstring promised "the on-screen image tracks the voice-over"; it was
+    true only by luck.
+
+    Now the voice exists before the pictures, so there is no need to guess: the
+    words under each shot are a fact, and they are what the prompt for that shot
+    should be written from. Say "cucumber" at 12.4s and the picture covering
+    12.4s is drawn from a sentence containing cucumber.
+
+    Words are bucketed by their MIDPOINT. A word straddling a cut belongs to
+    the shot it is mostly in — assigning by start would put a word that is
+    almost entirely under the next picture with the previous one.
+    """
+    spans = measure(mp3, "", n, tones)
+    if not spans:
+        return []
+    try:
+        import audio_gen
+        segments, _info = audio_gen._transcribe(Path(mp3))
+        words = [w for seg in segments for w in getattr(seg, "words", []) or []]
+    except Exception as e:
+        print(f"[timing] no word timings ({e}) — spans without their words")
+        return spans
+    if not words:
+        return spans
+
+    buckets: list[list[str]] = [[] for _ in spans]
+    for w in words:
+        try:
+            mid = (float(w.start) + float(w.end)) / 2.0
+        except Exception:
+            continue
+        for i, sp in enumerate(spans):
+            if sp["start"] <= mid < sp["end"] or (i == len(spans) - 1
+                                                  and mid >= sp["start"]):
+                buckets[i].append(str(w.word).strip())
+                break
+    out = []
+    for sp, said in zip(spans, buckets):
+        row = dict(sp)
+        row["text"] = " ".join(said).strip()
+        out.append(row)
+    silent = [r["index"] + 1 for r in out if not r["text"]]
+    if silent:
+        print(f"[timing] shot(s) {silent} have no words under them — they sit "
+              f"in a pause, and their picture has nothing to depict")
+    return out
+
+
 def too_short(spans: list[dict], floor: float = 0.0) -> list[int]:
     """Shots at or under the minimum segment — the beats the narration cannot
     carry. Asking for more pictures than the audio can hold is what produced
