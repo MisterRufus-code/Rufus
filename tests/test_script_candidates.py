@@ -263,21 +263,40 @@ def test_a_set_reads_best_first(db):
 # three cycles is nine attempts for three cards, and the retry is trying to do
 # the job the person is about to do. The different angle IS the other two.
 
-def test_a_candidate_set_does_not_escalate(monkeypatch):
-    """One cycle each. The person is the retry."""
-    seen = {}
+def test_the_score_stops_deciding_and_the_fact_gate_keeps_deciding(monkeypatch):
+    """TWO GATES, AND ONLY ONE OF THEM IS THE READER'S JOB.
+
+    A score below the bar is a label — ruling on it is exactly why a person is
+    here. An unsupported claim is not: they can tell which of three is better
+    written and cannot tell whether the source backs "the U.S. dictated the
+    rules"."""
     monkeypatch.delenv("RUFUS_CANDIDATE_CYCLES", raising=False)
     monkeypatch.setenv("RUFUS_SCRIPT_CYCLES", "3")
     with sc._relaxed_gates():
-        seen["inside"] = os.environ["RUFUS_SCRIPT_CYCLES"]
-    assert seen["inside"] == "1"
+        assert os.environ["RUFUS_ACCEPT_ON_FACTS_ALONE"] == "1"
+        assert os.environ["RUFUS_SCRIPT_CYCLES"] == "2"
     assert os.environ["RUFUS_SCRIPT_CYCLES"] == "3", "the caller's value is put back"
+    assert "RUFUS_ACCEPT_ON_FACTS_ALONE" not in os.environ
 
 
-def test_the_old_escalation_can_be_asked_for(monkeypatch):
-    monkeypatch.setenv("RUFUS_CANDIDATE_CYCLES", "3")
+def test_a_fact_gate_failure_gets_one_retry(monkeypatch):
+    """THE RUN THAT PROMPTED THIS. Attempt 1 scored 9/10, tripped MIND-READ on
+    a phrase, was capped to 4, and with a single cycle there was no second try
+    — the relaxation meant to stop good scripts being blocked had made one
+    phrasing flag fatal. A clean first draft still costs exactly one cycle,
+    because the score no longer ends one."""
+    import script_writer
+    monkeypatch.delenv("RUFUS_CANDIDATE_CYCLES", raising=False)
     with sc._relaxed_gates():
-        assert os.environ["RUFUS_SCRIPT_CYCLES"] == "3"
+        assert int(os.environ["RUFUS_SCRIPT_CYCLES"]) >= 2
+        assert script_writer._accept_on_facts_alone()
+    assert not script_writer._accept_on_facts_alone(), "off everywhere else"
+
+
+def test_the_cycle_count_can_be_asked_for(monkeypatch):
+    monkeypatch.setenv("RUFUS_CANDIDATE_CYCLES", "4")
+    with sc._relaxed_gates():
+        assert os.environ["RUFUS_SCRIPT_CYCLES"] == "4"
 
 
 def test_a_low_scoring_script_is_still_offered(db, monkeypatch):
@@ -315,3 +334,18 @@ def test_a_clean_script_is_recorded_as_clean(db, monkeypatch):
     _writer(monkeypatch, [{"script": "A.\nB.", "score": 8, "cost_usd": 0.02}] * 3)
     sc.write_for("T", proposal_id=1)
     assert db.candidates(proposal_id=1)[0]["fact_ok"] == 1
+
+
+def test_the_command_line_creates_the_schema_before_it_writes(tmp_path,
+                                                              monkeypatch):
+    """"no such table: script_candidates", after paying for a script.
+
+    The dashboard calls init_db at startup and every test fixture calls it, so
+    every path that had ever been exercised already had the tables. The one
+    path nobody had run was the command line — built, tested, never actually
+    run, which is this repo's oldest bug wearing a new hat."""
+    for mod in ("script_candidates", "gallery_variants", "voice_takes"):
+        src = (Path(__file__).parent.parent / "scripts" / f"{mod}.py"
+               ).read_text(encoding="utf-8")
+        main = src.split('if __name__ == "__main__":', 1)[1]
+        assert "db_manager.init_db()" in main, mod

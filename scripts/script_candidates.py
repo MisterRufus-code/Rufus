@@ -111,16 +111,29 @@ class _relaxed_gates:
         self.before = None
 
     def __enter__(self):
-        self.before = os.environ.get("RUFUS_SCRIPT_CYCLES")
+        self.before = {k: os.environ.get(k) for k in
+                       ("RUFUS_SCRIPT_CYCLES", "RUFUS_ACCEPT_ON_FACTS_ALONE")}
+        # TWO, NOT ONE — and the live run that prompted this is the argument.
+        # Attempt 1 scored 9/10, tripped the fact gate's MIND-READ check on a
+        # phrase ("the U.S. dictated the rules"), was capped to 4, and with a
+        # single cycle there was no second try. The relaxation meant to stop
+        # good scripts being blocked had made one phrasing flag fatal.
+        #
+        # The score no longer ends a cycle, so a clean first draft still costs
+        # exactly one; the second exists only for the case a person cannot
+        # check themselves, and the rejection is fed forward so the retry does
+        # not reach for the same unsupported claim.
         os.environ["RUFUS_SCRIPT_CYCLES"] = str(
-            os.environ.get("RUFUS_CANDIDATE_CYCLES", "1"))
+            os.environ.get("RUFUS_CANDIDATE_CYCLES", "2"))
+        os.environ["RUFUS_ACCEPT_ON_FACTS_ALONE"] = "1"
         return self
 
     def __exit__(self, *exc):
-        if self.before is None:
-            os.environ.pop("RUFUS_SCRIPT_CYCLES", None)
-        else:
-            os.environ["RUFUS_SCRIPT_CYCLES"] = self.before
+        for key, val in self.before.items():
+            if val is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = val
         return False
 
 
@@ -236,7 +249,15 @@ def write_for(topic: str, *, proposal_id: int | None = None,
 
 
 if __name__ == "__main__":
+    # THE SCHEMA, BEFORE ANYTHING TRIES TO WRITE TO IT. The dashboard calls
+    # init_db at startup and every test fixture calls it too, so every path
+    # that had ever been exercised already had the tables — and the one path
+    # nobody had run, the command line, died on "no such table" after paying
+    # for a script. Built, tested, and never actually run, which is this
+    # repo's oldest bug wearing a new hat.
     import argparse
+    import db_manager
+    db_manager.init_db()
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[1])
     ap.add_argument("topic")
     ap.add_argument("--proposal", type=int, default=None)

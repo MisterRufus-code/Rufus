@@ -2625,6 +2625,16 @@ def preanalyze(seed: dict, scene: str = "") -> tuple[str, str, float]:
     return analysis, run_id, cost
 
 
+def _accept_on_facts_alone() -> bool:
+    """Whether the score may stop a cycle, or only the fact gate may.
+
+    Set by script_candidates for a set a human will choose between. Off
+    everywhere else, so a single automatic script still has to clear the bar.
+    """
+    return (os.environ.get("RUFUS_ACCEPT_ON_FACTS_ALONE", "")
+            .strip().lower() in ("1", "true", "yes", "on"))
+
+
 def write_script_until_good(scene_description: str, seed: dict | None = None,
                             precomputed_analysis: str = None,
                             run_id: str = None) -> dict:
@@ -2672,7 +2682,24 @@ def write_script_until_good(scene_description: str, seed: dict | None = None,
         if best is None or result.get("score", 0) > best.get("score", 0):
             best = result
 
-        good = result.get("score", 0) >= target and result.get("fact_ok", True)
+        # TWO GATES, AND ONLY ONE OF THEM IS THE READER'S JOB.
+        #
+        # A candidate set is written for a person to rule between, so a score
+        # below the bar is a label rather than a reason to throw the draft away
+        # — that judgement is exactly what they are there for. An unsupported
+        # claim is not: they can tell which of three is better written, and
+        # they cannot tell whether the source backs "the U.S. dictated the
+        # rules". So when RUFUS_ACCEPT_ON_FACTS_ALONE is set, the score stops
+        # deciding and the fact gate keeps deciding.
+        #
+        # Live, on the run that prompted this: attempt 1 scored 9/10, tripped
+        # MIND-READ, was capped to 4, and with one cycle there was no second
+        # try — the relaxation meant to stop good scripts being blocked had
+        # made one phrasing flag fatal instead.
+        if _accept_on_facts_alone():
+            good = result.get("fact_ok", True)
+        else:
+            good = result.get("score", 0) >= target and result.get("fact_ok", True)
         if good:
             if cycle > 1:
                 print(f"[gpt] cycle {cycle}/{max_cycles}: "

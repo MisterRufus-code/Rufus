@@ -180,7 +180,15 @@ def prompts_of(set_id: int) -> list[str]:
 
 
 if __name__ == "__main__":
+    # THE SCHEMA, BEFORE ANYTHING TRIES TO WRITE TO IT. The dashboard calls
+    # init_db at startup and every test fixture calls it too, so every path
+    # that had ever been exercised already had the tables — and the one path
+    # nobody had run, the command line, died on "no such table" after paying
+    # for a script. Built, tested, and never actually run, which is this
+    # repo's oldest bug wearing a new hat.
     import argparse
+    import db_manager
+    db_manager.init_db()
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[1])
     ap.add_argument("script_file")
     ap.add_argument("--candidate", type=int, default=None)
