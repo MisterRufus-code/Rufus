@@ -93,7 +93,27 @@ def test_each_read_is_synthesized_at_its_own_tone(db, tmp_path, monkeypatch):
     saved = vt.build(str(_script(tmp_path)), set_id=1, n=2)
     assert len(saved) == 2
     assert [t for _text, t in seen] == [["tension"], ["curiosity"]]
-    assert all(text == "You checked your portfolio today." for text, _ in seen)
+    # THE WHOLE SCRIPT, not the opening line. A hook you liked is not a
+    # voiceover you can ship, so a stage that ends without a usable file is a
+    # stage you have to redo — the owner's call, and the better one.
+    assert all("That is the problem." in text for text, _ in seen)
+
+
+def test_the_quick_audition_mode_still_reads_only_the_hook(db, tmp_path,
+                                                           monkeypatch):
+    """Three eight-second hooks is twenty-four seconds of listening against two
+    and a half minutes for three full reads. That trade is still available to
+    anyone who wants to compare tones fast."""
+    import tts_engine
+    seen = []
+    monkeypatch.setenv("RUFUS_VOICE_TAKE_HOOK_ONLY", "1")
+    monkeypatch.setattr(tts_engine, "synthesize",
+                        lambda text, out, tones=None, beats=None:
+                        (seen.append(text), Path(out).write_bytes(b"x" * 2000)))
+    monkeypatch.setattr(vt, "takes_dir", lambda sid: tmp_path / "takes")
+    monkeypatch.setattr(vt, "tones_for", lambda s, n: ["tension"])
+    vt.build(str(_script(tmp_path)), set_id=1, n=1)
+    assert seen == ["You checked your portfolio today."]
 
 
 def test_one_tone_that_will_not_speak_does_not_cost_the_others(

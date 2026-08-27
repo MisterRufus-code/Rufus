@@ -1,7 +1,7 @@
 wrote docs/ENVIRONMENT.md
 enerated by `python scripts/env_doctor.py --markdown`. Do not edit by hand — there are more than a hundred of these and a hand-kept list is wrong within a month.
 
-151 variables, 64 of them described nowhere else.
+152 variables, 65 of them described nowhere else.
 
 `python scripts/env_doctor.py --check` reports variables you have SET that nothing reads — a typo or a renamed flag looks exactly like one that works.
 
@@ -141,6 +141,7 @@ enerated by `python scripts/env_doctor.py --markdown`. Do not edit by hand — t
 | `RUFUS_VISION_GATE` | `0` | `frame_gate.py` |
 | `RUFUS_VISION_MODEL` | — | `vision_review.py` |
 | `RUFUS_VOICE_TAKES` | — | `voice_takes.py` |
+| `RUFUS_VOICE_TAKE_HOOK_ONLY` | — | `voice_takes.py` |
 | `RUFUS_WAN` | `1` | `wan_client.py` |
 | `RUFUS_WAN_CFG` | `3.5` | `wan_client.py` |
 | `RUFUS_WAN_FACE_MOTION` | `0` | `wan_client.py` |

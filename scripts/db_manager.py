@@ -295,6 +295,51 @@ def init_db():
         """)
         c.execute("CREATE INDEX IF NOT EXISTS idx_vtake_set "
                   "ON voice_takes(set_id, status)")
+        # ONE VIDEO IN PROGRESS, ACROSS ALL OF ITS STAGES.
+        #
+        # The four choosing stages each grew their own table and their own
+        # page, and separately they work — but a person making a video does not
+        # have four tasks, they have one, and nothing tied a chosen script back
+        # to the topic it came from or forward to the pictures drawn for it.
+        # Four tabs is what that looks like from the outside, and the owner
+        # said so: "you made a mess".
+        #
+        # A project is the thread. It holds what has been decided so far and
+        # which stage is open, which is what lets the wizard go BACKWARDS —
+        # re-open the script stage, choose differently, and have the stages
+        # after it know they are stale.
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS projects (
+                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                created_at   TEXT DEFAULT (datetime('now')),
+                updated_at   TEXT DEFAULT (datetime('now')),
+                channel      TEXT,
+                niche        TEXT,
+                title        TEXT,
+                topic_source TEXT,
+                script_id    INTEGER,
+                script_file  TEXT,
+                gallery_id   INTEGER,
+                voice_id     INTEGER,
+                stage        TEXT DEFAULT 'topic',
+                status       TEXT DEFAULT 'open',
+                video_id     INTEGER
+            )
+        """)
+        # The topic options a project was offered, so REGEN has something to
+        # replace and so the ones passed over are kept — same reason every
+        # other stage keeps its losers.
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS project_topics (
+                id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                project_id INTEGER,
+                title      TEXT,
+                why        TEXT,
+                status     TEXT DEFAULT 'pending'
+            )
+        """)
+        c.execute("CREATE INDEX IF NOT EXISTS idx_ptopic_project "
+                  "ON project_topics(project_id, status)")
         c.execute("""
             CREATE TABLE IF NOT EXISTS script_attempts (
                 id                INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -658,6 +703,135 @@ def choose_candidate(candidate_id: int) -> dict | None:
                       (int(chosen["proposal_id"]), int(candidate_id)))
         chosen["status"] = "chosen"
         return chosen
+
+
+# ── projects: one video in progress, across all of its stages ────────────────
+
+STAGES = ("topic", "script", "gallery", "voice", "render")
+
+_PROJECT_COLS = ["id", "created_at", "updated_at", "channel", "niche", "title",
+                 "topic_source", "script_id", "script_file", "gallery_id",
+                 "voice_id", "stage", "status", "video_id"]
+_PTOPIC_COLS = ["id", "project_id", "title", "why", "status"]
+
+
+def new_project(*, channel: str, niche: str) -> int:
+    with _conn() as c:
+        return c.execute(
+            "INSERT INTO projects (channel, niche) VALUES (?,?)",
+            (channel, niche)).lastrowid
+
+
+def project(project_id: int) -> dict | None:
+    with _conn() as c:
+        row = c.execute(f"SELECT {', '.join(_PROJECT_COLS)} FROM projects "
+                        f"WHERE id = ?", (int(project_id),)).fetchone()
+    return dict(zip(_PROJECT_COLS, row)) if row else None
+
+
+def projects(status: str | None = "open", limit: int = 20) -> list[dict]:
+    q = f"SELECT {', '.join(_PROJECT_COLS)} FROM projects"
+    args: list = []
+    if status:
+        q += " WHERE status = ?"
+        args.append(status)
+    q += " ORDER BY id DESC LIMIT ?"
+    args.append(int(limit))
+    with _conn() as c:
+        rows = c.execute(q, args).fetchall()
+    return [dict(zip(_PROJECT_COLS, r)) for r in rows]
+
+
+def update_project(project_id: int, **fields) -> bool:
+    """Set any subset of a project's columns. Unknown keys are refused.
+
+    Refused rather than ignored: a typo in a column name that silently does
+    nothing is a stage that looks saved and is not, and this is the one table
+    that has to be trustworthy for the wizard to move backwards at all.
+    """
+    bad = [k for k in fields if k not in _PROJECT_COLS or k == "id"]
+    if bad:
+        raise ValueError(f"projects has no column(s) {bad}")
+    if not fields:
+        return False
+    sets = ", ".join(f"{k} = ?" for k in fields)
+    with _conn() as c:
+        cur = c.execute(
+            f"UPDATE projects SET {sets}, updated_at = datetime('now') "
+            f"WHERE id = ?", (*fields.values(), int(project_id)))
+        return cur.rowcount > 0
+
+
+def clear_project_from(project_id: int, stage: str) -> None:
+    """Forget every decision at `stage` and after it.
+
+    THIS IS WHAT MAKES GOING BACK HONEST. Re-open the script stage, pick a
+    different script, and the gallery drawn for the old one is not merely
+    stale — it is pictures of a script that is no longer being made. Leaving it
+    attached would render the video the owner just decided against.
+    """
+    if stage not in STAGES:
+        raise ValueError(f"unknown stage {stage!r}")
+    after = STAGES[STAGES.index(stage):]
+    fields: dict = {"stage": stage}
+    if "topic" in after:
+        fields["title"] = None
+        fields["topic_source"] = None
+    if "script" in after:
+        fields["script_id"] = None
+        fields["script_file"] = None
+    if "gallery" in after:
+        fields["gallery_id"] = None
+    if "voice" in after:
+        fields["voice_id"] = None
+    update_project(project_id, **fields)
+
+
+def save_project_topics(project_id: int, options: list[dict]) -> int:
+    """Replace this project's topic options. Returns how many were stored."""
+    with _conn() as c:
+        c.execute("DELETE FROM project_topics WHERE project_id = ? "
+                  "AND status = 'pending'", (int(project_id),))
+        n = 0
+        for o in options:
+            title = str(o.get("title", "")).strip()
+            if not title:
+                continue
+            c.execute("INSERT INTO project_topics (project_id, title, why) "
+                      "VALUES (?,?,?)",
+                      (int(project_id), title, str(o.get("why", ""))))
+            n += 1
+        return n
+
+
+def project_topics(project_id: int, status: str | None = "pending") -> list[dict]:
+    q = f"SELECT {', '.join(_PTOPIC_COLS)} FROM project_topics WHERE project_id = ?"
+    args: list = [int(project_id)]
+    if status:
+        q += " AND status = ?"
+        args.append(status)
+    q += " ORDER BY id ASC"
+    with _conn() as c:
+        rows = c.execute(q, args).fetchall()
+    return [dict(zip(_PTOPIC_COLS, r)) for r in rows]
+
+
+def choose_project_topic(topic_id: int) -> dict | None:
+    """Pick one option; its siblings are recorded as passed over."""
+    with _conn() as c:
+        row = c.execute(
+            f"SELECT {', '.join(_PTOPIC_COLS)} FROM project_topics "
+            f"WHERE id = ? AND status = 'pending'", (int(topic_id),)).fetchone()
+        if not row:
+            return None
+        got = dict(zip(_PTOPIC_COLS, row))
+        c.execute("UPDATE project_topics SET status='chosen' WHERE id=?",
+                  (int(topic_id),))
+        c.execute("UPDATE project_topics SET status='rejected' "
+                  "WHERE project_id=? AND id<>? AND status='pending'",
+                  (int(got["project_id"]), int(topic_id)))
+        got["status"] = "chosen"
+        return got
 
 
 # ── galleries ────────────────────────────────────────────────────────────────

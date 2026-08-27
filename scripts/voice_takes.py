@@ -2,13 +2,17 @@
 """
 voice_takes.py — three reads of the hook, so a person picks how it opens.
 
-ONLY THE HOOK, and the reason is what it costs to listen rather than what it
-costs to make. Audio is the one thing on this pipeline's choose-from-several
-list that cannot be skimmed: it plays at one times speed and there is no
-glancing at it. Three full forty-five-second takes is two and a half minutes of
-attention; three eight-second hooks is twenty-four seconds. And if the opening
-read lands, the rest of the script follows it — the hook is where a Short is
-won or lost anyway.
+WHOLE TAKES, READY TO USE. My first version recorded the opening line only,
+on the grounds that audio cannot be skimmed and three eight-second hooks is
+twenty-four seconds of listening against two and a half minutes for three full
+reads. The owner overruled it, and their reason is the better one: a hook you
+liked is not a voiceover you can ship, so a stage that ends without a usable
+file is a stage you have to redo. RUFUS_VOICE_TAKE_HOOK_ONLY=1 brings the
+cheap version back for anyone who wants to audition quickly.
+
+The listening cost is real and unchanged — it just buys something now. Skip
+through each take rather than sitting through it; what you are judging is pace
+and weight, and both are audible in ten seconds anywhere in the file.
 
 THE VOICE DOES NOT VARY. A channel whose narrator changes every video has no
 narrator; that is channel identity, chosen once, and re-rolling it per video
@@ -24,7 +28,8 @@ takes hoping one lands "Rentenmark" is a lottery ticket where a dictionary
 entry belongs. There is no lexicon anywhere in this codebase yet; that is a
 separate thing to build, not a variant to choose between.
 
-    RUFUS_VOICE_TAKES  3   how many reads to record
+    RUFUS_VOICE_TAKES            3   how many reads to record
+    RUFUS_VOICE_TAKE_HOOK_ONLY   0   record just the opening line instead
 """
 
 import os
@@ -56,13 +61,23 @@ def takes_dir(set_id: int) -> Path:
     return paths.media_root() / "voice_takes" / str(set_id)
 
 
+def hook_only() -> bool:
+    return (os.environ.get("RUFUS_VOICE_TAKE_HOOK_ONLY", "")
+            .strip().lower() in ("1", "true", "yes", "on"))
+
+
 def hook_of(script: str) -> str:
-    """The opening line — the eight seconds this stage is about."""
+    """The opening line, for the quick-audition mode."""
     for line in (script or "").splitlines():
         line = line.strip()
         if line:
             return line
     return ""
+
+
+def _speech_of(script: str) -> str:
+    """What each take reads: the whole script, or just its opening line."""
+    return hook_of(script) if hook_only() else (script or "").strip()
 
 
 def tones_for(script: str, n: int) -> list[str]:
@@ -104,9 +119,9 @@ def build(script_file: str, *, set_id: int, channel: str = "main_en",
     import tts_engine
 
     script = Path(script_file).read_text(encoding="utf-8")
-    hook = hook_of(script)
-    if not hook:
-        print("[takes] the script has no opening line to read")
+    speech = _speech_of(script)
+    if not speech:
+        print("[takes] the script has nothing in it to read")
         return []
 
     n = n or how_many()
@@ -122,12 +137,13 @@ def build(script_file: str, *, set_id: int, channel: str = "main_en",
     for tone in tones_for(script, n):
         mp3 = out_dir / f"{tone}.mp3"
         try:
-            # One beat, one tone: synthesize's per-beat path takes a tone list
-            # and the text those tones describe, which for a single line is
-            # exactly this pair. Going through it rather than around it means
-            # the take a person hears is produced the same way the render will
-            # produce it.
-            tts_engine.synthesize(hook, mp3, [tone], [hook])
+            # ONE TONE ACROSS THE WHOLE TAKE, which is the point of the stage:
+            # the takes differ from each other in pace and weight, not within
+            # themselves. synthesize's per-beat path wants a tone list and the
+            # text those tones describe; a take is one beat by that definition.
+            # Going through it rather than around it means the file a person
+            # hears is produced exactly the way the render produces audio.
+            tts_engine.synthesize(speech, mp3, [tone], [speech])
         except Exception as e:
             print(f"[takes] {tone}: no audio ({e})")
             continue
@@ -136,11 +152,12 @@ def build(script_file: str, *, set_id: int, channel: str = "main_en",
             continue
         row_id = db_manager.save_voice_take(
             set_id=set_id, channel=channel, topic=topic, tone=tone,
-            text=hook, path=str(mp3))
+            text=speech, path=str(mp3))
         saved.append({"id": row_id, "tone": tone, "path": str(mp3)})
         print(f"[takes] #{row_id} {tone} — {mp3.name}")
 
-    print(f"[takes] {len(saved)} read(s) of the hook — choose at /voice")
+    print(f"[takes] {len(saved)} full take(s)" if not hook_only()
+          else f"[takes] {len(saved)} hook read(s)")
     return saved
 
 
