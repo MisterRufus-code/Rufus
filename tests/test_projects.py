@@ -671,3 +671,102 @@ def test_the_builder_records_its_target_before_drawing():
     assert src.index("set_gallery_beats") < src.index("render_one_beat"), (
         "the target has to exist before the first picture, or the panel "
         "reports finished while nothing has been drawn")
+
+
+def test_regen_retires_the_scripts_it_is_replacing(tmp_path, monkeypatch):
+    """THE DEFECT THIS PINS. save_project_topics has always deleted the pending
+    options before writing the replacements. The other three stages never did,
+    so pressing "again" wrote three MORE scripts alongside the three already
+    there — the stage built to narrow a choice widening it every time."""
+    import db_manager as dbm
+    monkeypatch.setattr(dbm, "DB_FILE", tmp_path / "regen.db")
+    dbm.init_db()
+    pid = dbm.new_project(channel="c", niche="n")
+    for style in ("counterintuitive", "shocking_stat", "warning"):
+        dbm.save_candidate(proposal_id=None, channel="c", niche="n",
+                           topic="T", hook_style=style, hook="h",
+                           script="s", score=8, project_id=pid)
+    assert len(dbm.candidates(project_id=pid, status="pending")) == 3
+
+    gone = dbm.superseded_by_regen(pid, "script")
+
+    assert gone == 3
+    assert dbm.candidates(project_id=pid, status="pending") == []
+
+
+def test_a_retired_option_is_kept_not_deleted(tmp_path, monkeypatch):
+    """A passed-over option is half of a labelled pair — what won is only
+    meaningful beside what it beat. Deleting the rows would trade a tidy table
+    for the measurements."""
+    import db_manager as dbm
+    monkeypatch.setattr(dbm, "DB_FILE", tmp_path / "keep.db")
+    dbm.init_db()
+    pid = dbm.new_project(channel="c", niche="n")
+    dbm.save_candidate(proposal_id=None, channel="c", niche="n", topic="T",
+                       hook_style="warning", hook="h", script="s", score=8,
+                       project_id=pid)
+    dbm.superseded_by_regen(pid, "script")
+    assert dbm.candidates(project_id=pid, status="superseded"), (
+        "the row must survive with a new status, not be deleted")
+
+
+def test_regen_of_the_pictures_retires_only_the_pictures(tmp_path, monkeypatch):
+    """Regenerating the pictures says nothing about the script that was
+    already settled. Clearing forward from here is a different operation with
+    a different name."""
+    import db_manager as dbm
+    monkeypatch.setattr(dbm, "DB_FILE", tmp_path / "scope.db")
+    dbm.init_db()
+    pid = dbm.new_project(channel="c", niche="n")
+    cid = dbm.save_candidate(proposal_id=None, channel="c", niche="n",
+                             topic="T", hook_style="warning", hook="h",
+                             script="s", score=8, project_id=pid)
+    dbm.update_project(pid, script_id=cid)
+    sid = dbm.save_gallery_set(candidate_id=cid, channel="c", niche="n",
+                               topic="T", script_file="s.txt", n_variants=2)
+
+    gone = dbm.superseded_by_regen(pid, "gallery")
+
+    assert gone == 1
+    assert [g["id"] for g in dbm.gallery_sets(status="pending")] == []
+    assert dbm.gallery_sets(status="superseded")[0]["id"] == sid
+    # the script is untouched
+    assert dbm.candidates(project_id=pid)[0]["id"] == cid
+
+
+def test_regen_with_nothing_pending_retires_nothing(tmp_path, monkeypatch):
+    """The first press of a stage has no options to replace, and the message
+    must not claim otherwise."""
+    import db_manager as dbm
+    monkeypatch.setattr(dbm, "DB_FILE", tmp_path / "empty.db")
+    dbm.init_db()
+    pid = dbm.new_project(channel="c", niche="n")
+    assert dbm.superseded_by_regen(pid, "script") == 0
+    assert dbm.superseded_by_regen(pid, "gallery") == 0
+    assert dbm.superseded_by_regen(pid, "voice") == 0
+
+
+def test_regen_rejects_a_stage_that_does_not_exist(tmp_path, monkeypatch):
+    import db_manager as dbm
+    import pytest
+    monkeypatch.setattr(dbm, "DB_FILE", tmp_path / "bad.db")
+    dbm.init_db()
+    pid = dbm.new_project(channel="c", niche="n")
+    with pytest.raises(ValueError):
+        dbm.superseded_by_regen(pid, "pictures")
+
+
+def test_the_regen_route_retires_before_it_launches():
+    """Order matters: launching first would leave a window where both sets are
+    pending, and /galleries reads pending."""
+    from pathlib import Path
+    import dashboard
+    src = Path(dashboard.__file__).read_text(encoding="utf-8")
+    body = src.split("def create_regen", 1)[1].split("\n@app.route", 1)[0]
+    for stage, launch in (("script", "_launch_candidates"),
+                          ("gallery", "_launch_galleries"),
+                          ("voice", "_launch_voice_takes")):
+        block = body.split(f'if stage == "{stage}":', 1)[1]
+        assert f'superseded_by_regen(project_id, "{stage}")' in block
+        assert block.index("superseded_by_regen") < block.index(launch), (
+            f"{stage}: the old options must be retired before the new run starts")

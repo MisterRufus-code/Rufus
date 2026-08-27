@@ -1449,3 +1449,55 @@ def test_a_tile_a_viewer_may_not_open_is_not_offered(client):
     src = Path(dashboard.__file__).read_text(encoding="utf-8")
     block = src.split("def _home_tiles(", 1)[1][:900]
     assert "auth.can" in block
+
+
+def test_the_shot_line_drops_the_tag_and_the_framing_boilerplate():
+    """The framing sentence is one of a handful of fixed strings, identical on
+    every shot at that distance. Printed in full it is the first ninety
+    characters of every line on the page, so the part that says what THIS
+    picture is of starts past where the strip ends."""
+    out = dashboard._shot_line(
+        "[SHOT=object] Close shot: head and shoulders, or two hands and the "
+        "object they hold, filling most of the frame. A close-up of a hand "
+        "holding a peso note from 1985")
+    assert out == "A close-up of a hand holding a peso note from 1985"
+    assert "[SHOT=" not in out and "Close shot:" not in out
+
+
+def test_the_shot_line_keeps_a_prompt_that_is_only_framing():
+    """Stripping everything would leave the row with no caption at all, which
+    is worse than a repeated one."""
+    only = "Wide shot: the whole place is visible and the figures are small."
+    assert dashboard._shot_line(only) == only
+
+
+def test_the_shot_line_is_cut_to_one_line():
+    out = dashboard._shot_line("A " + "very " * 60 + "long shot", limit=40)
+    assert len(out) == 40 and out.endswith("…")
+
+
+def test_the_gallery_lays_the_draws_two_up_under_one_header():
+    """THE DEFECT THIS PINS. The page was a <table> whose first cell held the
+    number and a 150-character prompt with no width on it, so that cell took
+    whatever it wanted and shoved the pictures — the only thing anybody is
+    actually judging — into a strip at the far right."""
+    src = Path(dashboard.__file__).read_text(encoding="utf-8")
+    page = src.split("def galleries_page", 1)[1].split("\n@app.route", 1)[0]
+    # Comments dropped: this one explains the table it replaced, and a prose
+    # mention of the old markup is not the old markup.
+    code = "\n".join(l for l in page.splitlines()
+                     if not l.lstrip().startswith("#"))
+    assert "<table>" not in code and "<tr>" not in code, (
+        "the gallery is cards now, not a table")
+    assert 'class="shot-h"' in code and 'class="draws"' in code
+    assert 'class="draw' in code
+
+
+def test_the_draws_stay_two_across_at_every_width():
+    """Stacking them on a phone turns one comparison into two acts of memory,
+    which is the one thing this stage exists to avoid."""
+    src = Path(dashboard.__file__).read_text(encoding="utf-8")
+    rule = src.split(".draws {", 1)[1].split("}", 1)[0]
+    assert "repeat(2, 1fr)" in rule
+    assert ".draws" not in src.split("@media", 1)[-1].split(".shot {", 1)[0] \
+        or "repeat(2" in src, "no media query may collapse the pair"

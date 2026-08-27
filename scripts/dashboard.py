@@ -49,6 +49,7 @@ Environment:
 import html
 import json
 import os
+import re
 import subprocess
 import sys
 import threading
@@ -1564,6 +1565,30 @@ PAGE_STYLE = """<!doctype html><html><head><meta charset="utf-8">
   .tile-n { min-width: 20px; padding: 1px 7px; border-radius: 999px;
             font-size: 12px; font-weight: 600;
             background: var(--tone); color: #0b1220; }
+  /* One shot per card: a header line saying which shot and what of, then the
+     draws side by side. The draws grid is TWO columns and stays two on a
+     phone — the entire point is comparing them at a glance, and stacking them
+     turns one comparison into two acts of memory. */
+  .shot { border: 1px solid var(--border); border-radius: var(--radius);
+          background: var(--surface); margin: 10px 0; overflow: hidden; }
+  .shot-h { display: flex; gap: 8px; align-items: baseline; padding: 8px 12px;
+            border-bottom: 1px solid var(--border); }
+  .shot-n { flex: none; min-width: 20px; height: 20px; border-radius: 999px;
+            background: var(--make); color: #06122a; font-size: 12px;
+            font-weight: 600; text-align: center; line-height: 20px; }
+  .shot-p { font-size: 13px; color: var(--dim); }
+  .draws { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px;
+           padding: 8px; }
+  .draw { border: 2px solid transparent; border-radius: var(--radius-sm);
+          overflow: hidden; background: var(--bg); }
+  .draw.won { border-color: var(--ok); }
+  .draw img { width: 100%; display: block; aspect-ratio: 9 / 16;
+              object-fit: cover; }
+  .draw-f { display: flex; gap: 8px; align-items: center;
+            justify-content: space-between; padding: 4px 8px; }
+  .draw-v { font-size: 12px; color: var(--dim); font-weight: 600; }
+  .draw-w { font-size: 12px; color: var(--ok); font-weight: 600; }
+  .pick { font-size: 12px; padding: 4px 8px; }
   .tile.t-make    { --tone: var(--make); }
   .tile.t-review  { --tone: var(--review); }
   .tile.t-measure { --tone: var(--measure); }
@@ -3803,6 +3828,31 @@ def scripts_choose(candidate_id: int):
 
 # ── Choosing the pictures ────────────────────────────────────────────────────
 
+_GALLERY_TAG_RE = re.compile(r"^\s*\[SHOT\s*=\s*\w+\s*\]\s*")
+# The framing sentence is written by the storyboard and is one of a handful of
+# fixed strings, identical on every shot that shares a distance. Printed in
+# full it is the first ninety characters of every line on the page, so the
+# part that says what THIS picture is of starts past where the strip ends.
+_FRAMING_RE = re.compile(
+    r"^(wide shot|medium shot|close shot|close detail)\b[^.]*\.\s*", re.I)
+
+
+def _shot_line(prompt: str, limit: int = 110) -> str:
+    """One readable line describing the shot, for the strip above the draws.
+
+    Three things come off: the [SHOT=…] tag, which is a note to the prompt
+    builder and is stripped before the model sees it; the framing sentence,
+    which is boilerplate repeated verbatim across every shot at that distance;
+    and the tail past what fits. What is left is the sentence that differs
+    between one shot and the next, which is the only part worth reading when
+    you are deciding between two pictures of it.
+    """
+    text = _GALLERY_TAG_RE.sub("", (prompt or "").strip())
+    stripped = _FRAMING_RE.sub("", text).strip()
+    text = stripped or text          # a prompt that is ONLY framing keeps it
+    return text if len(text) <= limit else text[:limit - 1].rstrip() + "…"
+
+
 @app.route("/galleries")
 def galleries_page():
     """Two complete galleries, side by side, one row per shot.
@@ -3845,29 +3895,43 @@ def galleries_page():
                       f'type="submit">Make the video with this set</button>'
                       f'</form>')
 
+        # TWO LINES PER SHOT, NOT A TABLE ROW. The old layout put the number
+        # and a 150-character prompt in the first cell of a <table> with no
+        # width on it, so that cell took whatever it wanted and shoved the
+        # pictures — the only thing on the page anybody is actually judging —
+        # into a strip at the far right. Line one says which shot this is and
+        # what it is of; line two is the draws, side by side at a size you can
+        # tell apart, which is the comparison the whole stage exists for.
         rows = ""
         for beat in sorted(by_beat):
             cells = ""
             for im in sorted(by_beat[beat], key=lambda r: r["variant"]):
                 picked = im["status"] == "chosen"
-                swap = ""
-                if auth.can("generate") and not picked:
-                    swap = (f'<form method="post" action="/galleries/{gs["id"]}'
-                            f'/swap/{beat}/{im["variant"]}"><button '
-                            f'type="submit">use this one</button></form>')
+                letter = chr(65 + im["variant"])
+                if picked:
+                    action = '<span class="draw-w">ships</span>'
+                elif auth.can("generate"):
+                    action = (f'<form method="post" action="/galleries/'
+                              f'{gs["id"]}/swap/{beat}/{im["variant"]}">'
+                              f'<button class="pick" type="submit">use '
+                              f'{letter}</button></form>')
+                else:
+                    action = ""
                 cells += (
-                    f'<td style="vertical-align:top;padding:6px;'
-                    f'border:2px solid {"#4caf50" if picked else "transparent"}">'
-                    f'<img src="/galleries/image/{im["id"]}" '
-                    f'style="width:150px;max-width:40vw;display:block" '
-                    f'alt="shot {beat+1} variant {chr(65+im["variant"])}">'
-                    f'<div class="muted" style="font-size:12px">'
-                    f'{chr(65+im["variant"])}{" · chosen" if picked else ""}'
-                    f'</div>{swap}</td>')
-            prompt = (by_beat[beat][0]["prompt"] or "")[:150]
-            rows += (f'<tr><td class="muted" style="vertical-align:top">'
-                     f'{beat+1}<br><span style="font-size:11px">'
-                     f'{_esc(prompt)}</span></td>{cells}</tr>')
+                    f'<div class="draw{" won" if picked else ""}">'
+                    f'<img src="/galleries/image/{im["id"]}" loading="lazy" '
+                    f'alt="shot {beat+1} variant {letter}">'
+                    f'<div class="draw-f"><span class="draw-v">{letter}</span>'
+                    f'{action}</div></div>')
+            # The [SHOT=…] tag is a note to the prompt builder about whether
+            # this beat draws a person; it is stripped before the model ever
+            # sees it, and it is noise to a reader deciding between two
+            # pictures. One line, cut at the width the strip actually has.
+            prompt = _shot_line(by_beat[beat][0]["prompt"] or "")
+            rows += (f'<div class="shot">'
+                     f'<div class="shot-h"><span class="shot-n">{beat+1}</span>'
+                     f'<span class="shot-p">{_esc(prompt)}</span></div>'
+                     f'<div class="draws">{cells}</div></div>')
 
         blocks += (f'<h2 style="margin-top:22px">{_esc(gs["topic"] or "—")}</h2>'
                    f'<p class="muted">{len(by_beat)} shot(s), '
@@ -3877,7 +3941,7 @@ def galleries_page():
                    f'you passed over is half of a labelled pair, one per shot '
                    f'rather than one per video.</p>'
                    f'<div style="margin:10px 0">{bases}</div>'
-                   f'<div style="overflow-x:auto"><table>{rows}</table></div>')
+                   f'{rows}')
 
     if not sets:
         blocks = ('<p class="muted">Nothing waiting. Choose a script on '
@@ -4552,6 +4616,18 @@ def create_back(project_id: int, stage: str):
         f"Back at the {stage} stage — everything after it is forgotten."))
 
 
+def _replacing(n: int, noun: str) -> str:
+    """", replacing the 3 you had" — or nothing at all when there were none.
+
+    Said out loud because the alternative is silent: somebody who waited forty
+    minutes for a gallery and pressed the button next to it is entitled to be
+    told the old one just went away, rather than discovering it later.
+    """
+    if not n:
+        return ""
+    return f", replacing the {n} {noun}{'' if n == 1 else 's'} you had"
+
+
 @app.route("/create/<int:project_id>/regen/<stage>", methods=["POST"])
 def create_regen(project_id: int, stage: str):
     """Draw this stage again. The options are samples, not answers."""
@@ -4568,34 +4644,45 @@ def create_regen(project_id: int, stage: str):
             dbm.update_project(project_id, stage="topic")
             return redirect(f"/create?project={project_id}&msg="
                             + _urlquote(f"{n} topic(s) to choose from."))
+        # AGAIN MEANS INSTEAD, NOT AS WELL. The old options are retired before
+        # the new ones are drawn, so this stage keeps offering one choice of
+        # the size it was designed around. Without it a second press left six
+        # scripts, or two complete galleries stacked on /galleries, and the
+        # stage built to narrow a decision widened it every time it was used.
         if stage == "script":
             if not p.get("title"):
                 return redirect(f"/create?project={project_id}&error="
                                 + _urlquote("choose a topic first"))
+            gone = dbm.superseded_by_regen(project_id, "script")
             log = _launch_candidates(topic=p["title"], proposal_id=None,
                                      channel=p["channel"],
                                      project_id=project_id)
             return redirect(f"/create?project={project_id}&msg=" + _urlquote(
-                f"Writing three scripts — a minute or two. Log: logs/{log.name}"))
+                f"Writing three scripts{_replacing(gone, 'script')} — a minute "
+                f"or two. Log: logs/{log.name}"))
         if stage == "gallery":
             if not p.get("script_file"):
                 return redirect(f"/create?project={project_id}&error="
                                 + _urlquote("choose a script first"))
+            gone = dbm.superseded_by_regen(project_id, "gallery")
             log = _launch_galleries(script_file=p["script_file"],
                                     candidate_id=p.get("script_id"),
                                     topic=p.get("title") or "")
             return redirect(f"/create?project={project_id}&msg=" + _urlquote(
-                f"Recording the voice, then drawing two galleries — about "
-                f"forty minutes. Log: logs/{log.name}"))
+                f"Recording the voice, then drawing two galleries"
+                f"{_replacing(gone, 'set')} — about forty minutes. "
+                f"Log: logs/{log.name}"))
         if stage == "voice":
             if not p.get("gallery_id") or not p.get("script_file"):
                 return redirect(f"/create?project={project_id}&error="
                                 + _urlquote("settle the pictures first"))
+            gone = dbm.superseded_by_regen(project_id, "voice")
             log = _launch_voice_takes(script_file=p["script_file"],
                                       set_id=p["gallery_id"],
                                       topic=p.get("title") or "")
             return redirect(f"/create?project={project_id}&msg=" + _urlquote(
-                f"Recording three takes. Log: logs/{log.name}"))
+                f"Recording three takes{_replacing(gone, 'take')}. "
+                f"Log: logs/{log.name}"))
     except Exception as e:
         return redirect(f"/create?project={project_id}&error="
                         + _urlquote(f"could not start: {e}"))

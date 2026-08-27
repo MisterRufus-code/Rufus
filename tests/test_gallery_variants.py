@@ -274,3 +274,81 @@ def test_the_stored_shot_lengths_describe_the_merged_shots(tmp_path,
     stored = json.loads(dbm.voice_takes(set_id=sid)[0]["spans"])
     assert len(stored) == 1, "one held shot, one length"
     assert stored[0]["held"] == 2
+
+
+def test_the_gallery_renders_the_style_the_ordinary_loop_would(
+        tmp_path, monkeypatch):
+    """THE DEFECT THIS PINS. render_one_beat does not append the style block —
+    deliberately, because its other caller is the regenerate button, which is
+    handed a sidecar that already carries it. The ordinary render loop styles
+    its prompts first and then renders them. This stage did neither: it took
+    unstyled prompts from _build_sd_prompts straight to render_one_beat, so
+    every gallery was drawn in the checkpoint's own look (photographic) on a
+    channel whose style is stickman_micro.
+
+    So the assertion is not "some style is present" — it is that what the
+    gallery sends is byte for byte what generate_clips would have sent.
+    """
+    import main as rufus_main
+    import voice_takes
+    import comfy_client
+    import db_manager as dbm
+
+    monkeypatch.setenv("RUFUS_STYLE", "stickman_micro")
+    script = tmp_path / "s.txt"
+    script.write_text("One. Two.", encoding="utf-8")
+    monkeypatch.setattr(dbm, "DB_FILE", tmp_path / "style.db")
+    dbm.init_db()
+    monkeypatch.setattr(gv, "gallery_dir", lambda sid: tmp_path / f"s{sid}")
+    monkeypatch.setattr(rufus_main, "_target_beats", lambda s: 2)
+    monkeypatch.setattr(voice_takes, "build", lambda *a, **k: [])
+    shots = ["[SHOT=object] A close-up of a peso note",
+             "A wide view of an empty street"]
+    monkeypatch.setattr(rufus_main, "_build_sd_prompts",
+                        lambda s, n, max_scenes=10, grow=False, beats=None: shots)
+
+    sent = []
+    monkeypatch.setattr(comfy_client, "render_one_beat",
+                        lambda prompt, png, **k: sent.append(prompt) or False)
+
+    gv.build(str(script), niche="money_history", channel="c", n_variants=1)
+
+    assert sent == [comfy_client._with_detail(x) for x in shots], (
+        "the gallery must send the style block, exactly as the render loop does")
+    # A phrase from the SHARED half of the preset, not the figure half — an
+    # [SHOT=object] prompt has the figure half stripped on purpose, so
+    # asserting on "stick figures" would fail for a reason that is correct.
+    assert all("flat cartoon illustration" in x.lower() for x in sent), (
+        "the named style never reached the model")
+
+
+def test_the_gallery_stores_the_shot_not_the_style_block(tmp_path, monkeypatch):
+    """The stored prompt is read in two places that both want the SHOT: the
+    page prints it under the picture, where six hundred identical words would
+    push the one line that differs off the end, and prompts_of feeds the
+    image-prompt history, where a constant tail defeats the de-duplication it
+    exists for."""
+    import main as rufus_main
+    import voice_takes
+    import comfy_client
+    import db_manager as dbm
+
+    monkeypatch.setenv("RUFUS_STYLE", "stickman_micro")
+    script = tmp_path / "s.txt"
+    script.write_text("One.", encoding="utf-8")
+    monkeypatch.setattr(dbm, "DB_FILE", tmp_path / "store.db")
+    dbm.init_db()
+    out = tmp_path / "imgs"
+    monkeypatch.setattr(gv, "gallery_dir", lambda sid: out)
+    monkeypatch.setattr(rufus_main, "_target_beats", lambda s: 1)
+    monkeypatch.setattr(voice_takes, "build", lambda *a, **k: [])
+    monkeypatch.setattr(rufus_main, "_build_sd_prompts",
+                        lambda s, n, max_scenes=10, grow=False, beats=None:
+                        ["A close-up of a peso note"])
+    monkeypatch.setattr(comfy_client, "render_one_beat",
+                        lambda prompt, png, **k: True)
+
+    set_id = gv.build(str(script), niche="money_history", channel="c",
+                      n_variants=1)
+    rows = dbm.gallery_images(set_id)
+    assert rows and rows[0]["prompt"] == "A close-up of a peso note"

@@ -858,6 +858,64 @@ def clear_project_from(project_id: int, stage: str) -> None:
     update_project(project_id, **fields)
 
 
+def superseded_by_regen(project_id: int, stage: str) -> int:
+    """Retire the pending options AT `stage`, ahead of drawing new ones.
+
+    WHY REGEN HAS TO CLEAR FIRST. save_project_topics has always deleted the
+    pending options before writing the replacements, so the topic stage does
+    exactly what pressing "again" means: three suggestions become three other
+    suggestions. The other three stages never did. Regenerating scripts wrote
+    three more alongside the three already there; regenerating the pictures
+    started a whole second gallery set, and /galleries lists every pending set
+    it can find, so the page grew a second forty-minute set of decisions
+    underneath the first. Press it twice and there are nine scripts and three
+    galleries, and the stage built to narrow a choice widens it instead.
+
+    ONLY THIS STAGE. Regenerating the pictures says nothing about the script
+    that was already settled, and clearing forward from here is a different
+    operation with a different name — clear_project_from, which is what going
+    BACK calls, and which re-opens rather than retires.
+
+    RETIRED, NOT DELETED. A passed-over option is half of a labelled pair —
+    what won is only meaningful beside what it beat — and that signal is the
+    whole reason these are recorded instead of thrown away. So they become
+    `superseded`: out of the pending lists every stage reads, still on disk for
+    the comparison. Deleting the rows would trade a tidy table for the
+    measurements.
+
+    Returns how many were retired, so the caller can say so rather than
+    silently discarding something that took forty minutes to draw.
+    """
+    if stage not in STAGES:
+        raise ValueError(f"unknown stage {stage!r}")
+    p = project(project_id) or {}
+    with _conn() as c:
+        if stage == "script":
+            cur = c.execute("UPDATE script_candidates SET status='superseded' "
+                            "WHERE project_id=? AND status='pending'",
+                            (int(project_id),))
+        elif stage == "gallery":
+            # A set belongs to this project through the chosen script, which is
+            # what _launch_galleries passes as candidate_id — the only thread
+            # between a project and the sets drawn for it.
+            if not p.get("script_id"):
+                return 0
+            cur = c.execute("UPDATE gallery_sets SET status='superseded' "
+                            "WHERE candidate_id=? AND status='pending'",
+                            (int(p["script_id"]),))
+        elif stage == "voice":
+            if not p.get("gallery_id"):
+                return 0
+            cur = c.execute("UPDATE voice_takes SET status='superseded' "
+                            "WHERE set_id=? AND status='pending'",
+                            (int(p["gallery_id"]),))
+        else:
+            # topic: save_project_topics already replaces, and render has no
+            # options to retire.
+            return 0
+        return cur.rowcount or 0
+
+
 def save_project_topics(project_id: int, options: list[dict]) -> int:
     """Replace this project's topic options. Returns how many were stored."""
     with _conn() as c:

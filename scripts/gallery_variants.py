@@ -181,6 +181,27 @@ def build(script_file: str, *, candidate_id: int | None = None,
     # reads as 0 of 32 instead of as finished.
     db_manager.set_gallery_beats(set_id, len(prompts))
 
+    # THE LOOK, APPENDED HERE BECAUSE render_one_beat DOES NOT APPEND IT.
+    # The ordinary render loop styles its prompts (`prompts = [_with_detail(p)
+    # for p in prompts]`) and then renders them; render_one_beat deliberately
+    # does not, because its other caller is the regenerate button, which is fed
+    # a sidecar that ALREADY carries the style — styling there would give that
+    # prompt a second helping of it.
+    #
+    # This stage was reading prompts straight out of _build_sd_prompts, which
+    # are unstyled, and handing them to render_one_beat, which adds nothing. So
+    # every picture in every gallery was drawn with no style block at all: the
+    # checkpoint's own look, which is photographic, on a channel whose style is
+    # stickman_micro. Built, wired, tested against a mocked renderer that never
+    # looks at the prompt — and never actually compared against what the real
+    # loop sends.
+    #
+    # Styled ONCE for both variants: _detail_suffix re-reads config/styles.json
+    # on every call, and the block is identical across variants by definition —
+    # a look that differed between A and B would make the comparison a
+    # comparison of two styles rather than two draws.
+    styled = [comfy_client._with_detail(p) for p in prompts]
+
     print(f"[galleries] set #{set_id}: {n_variants} × {len(prompts)} "
           f"picture(s) → {out_dir}")
 
@@ -195,12 +216,18 @@ def build(script_file: str, *, candidate_id: int | None = None,
         for i, prompt in enumerate(prompts):
             png = out_dir / f"v{variant}_{i:02d}.png"
             seed = (base_seed + i) % (2**31 - 1)
-            ok = comfy_client.render_one_beat(prompt, png, seed=seed,
+            ok = comfy_client.render_one_beat(styled[i], png, seed=seed,
                                               niche=niche)
             if not ok:
                 print(f"[galleries] variant {variant} beat {i}: no image — "
                       f"the other variant still covers this shot")
                 continue
+            # THE SHOT IS STORED, NOT THE STYLED PROMPT. This row is read
+            # in two places and neither wants the style block: the page prints
+            # it under the picture, where six hundred identical words would
+            # push the one line that differs off the end; and prompts_of feeds
+            # the captions and the image-prompt history, where a constant tail
+            # on every entry defeats the de-duplication it exists for.
             db_manager.save_gallery_image(
                 set_id=set_id, variant=variant, beat_index=i, path=str(png),
                 prompt=prompt, seed=seed)
