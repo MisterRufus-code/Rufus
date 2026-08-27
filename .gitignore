@@ -8,13 +8,29 @@ config/client_secrets.json
 config/google_oauth.json
 
 # Generated media
-media_library/cache/
-media_library/output/
-media_library/temp/
-media_library/music/
-media_library/debug/
+#
+# NAMED ONE AT A TIME, AND THAT IS HOW SIX OF THEM GOT MISSED. This list grew
+# a line per directory as each was invented, so every directory invented since
+# — bench sheets, style previews, thumbnails, and the three the choose-from-
+# several pipeline writes — was tracked by default. The owner opened Source
+# Control and found ~180 generated files staged, including hundreds of PNGs
+# from two workflow benches.
+#
+# So the rule is inverted: everything under media_library/ is generated unless
+# it is a checked-in fixture, and the two that are get un-ignored below. A new
+# directory is ignored the day it is created rather than the day somebody
+# notices it in a commit.
+media_library/
 assets/sfx/
 assets/music_synth/
+
+# Scratch output from manual testing — same class, different place.
+test_*.mp4
+test_*.png
+test_*.mp3
+kokoro_test.mp3
+run_log.txt
+*.patch
 
 # Runtime logs and database
 logs/
