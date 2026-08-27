@@ -77,11 +77,50 @@ def test_known_tokens_resolve_to_their_roles(users_file):
     assert auth.user_for_token(PARTNER_TOKEN)["role"] == "partner"
 
 
-def test_corrupt_users_file_falls_back_rather_than_crashing(tmp_path, monkeypatch):
+# ── absent and corrupt are not the same answer ──────────────────────────────
+#
+# This used to assert that a corrupt users file returns [] — "falls back rather
+# than crashing". Not crashing was right. The destination was not: [] made
+# auth_enabled() False, and False made current_user() hand `owner` to any
+# loopback request. A users file that lost a closing brace turned every
+# permission check off.
+#
+# And loopback is not "somebody sitting at the machine". serve.ps1 publishes
+# this dashboard over Tailscale, and a proxied request arrives from 127.0.0.1
+# — so the fail-open reached everyone on the tailnet, which is precisely the
+# set of people the roles exist to tell apart.
+
+def test_a_corrupt_users_file_locks_the_door_rather_than_opening_it(
+        tmp_path, monkeypatch):
     bad = tmp_path / "users.json"
     bad.write_text("{ this is not json", encoding="utf-8")
     monkeypatch.setattr(auth, "USERS_FILE", bad)
+    with pytest.raises(auth.CorruptUserStore):
+        auth._load_users()
+    assert auth.auth_enabled() is True, "unreadable users are still users"
+    assert auth.user_for_token("anything") is None
+
+
+def test_a_corrupt_store_is_reported_to_a_person_not_as_a_crash(tmp_path,
+                                                                monkeypatch):
+    """AuthError subclass on purpose: every user-management path already
+    catches AuthError and shows the reason, so the store reports itself instead
+    of becoming a 500 — and instead of being overwritten by an add_user that
+    would take everyone else with it."""
+    bad = tmp_path / "users.json"
+    bad.write_text("{ broken", encoding="utf-8")
+    monkeypatch.setattr(auth, "USERS_FILE", bad)
+    assert issubclass(auth.CorruptUserStore, auth.AuthError)
+    with pytest.raises(auth.AuthError):
+        auth.add_user("someone", "viewer")
+
+
+def test_no_users_file_at_all_is_still_the_first_run(tmp_path, monkeypatch):
+    """A fresh install has nothing to protect, and legacy loopback mode is what
+    makes the very first `python scripts/dashboard.py` work."""
+    monkeypatch.setattr(auth, "USERS_FILE", tmp_path / "nothing.json")
     assert auth._load_users() == []
+    assert auth.auth_enabled() is False
 
 
 def test_partner_permissions_exclude_publishing():

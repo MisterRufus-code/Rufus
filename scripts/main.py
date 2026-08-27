@@ -2201,6 +2201,25 @@ def run(skip_upload: bool = False, niche_override: str = None, output_dir: Path 
     yt_id  = None
     auto_upload = os.environ.get("RUFUS_AUTO_UPLOAD", "0").strip().lower() in \
         ("1", "true", "yes", "on")
+
+    # A PUBLISH YOU CANNOT RECORD IS A PUBLISH YOU CANNOT RETRACT.
+    #
+    # The save above is deliberately non-fatal — a database problem should not
+    # throw away a rendered video — but `db_id` stays None when it fails, and
+    # nothing downstream checked. So an unattended RUFUS_AUTO_UPLOAD=1 run
+    # whose save failed put a video on the channel with no local row: no
+    # audit trail, no run to trace it back to, and update_youtube_id skipped
+    # (it is guarded by `if db_id`) so not even the video id was kept.
+    #
+    # Held rather than failed: the mp4 is on disk and the reason is named, so
+    # it can be approved by hand once the database is working. The one thing
+    # that must not happen is the machine publishing something it cannot
+    # afterwards point to.
+    if auto_upload and db_id is None:
+        auto_upload = False
+        print("           ⚠ the database save failed, so there is no row to "
+              "attach an upload to — holding for review instead of "
+              "auto-uploading. The video is at the path below.")
     min_score = _hold_min_score
     final_score = result.get("score", 0)
 

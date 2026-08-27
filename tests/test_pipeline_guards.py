@@ -1031,3 +1031,22 @@ def test_the_remotion_path_transcribes_through_the_wrapper():
     from pathlib import Path as _P
     src = (_P(__file__).parent.parent / "scripts" / "remotion_renderer.py").read_text(encoding="utf-8")
     assert "audio_gen._transcribe(mp3)" in src
+
+
+# ── a publish you cannot record is a publish you cannot retract ─────────────
+
+def test_auto_upload_is_refused_when_the_database_save_failed():
+    """save_video is deliberately non-fatal — a database problem should not
+    throw away a rendered video — but db_id stays None when it fails, and
+    nothing downstream checked it. An unattended RUFUS_AUTO_UPLOAD=1 run whose
+    save failed put a video on the channel with no local row: no audit trail,
+    no run to trace it to, and update_youtube_id skipped (it is guarded by
+    `if db_id`), so not even the video id was kept."""
+    src = (Path(__file__).parent.parent / "scripts" / "main.py"
+           ).read_text(encoding="utf-8")
+    guard = "if auto_upload and db_id is None:"
+    assert guard in src, "nothing stops an unrecordable publish"
+    after = src.split(guard, 1)[1][:400]
+    assert "auto_upload = False" in after, "the guard must actually disarm it"
+    # And it must sit BEFORE the branch that uploads, not after it.
+    assert src.index(guard) < src.index("RUFUS_AUTO_UPLOAD=1, uploading")

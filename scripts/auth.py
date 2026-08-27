@@ -99,18 +99,49 @@ ROLES = tuple(ROLE_PERMISSIONS)
 
 # ── User store ────────────────────────────────────────────────────────────────
 
-def _load_users() -> list[dict]:
-    """Users from config/users.json, or [] when the file is absent/unreadable.
+class CorruptUserStore(AuthError):
+    """The users file exists and cannot be read. Not the same as no file.
 
-    Never raises: a corrupt users file must not lock you out of your own
-    dashboard — it falls back to legacy loopback-owner mode instead.
+    An AuthError subclass on purpose: every user-management path in the CLI
+    and the dashboard already catches AuthError and shows the reason to a
+    person, so a store that cannot be read reports itself instead of becoming
+    a 500 — and, more importantly, instead of being overwritten by an add_user
+    that would take everyone else with it.
+    """
+
+
+def _load_users() -> list[dict]:
+    """Users from config/users.json, or [] when there is no file at all.
+
+    ABSENT AND CORRUPT ARE NOT THE SAME ANSWER, and collapsing them opened the
+    dashboard. Both used to return [], [] made auth_enabled() False, and False
+    made current_user() hand `owner` to any loopback request. So a users file
+    that lost a closing brace — a half-finished hand edit, a disk that filled
+    mid-write — silently turned every permission check off.
+    
+    And loopback is not "somebody sitting at this machine". serve.ps1 publishes
+    this dashboard over Tailscale, and a proxied request arrives from
+    127.0.0.1, so the fail-open reached everyone on the tailnet — which is
+    exactly the set of people roles exist to tell apart.
+
+    No file is still legacy mode: that is a fresh install with nothing to
+    protect, and it is what makes the first run work at all. A file that is
+    there and unreadable raises, and every caller treats that as "locked".
     """
     try:
-        data = json.loads(USERS_FILE.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError, ValueError):
+        raw = USERS_FILE.read_text(encoding="utf-8")
+    except FileNotFoundError:
         return []
+    except OSError as e:
+        raise CorruptUserStore(f"{USERS_FILE} cannot be read: {e}") from e
+    try:
+        data = json.loads(raw)
+    except (json.JSONDecodeError, ValueError) as e:
+        raise CorruptUserStore(f"{USERS_FILE} is not valid JSON: {e}") from e
     users = data.get("users") if isinstance(data, dict) else data
-    return users if isinstance(users, list) else []
+    if not isinstance(users, list):
+        raise CorruptUserStore(f"{USERS_FILE} has no list of users in it")
+    return users
 
 
 def _save_users(users: list[dict]) -> None:
@@ -119,10 +150,19 @@ def _save_users(users: list[dict]) -> None:
 
 
 def auth_enabled() -> bool:
-    """True once at least one user exists. Absent file = legacy mode."""
+    """True once at least one user exists. Absent file = legacy mode.
+
+    A corrupt file answers True — there are users, we simply cannot read them,
+    and the safe reading of "cannot tell who you are" is "not the owner".
+    current_user() then finds no token that matches and returns None.
+    """
     if os.environ.get("RUFUS_AUTH_DISABLED", "").strip().lower() in ("1", "true", "yes", "on"):
         return False
-    return bool(_load_users())
+    try:
+        return bool(_load_users())
+    except CorruptUserStore as e:
+        print(f"[auth] {e} — refusing every request until it is fixed")
+        return True
 
 
 def user_for_token(token: str) -> dict | None:
@@ -133,7 +173,13 @@ def user_for_token(token: str) -> dict | None:
     """
     if not token:
         return None
-    for u in _load_users():
+    try:
+        users = _load_users()
+    except CorruptUserStore:
+        # auth_enabled() already said so on this request path; matching a token
+        # against a store we cannot read is not something to guess at.
+        return None
+    for u in users:
         stored = u.get("token", "")
         if stored and secrets.compare_digest(str(stored), str(token)):
             return u
