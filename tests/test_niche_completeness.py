@@ -13,7 +13,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
 
 ROOT   = Path(__file__).parent.parent
-NICHES = json.loads((ROOT / "config" / "niches.json").read_text())["niches"]
+NICHES = json.loads((ROOT / "config" / "niches.json").read_text(encoding="utf-8"))["niches"]
 
 
 def test_every_niche_has_wisdom_pool():
@@ -22,7 +22,7 @@ def test_every_niche_has_wisdom_pool():
     for niche in NICHES:
         f = ROOT / "config" / "wisdom" / f"{niche}.json"
         assert f.exists(), f"missing wisdom pool: config/wisdom/{niche}.json"
-        quotes = json.loads(f.read_text()).get("quotes", [])
+        quotes = json.loads(f.read_text(encoding="utf-8")).get("quotes", [])
         assert len(quotes) >= 20, f"{niche} wisdom pool too small ({len(quotes)} < 20)"
         for q in quotes[:5]:
             assert q.get("text") and q.get("author"), f"malformed entry in {niche}.json"
@@ -37,7 +37,7 @@ def test_every_niche_has_gold_examples():
     other niche had two: its scripts opened as biography ("In 1397, Giovanni
     di Bicci de' Medici opened the Medici Bank") instead of viewer-first, the
     one thing the note explicitly warns against."""
-    gold = json.loads((ROOT / "config" / "gold_examples.json").read_text())
+    gold = json.loads((ROOT / "config" / "gold_examples.json").read_text(encoding="utf-8"))
     for niche in NICHES:
         examples = gold.get(niche, [])
         assert len(examples) >= 2, \
@@ -72,7 +72,7 @@ def test_money_history_gold_examples_pass_the_pipelines_own_body_gates():
     clean. Uses the real _body_violations rather than re-checking the rules."""
     import script_writer
 
-    gold = json.loads((ROOT / "config" / "gold_examples.json").read_text())
+    gold = json.loads((ROOT / "config" / "gold_examples.json").read_text(encoding="utf-8"))
     for i, ex in enumerate(gold.get("money_history", []), 1):
         violations = script_writer._body_violations(ex["script"])
         assert not violations, \
@@ -85,7 +85,7 @@ def test_legacy_gold_examples_do_not_get_worse():
     the existing ones fails it too, with a message saying to lower the number."""
     import script_writer
 
-    gold = json.loads((ROOT / "config" / "gold_examples.json").read_text())
+    gold = json.loads((ROOT / "config" / "gold_examples.json").read_text(encoding="utf-8"))
     failing = [
         f"{niche}#{i}: {script_writer._body_violations(ex['script'])}"
         for niche in sorted(_LEGACY_GOLD_NICHES)
@@ -154,7 +154,7 @@ def test_every_niche_has_required_config_keys():
 
 
 def test_scheduled_and_active_niches_exist():
-    data = json.loads((ROOT / "config" / "niches.json").read_text())
+    data = json.loads((ROOT / "config" / "niches.json").read_text(encoding="utf-8"))
     assert data["active"] in NICHES
     for n in data.get("schedule", []):
         assert n in NICHES, f"scheduled niche '{n}' not defined"

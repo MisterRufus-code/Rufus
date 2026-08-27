@@ -133,7 +133,7 @@ def test_a_missing_key_is_survivable(monkeypatch, tmp_path):
 
 
 def test_an_api_failure_is_survivable(monkeypatch, tmp_path):
-    (tmp_path / "keys.json").write_text(json.dumps({"openai": "sk-real"}))
+    (tmp_path / "keys.json").write_text(json.dumps({"openai": "sk-real"}), encoding="utf-8")
     monkeypatch.setattr(edit_director, "CONFIG_DIR", tmp_path)
     monkeypatch.delenv("RUFUS_EDIT_DIRECTOR", raising=False)
 
@@ -146,7 +146,7 @@ def test_an_api_failure_is_survivable(monkeypatch, tmp_path):
 
 
 def test_a_valid_reply_comes_back_directed(monkeypatch, tmp_path):
-    (tmp_path / "keys.json").write_text(json.dumps({"openai": "sk-real"}))
+    (tmp_path / "keys.json").write_text(json.dumps({"openai": "sk-real"}), encoding="utf-8")
     monkeypatch.setattr(edit_director, "CONFIG_DIR", tmp_path)
     monkeypatch.delenv("RUFUS_EDIT_DIRECTOR", raising=False)
 
@@ -182,20 +182,20 @@ def test_a_valid_reply_comes_back_directed(monkeypatch, tmp_path):
 # ── The renderer honours it ──────────────────────────────────────────────────
 
 def test_short_tsx_prefers_the_plan_over_the_index_cycle():
-    src = (Path(__file__).parent.parent / "remotion" / "src" / "Short.tsx").read_text()
+    src = (Path(__file__).parent.parent / "remotion" / "src" / "Short.tsx").read_text(encoding="utf-8")
     assert "MOTION_PATTERNS[direction.motion]" in src
     assert "?? KB_PATTERNS[index % KB_PATTERNS.length]" in src, \
         "the mechanical cycle must remain the FALLBACK, not be deleted"
 
 
 def test_short_tsx_knows_every_motion_the_director_can_send():
-    src = (Path(__file__).parent.parent / "remotion" / "src" / "Short.tsx").read_text()
+    src = (Path(__file__).parent.parent / "remotion" / "src" / "Short.tsx").read_text(encoding="utf-8")
     for motion in edit_director.MOTIONS:
         assert f"{motion}:" in src, f"Short.tsx cannot perform {motion}"
 
 
 def test_renderer_passes_the_plan_in_props():
-    src = (Path(__file__).parent.parent / "scripts" / "remotion_renderer.py").read_text()
+    src = (Path(__file__).parent.parent / "scripts" / "remotion_renderer.py").read_text(encoding="utf-8")
     assert '"edit":' in src
     assert "edit_director.direct(beats)" in src
 

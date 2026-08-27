@@ -15,7 +15,7 @@ def _write_niches(tmp_path, character=None, style_suffix="sepia, gold tones"):
     if character is not None:
         cfg["niches"]["money_history"]["character"] = character
     p = tmp_path / "niches.json"
-    p.write_text(json.dumps(cfg))
+    p.write_text(json.dumps(cfg), encoding="utf-8")
     return p
 
 

@@ -195,7 +195,7 @@ def test_a_missing_key_is_survivable(monkeypatch, tmp_path):
 
 
 def test_an_api_failure_is_survivable(monkeypatch, tmp_path):
-    (tmp_path / "keys.json").write_text(json.dumps({"openai": "sk-real"}))
+    (tmp_path / "keys.json").write_text(json.dumps({"openai": "sk-real"}), encoding="utf-8")
     monkeypatch.setattr(storyboard, "CONFIG_DIR", tmp_path)
     monkeypatch.delenv("RUFUS_STORYBOARD", raising=False)
     import openai
@@ -205,7 +205,7 @@ def test_an_api_failure_is_survivable(monkeypatch, tmp_path):
 
 
 def test_a_valid_reply_comes_back_in_beat_order(monkeypatch, tmp_path):
-    (tmp_path / "keys.json").write_text(json.dumps({"openai": "sk-real"}))
+    (tmp_path / "keys.json").write_text(json.dumps({"openai": "sk-real"}), encoding="utf-8")
     monkeypatch.setattr(storyboard, "CONFIG_DIR", tmp_path)
     monkeypatch.delenv("RUFUS_STORYBOARD", raising=False)
 
@@ -241,7 +241,7 @@ def test_a_valid_reply_comes_back_in_beat_order(monkeypatch, tmp_path):
 # ── main uses it, and can still live without it ──────────────────────────────
 
 def test_main_tries_the_storyboard_before_the_per_beat_writer():
-    src = (Path(__file__).parent.parent / "scripts" / "main.py").read_text()
+    src = (Path(__file__).parent.parent / "scripts" / "main.py").read_text(encoding="utf-8")
     body = src.split("def _build_sd_prompts")[1]
     assert "storyboard.plan(" in body
     assert body.index("storyboard.plan(") < body.index("beat_lines = "), \
@@ -251,7 +251,7 @@ def test_main_tries_the_storyboard_before_the_per_beat_writer():
 def test_main_defuses_printed_text_on_storyboard_shots_too():
     """The blank-surfaces clause is applied on the per-beat path; the
     storyboard path must not quietly skip it."""
-    src = (Path(__file__).parent.parent / "scripts" / "main.py").read_text()
+    src = (Path(__file__).parent.parent / "scripts" / "main.py").read_text(encoding="utf-8")
     body = src.split("def _build_sd_prompts")[1]
     sb = body[body.index("storyboard.plan("):]
     assert "_defuse_readable_text(s) for s in shots" in sb
@@ -263,7 +263,7 @@ def test_the_character_clause_exists_before_the_storyboard_reads_it():
     moved ahead of the per-beat writer but the clause it passes was still built
     below it. Fail-open hid it as a one-line warning while the whole feature
     never ran once."""
-    src = (Path(__file__).parent.parent / "scripts" / "main.py").read_text()
+    src = (Path(__file__).parent.parent / "scripts" / "main.py").read_text(encoding="utf-8")
     body = src.split("def _build_sd_prompts")[1]
     assert body.index("char_clause = character_engine.character_clause") \
         < body.index("storyboard.plan(")

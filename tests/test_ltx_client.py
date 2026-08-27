@@ -26,7 +26,7 @@ def _tpl(tmp_path, placeholder=True):
         "3": {"class_type": "SaveVideo", "inputs": {"video": ["1", 0]}},
     }
     p = tmp_path / "ltx_i2v_api.json"
-    p.write_text(json.dumps(g))
+    p.write_text(json.dumps(g), encoding="utf-8")
     return p
 
 

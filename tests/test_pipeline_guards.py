@@ -119,7 +119,7 @@ def test_load_used_seeds_handles_corrupted_json(tmp_path, capsys):
     original = research.USED_SEEDS_FILE
     try:
         research.USED_SEEDS_FILE = tmp_path / "used_seeds.json"
-        research.USED_SEEDS_FILE.write_text("{ broken json !!!")
+        research.USED_SEEDS_FILE.write_text("{ broken json !!!", encoding="utf-8")
         result = research._load_used_seeds()
         assert result == []
         captured = capsys.readouterr()
@@ -261,7 +261,7 @@ def test_image_prompt_history_is_capped(tmp_path, monkeypatch):
     for i in range(30):   # far past the 24-run cap
         main._remember_image_prompts([f"prompt {i}"])
 
-    data = json.loads((tmp_path / "recent.json").read_text())
+    data = json.loads((tmp_path / "recent.json").read_text(encoding="utf-8"))
     assert len(data["runs"]) == 24
     # oldest runs dropped, newest kept
     assert data["runs"][-1]["prompts"] == ["prompt 29"]
@@ -530,7 +530,7 @@ def test_wisdom_quote_author_uniform(monkeypatch, tmp_path):
     quotes = [{"text": f"buffett wisdom {i}", "author": "Warren Buffett"} for i in range(28)]
     quotes += [{"text": f"munger wisdom {i}", "author": "Charlie Munger"} for i in range(2)]
     f = tmp_path / "finance.json"
-    f.write_text(_json.dumps({"quotes": quotes}))
+    f.write_text(_json.dumps({"quotes": quotes}), encoding="utf-8")
     monkeypatch.setattr(research, "WISDOM_DIR", tmp_path)
     import random as _random
     _random.seed(7)
@@ -629,7 +629,7 @@ def test_ensure_media_root_noop_when_already_a_directory(tmp_path, monkeypatch):
     monkeypatch.setattr(main, "ROOT", tmp_path)
     real_dir = tmp_path / "media_library"
     real_dir.mkdir()
-    (real_dir / "keep.txt").write_text("keep")
+    (real_dir / "keep.txt").write_text("keep", encoding="utf-8")
 
     main._ensure_media_root()
 
@@ -663,7 +663,7 @@ def test_housekeeping_never_deletes_debug(tmp_path, monkeypatch):
     old_run.mkdir(parents=True)
 
     old_file = old_run / "script.txt"
-    old_file.write_text("old")
+    old_file.write_text("old", encoding="utf-8")
 
     old_time = time.time() - 400 * 86400   # over a year old
     os.utime(old_file, (old_time, old_time))
@@ -702,7 +702,7 @@ def test_save_debug_artifacts_saves_script_and_voiceover(tmp_path, monkeypatch):
     ag._save_debug_artifacts("Hook.\nBody.\nCTA.", mp3)
 
     out = tmp_path / "media_library" / "debug" / "20260710-abc123"
-    assert (out / "script.txt").read_text() == "Hook.\nBody.\nCTA."
+    assert (out / "script.txt").read_text(encoding="utf-8") == "Hook.\nBody.\nCTA."
     assert (out / "voiceover.mp3").read_bytes() == b"fake mp3 bytes"
 
 
@@ -1020,7 +1020,7 @@ def test_every_transcribe_call_goes_through_the_cpu_fallback():
     for py in scripts.glob("*.py"):
         if py.name == "audio_gen.py":
             continue            # the wrapper itself is where the raw call lives
-        if "_whisper().transcribe" in py.read_text():
+        if "_whisper().transcribe" in py.read_text(encoding="utf-8"):
             offenders.append(py.name)
     assert not offenders, (
         f"{offenders} call the whisper model directly — use "
@@ -1029,5 +1029,5 @@ def test_every_transcribe_call_goes_through_the_cpu_fallback():
 
 def test_the_remotion_path_transcribes_through_the_wrapper():
     from pathlib import Path as _P
-    src = (_P(__file__).parent.parent / "scripts" / "remotion_renderer.py").read_text()
+    src = (_P(__file__).parent.parent / "scripts" / "remotion_renderer.py").read_text(encoding="utf-8")
     assert "audio_gen._transcribe(mp3)" in src

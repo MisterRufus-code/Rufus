@@ -746,7 +746,7 @@ def test_the_venv_interpreter_is_not_complained_about(monkeypatch, tmp_path):
     venv = tmp_path / ".venv" / ("Scripts" if os.name == "nt" else "bin")
     venv.mkdir(parents=True)
     exe = venv / ("python.exe" if os.name == "nt" else "python")
-    exe.write_text("")
+    exe.write_text("", encoding="utf-8")
     monkeypatch.setattr(dashboard, "ROOT", tmp_path)
     monkeypatch.setattr(dashboard.sys, "executable", str(exe))
     assert dashboard._wrong_interpreter() == ""
@@ -758,7 +758,7 @@ def test_a_different_interpreter_is_named_out_loud(monkeypatch, tmp_path):
     launcher, and nothing anywhere said a word."""
     venv = tmp_path / ".venv" / ("Scripts" if os.name == "nt" else "bin")
     venv.mkdir(parents=True)
-    (venv / ("python.exe" if os.name == "nt" else "python")).write_text("")
+    (venv / ("python.exe" if os.name == "nt" else "python")).write_text("", encoding="utf-8")
     monkeypatch.setattr(dashboard, "ROOT", tmp_path)
     monkeypatch.setattr(dashboard.sys, "executable", "/usr/bin/python3")
     msg = dashboard._wrong_interpreter()
@@ -774,7 +774,7 @@ def test_no_venv_means_nothing_to_be_wrong_about(monkeypatch, tmp_path):
 def test_the_notice_can_be_turned_off_by_someone_who_means_it(monkeypatch, tmp_path):
     venv = tmp_path / ".venv" / ("Scripts" if os.name == "nt" else "bin")
     venv.mkdir(parents=True)
-    (venv / ("python.exe" if os.name == "nt" else "python")).write_text("")
+    (venv / ("python.exe" if os.name == "nt" else "python")).write_text("", encoding="utf-8")
     monkeypatch.setattr(dashboard, "ROOT", tmp_path)
     monkeypatch.setattr(dashboard.sys, "executable", "/usr/bin/python3")
     monkeypatch.setenv("RUFUS_ALLOW_ANY_PYTHON", "1")
@@ -1363,3 +1363,17 @@ def test_no_section_keeps_its_own_back_link(client):
     page = client.get("/measure").get_data(as_text=True)
     body = page.split("</header>", 1)[1]
     assert body.count('class="back"') == 1
+
+
+def test_no_log_path_is_built_by_hand():
+    """AGENTS.md: never hardcode a path paths.py already resolves.
+
+    dashboard.py had ten `ROOT / "logs"` sites next to two paths.log_dir()
+    ones — including the three launchers added most recently, which copied the
+    older pattern instead of the documented rule. On a box with RUFUS_LOG_DIR
+    set, every dashboard-launched run wrote its log somewhere the owner was
+    not looking, and the page told them to go and read it there."""
+    src = (Path(dashboard.__file__)).read_text(encoding="utf-8")
+    assert 'ROOT / "logs"' not in src, (
+        "a log path is being built by hand again; paths.log_dir() resolves it "
+        "and honours RUFUS_LOG_DIR")

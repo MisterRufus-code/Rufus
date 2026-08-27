@@ -100,7 +100,7 @@ def test_no_period_falls_back_to_present_day_not_to_a_guess():
 # ── The instruction actually carries the tags ────────────────────────────────
 
 def test_instruction_states_the_era_rule_per_beat():
-    src = Path(main.__file__).read_text()
+    src = Path(main.__file__).read_text(encoding="utf-8")
     assert "[ERA=" in src
     assert "present day" in src
     assert "period costume on a present-day" in src.lower()

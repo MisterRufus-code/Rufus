@@ -38,13 +38,13 @@ def _i2v_graph():
 
 def test_load_template_bare_graph(tmp_path):
     p = tmp_path / "g.json"
-    p.write_text(json.dumps(_i2v_graph()))
+    p.write_text(json.dumps(_i2v_graph()), encoding="utf-8")
     assert ct.load_template(p) is not None
 
 
 def test_load_template_prompt_wrapper(tmp_path):
     p = tmp_path / "g.json"
-    p.write_text(json.dumps({"prompt": _i2v_graph()}))
+    p.write_text(json.dumps({"prompt": _i2v_graph()}), encoding="utf-8")
     g = ct.load_template(p)
     assert g is not None and "1" in g
 
@@ -55,13 +55,13 @@ def test_load_template_missing_file(tmp_path):
 
 def test_load_template_invalid_json(tmp_path):
     p = tmp_path / "g.json"
-    p.write_text("{ not json")
+    p.write_text("{ not json", encoding="utf-8")
     assert ct.load_template(p) is None
 
 
 def test_load_template_not_a_graph(tmp_path):
     p = tmp_path / "g.json"
-    p.write_text(json.dumps({"a": {"no_class": 1}}))
+    p.write_text(json.dumps({"a": {"no_class": 1}}), encoding="utf-8")
     assert ct.load_template(p) is None
 
 

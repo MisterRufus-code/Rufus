@@ -69,11 +69,39 @@ def _unencoded(path: Path) -> list[str]:
     return out
 
 
+# AND THE TESTS, WHICH IS WHERE IT ACTUALLY BIT.
+#
+# This guard was right, and it looked at scripts/ only. Forty bare read_text()
+# calls therefore lived on in tests/ — several of them reading comfy_client.py,
+# which holds em-dashes, ✗ and →. On the owner's cp1255 Windows box that raises
+# UnicodeDecodeError at COLLECTION time, so `python -m pytest` could not even
+# start: the whole suite was unrunnable on the machine it ships from, while
+# passing on every UTF-8 CI runner.
+#
+# A test file is not a lesser file. It reads the same sources, on the same box,
+# with the same default — and a rule enforced in one directory is a rule the
+# next directory has never heard of.
+TESTS = Path(__file__).parent
+
+
 def test_no_script_reads_or_writes_a_file_without_saying_utf8():
     offenders = [o for p in sorted(SCRIPTS.glob("*.py")) for o in _unencoded(p)]
     assert not offenders, (
         "these fall back to the locale code page (cp1255 on the owner's box, "
         "which turns an em-dash into 'ג€”'):\n  " + "\n  ".join(offenders))
+
+
+def test_no_test_reads_a_file_without_saying_utf8():
+    """The suite has to be runnable on the box it ships from.
+
+    Bare read_text() in a test that opens a source file is not a style nit —
+    it is a UnicodeDecodeError during collection on any non-UTF-8 locale, which
+    means no test runs at all, which means the guard above never gets to fire
+    either."""
+    offenders = [o for p in sorted(TESTS.glob("*.py")) for o in _unencoded(p)]
+    assert not offenders, (
+        "these would decode with the ANSI code page on the owner's box, and "
+        f"take the whole collection down with them: {offenders}")
 
 
 def test_the_cta_pool_really_does_contain_non_ascii():

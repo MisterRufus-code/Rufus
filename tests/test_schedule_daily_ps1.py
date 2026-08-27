@@ -4,7 +4,7 @@ repo already uses for run_scheduled.bat (see test_comfy_client.py)."""
 
 from pathlib import Path
 
-SCRIPT = (Path(__file__).parent.parent / "schedule_daily.ps1").read_text()
+SCRIPT = (Path(__file__).parent.parent / "schedule_daily.ps1").read_text(encoding="utf-8")
 
 
 def test_no_here_strings():

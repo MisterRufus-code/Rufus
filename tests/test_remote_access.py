@@ -112,7 +112,7 @@ def test_recent_images_reads_the_prompt_sidecar(tmp_path, monkeypatch):
     import paths
     monkeypatch.setattr(paths, "thumbnails_dir", lambda: tmp_path)
     (tmp_path / "a.png").write_bytes(b"x" * 2048)
-    (tmp_path / "a.txt").write_text("PROMPT: a golden hourglass\nSEED: 1\n")
+    (tmp_path / "a.txt").write_text("PROMPT: a golden hourglass\nSEED: 1\n", encoding="utf-8")
     got = image_gen.recent_images()
     assert len(got) == 1 and got[0]["prompt"] == "a golden hourglass"
 

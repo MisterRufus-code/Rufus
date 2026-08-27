@@ -29,7 +29,7 @@ def niches(tmp_path, monkeypatch):
         "character": dict(_CHAR),
     }}}
     p = tmp_path / "niches.json"
-    p.write_text(json.dumps(cfg))
+    p.write_text(json.dumps(cfg), encoding="utf-8")
     monkeypatch.setattr(ce, "NICHES_FILE", p)
     return p
 
@@ -71,7 +71,7 @@ def test_default_trigger_survives_a_nameless_character():
 
 def test_configured_lora_trigger_wins(niches, monkeypatch):
     cfg = dict(_CHAR, lora_trigger="my_custom_tok")
-    niches.write_text(json.dumps({"niches": {"money_history": {"character": cfg}}}))
+    niches.write_text(json.dumps({"niches": {"money_history": {"character": cfg}}}), encoding="utf-8")
     _, caption = cd.build_prompt("money_history", 0)
     assert caption.startswith("my_custom_tok,")
 
@@ -79,7 +79,7 @@ def test_configured_lora_trigger_wins(niches, monkeypatch):
 # ── Prompt / caption split ───────────────────────────────────────────────────
 
 def test_build_prompt_none_without_character(niches):
-    niches.write_text(json.dumps({"niches": {"money_history": {}}}))
+    niches.write_text(json.dumps({"niches": {"money_history": {}}}), encoding="utf-8")
     assert cd.build_prompt("money_history", 0) is None
 
 
@@ -116,7 +116,7 @@ def _fake_generate(prompt, out_path, *, width, height, seed):
     out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_bytes(b"PNG")
-    out_path.with_suffix(".txt").write_text(f"PROMPT: {prompt}\nSEED: {seed}\n")
+    out_path.with_suffix(".txt").write_text(f"PROMPT: {prompt}\nSEED: {seed}\n", encoding="utf-8")
     return out_path
 
 
@@ -146,7 +146,7 @@ def test_build_dataset_overwrites_the_metadata_sidecar_with_a_real_caption(
     out = tmp_path / "ds"
     written = cd.build_dataset("money_history", count=1, out_dir=out, seed_base=1)
 
-    caption = written[0].with_suffix(".txt").read_text()
+    caption = written[0].with_suffix(".txt").read_text(encoding="utf-8")
     assert "PROMPT:" not in caption
     assert "SEED:" not in caption
     assert caption.startswith("chronicler_v1,")
@@ -220,13 +220,13 @@ def test_build_dataset_writes_a_manifest(niches, tmp_path, monkeypatch):
     out = tmp_path / "ds"
     cd.build_dataset("money_history", count=2, out_dir=out, seed_base=1)
 
-    lines = [json.loads(l) for l in (out / "_manifest.jsonl").read_text().splitlines()]
+    lines = [json.loads(l) for l in (out / "_manifest.jsonl").read_text(encoding="utf-8").splitlines()]
     assert len(lines) == 2
     assert {"file", "index", "seed", "caption", "prompt"} <= set(lines[0])
 
 
 def test_build_dataset_empty_for_niche_without_character(niches, tmp_path):
-    niches.write_text(json.dumps({"niches": {"money_history": {}}}))
+    niches.write_text(json.dumps({"niches": {"money_history": {}}}), encoding="utf-8")
     with patch("image_gen.generate_image") as gen:
         assert cd.build_dataset("money_history", count=3, out_dir=tmp_path / "ds") == []
     gen.assert_not_called()

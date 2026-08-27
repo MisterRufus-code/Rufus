@@ -173,7 +173,7 @@ def test_render_image_none_when_await_fails(monkeypatch):
 # ── Scheduled runner hygiene ─────────────────────────────────────────────────────
 
 def test_run_scheduled_bat_is_task_scheduler_safe():
-    bat = (Path(__file__).parent.parent / "run_scheduled.bat").read_text()
+    bat = (Path(__file__).parent.parent / "run_scheduled.bat").read_text(encoding="utf-8")
     commands = [l.strip().lower() for l in bat.splitlines()
                 if l.strip() and not l.strip().upper().startswith("REM")]
     assert "pause" not in commands             # a pause command hangs the scheduled task
@@ -186,7 +186,7 @@ def test_run_scheduled_bat_wires_in_the_feedback_loop():
     # analytics_fetcher.py + feedback_analyzer.py were built but never invoked
     # by the schedule — dormant until wired in here. Must run BEFORE main.py
     # so today's script can actually use freshly updated learnings.json.
-    bat = (Path(__file__).parent.parent / "run_scheduled.bat").read_text()
+    bat = (Path(__file__).parent.parent / "run_scheduled.bat").read_text(encoding="utf-8")
     lines = bat.splitlines()
     idx = {name: next(i for i, l in enumerate(lines) if name in l)
            for name in ("analytics_fetcher.py", "feedback_analyzer.py", "main.py")}
@@ -197,7 +197,7 @@ def test_run_scheduled_bat_wires_in_the_feedback_loop():
 def test_run_scheduled_bat_propagates_exit_code():
     # A silently-swallowed failure defeats the whole point of alerting on one —
     # the script must both capture and ultimately exit with main.py's real code.
-    bat = (Path(__file__).parent.parent / "run_scheduled.bat").read_text()
+    bat = (Path(__file__).parent.parent / "run_scheduled.bat").read_text(encoding="utf-8")
     assert "set RUFUS_EXIT=%ERRORLEVEL%" in bat
     assert "exit /b %RUFUS_EXIT%" in bat
 
@@ -207,7 +207,7 @@ def test_run_scheduled_bat_date_var_set_outside_any_conditional_block():
     # a variable and reading it back with %var% (not !var!) inside the SAME
     # parenthesized if-block silently sees a stale/empty value, because the
     # whole block is %-expanded once at parse time before it runs line by line.
-    bat = (Path(__file__).parent.parent / "run_scheduled.bat").read_text()
+    bat = (Path(__file__).parent.parent / "run_scheduled.bat").read_text(encoding="utf-8")
     lines = bat.splitlines()
     set_today_idx = next(i for i, l in enumerate(lines) if l.strip().startswith("for /f") and "set TODAY=" in l)
     # Nothing before this line may be an unclosed "if ... (" — i.e. no line
@@ -222,7 +222,7 @@ def test_run_scheduled_bat_rotates_and_reports():
     """--scheduled makes a multi-niche schedule actually rotate (plain main.py
     silently ignored the schedule); report.py after main.py surfaces KPIs in
     the daily log instead of requiring a manual invocation nobody does."""
-    bat = (Path(__file__).parent.parent / "run_scheduled.bat").read_text()
+    bat = (Path(__file__).parent.parent / "run_scheduled.bat").read_text(encoding="utf-8")
     lines = bat.splitlines()
     main_idx   = next(i for i, l in enumerate(lines) if "main.py" in l)
     assert "--scheduled" in lines[main_idx]
@@ -282,7 +282,7 @@ def _flux2_tpl(tmp_path):
               "inputs": {"filename_prefix": "flux2", "images": ["1", 0]}},
     }
     p = tmp_path / "flux2_api.json"
-    p.write_text(json.dumps(g))
+    p.write_text(json.dumps(g), encoding="utf-8")
     return p
 
 
@@ -301,7 +301,7 @@ def _stills_tpl(tmp_path, name="stills_api.json"):
               "inputs": {"filename_prefix": "s", "images": ["1", 0]}},
     }
     p = tmp_path / name
-    p.write_text(json.dumps(g))
+    p.write_text(json.dumps(g), encoding="utf-8")
     return p
 
 
@@ -750,7 +750,7 @@ def test_character_template_loads_when_exported(monkeypatch, tmp_path):
         "1": {"class_type": "LoadImage", "inputs": {"image": "ref.png"}},
         "2": {"class_type": "CLIPTextEncode", "inputs": {"text": "RUFUS_PROMPT"}},
         "3": {"class_type": "SaveImage", "inputs": {"filename_prefix": "s", "images": ["2", 0]}},
-    }))
+    }), encoding="utf-8")
     monkeypatch.setattr(c, "CHARACTER_TEMPLATE", p)
     monkeypatch.delenv("RUFUS_CHARACTER_TEMPLATE", raising=False)
     assert c._character_template() is not None
@@ -760,7 +760,7 @@ def test_character_template_env_kill_switch(monkeypatch, tmp_path):
     p = tmp_path / "character_stills_api.json"
     p.write_text(json.dumps({
         "1": {"class_type": "CLIPTextEncode", "inputs": {"text": "RUFUS_PROMPT"}},
-    }))
+    }), encoding="utf-8")
     monkeypatch.setattr(c, "CHARACTER_TEMPLATE", p)
     monkeypatch.setenv("RUFUS_CHARACTER_TEMPLATE", "0")
     assert c._character_template() is None
@@ -1131,7 +1131,7 @@ def test_i2i_template_loads_and_has_kill_switch(monkeypatch, tmp_path):
     p.write_text(json.dumps({
         "1": {"class_type": "LoadImage", "inputs": {"image": "x.png"}},
         "2": {"class_type": "CLIPTextEncode", "inputs": {"text": "RUFUS_PROMPT"}},
-    }))
+    }), encoding="utf-8")
     monkeypatch.setattr(c, "I2I_TEMPLATE", p)
     monkeypatch.delenv("RUFUS_I2I_TEMPLATE", raising=False)
     assert c._i2i_template() is not None
@@ -1437,7 +1437,7 @@ def test_cli_defaults_to_stills_only():
     one-prompt check from the CLI fell through to the motion chain. On a
     16GB-RAM box that turned "does this prompt look right?" into a four-minute
     sample plus a VAE decode that ran for over an hour."""
-    src = Path(c.__file__).read_text()
+    src = Path(c.__file__).read_text(encoding="utf-8")
     main_block = src.split('if __name__ == "__main__":')[1]
     assert 'os.environ.setdefault("RUFUS_STILLS_ONLY", "1")' in main_block
     assert main_block.index('setdefault("RUFUS_STILLS_ONLY"') < \

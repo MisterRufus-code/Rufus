@@ -58,7 +58,7 @@ def _write_channels(tmp_path) -> Path:
         },
     }
     p = tmp_path / "channels.json"
-    p.write_text(json.dumps(cfg))
+    p.write_text(json.dumps(cfg), encoding="utf-8")
     return p
 
 

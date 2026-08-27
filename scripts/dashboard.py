@@ -660,7 +660,7 @@ def _launch_run(*, niche: str | None = None, topic: str | None = None,
     # dashboard, which is not guaranteed to be one of them.
     env.setdefault("PYTHONUTF8", "1")
     env.setdefault("PYTHONIOENCODING", "utf-8")
-    log_dir = ROOT / "logs"
+    log_dir = paths.log_dir()
     log_dir.mkdir(parents=True, exist_ok=True)
     log_path = log_dir / f"dashboard_run_{int(time.time())}.log"
     with open(log_path, "wb") as logf:
@@ -688,7 +688,7 @@ def _launch_candidates(*, topic: str, proposal_id: int | None,
     env.update(_load_settings())
     env.setdefault("PYTHONUTF8", "1")
     env.setdefault("PYTHONIOENCODING", "utf-8")
-    log_dir = ROOT / "logs"
+    log_dir = paths.log_dir()
     log_dir.mkdir(parents=True, exist_ok=True)
     log_path = log_dir / f"candidates_{int(time.time())}.log"
     with open(log_path, "wb") as logf:
@@ -715,7 +715,7 @@ def _launch_galleries(*, script_file: str, candidate_id: int | None,
     env.update(_load_settings())
     env.setdefault("PYTHONUTF8", "1")
     env.setdefault("PYTHONIOENCODING", "utf-8")
-    log_dir = ROOT / "logs"
+    log_dir = paths.log_dir()
     log_dir.mkdir(parents=True, exist_ok=True)
     log_path = log_dir / f"galleries_{int(time.time())}.log"
     with open(log_path, "wb") as logf:
@@ -740,7 +740,7 @@ def _launch_voice_takes(*, script_file: str, set_id: int,
     env.update(_load_settings())
     env.setdefault("PYTHONUTF8", "1")
     env.setdefault("PYTHONIOENCODING", "utf-8")
-    log_dir = ROOT / "logs"
+    log_dir = paths.log_dir()
     log_dir.mkdir(parents=True, exist_ok=True)
     log_path = log_dir / f"voice_takes_{int(time.time())}.log"
     with open(log_path, "wb") as logf:
@@ -2846,7 +2846,7 @@ def _launch_thumb(prompt: str, headline: str, count: int, *,
     if style:
         env["RUFUS_STYLE"] = style
         env.pop("RUFUS_STILLS_DETAIL", None)   # a literal override outranks it
-    log_dir = ROOT / "logs"
+    log_dir = paths.log_dir()
     log_dir.mkdir(parents=True, exist_ok=True)
     log_path = log_dir / f"thumb_{int(time.time())}.log"
     with open(log_path, "wb") as logf:
@@ -3659,7 +3659,7 @@ def scripts_choose(candidate_id: int):
         if not chosen:
             return redirect("/scripts?error=" + _urlquote(
                 "that one is not pending — already decided?"))
-        out_dir = ROOT / "logs" / "chosen_scripts"
+        out_dir = paths.log_dir() / "chosen_scripts"
         out_dir.mkdir(parents=True, exist_ok=True)
         script_file = out_dir / f"candidate_{candidate_id}.txt"
         script_file.write_text(chosen["script"] or "", encoding="utf-8")
@@ -4421,7 +4421,7 @@ def tracking_fetch():
     """
     auth.require("approve")
     _require_localhost()
-    log_dir = ROOT / "logs"
+    log_dir = paths.log_dir()
     log_dir.mkdir(parents=True, exist_ok=True)
     log_path = log_dir / f"analytics_{int(time.time())}.log"
     code = ("import sys; sys.path.insert(0, 'scripts');"
@@ -4812,7 +4812,7 @@ def _log_files(limit: int = 40) -> list[dict]:
     what happened.
     """
     out: list[dict] = []
-    for d in (ROOT / "logs",):
+    for d in (paths.log_dir(),):
         if not d.is_dir():
             continue
         for f in d.glob("*.log"):
@@ -4835,7 +4835,7 @@ def _read_log(name: str, tail: int = LOG_TAIL_BYTES) -> str:
     re-checked against the logs directory — the filename arrives from a query
     string, and `..` in it would otherwise read anything on the disk.
     """
-    d = (ROOT / "logs").resolve()
+    d = paths.log_dir().resolve()
     f = (d / name).resolve()
     if f.parent != d or not f.is_file():
         return ""
@@ -5306,7 +5306,7 @@ def rewrite_script(video_id: int):
         env.setdefault("PYTHONIOENCODING", "utf-8")
         if v.get("niche"):
             env["RUFUS_NICHE_OVERRIDE"] = str(v["niche"])
-        log_dir = ROOT / "logs"
+        log_dir = paths.log_dir()
         log_dir.mkdir(parents=True, exist_ok=True)
         log = log_dir / f"rewrite_{video_id}_{int(time.time())}.log"
         with open(log, "wb") as logf:
@@ -5390,7 +5390,7 @@ def _launch_recut(video_id: int, v: dict):
     # a different niche would fetch the wrong music and grade it wrong.
     if v.get("niche"):
         env["RUFUS_NICHE_OVERRIDE"] = str(v["niche"])
-    log_dir = ROOT / "logs"
+    log_dir = paths.log_dir()
     log_dir.mkdir(parents=True, exist_ok=True)
     log_path = log_dir / f"recut_{video_id}_{int(time.time())}.log"
     with open(log_path, "wb") as logf:
@@ -5431,7 +5431,7 @@ def _launch_regen(v: dict, beat: int, png: Path, txt: Path, prompt: str,
     # same reasoning as _launch_recut.
     if v.get("niche"):
         env["RUFUS_NICHE_OVERRIDE"] = str(v["niche"])
-    log_dir = ROOT / "logs"
+    log_dir = paths.log_dir()
     log_dir.mkdir(parents=True, exist_ok=True)
     log_path = log_dir / f"regen_{v['id']}_{beat:02d}_{int(time.time())}.log"
     try:

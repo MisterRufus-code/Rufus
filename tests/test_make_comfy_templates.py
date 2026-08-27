@@ -261,7 +261,7 @@ def test_character_path_refuses_an_img2img_template(tmp_path, monkeypatch, capsy
     ten renders reproducing one portrait."""
     import comfy_client
     bad = tmp_path / "character_stills_api.json"
-    bad.write_text(json.dumps(_img2img_graph()))
+    bad.write_text(json.dumps(_img2img_graph()), encoding="utf-8")
     monkeypatch.setattr(comfy_client, "CHARACTER_TEMPLATE", bad)
     monkeypatch.delenv("RUFUS_CHARACTER_TEMPLATE", raising=False)
     assert comfy_client._character_template() is None
@@ -275,7 +275,7 @@ def test_character_path_accepts_a_real_conditioning_template(tmp_path, monkeypat
     g["3"]["inputs"]["latent_image"] = ["empty", 0]
     g["empty"] = {"class_type": "EmptyLatentImage", "inputs": {"width": 832}}
     good = tmp_path / "character_stills_api.json"
-    good.write_text(json.dumps(g))
+    good.write_text(json.dumps(g), encoding="utf-8")
     monkeypatch.setattr(comfy_client, "CHARACTER_TEMPLATE", good)
     monkeypatch.delenv("RUFUS_CHARACTER_TEMPLATE", raising=False)
     assert comfy_client._character_template() is not None

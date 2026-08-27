@@ -153,7 +153,7 @@ def test_the_misleading_numpy_hint_is_gone():
 # SILENT: no error, just a flatter video. So the pin is the only thing standing
 # between a fresh install and quietly worse audio forever.
 
-_REQS = (Path(__file__).parent.parent / "requirements.txt").read_text()
+_REQS = (Path(__file__).parent.parent / "requirements.txt").read_text(encoding="utf-8")
 
 
 def test_numpy_is_pinned_below_2():

@@ -110,7 +110,7 @@ def test_add_embedding_caps_history_per_channel(monkeypatch, tmp_path):
         sw.add_embedding([float(i), 1.0], "main_en")
     sw.add_embedding([9.0, 9.0], "spanish")            # must survive main_en's cap
 
-    entries = _json.loads((tmp_path / "emb.json").read_text())
+    entries = _json.loads((tmp_path / "emb.json").read_text(encoding="utf-8"))
     main = [e for e in entries if e["channel"] == "main_en"]
     assert len(main) == 3
     assert main[-1]["vec"][0] == 4.0                   # newest kept
@@ -991,7 +991,7 @@ def test_add_topic_embedding_prunes_stale_entries(monkeypatch, tmp_path):
     sw.add_topic_embedding([1.0, 0.0], "main_en", now=stale)
     sw.add_topic_embedding([0.0, 1.0], "main_en", now=now)
 
-    entries = _json.loads((tmp_path / "topics.json").read_text())
+    entries = _json.loads((tmp_path / "topics.json").read_text(encoding="utf-8"))
     assert len(entries) == 1
     assert entries[0]["vec"] == [0.0, 1.0]
 
@@ -1004,7 +1004,7 @@ def test_add_topic_embedding_respects_history_cap(monkeypatch, tmp_path):
     now = 1_000_000.0
     for i in range(6):
         sw.add_topic_embedding([float(i)], "main_en", now=now)
-    entries = _json.loads((tmp_path / "topics.json").read_text())
+    entries = _json.loads((tmp_path / "topics.json").read_text(encoding="utf-8"))
     assert len(entries) == 3
     assert entries[-1]["vec"] == [5.0]   # newest kept
 

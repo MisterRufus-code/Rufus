@@ -40,7 +40,7 @@ def users_file(tmp_path, monkeypatch):
         {"name": "dani",  "role": "owner",   "token": OWNER_TOKEN},
         {"name": "james", "role": "partner", "token": PARTNER_TOKEN},
         {"name": "guest", "role": "viewer",  "token": VIEWER_TOKEN},
-    ]}))
+    ]}), encoding="utf-8")
     monkeypatch.setattr(auth, "USERS_FILE", f)
     monkeypatch.delenv("RUFUS_AUTH_DISABLED", raising=False)
     return f
@@ -126,7 +126,7 @@ def test_progress_never_raises_when_the_directory_is_unwritable(monkeypatch):
 
 def test_corrupt_progress_file_reads_as_none(progress_dir):
     progress_dir.mkdir(parents=True, exist_ok=True)
-    (progress_dir / "main_en.json").write_text("{ not json")
+    (progress_dir / "main_en.json").write_text("{ not json", encoding="utf-8")
     assert run_progress.read("main_en") is None
 
 
@@ -145,9 +145,9 @@ def test_a_quiet_running_file_is_reported_stale(progress_dir):
     # Rewind updated_at past the staleness window: the process died without
     # ever calling finish().
     p = progress_dir / "main_en.json"
-    data = json.loads(p.read_text())
+    data = json.loads(p.read_text(encoding="utf-8"))
     data["updated_at"] = time.time() - (run_progress.STALE_AFTER_SECONDS + 60)
-    p.write_text(json.dumps(data))
+    p.write_text(json.dumps(data), encoding="utf-8")
     assert run_progress.read("main_en")["stale"] is True
 
 
@@ -155,9 +155,9 @@ def test_a_finished_run_is_never_stale(progress_dir):
     run_progress.begin("main_en")
     run_progress.finish("done")
     p = progress_dir / "main_en.json"
-    data = json.loads(p.read_text())
+    data = json.loads(p.read_text(encoding="utf-8"))
     data["updated_at"] = time.time() - (run_progress.STALE_AFTER_SECONDS + 60)
-    p.write_text(json.dumps(data))
+    p.write_text(json.dumps(data), encoding="utf-8")
     assert run_progress.read("main_en")["stale"] is False
 
 
@@ -226,9 +226,9 @@ def test_status_flags_a_held_lock_whose_progress_went_quiet(client, monkeypatch,
     run_progress.begin("main_en")
     run_progress.update(5, "rendering")
     p = progress_dir / "main_en.json"
-    data = json.loads(p.read_text())
+    data = json.loads(p.read_text(encoding="utf-8"))
     data["updated_at"] = time.time() - (run_progress.STALE_AFTER_SECONDS + 60)
-    p.write_text(json.dumps(data))
+    p.write_text(json.dumps(data), encoding="utf-8")
 
     client.get(f"/?token={OWNER_TOKEN}")
     assert client.get("/api/status").get_json()["runs"][0]["stale"] is True

@@ -156,7 +156,7 @@ def _wiki_response(extract, title="Nixon shock"):
 
 def test_fetch_wikipedia_returns_grounded_seed(monkeypatch, tmp_path):
     topics = tmp_path / "wiki_topics.json"
-    topics.write_text('{"money_history": ["Nixon shock"]}')
+    topics.write_text('{"money_history": ["Nixon shock"]}', encoding="utf-8")
     monkeypatch.setattr(research, "WIKI_TOPICS_FILE", topics)
 
     extract = ("The Nixon shock was a series of economic measures taken by "
@@ -177,7 +177,7 @@ def test_fetch_wikipedia_uses_wiki_headers_not_reddit_ua(monkeypatch, tmp_path):
     — regression test for the real 403 Forbidden bug seen in production. The
     Wikipedia call must use WIKI_HEADERS, never the Chrome-spoofing REDDIT_HEADERS."""
     topics = tmp_path / "wiki_topics.json"
-    topics.write_text('{"money_history": ["Nixon shock"]}')
+    topics.write_text('{"money_history": ["Nixon shock"]}', encoding="utf-8")
     monkeypatch.setattr(research, "WIKI_TOPICS_FILE", topics)
 
     extract = "x" * (research.WIKI_MIN_EXTRACT + 10)
@@ -192,7 +192,7 @@ def test_fetch_wikipedia_uses_wiki_headers_not_reddit_ua(monkeypatch, tmp_path):
 
 def test_fetch_wikipedia_skips_used_topics(monkeypatch, tmp_path):
     topics = tmp_path / "wiki_topics.json"
-    topics.write_text('{"money_history": ["Nixon shock"]}')
+    topics.write_text('{"money_history": ["Nixon shock"]}', encoding="utf-8")
     monkeypatch.setattr(research, "WIKI_TOPICS_FILE", topics)
 
     used = {"wiki:https://en.wikipedia.org/wiki/Nixon_shock"}
@@ -204,7 +204,7 @@ def test_fetch_wikipedia_skips_used_topics(monkeypatch, tmp_path):
 
 def test_fetch_wikipedia_rejects_short_extract(monkeypatch, tmp_path):
     topics = tmp_path / "wiki_topics.json"
-    topics.write_text('{"money_history": ["Stub article"]}')
+    topics.write_text('{"money_history": ["Stub article"]}', encoding="utf-8")
     monkeypatch.setattr(research, "WIKI_TOPICS_FILE", topics)
 
     with patch.object(research.httpx, "get", return_value=_wiki_response("Too short.")):
@@ -213,7 +213,7 @@ def test_fetch_wikipedia_rejects_short_extract(monkeypatch, tmp_path):
 
 def test_fetch_wikipedia_none_for_unlisted_niche(monkeypatch, tmp_path):
     topics = tmp_path / "wiki_topics.json"
-    topics.write_text('{"money_history": ["Nixon shock"]}')
+    topics.write_text('{"money_history": ["Nixon shock"]}', encoding="utf-8")
     monkeypatch.setattr(research, "WIKI_TOPICS_FILE", topics)
     assert research.fetch_wikipedia_story("motivation") is None
 
@@ -225,7 +225,7 @@ def test_wikipedia_seed_id_uses_url():
 
 def test_wiki_topics_config_valid_and_substantial():
     import json as _json
-    topics = _json.loads((Path(__file__).parent.parent / "config" / "wiki_topics.json").read_text())
+    topics = _json.loads((Path(__file__).parent.parent / "config" / "wiki_topics.json").read_text(encoding="utf-8"))
     assert len(topics["money_history"]) >= 150   # enough runway that daily uploads
                                                   # don't exhaust fresh topics for months
     assert all(isinstance(t, str) and t for t in topics["money_history"])
@@ -233,7 +233,7 @@ def test_wiki_topics_config_valid_and_substantial():
 
 def test_wiki_topics_no_duplicates():
     import json as _json
-    topics = _json.loads((Path(__file__).parent.parent / "config" / "wiki_topics.json").read_text())
+    topics = _json.loads((Path(__file__).parent.parent / "config" / "wiki_topics.json").read_text(encoding="utf-8"))
     money_history = topics["money_history"]
     assert len(money_history) == len(set(money_history))
 
@@ -245,7 +245,7 @@ def _niches_fixture(tmp_path, subreddits=None):
     niches.write_text(json.dumps({
         "active": "money_history",
         "niches": {"money_history": {"subreddits": subreddits or ["badeconomics"]}},
-    }))
+    }), encoding="utf-8")
     return niches
 
 
@@ -453,7 +453,7 @@ def test_wikipedia_story_prefers_fulltext_over_summary(monkeypatch, tmp_path):
     full    = "Much longer real article body with specifics. " * 40
 
     topics = tmp_path / "wiki_topics.json"
-    topics.write_text(json.dumps({"money_history": ["Some Article"]}))
+    topics.write_text(json.dumps({"money_history": ["Some Article"]}), encoding="utf-8")
     monkeypatch.setattr(research, "WIKI_TOPICS_FILE", topics)
     monkeypatch.setattr(research, "replenish_wiki_topics", lambda n: None)
     monkeypatch.setattr(research, "_unused_wiki_topic_count", lambda n, u: 99)
@@ -469,7 +469,7 @@ def test_wikipedia_story_prefers_fulltext_over_summary(monkeypatch, tmp_path):
 def test_wikipedia_story_falls_back_to_summary_when_fulltext_fails(monkeypatch, tmp_path):
     summary = "A short lead paragraph about the topic that clears the minimum. " * 4
     topics = tmp_path / "wiki_topics.json"
-    topics.write_text(json.dumps({"money_history": ["Some Article"]}))
+    topics.write_text(json.dumps({"money_history": ["Some Article"]}), encoding="utf-8")
     monkeypatch.setattr(research, "WIKI_TOPICS_FILE", topics)
     monkeypatch.setattr(research, "replenish_wiki_topics", lambda n: None)
     monkeypatch.setattr(research, "_unused_wiki_topic_count", lambda n, u: 99)
@@ -593,7 +593,7 @@ def test_get_seed_with_topic_raises_when_unresolvable(monkeypatch):
 
 def test_unused_wiki_topic_count_excludes_used(monkeypatch, tmp_path):
     topics = tmp_path / "wiki_topics.json"
-    topics.write_text('{"money_history": ["A", "B", "C"]}')
+    topics.write_text('{"money_history": ["A", "B", "C"]}', encoding="utf-8")
     monkeypatch.setattr(research, "WIKI_TOPICS_FILE", topics)
     used = {"wiki:https://en.wikipedia.org/wiki/A"}
     assert research._unused_wiki_topic_count("money_history", used) == 2
@@ -601,14 +601,14 @@ def test_unused_wiki_topic_count_excludes_used(monkeypatch, tmp_path):
 
 def test_unused_wiki_topic_count_missing_niche_is_zero(monkeypatch, tmp_path):
     topics = tmp_path / "wiki_topics.json"
-    topics.write_text('{"money_history": ["A"]}')
+    topics.write_text('{"money_history": ["A"]}', encoding="utf-8")
     monkeypatch.setattr(research, "WIKI_TOPICS_FILE", topics)
     assert research._unused_wiki_topic_count("nonexistent_niche", set()) == 0
 
 
 def test_replenish_noop_without_openai_key(monkeypatch, tmp_path):
     topics = tmp_path / "wiki_topics.json"
-    topics.write_text('{"money_history": ["A"]}')
+    topics.write_text('{"money_history": ["A"]}', encoding="utf-8")
     monkeypatch.setattr(research, "WIKI_TOPICS_FILE", topics)
     monkeypatch.setattr(research, "_load_keys", lambda: {})
     with patch.object(research.httpx, "get") as get:
@@ -621,7 +621,7 @@ def test_replenish_validates_before_trusting_gpt(monkeypatch, tmp_path):
     """GPT invents plausible-sounding titles that don't exist often enough to
     matter — only titles that actually resolve on Wikipedia get appended."""
     topics = tmp_path / "wiki_topics.json"
-    topics.write_text('{"money_history": ["Existing Topic"]}')
+    topics.write_text('{"money_history": ["Existing Topic"]}', encoding="utf-8")
     monkeypatch.setattr(research, "WIKI_TOPICS_FILE", topics)
     monkeypatch.setattr(research, "_load_keys", lambda: {"openai": "sk-real"})
 
@@ -650,7 +650,7 @@ def test_replenish_validates_before_trusting_gpt(monkeypatch, tmp_path):
         added = research.replenish_wiki_topics("money_history", count=3)
 
     assert added == 2   # only the two real articles
-    data = json.loads(topics.read_text())
+    data = json.loads(topics.read_text(encoding="utf-8"))
     assert "Real Article" in data["money_history"]
     assert "Another Real One" in data["money_history"]
     assert "Fake Nonexistent Article" not in data["money_history"]
@@ -659,7 +659,7 @@ def test_replenish_validates_before_trusting_gpt(monkeypatch, tmp_path):
 
 def test_replenish_never_duplicates_existing_topics(monkeypatch, tmp_path):
     topics = tmp_path / "wiki_topics.json"
-    topics.write_text('{"money_history": ["Already Here"]}')
+    topics.write_text('{"money_history": ["Already Here"]}', encoding="utf-8")
     monkeypatch.setattr(research, "WIKI_TOPICS_FILE", topics)
     monkeypatch.setattr(research, "_load_keys", lambda: {"openai": "sk-real"})
 
@@ -680,13 +680,13 @@ def test_replenish_never_duplicates_existing_topics(monkeypatch, tmp_path):
          patch.object(research.httpx, "get", side_effect=fake_wiki_get):
         research.replenish_wiki_topics("money_history", count=2)
 
-    data = json.loads(topics.read_text())
+    data = json.loads(topics.read_text(encoding="utf-8"))
     assert data["money_history"].count("Already Here") == 1   # not duplicated
 
 
 def test_replenish_returns_zero_and_does_not_crash_on_gpt_error(monkeypatch, tmp_path):
     topics = tmp_path / "wiki_topics.json"
-    topics.write_text('{"money_history": ["A"]}')
+    topics.write_text('{"money_history": ["A"]}', encoding="utf-8")
     monkeypatch.setattr(research, "WIKI_TOPICS_FILE", topics)
     monkeypatch.setattr(research, "_load_keys", lambda: {"openai": "sk-real"})
 
@@ -699,7 +699,7 @@ def test_replenish_returns_zero_and_does_not_crash_on_gpt_error(monkeypatch, tmp
 
 def test_fetch_wikipedia_story_triggers_replenish_when_pool_low(monkeypatch, tmp_path):
     topics = tmp_path / "wiki_topics.json"
-    topics.write_text('{"money_history": ["Nixon shock"]}')   # 1 topic < threshold
+    topics.write_text('{"money_history": ["Nixon shock"]}', encoding="utf-8")   # 1 topic < threshold
     monkeypatch.setattr(research, "WIKI_TOPICS_FILE", topics)
 
     called = []
@@ -714,7 +714,7 @@ def test_fetch_wikipedia_story_triggers_replenish_when_pool_low(monkeypatch, tmp
 def test_fetch_wikipedia_story_skips_replenish_when_pool_healthy(monkeypatch, tmp_path):
     topics = tmp_path / "wiki_topics.json"
     many = [f"Topic {i}" for i in range(research.WIKI_REPLENISH_THRESHOLD + 10)]
-    topics.write_text(json.dumps({"money_history": many}))
+    topics.write_text(json.dumps({"money_history": many}), encoding="utf-8")
     monkeypatch.setattr(research, "WIKI_TOPICS_FILE", topics)
 
     called = []
@@ -734,7 +734,7 @@ def test_replenish_prompt_asks_for_concepts_not_just_events(monkeypatch, tmp_pat
     isn't a repeat every time it's picked. Locks in that the replenishment
     prompt itself asks for both kinds, not just discrete events."""
     topics = tmp_path / "wiki_topics.json"
-    topics.write_text('{"money_history": []}')
+    topics.write_text('{"money_history": []}', encoding="utf-8")
     monkeypatch.setattr(research, "WIKI_TOPICS_FILE", topics)
     monkeypatch.setattr(research, "_load_keys", lambda: {"openai": "sk-real"})
 

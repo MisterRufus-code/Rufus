@@ -20,7 +20,7 @@ def _write_template(tmp_path, placeholder=True):
         "3": {"class_type": "VAEDecode", "inputs": {"samples": ["1", 0]}},
     }
     p = tmp_path / "hunyuan_i2v_api.json"
-    p.write_text(json.dumps(g))
+    p.write_text(json.dumps(g), encoding="utf-8")
     return p
 
 
@@ -138,7 +138,7 @@ def test_settings_reads_sampler_values_from_the_live_template(monkeypatch, tmp_p
         "129": {"class_type": "CFGGuider", "inputs": {"cfg": 1}},
         "130": {"class_type": "ModelSamplingSD3", "inputs": {"shift": 5}},
     }
-    p = tmp_path / "tpl.json"; p.write_text(_json.dumps(g))
+    p = tmp_path / "tpl.json"; p.write_text(_json.dumps(g), encoding="utf-8")
     monkeypatch.setenv("RUFUS_HUNYUAN_TEMPLATE", str(p))
 
     s = hy.settings()

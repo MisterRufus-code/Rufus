@@ -182,7 +182,7 @@ def test_video_detail_edit_form_prefilled(client):
 def test_video_detail_lists_debug_assets_when_present(client, tmp_path):
     run_dir = dashboard.DEBUG_ROOT / "runX"
     run_dir.mkdir(parents=True)
-    (run_dir / "script.txt").write_text("hello")
+    (run_dir / "script.txt").write_text("hello", encoding="utf-8")
     (run_dir / "01.png").write_bytes(b"x" * 2000)
 
     vid = db_manager.save_video(niche="finance", script_hook="Hook",
@@ -381,7 +381,7 @@ def test_debug_file_404_for_missing_run(client):
 def test_debug_file_blocks_path_traversal(client, tmp_path):
     run_dir = dashboard.DEBUG_ROOT / "runZ"
     run_dir.mkdir(parents=True)
-    (dashboard.DEBUG_ROOT / "secret.txt").write_text("nope")
+    (dashboard.DEBUG_ROOT / "secret.txt").write_text("nope", encoding="utf-8")
     r = client.get("/debug/runZ/../secret.txt")
     assert r.status_code in (404, 403)
 
@@ -488,7 +488,7 @@ def test_failures_lists_orphaned_debug_run_not_in_db(client, tmp_path):
     has NO videos row — it must still show up here, unlike everywhere else."""
     run_dir = dashboard.DEBUG_ROOT / "crashed-run-1"
     run_dir.mkdir(parents=True)
-    (run_dir / "script.txt").write_text("This script never made it to render.")
+    (run_dir / "script.txt").write_text("This script never made it to render.", encoding="utf-8")
     (run_dir / "01.png").write_bytes(b"x" * 1000)
 
     r = client.get("/failures")
@@ -503,7 +503,7 @@ def test_failures_excludes_runs_that_did_reach_db(client, tmp_path):
     run, not a failure — must not appear in the crashed-runs section."""
     run_dir = dashboard.DEBUG_ROOT / "completed-run"
     run_dir.mkdir(parents=True)
-    (run_dir / "script.txt").write_text("finished fine")
+    (run_dir / "script.txt").write_text("finished fine", encoding="utf-8")
     db_manager.save_video(niche="finance", script_hook="Hook", scene_desc="s",
                           video_file="v.mp4", score=9, run_id="completed-run")
 
@@ -566,7 +566,7 @@ def test_failures_phase_filter(client):
 def test_failures_escapes_xss_in_script_preview(client, tmp_path):
     run_dir = dashboard.DEBUG_ROOT / "xss-run"
     run_dir.mkdir(parents=True)
-    (run_dir / "script.txt").write_text("<script>alert(1)</script>")
+    (run_dir / "script.txt").write_text("<script>alert(1)</script>", encoding="utf-8")
     r = client.get("/failures")
     assert b"<script>alert(1)</script>" not in r.data
     assert b"&lt;script&gt;" in r.data
@@ -797,7 +797,7 @@ def test_dashboard_runs_single_threaded():
     """Audit H3: _scoped_env's env mutation is only safe when requests are
     serialized — Flask 3.x defaults threaded=True, so the explicit
     threaded=False in app.run() is load-bearing. Guard it textually."""
-    src = (Path(__file__).parent.parent / "scripts" / "dashboard.py").read_text()
+    src = (Path(__file__).parent.parent / "scripts" / "dashboard.py").read_text(encoding="utf-8")
     assert "threaded=False" in src
 
 
@@ -952,6 +952,13 @@ def test_run_in_progress_true_when_lock_held(tmp_path, monkeypatch):
 def test_launch_run_builds_expected_command(tmp_path, monkeypatch):
     import subprocess
     monkeypatch.setattr(dashboard, "ROOT", tmp_path)
+    # RUFUS_LOG_DIR, not dashboard.ROOT — and the difference is the bug that
+    # was here. The launchers built `ROOT / "logs"` by hand while AGENTS.md
+    # says never to hardcode a path paths.py already resolves, so a box with
+    # RUFUS_LOG_DIR set had its dashboard-launched runs write somewhere the
+    # owner was not looking. Asserting through the documented override is what
+    # proves the launcher now honours it.
+    monkeypatch.setenv("RUFUS_LOG_DIR", str(tmp_path / "logs"))
     dashboard._LAUNCHED.clear()
     captured = {}
     class FakeProc:
@@ -1205,7 +1212,7 @@ def test_settings_load_survives_missing_file(tmp_path, monkeypatch):
 
 def test_settings_load_survives_corrupt_file(tmp_path, monkeypatch):
     p = tmp_path / "settings.json"
-    p.write_text("{ not json")
+    p.write_text("{ not json", encoding="utf-8")
     monkeypatch.setattr(dashboard, "SETTINGS_FILE", p)
     assert dashboard._load_settings() == {}
 

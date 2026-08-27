@@ -73,7 +73,7 @@ def test_run_report_collects_script_and_prompts(monkeypatch, tmp_path):
 def test_run_report_never_raises_on_bad_path(monkeypatch, tmp_path):
     """A reporting failure must never break a render."""
     blocker = tmp_path / "blocked"
-    blocker.write_text("i am a file, not a directory")
+    blocker.write_text("i am a file, not a directory", encoding="utf-8")
     monkeypatch.setenv("RUFUS_DEBUG_DIR", str(blocker))
     assert paths.write_run_report("run-x", script="s") is None
 

@@ -24,11 +24,11 @@ def test_flux_instruction_requires_locking_to_beats_specific_anchor(tmp_path, mo
     specific noun/number in each beat, not drift to a generic related scene —
     this is the fix for 'images don't match what's being said'."""
     keys_file = tmp_path / "keys.json"
-    keys_file.write_text(json.dumps({"openai": "sk-test-key-1234567890"}))
+    keys_file.write_text(json.dumps({"openai": "sk-test-key-1234567890"}), encoding="utf-8")
     monkeypatch.setattr(main, "CONFIG_DIR", tmp_path)
 
     niches_file = tmp_path / "niches.json"
-    niches_file.write_text(json.dumps({"niches": {"money_history": {"video_source": "comfy"}}}))
+    niches_file.write_text(json.dumps({"niches": {"money_history": {"video_source": "comfy"}}}), encoding="utf-8")
     monkeypatch.setattr(main, "NICHES_FILE", niches_file)
     monkeypatch.setenv("RUFUS_VIDEO_SOURCE", "comfy")
 
@@ -60,11 +60,11 @@ def test_flux_instruction_steers_away_from_hard_to_render_faces(tmp_path, monkey
     worst (uncanny/distorted) — the instruction must tell GPT to avoid them and
     keep people mid-distance / three-quarter. Fix for 'the faces are scary'."""
     keys_file = tmp_path / "keys.json"
-    keys_file.write_text(json.dumps({"openai": "sk-test-key-1234567890"}))
+    keys_file.write_text(json.dumps({"openai": "sk-test-key-1234567890"}), encoding="utf-8")
     monkeypatch.setattr(main, "CONFIG_DIR", tmp_path)
 
     niches_file = tmp_path / "niches.json"
-    niches_file.write_text(json.dumps({"niches": {"money_history": {"video_source": "comfy"}}}))
+    niches_file.write_text(json.dumps({"niches": {"money_history": {"video_source": "comfy"}}}), encoding="utf-8")
     monkeypatch.setattr(main, "NICHES_FILE", niches_file)
     monkeypatch.setenv("RUFUS_VIDEO_SOURCE", "comfy")
 
@@ -100,11 +100,11 @@ def test_flux_instruction_pushes_illustration_over_photorealism(tmp_path, monkey
     must explicitly demand flat illustration technique and ban the
     photographic/photorealistic alternative it used to require."""
     keys_file = tmp_path / "keys.json"
-    keys_file.write_text(json.dumps({"openai": "sk-test-key-1234567890"}))
+    keys_file.write_text(json.dumps({"openai": "sk-test-key-1234567890"}), encoding="utf-8")
     monkeypatch.setattr(main, "CONFIG_DIR", tmp_path)
 
     niches_file = tmp_path / "niches.json"
-    niches_file.write_text(json.dumps({"niches": {"money_history": {"video_source": "comfy"}}}))
+    niches_file.write_text(json.dumps({"niches": {"money_history": {"video_source": "comfy"}}}), encoding="utf-8")
     monkeypatch.setattr(main, "NICHES_FILE", niches_file)
     monkeypatch.setenv("RUFUS_VIDEO_SOURCE", "comfy")
 
@@ -143,7 +143,7 @@ def test_flux_instruction_includes_character_clause_when_niche_has_one(tmp_path,
     every beat's prompt describes the same person — the text-level layer of
     the "fixed character across scenes" feature."""
     keys_file = tmp_path / "keys.json"
-    keys_file.write_text(json.dumps({"openai": "sk-test-key-1234567890"}))
+    keys_file.write_text(json.dumps({"openai": "sk-test-key-1234567890"}), encoding="utf-8")
     monkeypatch.setattr(main, "CONFIG_DIR", tmp_path)
 
     niches_file = tmp_path / "niches.json"
@@ -154,7 +154,7 @@ def test_flux_instruction_includes_character_clause_when_niche_has_one(tmp_path,
             "name": "the Chronicler",
             "description": "grey hair, round spectacles, brown leather satchel",
         },
-    }}}))
+    }}}), encoding="utf-8")
     monkeypatch.setattr(main, "NICHES_FILE", niches_file)
     monkeypatch.setenv("RUFUS_VIDEO_SOURCE", "comfy")
     monkeypatch.delenv("RUFUS_CHARACTER_MODE", raising=False)
@@ -204,11 +204,11 @@ def test_flux_instruction_omits_character_clause_without_niche_config(tmp_path, 
     must get an instruction identical in shape to before this feature —
     no stray clause, no crash."""
     keys_file = tmp_path / "keys.json"
-    keys_file.write_text(json.dumps({"openai": "sk-test-key-1234567890"}))
+    keys_file.write_text(json.dumps({"openai": "sk-test-key-1234567890"}), encoding="utf-8")
     monkeypatch.setattr(main, "CONFIG_DIR", tmp_path)
 
     niches_file = tmp_path / "niches.json"
-    niches_file.write_text(json.dumps({"niches": {"money_history": {"video_source": "comfy"}}}))
+    niches_file.write_text(json.dumps({"niches": {"money_history": {"video_source": "comfy"}}}), encoding="utf-8")
     monkeypatch.setattr(main, "NICHES_FILE", niches_file)
     monkeypatch.setenv("RUFUS_VIDEO_SOURCE", "comfy")
 
@@ -247,7 +247,7 @@ def test_flux_instruction_omits_character_clause_without_niche_config(tmp_path, 
 
 def test_sd_instruction_includes_character_clause_when_niche_has_one(tmp_path, monkeypatch):
     keys_file = tmp_path / "keys.json"
-    keys_file.write_text(json.dumps({"openai": "sk-test-key-1234567890"}))
+    keys_file.write_text(json.dumps({"openai": "sk-test-key-1234567890"}), encoding="utf-8")
     monkeypatch.setattr(main, "CONFIG_DIR", tmp_path)
 
     niches_file = tmp_path / "niches.json"
@@ -258,7 +258,7 @@ def test_sd_instruction_includes_character_clause_when_niche_has_one(tmp_path, m
             "name": "the Strategist",
             "description": "sharp asymmetric bob, charcoal blazer",
         },
-    }}}))
+    }}}), encoding="utf-8")
     monkeypatch.setattr(main, "NICHES_FILE", niches_file)
     monkeypatch.delenv("RUFUS_VIDEO_SOURCE", raising=False)
     monkeypatch.delenv("RUFUS_CHARACTER_MODE", raising=False)
@@ -295,7 +295,7 @@ def test_sd_instruction_omits_character_clause_by_default(tmp_path, monkeypatch)
     """Production default: every SD niche ships its character disabled, so
     a real run's prompt must carry no trace of it until the owner opts in."""
     keys_file = tmp_path / "keys.json"
-    keys_file.write_text(json.dumps({"openai": "sk-test-key-1234567890"}))
+    keys_file.write_text(json.dumps({"openai": "sk-test-key-1234567890"}), encoding="utf-8")
     monkeypatch.setattr(main, "CONFIG_DIR", tmp_path)
 
     niches_file = tmp_path / "niches.json"
@@ -306,7 +306,7 @@ def test_sd_instruction_omits_character_clause_by_default(tmp_path, monkeypatch)
             "name": "the Strategist",
             "description": "sharp asymmetric bob, charcoal blazer",
         },
-    }}}))
+    }}}), encoding="utf-8")
     monkeypatch.setattr(main, "NICHES_FILE", niches_file)
     monkeypatch.delenv("RUFUS_VIDEO_SOURCE", raising=False)
 

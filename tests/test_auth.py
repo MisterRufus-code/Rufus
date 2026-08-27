@@ -32,7 +32,7 @@ def users_file(tmp_path, monkeypatch):
         {"name": "dani",  "role": "owner",   "token": OWNER_TOKEN},
         {"name": "james", "role": "partner", "token": PARTNER_TOKEN},
         {"name": "guest", "role": "viewer",  "token": VIEWER_TOKEN},
-    ]}))
+    ]}), encoding="utf-8")
     monkeypatch.setattr(auth, "USERS_FILE", f)
     monkeypatch.delenv("RUFUS_AUTH_DISABLED", raising=False)
     return f
@@ -79,7 +79,7 @@ def test_known_tokens_resolve_to_their_roles(users_file):
 
 def test_corrupt_users_file_falls_back_rather_than_crashing(tmp_path, monkeypatch):
     bad = tmp_path / "users.json"
-    bad.write_text("{ this is not json")
+    bad.write_text("{ this is not json", encoding="utf-8")
     monkeypatch.setattr(auth, "USERS_FILE", bad)
     assert auth._load_users() == []
 
@@ -276,7 +276,7 @@ def test_base_url_reads_the_saved_tailnet_url(monkeypatch, tmp_path):
     across process/terminal boundaries."""
     monkeypatch.delenv("RUFUS_DASHBOARD_URL", raising=False)
     f = tmp_path / "dashboard_url.txt"
-    f.write_text("https://rufus.tail635959.ts.net/\n")
+    f.write_text("https://rufus.tail635959.ts.net/\n", encoding="utf-8")
     monkeypatch.setattr(auth, "DASHBOARD_URL_FILE", f)
     assert auth._base_url() == "https://rufus.tail635959.ts.net"
 
@@ -363,14 +363,14 @@ def test_google_oauth_disabled_without_config_file(tmp_path, monkeypatch):
 
 def test_google_oauth_enabled_once_configured(tmp_path, monkeypatch):
     f = tmp_path / "google_oauth.json"
-    f.write_text(json.dumps({"client_id": "x", "client_secret": "y"}))
+    f.write_text(json.dumps({"client_id": "x", "client_secret": "y"}), encoding="utf-8")
     monkeypatch.setattr(auth, "GOOGLE_OAUTH_FILE", f)
     assert auth.google_oauth_enabled() is True
 
 
 def test_google_oauth_disabled_when_incomplete(tmp_path, monkeypatch):
     f = tmp_path / "google_oauth.json"
-    f.write_text(json.dumps({"client_id": "x"}))   # no client_secret
+    f.write_text(json.dumps({"client_id": "x"}), encoding="utf-8")   # no client_secret
     monkeypatch.setattr(auth, "GOOGLE_OAUTH_FILE", f)
     assert auth.google_oauth_enabled() is False
 
@@ -456,7 +456,7 @@ def test_google_callback_404s_when_not_configured(client):
 
 def test_google_start_redirects_to_google_when_configured(client, tmp_path, monkeypatch):
     f = tmp_path / "google_oauth.json"
-    f.write_text(json.dumps({"client_id": "cid", "client_secret": "secret"}))
+    f.write_text(json.dumps({"client_id": "cid", "client_secret": "secret"}), encoding="utf-8")
     monkeypatch.setattr(auth, "GOOGLE_OAUTH_FILE", f)
     r = client.get("/auth/google/start")
     assert r.status_code == 302
@@ -465,7 +465,7 @@ def test_google_start_redirects_to_google_when_configured(client, tmp_path, monk
 
 def test_google_callback_rejects_bad_state(client, tmp_path, monkeypatch):
     f = tmp_path / "google_oauth.json"
-    f.write_text(json.dumps({"client_id": "cid", "client_secret": "secret"}))
+    f.write_text(json.dumps({"client_id": "cid", "client_secret": "secret"}), encoding="utf-8")
     monkeypatch.setattr(auth, "GOOGLE_OAUTH_FILE", f)
     r = client.get("/auth/google/callback?state=bogus&code=abc")
     assert r.status_code == 302 and "/login" in r.headers["Location"]
@@ -473,7 +473,7 @@ def test_google_callback_rejects_bad_state(client, tmp_path, monkeypatch):
 
 def test_google_callback_rejects_denied_consent(client, tmp_path, monkeypatch):
     f = tmp_path / "google_oauth.json"
-    f.write_text(json.dumps({"client_id": "cid", "client_secret": "secret"}))
+    f.write_text(json.dumps({"client_id": "cid", "client_secret": "secret"}), encoding="utf-8")
     monkeypatch.setattr(auth, "GOOGLE_OAUTH_FILE", f)
     r = client.get("/auth/google/callback?error=access_denied")
     assert r.status_code == 302 and "/login" in r.headers["Location"]
@@ -481,7 +481,7 @@ def test_google_callback_rejects_denied_consent(client, tmp_path, monkeypatch):
 
 def test_google_callback_signs_in_a_recognized_email(client, tmp_path, monkeypatch):
     f = tmp_path / "google_oauth.json"
-    f.write_text(json.dumps({"client_id": "cid", "client_secret": "secret"}))
+    f.write_text(json.dumps({"client_id": "cid", "client_secret": "secret"}), encoding="utf-8")
     monkeypatch.setattr(auth, "GOOGLE_OAUTH_FILE", f)
     auth.add_user("googleuser", "partner", google_email="partner@example.com")
 
@@ -507,7 +507,7 @@ def test_google_callback_signs_in_a_recognized_email(client, tmp_path, monkeypat
 
 def test_google_callback_refuses_an_unrecognized_email(client, tmp_path, monkeypatch):
     f = tmp_path / "google_oauth.json"
-    f.write_text(json.dumps({"client_id": "cid", "client_secret": "secret"}))
+    f.write_text(json.dumps({"client_id": "cid", "client_secret": "secret"}), encoding="utf-8")
     monkeypatch.setattr(auth, "GOOGLE_OAUTH_FILE", f)
     state = auth.new_oauth_state()
 
@@ -530,7 +530,7 @@ def test_google_callback_refuses_an_unrecognized_email(client, tmp_path, monkeyp
 
 def test_google_callback_refuses_unverified_email(client, tmp_path, monkeypatch):
     f = tmp_path / "google_oauth.json"
-    f.write_text(json.dumps({"client_id": "cid", "client_secret": "secret"}))
+    f.write_text(json.dumps({"client_id": "cid", "client_secret": "secret"}), encoding="utf-8")
     monkeypatch.setattr(auth, "GOOGLE_OAUTH_FILE", f)
     auth.add_user("googleuser", "partner", google_email="partner@example.com")
     state = auth.new_oauth_state()
@@ -693,7 +693,7 @@ def thumbs(tmp_path, monkeypatch):
     d = tmp_path / "thumbs"
     d.mkdir()
     (d / "a.png").write_bytes(b"x" * 2048)
-    (d / "a.txt").write_text("PROMPT: a cracked hourglass\nSEED: 1\n")
+    (d / "a.txt").write_text("PROMPT: a cracked hourglass\nSEED: 1\n", encoding="utf-8")
     monkeypatch.setattr(paths, "thumbnails_dir", lambda: d)
     return d
 

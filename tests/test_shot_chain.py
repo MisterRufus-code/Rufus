@@ -96,7 +96,7 @@ def _graph(denoise=1.0, placeholder=True, load_image=True):
 
 def _install(tmp_path, monkeypatch, graph):
     p = tmp_path / "shot_chain_api.json"
-    p.write_text(json.dumps(graph))
+    p.write_text(json.dumps(graph), encoding="utf-8")
     monkeypatch.setenv("RUFUS_SHOT_CHAIN_TEMPLATE", str(p))
     monkeypatch.delenv("RUFUS_SHOT_CHAIN", raising=False)
     return p
@@ -183,7 +183,7 @@ def test_starts_from_loaded_image_still_works():
 
 # ── The wiring in comfy_client ──────────────────────────────────────────────
 
-_SRC = (Path(__file__).parent.parent / "scripts" / "comfy_client.py").read_text()
+_SRC = (Path(__file__).parent.parent / "scripts" / "comfy_client.py").read_text(encoding="utf-8")
 
 
 def test_comfy_client_only_chains_on_the_first_attempt():
