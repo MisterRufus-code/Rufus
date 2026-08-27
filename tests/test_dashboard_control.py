@@ -1388,3 +1388,64 @@ def test_no_log_path_is_built_by_hand():
     assert 'ROOT / "logs"' not in src, (
         "a log path is being built by hand again; paths.log_dir() resolves it "
         "and honours RUFUS_LOG_DIR")
+
+
+# ── a home page rather than the top of a long scroll ────────────────────────
+#
+# The index was the review queue with everything else stacked underneath: a
+# flow bar, a banner, advice, the queue, a topic form, filters, stat cards, a
+# sparkline and two tables. Every block earns its place and none of them
+# answers the question somebody opening the dashboard actually has, which is
+# "where do I go".
+
+def test_the_home_page_opens_with_somewhere_to_go(client):
+    page = client.get("/").get_data(as_text=True)
+    body = page.split("</header>", 1)[1]
+    assert 'class="tiles"' in body
+    assert body.index('class="tiles"') < body.index("Score trend")
+
+
+def test_every_tile_is_a_real_link(client):
+    """Real anchors, so they tab, and so a middle click opens one in a new tab
+    the way a link is expected to."""
+    import re
+    page = client.get("/").get_data(as_text=True)
+    tiles = re.findall(r'<a class="tile[^"]*" href="([^"]+)"', page)
+    assert len(tiles) >= 6
+    assert all(h.startswith(("/", "#")) for h in tiles)
+
+
+def test_every_tile_says_what_it_is_for(client):
+    """A grid of nouns is a menu. What makes it a home page is that each one
+    says what it does before you click it."""
+    import re
+    page = client.get("/").get_data(as_text=True)
+    assert len(re.findall(r'class="tile-b"', page)) >= 6
+
+
+def test_a_tile_count_is_in_the_label_and_not_only_in_the_badge():
+    """A badge alone is a fact only sighted users get, so the number goes in
+    the aria-label too — and the label reads as a sentence rather than as a
+    noun with a digit stuck to it."""
+    src = Path(dashboard.__file__).read_text(encoding="utf-8")
+    block = src.split("def _home_tiles(", 1)[1][:1200]
+    assert 'label = f"{title}, {n} waiting"' in block
+    assert "aria-label=" in block
+
+
+def test_the_tiles_use_the_group_hues_the_palette_already_had(client):
+    """The nav has had --make, --review, --measure and --system since it was
+    grouped, and nothing used them at this size. A tile you can find by its
+    colour before reading it is the reason to have four hues rather than one."""
+    page = client.get("/").get_data(as_text=True)
+    for group in ("t-make", "t-review", "t-measure", "t-system"):
+        assert group in page, group
+
+
+def test_a_tile_a_viewer_may_not_open_is_not_offered(client):
+    """The same rule as the nav: a link they would only get a 403 from is
+    worse than no link."""
+    import re
+    src = Path(dashboard.__file__).read_text(encoding="utf-8")
+    block = src.split("def _home_tiles(", 1)[1][:900]
+    assert "auth.can" in block

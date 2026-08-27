@@ -1542,6 +1542,33 @@ PAGE_STYLE = """<!doctype html><html><head><meta charset="utf-8">
      different from a badge that is simply absent and could mean anything. */
   .flow-n.zero { background: transparent; color: var(--dim); font-weight: 400; }
 
+  /* THE HOME GRID. Auto-fit rather than a fixed column count: the same markup
+     is one column on the phone this is actually reviewed from and four on a
+     desktop, without a media query per breakpoint. */
+  .tiles { display: grid; gap: 12px; margin: 0 0 20px;
+           grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); }
+  .tile { display: flex; flex-direction: column; gap: 4px;
+          padding: 14px 16px; border-radius: var(--radius);
+          border: 1px solid var(--border); background: var(--surface);
+          box-shadow: var(--shadow); text-decoration: none; color: inherit;
+          /* The group's hue as an edge rather than a fill: it names the tile
+             without competing with the words in it, and it survives the light
+             theme where a filled panel would have to fight for contrast. */
+          border-left: 3px solid var(--tone); }
+  .tile:hover { border-color: var(--tone); background: var(--raised); }
+  .tile-t { display: flex; align-items: center; gap: 8px; font-size: 15px;
+            font-weight: 600; }
+  .tile-b { font-size: 13px; color: var(--dim); }
+  /* The number is in the label too, for anything that does not render colour
+     or size — a badge alone is a fact only sighted users get. */
+  .tile-n { min-width: 20px; padding: 1px 7px; border-radius: 999px;
+            font-size: 12px; font-weight: 600;
+            background: var(--tone); color: #0b1220; }
+  .tile.t-make    { --tone: var(--make); }
+  .tile.t-review  { --tone: var(--review); }
+  .tile.t-measure { --tone: var(--measure); }
+  .tile.t-system  { --tone: var(--system); }
+
   .filters { margin: 12px 0; }
   .filters a { margin-right: 10px; font-size: 13px; text-decoration: none; }
   .back { text-decoration: none; font-size: 14px; }
@@ -2087,6 +2114,91 @@ def _msg_banner() -> str:
     return ""
 
 
+# ── a home page rather than a top-of-a-long-scroll ───────────────────────────
+#
+# The index was the review queue with everything else stacked underneath it: a
+# flow bar, a banner, advice, the queue, a topic form, filters, stat cards, a
+# sparkline and two tables. Every block earns its place and none of them
+# answers the question somebody opening the dashboard actually has, which is
+# "where do I go".
+#
+# So the page opens with the places you can go, as tiles: what each one is for,
+# and the number waiting behind it where there is one. The detail blocks stay
+# exactly where they were, below.
+#
+# COLOUR CARRIES THE GROUP, which the palette was already built for — the nav
+# has had --make, --review, --measure and --system since it was grouped, and
+# nothing used them at this size. A tile you can find by its colour before you
+# have read it is the whole reason to have four hues rather than one accent.
+#
+# ACCESSIBLE MEANS THE ORDINARY THINGS. Real anchors, so they tab and they open
+# in a new tab if somebody wants that; the count in the text rather than only
+# in a coloured dot; aria-labels that read as a sentence; and contrast that
+# survives the light theme, where these hues go weak against white and the
+# palette already compensates.
+
+_HOME_TILES = (
+    # (href, title, what it is for, group, count key)
+    ("/create",    "Make a video",      "Five decisions, one at a time",
+     "make",    "create"),
+    ("/scripts",   "Scripts waiting",   "Three per topic, pick one",
+     "make",    "/scripts"),
+    ("/galleries", "Pictures waiting",  "Two draws, swap shot by shot",
+     "make",    "/galleries"),
+    ("/voice",     "Reads waiting",     "Three takes, pick the pace",
+     "make",    "/voice"),
+    ("/",          "Awaiting review",   "Finished videos, approve or reject",
+     "review",  "pending"),
+    ("/gallery",   "Gallery",           "Everything made, newest first",
+     "review",  None),
+    ("/measure",   "Measure",           "What to change, and whether it worked",
+     "measure", None),
+    ("/scout",     "Scout",             "What the neighbours did that worked",
+     "measure", "/scout"),
+    ("/styles",    "Look and narrator", "Style, voices, workflow bench",
+     "system",  None),
+    ("/settings",  "Settings",          "Keys, schedule, channels",
+     "system",  None),
+)
+
+
+def _home_tile_counts(stats: dict) -> dict:
+    counts = {"pending": stats.get("pending", 0)}
+    try:
+        flow = _flow_counts()
+        counts.update(flow)
+        import db_manager as dbm
+        counts["create"] = len(dbm.projects(status="open", limit=20))
+    except Exception:
+        pass
+    return counts
+
+
+def _home_tiles(stats: dict) -> str:
+    allowed = {href for href, _l, perm in NAV_ITEMS if auth.can(perm)}
+    counts = _home_tile_counts(stats)
+    cells = []
+    for href, title, blurb, group, key in _HOME_TILES:
+        # "/" is the page we are on; the others have to be reachable.
+        if href != "/" and href not in allowed:
+            continue
+        n = counts.get(key) if key else None
+        badge = ""
+        label = title
+        if n:
+            badge = f'<span class="tile-n">{n}</span>'
+            label = f"{title}, {n} waiting"
+        target = "#review" if href == "/" else href
+        cells.append(
+            f'<a class="tile t-{group}" href="{target}" '
+            f'aria-label="{_esc(label)}. {_esc(blurb)}">'
+            f'<span class="tile-t">{_esc(title)}{badge}</span>'
+            f'<span class="tile-b">{_esc(blurb)}</span></a>')
+    if not cells:
+        return ""
+    return f'<div class="tiles">{"".join(cells)}</div>'
+
+
 @app.route("/")
 def index():
     channel = request.args.get("channel") or None
@@ -2184,6 +2296,7 @@ def index():
     # them. Every other block here answers a question you have to already have.
     body = f"""
     {_flow_bar()}
+    {_home_tiles(stats)}
     {_msg_banner()}
     {_failure_notice()}
     {advice_html}
