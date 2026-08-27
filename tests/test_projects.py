@@ -297,3 +297,129 @@ def test_abandoning_deletes_nothing(client):
     client.post(f"/create/{pid}/abandon")
     assert db_manager.project(pid)["status"] == "abandoned"
     assert len(db_manager.project_topics(pid)) == 3
+
+
+# ── going back has to give the options back ─────────────────────────────────
+#
+# "When you go back it doesn't save." Forgetting FORWARD was right — pick a
+# different script and the gallery drawn for the old one is pictures of a
+# different video. But the first version cleared the project's pointers and
+# left the options themselves marked chosen and rejected, and every stage lists
+# what is still pending. So going back landed on a stage that looked empty and
+# offered to regenerate: three scripts already paid for, invisible, and the
+# only button on screen spending money to write three more.
+
+def test_going_back_to_the_script_stage_shows_the_scripts_again(db):
+    pid = _project(db)
+    ids = [db.save_candidate(proposal_id=None, project_id=pid, channel="c",
+                             niche="n", topic="T", hook_style=s, hook="h",
+                             script="s", score=8)
+           for s in ("counterintuitive", "shocking_stat", "warning")]
+    db.choose_candidate(ids[0])
+    db.update_project(pid, script_id=ids[0], script_file="s.txt",
+                      stage="gallery")
+    assert db.candidates(project_id=pid, status="pending") == []
+
+    db.clear_project_from(pid, "script")
+    back = db.candidates(project_id=pid, status="pending")
+    assert len(back) == 3, "the three you already paid for must come back"
+    assert db.project(pid)["script_id"] is None
+
+
+def test_going_back_to_the_voice_stage_shows_the_takes_again(db):
+    pid = _project(db)
+    sid = db.save_gallery_set(candidate_id=1, channel="c", niche="n",
+                              topic="T", script_file="s.txt", n_variants=2)
+    tids = [db.save_voice_take(set_id=sid, channel="c", topic="T", tone=t,
+                               text="x", path=f"/{t}.mp3")
+            for t in ("curiosity", "tension", "weight")]
+    db.choose_voice_take(tids[1])
+    db.update_project(pid, gallery_id=sid, voice_id=tids[1], stage="render")
+
+    db.clear_project_from(pid, "voice")
+    assert len(db.voice_takes(set_id=sid, status="pending")) == 3
+    assert db.project(pid)["voice_id"] is None
+    assert db.project(pid)["gallery_id"] == sid, "the pictures were decided before"
+
+
+def test_going_back_to_the_gallery_keeps_the_per_shot_picks(db):
+    """Re-opening the SET is what makes it choosable again. Wiping which
+    picture won each shot would throw away the one part of that stage that
+    took real attention."""
+    pid = _project(db)
+    sid = db.save_gallery_set(candidate_id=1, channel="c", niche="n",
+                              topic="T", script_file="s.txt", n_variants=2)
+    for v in range(2):
+        for b in range(3):
+            db.save_gallery_image(set_id=sid, variant=v, beat_index=b,
+                                  path=f"/v{v}_{b}.png", prompt="p", seed=1)
+    db.choose_gallery_base(sid, 1)
+    db.swap_gallery_beat(sid, 0, 0)
+    db.decide_gallery_set(sid, "chosen")
+    db.update_project(pid, gallery_id=sid, stage="voice")
+
+    db.clear_project_from(pid, "gallery")
+    assert db.gallery_sets(status="pending", limit=10)[0]["id"] == sid
+    picks = {r["beat_index"]: r["variant"]
+             for r in db.gallery_images(sid, status="chosen")}
+    assert picks == {0: 0, 1: 1, 2: 1}, "the shots you chose are still chosen"
+
+
+def test_going_back_to_the_topic_shows_the_topics_again(db):
+    pid = _project(db)
+    db.save_project_topics(pid, [{"title": "A"}, {"title": "B"},
+                                 {"title": "C"}])
+    opts = db.project_topics(pid)
+    db.choose_project_topic(opts[0]["id"])
+    db.update_project(pid, title="A", stage="script")
+
+    db.clear_project_from(pid, "topic")
+    assert len(db.project_topics(pid)) == 3
+    assert db.project(pid)["title"] is None
+
+
+def test_going_back_never_costs_money(db, monkeypatch):
+    """The whole complaint: the only button on an emptied stage was one that
+    spends. Nothing about going back may need a model call."""
+    import script_candidates
+    import topic_options
+    for mod, fn in ((script_candidates, "write_for"),
+                    (topic_options, "suggest")):
+        monkeypatch.setattr(mod, fn, lambda *a, **k: (_ for _ in ()).throw(
+            AssertionError(f"{fn} must not run when going back")))
+    pid = _project(db)
+    db.save_project_topics(pid, [{"title": "A"}, {"title": "B"}])
+    db.update_project(pid, title="A", script_id=1, script_file="s.txt",
+                      stage="gallery")
+    db.clear_project_from(pid, "script")
+    db.clear_project_from(pid, "topic")
+
+
+def test_choosing_a_wizard_script_rejects_its_siblings(db):
+    """SIBLINGS SHARE A PROPOSAL *OR* A PROJECT, and only the first was
+    checked. The wizard writes candidates with a project and no proposal, so
+    choosing one rejected nothing: all three stayed pending, the stage still
+    offered them, and the preference pair — the entire reason the losers are
+    kept — was never recorded."""
+    pid = _project(db)
+    ids = [db.save_candidate(proposal_id=None, project_id=pid, channel="c",
+                             niche="n", topic="T", hook_style=s, hook="h",
+                             script="s", score=8)
+           for s in ("a", "b", "c")]
+    db.choose_candidate(ids[1])
+    rows = {r["id"]: r["status"] for r in db.candidates(project_id=pid)}
+    assert rows[ids[1]] == "chosen"
+    assert rows[ids[0]] == rows[ids[2]] == "rejected"
+
+
+def test_another_projects_scripts_are_not_siblings(db):
+    a, b = _project(db), _project(db)
+    ia = db.save_candidate(proposal_id=None, project_id=a, channel="c",
+                           niche="n", topic="A", hook_style="x", hook="h",
+                           script="s", score=8)
+    ib = db.save_candidate(proposal_id=None, project_id=b, channel="c",
+                           niche="n", topic="B", hook_style="x", hook="h",
+                           script="s", score=8)
+    db.choose_candidate(ia)
+    assert db.candidates(project_id=b)[0]["status"] == "pending"
+    assert ib

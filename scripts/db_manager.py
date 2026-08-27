@@ -719,15 +719,21 @@ def choose_candidate(candidate_id: int) -> dict | None:
         chosen = dict(zip(_CANDIDATE_COLS, row))
         c.execute("UPDATE script_candidates SET status='chosen', "
                   "decided_at=datetime('now') WHERE id=?", (int(candidate_id),))
-        # Siblings share the proposal. A candidate written with no proposal
-        # behind it (a manual topic) has no siblings to reject, and NULL = NULL
-        # is not true in SQL — so guard rather than let the UPDATE quietly
-        # match nothing and call that a set of one.
-        if chosen["proposal_id"] is not None:
-            c.execute("UPDATE script_candidates SET status='rejected', "
-                      "decided_at=datetime('now') "
-                      "WHERE proposal_id=? AND id<>? AND status='pending'",
-                      (int(chosen["proposal_id"]), int(candidate_id)))
+        # SIBLINGS SHARE A PROPOSAL *OR* A PROJECT, and only the first was
+        # checked. The wizard writes candidates with a project and no proposal,
+        # so choosing one rejected nothing: all three stayed pending, the stage
+        # still offered them, and the preference pair — the entire reason the
+        # losers are kept — was never recorded. NULL = NULL is not true in SQL,
+        # which is why this has to name the column that is actually set rather
+        # than matching on both and hoping.
+        for column, value in (("proposal_id", chosen["proposal_id"]),
+                              ("project_id", chosen.get("project_id"))):
+            if value is None:
+                continue
+            c.execute(f"UPDATE script_candidates SET status='rejected', "
+                      f"decided_at=datetime('now') "
+                      f"WHERE {column}=? AND id<>? AND status='pending'",
+                      (int(value), int(candidate_id)))
         chosen["status"] = "chosen"
         return chosen
 
@@ -790,27 +796,54 @@ def update_project(project_id: int, **fields) -> bool:
 
 
 def clear_project_from(project_id: int, stage: str) -> None:
-    """Forget every decision at `stage` and after it.
+    """Go back to `stage`: undecide it and everything after it.
 
-    THIS IS WHAT MAKES GOING BACK HONEST. Re-open the script stage, pick a
-    different script, and the gallery drawn for the old one is not merely
-    stale — it is pictures of a script that is no longer being made. Leaving it
-    attached would render the video the owner just decided against.
+    TWO HALVES, AND THE FIRST VERSION ONLY HAD ONE. Forgetting forward is
+    right — pick a different script and the gallery drawn for the old one is
+    not stale, it is pictures of a different video. But it cleared the
+    project's POINTERS and left the options themselves marked chosen and
+    rejected, and every stage lists what is still `pending`. So going back
+    landed on a stage that looked empty and offered to regenerate: three
+    scripts you had already paid for, invisible, and the only button on screen
+    spending money to write three more. The owner hit it immediately —
+    "when you go back it doesn't save".
+
+    So going back also RE-OPENS. The options come back exactly as they were,
+    your previous pick among them, and you choose again — the same one or a
+    different one — without buying anything.
+
+    Per-shot gallery picks are deliberately left alone. Re-opening the SET is
+    what makes it choosable again; wiping which picture won each shot would
+    throw away the one part of that stage that took real attention.
     """
     if stage not in STAGES:
         raise ValueError(f"unknown stage {stage!r}")
+    p = project(project_id) or {}
     after = STAGES[STAGES.index(stage):]
     fields: dict = {"stage": stage}
-    if "topic" in after:
-        fields["title"] = None
-        fields["topic_source"] = None
-    if "script" in after:
-        fields["script_id"] = None
-        fields["script_file"] = None
-    if "gallery" in after:
-        fields["gallery_id"] = None
-    if "voice" in after:
-        fields["voice_id"] = None
+    with _conn() as c:
+        if "script" in after:
+            fields["script_id"] = None
+            fields["script_file"] = None
+            c.execute("UPDATE script_candidates SET status='pending', "
+                      "decided_at=NULL WHERE project_id=?", (int(project_id),))
+        if "gallery" in after and p.get("gallery_id"):
+            fields["gallery_id"] = None
+            c.execute("UPDATE gallery_sets SET status='pending', "
+                      "decided_at=NULL WHERE id=?", (int(p["gallery_id"]),))
+        elif "gallery" in after:
+            fields["gallery_id"] = None
+        if "voice" in after and p.get("gallery_id"):
+            fields["voice_id"] = None
+            c.execute("UPDATE voice_takes SET status='pending', "
+                      "decided_at=NULL WHERE set_id=?", (int(p["gallery_id"]),))
+        elif "voice" in after:
+            fields["voice_id"] = None
+        if "topic" in after:
+            fields["title"] = None
+            fields["topic_source"] = None
+            c.execute("UPDATE project_topics SET status='pending' "
+                      "WHERE project_id=?", (int(project_id),))
     update_project(project_id, **fields)
 
 
