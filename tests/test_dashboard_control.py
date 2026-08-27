@@ -1525,3 +1525,58 @@ def test_the_last_owner_guard_lives_in_auth_not_in_the_route():
     body = src.split("def settings_users_role", 1)[1].split("\n@app.route", 1)[0]
     assert "last_owner" not in body and "only owner" not in body
     assert "auth.AuthError" in body, "it has to surface auth's refusal"
+
+
+def test_a_message_is_signed_by_whoever_sent_it():
+    """A message into a shared channel that does not say who sent it makes the
+    reader guess, and there are exactly two candidates."""
+    src = Path(dashboard.__file__).read_text(encoding="utf-8")
+    body = src.split("def message_send", 1)[1].split("\n@app.route", 1)[0]
+    assert "_whoami()" in body
+    assert "says" in body, "the title has to carry the name"
+
+
+def test_sending_a_message_needs_more_than_view():
+    """It leaves the machine and lands in a channel other people read. A
+    viewer can look at this dashboard; they should not be able to post to the
+    team from it."""
+    src = Path(dashboard.__file__).read_text(encoding="utf-8")
+    body = src.split("def message_send", 1)[1].split("\n@app.route", 1)[0]
+    assert 'auth.require("generate")' in body
+    perms = dashboard.auth.ROLE_PERMISSIONS
+    assert "generate" not in perms["viewer"]
+    assert "generate" in perms["partner"]
+
+
+def test_the_message_page_says_where_it_will_go(monkeypatch):
+    """Sending into a channel you cannot name is how a private note ends up
+    somewhere public."""
+    import notify
+    monkeypatch.setattr(notify, "configured", lambda: ["Discord", "ntfy"])
+    src = Path(dashboard.__file__).read_text(encoding="utf-8")
+    body = src.split("def message_page", 1)[1].split("\n@app.route", 1)[0]
+    assert "notify.configured()" in body
+    assert "Goes to" in body
+
+
+def test_an_unconfigured_dashboard_offers_setup_not_a_dead_form(monkeypatch):
+    """A send button with nowhere to send to fails silently at the moment you
+    most need it to have worked."""
+    src = Path(dashboard.__file__).read_text(encoding="utf-8")
+    body = src.split("def message_page", 1)[1].split("\n@app.route", 1)[0]
+    assert 'href="/settings"' in body
+    assert "nowhere to send" in body
+
+
+def test_an_empty_message_is_refused():
+    src = Path(dashboard.__file__).read_text(encoding="utf-8")
+    body = src.split("def message_send", 1)[1].split("\n@app.route", 1)[0]
+    assert "Type something first" in body
+
+
+def test_the_priority_is_validated_not_trusted():
+    """It goes into an ntfy header. Whatever arrives from the form is not a
+    priority until this says it is."""
+    src = Path(dashboard.__file__).read_text(encoding="utf-8")
+    body = src.split("def message_send", 1)[1].split("\n@app.route", 1)[0]
+    assert '("low", "normal", "high")' in body

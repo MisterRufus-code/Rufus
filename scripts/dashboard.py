@@ -1767,6 +1767,7 @@ NAV_ITEMS = [
     ("/gallery",    "🖼 Gallery",                         "view"),
     ("/measure",    "📊 Measure",                         "view"),
     ("/history",    "🕰 History",                         "view"),
+    ("/message",    "📣 Send a message",                  "generate"),
     ("/logs",       "📜 Logs",                            "view"),
     ("/system",     "🖥 System",                          "system"),
     ("/settings",   "⚙ Settings",                         "settings"),
@@ -1807,7 +1808,7 @@ NAV_GROUPS = (
     # under one heading felt wrong before it broke the group-size rule.
     ("Make",    ("/create", "/generate", "/thumbnails")),
     ("Queues",  ("/scout", "/scripts", "/galleries", "/voice")),
-    ("Review",  ("/gallery", "/history", "/failures", "/logs")),
+    ("Review",  ("/gallery", "/history", "/failures", "/logs", "/message")),
     ("Measure", ("/measure", "/trending")),
     ("Setup",   ("/styles", "/voices", "/bench", "/system", "/settings")),
 )
@@ -3420,6 +3421,96 @@ def settings_users_add():
     return redirect(
         f"/settings/users?ok={_urlquote(f'Added {name} as {role_name}.')}"
         f"&link={_urlquote(link)}&name={_urlquote(name)}")
+
+
+# ── Say something to the other person ────────────────────────────────────────
+
+@app.route("/message")
+def message_page():
+    """Type a message, send it to Discord and ntfy.
+
+    WHAT THIS IS NOT. notify.py already pushes automatically — a finished
+    video, a failed run, the analytics summary. Those are the machine telling
+    you something. This is the other direction and the missing one: two people
+    now share this channel, and there was no way for one of them to say "the
+    pictures on 105 are wrong, redo them before you approve it" without
+    leaving the dashboard for a different app.
+
+    IT SIGNS ITSELF. The message carries the name of whoever sent it, from the
+    same auth.current_user() the decision columns use. A message into a shared
+    channel that does not say who sent it makes the reader guess, and there
+    are exactly two candidates.
+    """
+    auth.require("generate")
+    import notify
+    backends = notify.configured()
+
+    if backends:
+        where = (f'<p class="muted">Goes to <b>{_esc(", ".join(backends))}</b>'
+                 f'. Everyone subscribed sees it.</p>')
+        form = f"""
+        <form method="post" action="/message/send" style="display:grid;gap:12px;max-width:560px">
+          <div>
+            <label for="body">Message</label>
+            <textarea class="field" id="body" name="body" rows="4" required
+                      placeholder="the pictures on 105 are wrong &mdash; redo them before you approve it"></textarea>
+          </div>
+          <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end">
+            <div>
+              <label for="priority">Urgency</label>
+              <select class="field" id="priority" name="priority" style="margin:6px 0 0">
+                <option value="low">quiet &mdash; no buzz</option>
+                <option value="normal" selected>normal</option>
+                <option value="high">urgent &mdash; breaks through silent mode</option>
+              </select>
+            </div>
+            <button class="btn save" type="submit" style="height:38px">Send</button>
+          </div>
+        </form>"""
+    else:
+        where = ""
+        form = ('<div class="msg error">No Discord webhook and no ntfy topic '
+                'is set, so there is nowhere to send to. Add one on '
+                '<a href="/settings">Settings</a> &mdash; ntfy takes about two '
+                'minutes and needs no account.</div>')
+
+    body = f"""
+    <a class="back" href="/">&larr; back</a>
+    <h2 style="margin-top:14px">Send a message</h2>
+    <p class="muted">For telling the other person something. The automatic
+       alerts &mdash; finished videos, failed runs, the analytics summary
+       &mdash; send themselves and are not this.</p>
+    {where}
+    {_msg_banner()}
+    {form}
+    """
+    return _head() + body + PAGE_TAIL
+
+
+@app.route("/message/send", methods=["POST"])
+def message_send():
+    auth.require("generate")
+    import notify
+    text = (request.form.get("body") or "").strip()
+    if not text:
+        return redirect("/message?error=" + _urlquote("Type something first."))
+    priority = (request.form.get("priority") or "normal").strip()
+    if priority not in ("low", "normal", "high"):
+        priority = "normal"
+
+    who = _whoami()
+    title = f"{who} says" if who else "Message from the dashboard"
+    ok = notify.send(title, text, url=notify._dashboard_url(),
+                     priority=priority)
+    if not ok:
+        # notify.send never raises and returns False for "unconfigured" and
+        # "every backend failed" alike, so the message has to cover both
+        # without claiming to know which.
+        return redirect("/message?error=" + _urlquote(
+            "Nothing went out. Either no backend is configured, or the send "
+            "failed — the Logs page has the reason."))
+    return redirect("/message?msg=" + _urlquote(
+        f"Sent via {', '.join(notify.configured())}."))
 
 
 @app.route("/settings/users/role", methods=["POST"])
