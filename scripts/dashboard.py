@@ -1597,6 +1597,22 @@ PAGE_STYLE = """<!doctype html><html><head><meta charset="utf-8">
   .by { font-size: 11px; font-weight: 600; padding: 2px 7px;
         border-radius: 999px; white-space: nowrap; color: var(--who);
         background: color-mix(in srgb, var(--who) 15%, transparent); }
+  .notes { list-style: none; padding: 0; margin: 10px 0 0;
+           display: grid; gap: 8px; max-width: 720px; }
+  .note { display: grid; grid-template-columns: 1fr auto; gap: 8px 12px;
+          align-items: center; background: var(--surface);
+          border: 1px solid var(--border); border-left: 3px solid var(--tone);
+          border-radius: var(--radius); padding: 10px 14px; }
+  .note.p-high   { --tone: var(--bad); }
+  .note.p-normal { --tone: var(--accent); }
+  .note.p-low    { --tone: var(--border); }
+  .note.is-done  { opacity: .58; }
+  .note.is-done .note-b { text-decoration: line-through; }
+  .note-b { grid-column: 1; font-size: 15px; line-height: 1.45; }
+  .note-m { grid-column: 1; display: flex; gap: 8px; align-items: center;
+            flex-wrap: wrap; font-size: 12px; }
+  .note form { grid-column: 2; grid-row: 1 / span 2; }
+  .note-bell { color: var(--accent); font-size: 11px; }
   .tile.t-make    { --tone: var(--make); }
   .tile.t-review  { --tone: var(--review); }
   .tile.t-measure { --tone: var(--measure); }
@@ -3427,62 +3443,117 @@ def settings_users_add():
 
 @app.route("/message")
 def message_page():
-    """Type a message, send it to Discord and ntfy.
+    """Leave a note. Optionally ping it. Tick it off when it is done.
 
     WHAT THIS IS NOT. notify.py already pushes automatically — a finished
     video, a failed run, the analytics summary. Those are the machine telling
     you something. This is the other direction and the missing one: two people
     now share this channel, and there was no way for one of them to say "the
-    pictures on 105 are wrong, redo them before you approve it" without
-    leaving the dashboard for a different app.
+    pictures on 105 are wrong, redo them before you approve it".
 
-    IT SIGNS ITSELF. The message carries the name of whoever sent it, from the
-    same auth.current_user() the decision columns use. A message into a shared
-    channel that does not say who sent it makes the reader guess, and there
-    are exactly two candidates.
+    A NOTIFICATION IS NOT A RECORD, which is why the note is stored first and
+    pushed second. Discord and ntfy are a tap on the shoulder — read once,
+    scrolled past, gone by morning. Half of what passes between two people
+    running a channel is not "look at this now", it is "do not forget this",
+    and that needs somewhere to live until somebody actually does it.
+
+    So the ping is a checkbox, not the point. A note nobody was pinged about
+    is still a note; a ping nobody kept is nothing an hour later.
+
+    IT SIGNS ITSELF, from the same auth.current_user() the decision columns
+    use. A note in a shared list that does not say who wrote it makes the
+    reader guess, and there are exactly two candidates.
     """
     auth.require("generate")
+    import db_manager as dbm
     import notify
     backends = notify.configured()
 
+    where = (f'<span class="muted">Ticking &ldquo;ping&rdquo; also sends it to '
+             f'<b>{_esc(", ".join(backends))}</b>.</span>' if backends else
+             '<span class="muted">No Discord webhook or ntfy topic is set, so '
+             'nothing can be pushed &mdash; notes still save. Add one on '
+             '<a href="/settings">Settings</a>.</span>')
+
+    ping = ""
     if backends:
-        where = (f'<p class="muted">Goes to <b>{_esc(", ".join(backends))}</b>'
-                 f'. Everyone subscribed sees it.</p>')
-        form = f"""
-        <form method="post" action="/message/send" style="display:grid;gap:12px;max-width:560px">
-          <div>
-            <label for="body">Message</label>
-            <textarea class="field" id="body" name="body" rows="4" required
-                      placeholder="the pictures on 105 are wrong &mdash; redo them before you approve it"></textarea>
-          </div>
-          <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end">
-            <div>
-              <label for="priority">Urgency</label>
-              <select class="field" id="priority" name="priority" style="margin:6px 0 0">
-                <option value="low">quiet &mdash; no buzz</option>
-                <option value="normal" selected>normal</option>
-                <option value="high">urgent &mdash; breaks through silent mode</option>
-              </select>
-            </div>
-            <button class="btn save" type="submit" style="height:38px">Send</button>
-          </div>
-        </form>"""
+        ping = ('<label style="display:flex;gap:7px;align-items:center;'
+                'font-weight:400"><input type="checkbox" name="ping" value="1" '
+                'checked> ping it</label>')
+
+    form = f"""
+    <form method="post" action="/message/send" style="display:grid;gap:12px;max-width:600px">
+      <div>
+        <label for="body">Note</label>
+        <textarea class="field" id="body" name="body" rows="3" required
+                  placeholder="the pictures on 105 are wrong &mdash; redo them before approving"></textarea>
+      </div>
+      <div style="display:flex;gap:14px;flex-wrap:wrap;align-items:flex-end">
+        <div>
+          <label for="priority">Urgency</label>
+          <select class="field" id="priority" name="priority" style="margin:6px 0 0">
+            <option value="low">quiet</option>
+            <option value="normal" selected>normal</option>
+            <option value="high">urgent</option>
+          </select>
+        </div>
+        {ping}
+        <button class="btn save" type="submit" style="height:38px">Save</button>
+      </div>
+    </form>"""
+
+    open_notes = dbm.notes(done=False, limit=60)
+    done_notes = dbm.notes(done=True, limit=15)
+
+    def row(n, done=False):
+        who = _by_badge(n.get("author"))
+        when = _esc(str(n.get("created_at") or "")[:16])
+        bell = ('<span class="note-bell" title="was pushed">&#9679;</span>'
+                if n.get("notified") else "")
+        pr = n.get("priority") or "normal"
+        if done:
+            by = n.get("done_by")
+            tail = (f'<span class="muted">done by {_esc(by)}</span>'
+                    if by else '<span class="muted">done</span>')
+            act = (f'<form method="post" action="/message/{n["id"]}/reopen">'
+                   f'<button type="submit">reopen</button></form>')
+        else:
+            tail = ""
+            act = (f'<form method="post" action="/message/{n["id"]}/done">'
+                   f'<button class="btn save" type="submit" '
+                   f'style="padding:4px 11px">done</button></form>')
+        return (f'<li class="note p-{_esc(pr)}{" is-done" if done else ""}">'
+                f'<div class="note-b">{_esc(n["text"])}</div>'
+                f'<div class="note-m">{who}<span class="muted">{when}</span>'
+                f'{bell}{tail}</div>{act}</li>')
+
+    if open_notes:
+        open_html = (f'<h2 style="margin-top:30px">Still open '
+                     f'({len(open_notes)})</h2>'
+                     f'<ul class="notes">'
+                     f'{"".join(row(n) for n in open_notes)}</ul>')
     else:
-        where = ""
-        form = ('<div class="msg error">No Discord webhook and no ntfy topic '
-                'is set, so there is nowhere to send to. Add one on '
-                '<a href="/settings">Settings</a> &mdash; ntfy takes about two '
-                'minutes and needs no account.</div>')
+        open_html = ('<h2 style="margin-top:30px">Still open (0)</h2>'
+                     '<p class="muted">Nothing outstanding.</p>')
+
+    done_html = ""
+    if done_notes:
+        done_html = (f'<details style="margin-top:26px"><summary>Recently done '
+                     f'({len(done_notes)})</summary><ul class="notes">'
+                     f'{"".join(row(n, done=True) for n in done_notes)}'
+                     f'</ul></details>')
 
     body = f"""
     <a class="back" href="/">&larr; back</a>
-    <h2 style="margin-top:14px">Send a message</h2>
-    <p class="muted">For telling the other person something. The automatic
-       alerts &mdash; finished videos, failed runs, the analytics summary
-       &mdash; send themselves and are not this.</p>
-    {where}
+    <h2 style="margin-top:14px">Notes &amp; messages</h2>
+    <p class="muted">For telling the other person something, and for the things
+       neither of you should forget. The automatic alerts &mdash; finished
+       videos, failed runs, the analytics summary &mdash; send themselves and
+       are not this. {where}</p>
     {_msg_banner()}
     {form}
+    {open_html}
+    {done_html}
     """
     return _head() + body + PAGE_TAIL
 
@@ -3490,6 +3561,7 @@ def message_page():
 @app.route("/message/send", methods=["POST"])
 def message_send():
     auth.require("generate")
+    import db_manager as dbm
     import notify
     text = (request.form.get("body") or "").strip()
     if not text:
@@ -3497,20 +3569,45 @@ def message_send():
     priority = (request.form.get("priority") or "normal").strip()
     if priority not in ("low", "normal", "high"):
         priority = "normal"
+    want_ping = request.form.get("ping") == "1"
 
     who = _whoami()
-    title = f"{who} says" if who else "Message from the dashboard"
-    ok = notify.send(title, text, url=notify._dashboard_url(),
-                     priority=priority)
-    if not ok:
-        # notify.send never raises and returns False for "unconfigured" and
-        # "every backend failed" alike, so the message has to cover both
-        # without claiming to know which.
+    # STORED BEFORE IT IS PUSHED. A failed webhook must not cost the note —
+    # that is the half that has to survive, and the push is the part that can
+    # be retried by simply saying it again.
+    pushed = False
+    if want_ping:
+        pushed = notify.send(f"{who} says" if who else "Note from the dashboard",
+                             text, url=notify._dashboard_url(),
+                             priority=priority)
+    dbm.add_note(text, author=who, priority=priority, notified=pushed)
+
+    if want_ping and not pushed:
         return redirect("/message?error=" + _urlquote(
-            "Nothing went out. Either no backend is configured, or the send "
-            "failed — the Logs page has the reason."))
-    return redirect("/message?msg=" + _urlquote(
-        f"Sent via {', '.join(notify.configured())}."))
+            "Saved, but nothing went out — either no backend is configured or "
+            "the send failed. The Logs page has the reason."))
+    if pushed:
+        return redirect("/message?msg=" + _urlquote(
+            f"Saved and sent via {', '.join(notify.configured())}."))
+    return redirect("/message?msg=" + _urlquote("Saved."))
+
+
+@app.route("/message/<int:note_id>/done", methods=["POST"])
+def message_done(note_id: int):
+    auth.require("generate")
+    import db_manager as dbm
+    if not dbm.finish_note(note_id, by=_whoami()):
+        return redirect("/message?error=" + _urlquote(
+            "Already done — somebody got there first."))
+    return redirect("/message?msg=" + _urlquote("Ticked off."))
+
+
+@app.route("/message/<int:note_id>/reopen", methods=["POST"])
+def message_reopen(note_id: int):
+    auth.require("generate")
+    import db_manager as dbm
+    dbm.reopen_note(note_id)
+    return redirect("/message?msg=" + _urlquote("Back on the list."))
 
 
 @app.route("/settings/users/role", methods=["POST"])

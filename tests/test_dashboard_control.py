@@ -1556,7 +1556,7 @@ def test_the_message_page_says_where_it_will_go(monkeypatch):
     src = Path(dashboard.__file__).read_text(encoding="utf-8")
     body = src.split("def message_page", 1)[1].split("\n@app.route", 1)[0]
     assert "notify.configured()" in body
-    assert "Goes to" in body
+    assert "also sends it to" in body
 
 
 def test_an_unconfigured_dashboard_offers_setup_not_a_dead_form(monkeypatch):
@@ -1565,7 +1565,9 @@ def test_an_unconfigured_dashboard_offers_setup_not_a_dead_form(monkeypatch):
     src = Path(dashboard.__file__).read_text(encoding="utf-8")
     body = src.split("def message_page", 1)[1].split("\n@app.route", 1)[0]
     assert 'href="/settings"' in body
-    assert "nowhere to send" in body
+    assert "nothing can be pushed" in body
+    assert "notes still save" in body, (
+        "an unreachable webhook must not cost the note")
 
 
 def test_an_empty_message_is_refused():

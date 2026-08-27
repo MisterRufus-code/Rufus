@@ -383,6 +383,20 @@ def init_db():
                 video_id     INTEGER
             )
         """)
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS notes (
+                id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                created_at TEXT DEFAULT (datetime('now')),
+                author     TEXT,
+                text       TEXT NOT NULL,
+                priority   TEXT DEFAULT 'normal',
+                notified   INTEGER DEFAULT 0,
+                done_at    TEXT,
+                done_by    TEXT
+            )
+        """)
+        c.execute("CREATE INDEX IF NOT EXISTS idx_notes_open "
+                  "ON notes(done_at, id)")
         # Who started it. Every stage below records who DECIDED; this records
         # who opened the project at all, which is the row the home page reads
         # to say whose video is in flight.
@@ -888,6 +902,75 @@ def clear_project_from(project_id: int, stage: str) -> None:
             c.execute("UPDATE project_topics SET status='pending' "
                       "WHERE project_id=?", (int(project_id),))
     update_project(project_id, **fields)
+
+
+# ── notes: the things the two of you have to remember ────────────────────────
+#
+# A NOTIFICATION IS NOT A RECORD. Discord and ntfy are a tap on the shoulder:
+# read once, scrolled past, and gone by the next morning. Half of what gets
+# sent between two people running a channel is not "look at this now", it is
+# "do not forget this" — the pictures on 105 are wrong, the cfg needs raising,
+# ask about the Bretton Woods hook. Those need somewhere to live until somebody
+# actually does them.
+#
+# So a message is stored FIRST and pushed second, and the push is optional. A
+# note nobody was pinged about is still a note; a ping nobody kept is nothing
+# an hour later.
+
+_NOTE_COLS = ["id", "created_at", "author", "text", "priority", "notified",
+              "done_at", "done_by"]
+
+
+def add_note(text: str, *, author: str = "", priority: str = "normal",
+             notified: bool = False) -> int:
+    with _conn() as c:
+        return c.execute(
+            "INSERT INTO notes (author, text, priority, notified) "
+            "VALUES (?,?,?,?)",
+            (author or None, text.strip(), priority, 1 if notified else 0)
+        ).lastrowid
+
+
+def notes(*, done: bool = False, limit: int = 50) -> list[dict]:
+    """Open notes oldest first; done notes newest first.
+
+    The orders differ on purpose. An open list is a queue — the thing waiting
+    longest is the thing most likely to be forgotten, so it goes on top. A done
+    list is a record, and what you want from a record is what happened last.
+    """
+    order = "id DESC" if done else "id ASC"
+    where = "done_at IS NOT NULL" if done else "done_at IS NULL"
+    with _conn() as c:
+        rows = c.execute(
+            f"SELECT {', '.join(_NOTE_COLS)} FROM notes WHERE {where} "
+            f"ORDER BY {order} LIMIT ?", (int(limit),)).fetchall()
+    return [dict(zip(_NOTE_COLS, r)) for r in rows]
+
+
+def finish_note(note_id: int, by: str = "") -> bool:
+    """Tick one off. False if it is already done, so two people clicking at
+    once cannot overwrite who actually did it."""
+    with _conn() as c:
+        cur = c.execute(
+            "UPDATE notes SET done_at=datetime('now'), done_by=? "
+            "WHERE id=? AND done_at IS NULL", (by or None, int(note_id)))
+        return cur.rowcount > 0
+
+
+def reopen_note(note_id: int) -> bool:
+    with _conn() as c:
+        cur = c.execute("UPDATE notes SET done_at=NULL, done_by=NULL "
+                        "WHERE id=? AND done_at IS NOT NULL", (int(note_id),))
+        return cur.rowcount > 0
+
+
+def open_note_count() -> int:
+    try:
+        with _conn() as c:
+            return c.execute(
+                "SELECT COUNT(*) FROM notes WHERE done_at IS NULL").fetchone()[0]
+    except Exception:
+        return 0
 
 
 def superseded_by_regen(project_id: int, stage: str) -> int:

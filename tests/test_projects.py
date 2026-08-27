@@ -921,3 +921,80 @@ def test_nobody_recorded_shows_a_dash_not_a_made_up_name():
     import dashboard
     assert "—" in dashboard._by_badge(None)
     assert "—" in dashboard._by_badge("")
+
+
+# ── notes ────────────────────────────────────────────────────────────────────
+
+def test_a_note_survives_a_failed_push(tmp_path, monkeypatch):
+    """A notification is not a record. The note is the half that has to
+    survive — a webhook that was deleted must not cost the thing you were
+    trying not to forget."""
+    import db_manager as dbm
+    monkeypatch.setattr(dbm, "DB_FILE", tmp_path / "n.db")
+    dbm.init_db()
+    dbm.add_note("the pictures on 105 are wrong", author="Daniel",
+                 notified=False)
+    rows = dbm.notes()
+    assert len(rows) == 1
+    assert rows[0]["notified"] == 0, "it records that nothing went out"
+    assert rows[0]["text"] == "the pictures on 105 are wrong"
+
+
+def test_the_store_happens_even_when_no_ping_was_asked_for():
+    """The ping is a checkbox, not the point. A note nobody was pinged about
+    is still a note."""
+    from pathlib import Path
+    import dashboard
+    src = Path(dashboard.__file__).read_text(encoding="utf-8")
+    body = src.split("def message_send", 1)[1].split("\n@app.route", 1)[0]
+    assert "dbm.add_note(" in body
+    # add_note is not inside the `if want_ping` branch
+    ping_at, save_at = body.index("if want_ping:"), body.index("dbm.add_note(")
+    assert save_at > ping_at
+    assert body[ping_at:save_at].count("\n    dbm.add_note") == 0
+
+
+def test_open_notes_are_oldest_first_and_done_notes_newest(tmp_path, monkeypatch):
+    """The orders differ on purpose. An open list is a queue — what has waited
+    longest is most likely to be forgotten. A done list is a record, and what
+    you want from a record is what happened last."""
+    import db_manager as dbm
+    monkeypatch.setattr(dbm, "DB_FILE", tmp_path / "o.db")
+    dbm.init_db()
+    ids = [dbm.add_note(f"note {i}", author="D") for i in range(3)]
+    assert [n["id"] for n in dbm.notes()] == ids
+    for i in ids:
+        dbm.finish_note(i, by="D")
+    assert [n["id"] for n in dbm.notes(done=True)] == list(reversed(ids))
+
+
+def test_two_people_cannot_both_claim_the_same_note(tmp_path, monkeypatch):
+    """Whoever got there first keeps the credit; the second click is refused
+    rather than silently overwriting who actually did it."""
+    import db_manager as dbm
+    monkeypatch.setattr(dbm, "DB_FILE", tmp_path / "race.db")
+    dbm.init_db()
+    n = dbm.add_note("raise cfg to 2", author="Daniel")
+    assert dbm.finish_note(n, by="elroee") is True
+    assert dbm.finish_note(n, by="Daniel") is False
+    assert dbm.notes(done=True)[0]["done_by"] == "elroee"
+
+
+def test_a_note_can_come_back(tmp_path, monkeypatch):
+    import db_manager as dbm
+    monkeypatch.setattr(dbm, "DB_FILE", tmp_path / "re.db")
+    dbm.init_db()
+    n = dbm.add_note("check the Bretton Woods hook", author="D")
+    dbm.finish_note(n, by="D")
+    assert dbm.open_note_count() == 0
+    assert dbm.reopen_note(n) is True
+    assert dbm.open_note_count() == 1
+    assert dbm.notes()[0]["done_by"] is None
+
+
+def test_the_note_count_survives_a_database_that_will_not_answer(monkeypatch):
+    """It is read to badge a nav item on every page; a hiccup costs the badge,
+    not the page."""
+    import db_manager as dbm
+    monkeypatch.setattr(dbm, "_conn", lambda: (_ for _ in ()).throw(RuntimeError))
+    assert dbm.open_note_count() == 0
