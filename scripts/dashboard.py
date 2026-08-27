@@ -3866,6 +3866,165 @@ def galleries_use(set_id: int):
 # the honest thing to do with a set you do not like is draw another. It rebuilds
 # only the stage you are standing on.
 
+# ── how far in, and how much longer ──────────────────────────────────────────
+#
+# "Reload this page" is not a design, it is an apology. Three of the five
+# stages take real time — a minute or two for scripts, seconds for takes, and
+# about forty minutes for two galleries — and the page said nothing about any
+# of it. You pressed a button, the screen went quiet, and the only way to learn
+# anything was to press F5 and guess.
+#
+# NOTHING NEW HAD TO BE INSTRUMENTED. Every one of those stages fills a table
+# as it goes: three candidate rows, thirty-two gallery images, three takes. So
+# progress is a row count against a target, and the target is known before the
+# work starts. That is exact rather than estimated, and it costs one small
+# query.
+#
+# The ETA is elapsed ÷ done × remaining and nothing cleverer. It is honest
+# about being rough because it says "about", and after two or three images it
+# is close enough to answer the only question anybody has, which is whether to
+# wait or come back.
+
+def _project_progress(p: dict) -> dict:
+    """{working, done, total, label, eta_seconds} for the stage in progress."""
+    import time as _time
+    import db_manager as dbm
+
+    out = {"working": False, "done": 0, "total": 0, "label": "",
+           "eta_seconds": None, "stage": p.get("stage") or "topic"}
+    stage = out["stage"]
+    started = None
+    try:
+        if stage == "script":
+            rows = dbm.candidates(project_id=p["id"], limit=20)
+            out.update(done=len(rows), total=3, label="scripts written")
+            started = rows[0]["created_at"] if rows else None
+        elif stage == "gallery":
+            sid = p.get("gallery_id")
+            if not sid:
+                sets = [g for g in dbm.gallery_sets(status=None, limit=30)
+                        if g.get("candidate_id") == p.get("script_id")]
+                sid = sets[0]["id"] if sets else None
+                started = sets[0]["created_at"] if sets else None
+            if sid:
+                images = dbm.gallery_images(sid)
+                beats = len({im["beat_index"] for im in images})
+                # n_variants COMES FROM THE SET, not from the pictures. The
+                # first variant is drawn to completion before the second
+                # starts, so counting distinct variants in a half-drawn set
+                # answers 1 — and one times the beats equals what is already
+                # there, which reads as finished while half the work is still
+                # queued.
+                row = next((g for g in dbm.gallery_sets(status=None, limit=40)
+                            if g["id"] == sid), None)
+                variants = int((row or {}).get("n_variants") or 2)
+                total = max(len(images), beats * variants)
+                out.update(done=len(images), total=total,
+                           label="pictures drawn")
+        elif stage == "voice":
+            rows = dbm.voice_takes(set_id=p.get("gallery_id"), limit=10)
+            out.update(done=len(rows), total=3, label="takes recorded")
+            started = rows[0]["created_at"] if rows else None
+    except Exception:
+        return out
+
+    out["working"] = 0 < out["total"] and out["done"] < out["total"]
+    if not out["working"] or not out["done"] or not started:
+        return out
+    try:
+        from datetime import datetime, timezone
+        t0 = datetime.fromisoformat(str(started)).replace(tzinfo=timezone.utc)
+        elapsed = max(1.0, _time.time() - t0.timestamp())
+        per = elapsed / out["done"]
+        out["eta_seconds"] = int(per * (out["total"] - out["done"]))
+    except Exception:
+        pass
+    return out
+
+
+def _eta_words(seconds) -> str:
+    if seconds is None:
+        return ""
+    if seconds < 60:
+        return "under a minute left"
+    if seconds < 5400:
+        return f"about {round(seconds / 60)} minute(s) left"
+    return f"about {seconds / 3600:.1f} hour(s) left"
+
+
+def _working_panel(p: dict, prog: dict, what: str) -> str:
+    """The panel a stage shows while its work is still running."""
+    done, total = prog["done"], prog["total"]
+    pct = int(100 * done / total) if total else 0
+    eta = _eta_words(prog.get("eta_seconds"))
+    bar = (f'<div style="height:8px;border-radius:999px;background:var(--border);'
+           f'overflow:hidden;margin:10px 0">'
+           f'<div id="wizard-bar-fill" style="height:100%;width:{pct}%;'
+           f'background:var(--accent);transition:width .4s"></div></div>')
+    counted = (f'<p class="muted" id="wizard-count">{done} of {total} '
+               f'{prog["label"]}{" · " + eta if eta else ""}</p>'
+               ) if total else '<p class="muted" id="wizard-count"></p>' 
+    # The wrapper carries the project id and whether work is in flight; the
+    # poller below reads both off it. Without it the page is static again and
+    # the only way forward is the F5 this replaces.
+    return (f'<div id="wizard-progress" data-project="{p["id"]}" '
+            f'data-working="1">'
+            f'<h2 style="margin-top:22px">{what}</h2>{bar}{counted}'
+            f'<p class="muted">This page updates itself — leave it open, or '
+            f'come back later. Nothing is lost either way.</p></div>')
+
+
+@app.route("/api/create/<int:project_id>")
+def api_create_progress(project_id: int):
+    """What the wizard polls. Cheap: one project read and one count query."""
+    auth.require("view")
+    import db_manager as dbm
+    p = dbm.project(project_id)
+    if not p:
+        return {"ok": False}, 404
+    prog = _project_progress(p)
+    prog.update(ok=True, id=project_id, title=p.get("title") or "",
+                eta=_eta_words(prog.get("eta_seconds")))
+    return prog
+
+
+# Polls the endpoint above and reloads the page the moment the stage's work
+# finishes. Vanilla and inline, like the status bar — this dashboard has no
+# build step on purpose, and a page that needs a bundler to tell you it is
+# still working is a page that tells you nothing when the bundler is missing.
+WIZARD_POLL_JS = """
+<script>
+(function () {
+  var el = document.getElementById('wizard-progress');
+  if (!el) return;
+  var pid = el.getAttribute('data-project');
+  var wasWorking = el.getAttribute('data-working') === '1';
+  function tick() {
+    fetch('/api/create/' + pid, {headers: {'Accept': 'application/json'}})
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (d) {
+        if (!d || !d.ok) return;
+        // The stage finished, or moved on: show the real page rather than
+        // guessing at what it now contains.
+        if (wasWorking && !d.working) { location.reload(); return; }
+        var pct = d.total ? Math.round(100 * d.done / d.total) : 0;
+        var fill = document.getElementById('wizard-bar-fill');
+        if (fill) fill.style.width = pct + '%';
+        var txt = document.getElementById('wizard-count');
+        if (txt && d.total) {
+          txt.textContent = d.done + ' of ' + d.total + ' ' + d.label +
+                            (d.eta ? ' · ' + d.eta : '');
+        }
+      })
+      .catch(function () {});
+  }
+  tick();
+  setInterval(tick, 4000);
+})();
+</script>
+"""
+
+
 _WIZARD_STAGES = (
     ("topic",   "Topic"),
     ("script",  "Script"),
@@ -3975,14 +4134,14 @@ def _wizard_script(p: dict) -> str:
     rows = dbm.candidates(project_id=p["id"], status="pending", limit=20)
     title = _esc(p.get("title") or "")
     if not rows:
+        prog = _project_progress(p)
         return (
-            f'<h2 style="margin-top:22px">Writing three scripts about '
-            f'&ldquo;{title}&rdquo;</h2>'
-            '<p class="muted">One per hook style &mdash; a minute or two. '
-            'Reload this page. If nothing appears, <a href="/logs">Logs</a> '
-            'says why.</p>'
-            f'<div style="margin:10px 0">'
-            f'{_regen(p["id"], "script", "Try again")}</div>')
+            _working_panel(p, prog,
+                           f"Writing three scripts about &ldquo;{title}&rdquo;")
+            + '<p class="muted">One per hook style. If nothing arrives, '
+              '<a href="/logs">Logs</a> says why.</p>'
+            + f'<div style="margin:10px 0">'
+              f'{_regen(p["id"], "script", "Try again")}</div>')
     cards = ""
     for c in rows:
         warn = ""
@@ -4021,16 +4180,16 @@ def _wizard_gallery(p: dict) -> str:
                 if g.get("candidate_id") == p.get("script_id")]
         sid = sets[0]["id"] if sets else None
     if not sid:
+        prog = _project_progress(p)
         return (
-            '<h2 style="margin-top:22px">Recording the voice, then drawing the '
-            'pictures</h2>'
-            '<p class="muted">The voice is recorded first so the shot lengths '
-            'are measured from real audio rather than guessed from the word '
-            'count &mdash; which take gets used is the last thing you choose. '
-            'Two full galleries is about forty minutes of the GPU, so come '
-            'back rather than wait.</p>'
-            f'<div style="margin:10px 0">'
-            f'{_regen(p["id"], "gallery", "Start again")}</div>')
+            _working_panel(p, prog,
+                           "Recording the voice, then drawing the pictures")
+            + '<p class="muted">The voice is recorded first so the shot '
+              'lengths are measured from real audio rather than guessed from '
+              'the word count &mdash; which take gets used is the last thing '
+              'you choose.</p>'
+            + f'<div style="margin:10px 0">'
+              f'{_regen(p["id"], "gallery", "Start again")}</div>')
     images = dbm.gallery_images(sid)
     spans = _project_spans(p)
     by_beat: dict = {}
@@ -4086,12 +4245,13 @@ def _wizard_voice(p: dict) -> str:
     takes = dbm.voice_takes(set_id=p.get("gallery_id"), status="pending",
                             limit=10)
     if not takes:
+        prog = _project_progress(p)
         return (
-            '<h2 style="margin-top:22px">Recording three takes</h2>'
-            '<p class="muted">Whole voiceovers, ready to use &mdash; they '
-            'differ in pace and weight.</p>'
-            f'<div style="margin:10px 0">'
-            f'{_regen(p["id"], "voice", "Try again")}</div>')
+            _working_panel(p, prog, "Recording three takes")
+            + '<p class="muted">Whole voiceovers, ready to use &mdash; they '
+              'differ in pace and weight.</p>'
+            + f'<div style="margin:10px 0">'
+              f'{_regen(p["id"], "voice", "Try again")}</div>')
     cards = ""
     for t in takes:
         secs = f' &middot; {t["seconds"]:.0f}s' if t.get("seconds") else ""
@@ -4181,7 +4341,7 @@ def create_page():
         f'{_msg_banner()}{_wizard_bar(p)}{_wizard_decided(p)}{inner}'
         f'<form method="post" action="/create/{p["id"]}/abandon" '
         f'style="margin-top:26px"><button type="submit">Abandon this one'
-        f'</button></form>{others}')
+        f'</button></form>{others}{WIZARD_POLL_JS}')
     return _head() + body + PAGE_TAIL
 
 

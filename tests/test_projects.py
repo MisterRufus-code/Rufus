@@ -423,3 +423,100 @@ def test_another_projects_scripts_are_not_siblings(db):
     db.choose_candidate(ia)
     assert db.candidates(project_id=b)[0]["status"] == "pending"
     assert ib
+
+
+# ── how far in, and how much longer ─────────────────────────────────────────
+#
+# "Reload this page" is not a design, it is an apology. Three of the five
+# stages take real time and the page said nothing about any of it: you pressed
+# a button, the screen went quiet, and the only way to learn anything was F5.
+#
+# Nothing new had to be instrumented — every slow stage fills a table as it
+# goes, so progress is a row count against a target that is known before the
+# work starts. Exact rather than estimated, one small query.
+
+def test_a_stage_with_nothing_yet_is_working_not_finished(db):
+    pid = _project(db)
+    db.update_project(pid, title="T", stage="script")
+    import dashboard
+    prog = dashboard._project_progress(db.project(pid))
+    assert prog["total"] == 3 and prog["done"] == 0
+
+
+def test_progress_counts_rows_as_they_arrive(db):
+    import dashboard
+    pid = _project(db)
+    db.update_project(pid, title="T", stage="script")
+    for i in range(2):
+        db.save_candidate(proposal_id=None, project_id=pid, channel="c",
+                          niche="n", topic="T", hook_style=str(i), hook="h",
+                          script="s", score=8)
+    prog = dashboard._project_progress(db.project(pid))
+    assert (prog["done"], prog["total"], prog["working"]) == (2, 3, True)
+
+
+def test_a_finished_stage_stops_reporting_work(db):
+    import dashboard
+    pid = _project(db)
+    db.update_project(pid, title="T", stage="script")
+    for i in range(3):
+        db.save_candidate(proposal_id=None, project_id=pid, channel="c",
+                          niche="n", topic="T", hook_style=str(i), hook="h",
+                          script="s", score=8)
+    assert dashboard._project_progress(db.project(pid))["working"] is False
+
+
+def test_a_half_drawn_gallery_does_not_claim_to_be_finished(db):
+    """A set half-drawn does not yet know its own beat count. Guessing the
+    target low would show 100% while pictures were still arriving."""
+    import dashboard
+    pid = _project(db)
+    sid = db.save_gallery_set(candidate_id=1, channel="c", niche="n",
+                              topic="T", script_file="s.txt", n_variants=2)
+    db.update_project(pid, script_id=1, gallery_id=sid, stage="gallery")
+    for b in range(4):
+        db.save_gallery_image(set_id=sid, variant=0, beat_index=b,
+                              path=f"/a{b}.png", prompt="p", seed=1)
+    prog = dashboard._project_progress(db.project(pid))
+    assert prog["total"] >= 8, "four beats over two variants is eight pictures"
+    assert prog["working"] is True
+
+
+def test_the_eta_is_only_offered_once_there_is_something_to_divide(db):
+    """elapsed ÷ done × remaining needs a done. Before the first row it would
+    be a number made up to look reassuring."""
+    import dashboard
+    pid = _project(db)
+    db.update_project(pid, title="T", stage="voice")
+    assert dashboard._project_progress(db.project(pid))["eta_seconds"] is None
+
+
+def test_the_eta_reads_as_time_rather_than_seconds():
+    import dashboard
+    assert dashboard._eta_words(None) == ""
+    assert "under a minute" in dashboard._eta_words(30)
+    assert "minute" in dashboard._eta_words(600)
+    assert "hour" in dashboard._eta_words(7200)
+
+
+def test_the_page_polls_instead_of_asking_to_be_reloaded(client):
+    import dashboard
+    pid = _start(client)
+    db_manager.update_project(pid, title="T", stage="script")
+    page = client.get(f"/create?project={pid}").get_data(as_text=True)
+    assert "Reload this page" not in page
+    assert 'id="wizard-progress"' in page
+    assert "/api/create/" in page
+
+
+def test_the_progress_endpoint_is_cheap_and_answers_json(client):
+    pid = _start(client)
+    db_manager.update_project(pid, title="T", stage="script")
+    r = client.get(f"/api/create/{pid}")
+    assert r.status_code == 200
+    body = r.get_json()
+    assert body["ok"] is True and body["total"] == 3
+
+
+def test_the_progress_endpoint_says_so_for_a_project_that_is_gone(client):
+    assert client.get("/api/create/99999").status_code == 404
