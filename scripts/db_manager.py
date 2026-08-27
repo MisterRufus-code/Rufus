@@ -104,6 +104,18 @@ def init_db():
             # is the wrong trade.
             "ALTER TABLE videos ADD COLUMN created_at TEXT",
             "ALTER TABLE videos ADD COLUMN uploaded_at TEXT",
+            # WHO DECIDED. Two people work this channel now, and until this
+            # column every approval, rejection and pick was anonymous — the
+            # database recorded what was chosen and never once recorded by
+            # whom. "Who made this video" had no answer to give.
+            #
+            # A NAME, NOT A USER ID. config/users.json is a small hand-edited
+            # file with no stable ids in it, and a revoked user must not turn
+            # a year of history into dangling references. The name is what a
+            # person recognises and what the page prints; if it is later
+            # renamed the old rows keep saying who it was at the time, which
+            # is the honest answer for a record of decisions.
+            "ALTER TABLE videos ADD COLUMN decided_by TEXT",
         ):
             try:
                 c.execute(ddl)
@@ -226,7 +238,8 @@ def init_db():
         # The score and the fact gate still run; they land in the row and on
         # the card, where a reviewer can weigh them.
         for ddl in ("ALTER TABLE script_candidates ADD COLUMN fact_ok INTEGER DEFAULT 1",
-                    "ALTER TABLE script_candidates ADD COLUMN fact_reason TEXT"):
+                    "ALTER TABLE script_candidates ADD COLUMN fact_reason TEXT",
+                    "ALTER TABLE script_candidates ADD COLUMN decided_by TEXT"):
             try:
                 c.execute(ddl)
             except Exception:
@@ -266,10 +279,12 @@ def init_db():
         # finished, and the wizard showed the completed gallery view over an
         # empty table while ComfyUI was still rendering. A target has to come
         # from the plan, not from the output.
-        try:
-            c.execute("ALTER TABLE gallery_sets ADD COLUMN n_beats INTEGER DEFAULT 0")
-        except Exception:
-            pass
+        for ddl in ("ALTER TABLE gallery_sets ADD COLUMN n_beats INTEGER DEFAULT 0",
+                    "ALTER TABLE gallery_sets ADD COLUMN decided_by TEXT"):
+            try:
+                c.execute(ddl)
+            except Exception:
+                pass
         # status per IMAGE, the same idiom script_candidates uses and for the
         # same reason: the row that lost is half of a labelled preference pair,
         # and here there is one per shot rather than one per video. Sixteen
@@ -288,6 +303,14 @@ def init_db():
         """)
         c.execute("CREATE INDEX IF NOT EXISTS idx_gimg_set "
                   "ON gallery_images(set_id, beat_index, variant)")
+        # Per-shot, because the swaps are where the attention went: taking a
+        # base is one click and correcting eight shots is eight judgements, and
+        # a set credited only to whoever pressed "take all from A" would hide
+        # the person who actually did that work.
+        try:
+            c.execute("ALTER TABLE gallery_images ADD COLUMN decided_by TEXT")
+        except Exception:
+            pass
         # THREE READS OF THE HOOK, AND ONLY THE HOOK.
         #
         # Audio is the one thing on this list that cannot be skimmed — it plays
@@ -323,7 +346,8 @@ def init_db():
         # A take is recorded before the pictures are drawn precisely so the
         # gallery stage can say how long each shot will be on screen.
         for ddl in ("ALTER TABLE voice_takes ADD COLUMN seconds REAL DEFAULT 0",
-                    "ALTER TABLE voice_takes ADD COLUMN spans TEXT"):
+                    "ALTER TABLE voice_takes ADD COLUMN spans TEXT",
+                    "ALTER TABLE voice_takes ADD COLUMN decided_by TEXT"):
             try:
                 c.execute(ddl)
             except Exception:
@@ -359,6 +383,13 @@ def init_db():
                 video_id     INTEGER
             )
         """)
+        # Who started it. Every stage below records who DECIDED; this records
+        # who opened the project at all, which is the row the home page reads
+        # to say whose video is in flight.
+        try:
+            c.execute("ALTER TABLE projects ADD COLUMN created_by TEXT")
+        except Exception:
+            pass
         # The topic options a project was offered, so REGEN has something to
         # replace and so the ones passed over are kept — same reason every
         # other stage keeps its losers.
@@ -676,7 +707,7 @@ def save_candidate(*, proposal_id: int | None, channel: str, niche: str,
 _CANDIDATE_COLS = ["id", "created_at", "proposal_id", "channel", "niche",
                    "topic", "hook_style", "hook", "script", "score", "run_id",
                    "cost_usd", "status", "decided_at", "fact_ok",
-                   "fact_reason", "project_id"]
+                   "fact_reason", "project_id", "decided_by"]
 
 
 def candidates(proposal_id: int | None = None,
@@ -708,7 +739,7 @@ def candidates(proposal_id: int | None = None,
     return [dict(zip(_CANDIDATE_COLS, r)) for r in rows]
 
 
-def choose_candidate(candidate_id: int) -> dict | None:
+def choose_candidate(candidate_id: int, by: str = "") -> dict | None:
     """Mark one candidate chosen and every sibling rejected. Returns it.
 
     BOTH SIDES IN ONE CALL, and that is the point rather than a convenience:
@@ -729,7 +760,8 @@ def choose_candidate(candidate_id: int) -> dict | None:
             return None
         chosen = dict(zip(_CANDIDATE_COLS, row))
         c.execute("UPDATE script_candidates SET status='chosen', "
-                  "decided_at=datetime('now') WHERE id=?", (int(candidate_id),))
+                  "decided_at=datetime('now'), decided_by=? WHERE id=?",
+                  (by or None, int(candidate_id)))
         # SIBLINGS SHARE A PROPOSAL *OR* A PROJECT, and only the first was
         # checked. The wizard writes candidates with a project and no proposal,
         # so choosing one rejected nothing: all three stayed pending, the stage
@@ -742,9 +774,9 @@ def choose_candidate(candidate_id: int) -> dict | None:
             if value is None:
                 continue
             c.execute(f"UPDATE script_candidates SET status='rejected', "
-                      f"decided_at=datetime('now') "
+                      f"decided_at=datetime('now'), decided_by=? "
                       f"WHERE {column}=? AND id<>? AND status='pending'",
-                      (int(value), int(candidate_id)))
+                      (by or None, int(value), int(candidate_id)))
         chosen["status"] = "chosen"
         return chosen
 
@@ -755,15 +787,15 @@ STAGES = ("topic", "script", "gallery", "voice", "render")
 
 _PROJECT_COLS = ["id", "created_at", "updated_at", "channel", "niche", "title",
                  "topic_source", "script_id", "script_file", "gallery_id",
-                 "voice_id", "stage", "status", "video_id"]
+                 "voice_id", "stage", "status", "video_id", "created_by"]
 _PTOPIC_COLS = ["id", "project_id", "title", "why", "status"]
 
 
-def new_project(*, channel: str, niche: str) -> int:
+def new_project(*, channel: str, niche: str, by: str = "") -> int:
     with _conn() as c:
         return c.execute(
-            "INSERT INTO projects (channel, niche) VALUES (?,?)",
-            (channel, niche)).lastrowid
+            "INSERT INTO projects (channel, niche, created_by) VALUES (?,?,?)",
+            (channel, niche, by or None)).lastrowid
 
 
 def project(project_id: int) -> dict | None:
@@ -966,9 +998,10 @@ def choose_project_topic(topic_id: int) -> dict | None:
 # ── galleries ────────────────────────────────────────────────────────────────
 
 _GSET_COLS = ["id", "created_at", "candidate_id", "channel", "niche", "topic",
-              "script_file", "n_variants", "status", "decided_at", "n_beats"]
+              "script_file", "n_variants", "status", "decided_at", "n_beats",
+              "decided_by"]
 _GIMG_COLS = ["id", "set_id", "variant", "beat_index", "path", "prompt",
-              "seed", "status"]
+              "seed", "status", "decided_by"]
 
 
 def save_gallery_set(*, candidate_id: int | None, channel: str, niche: str,
@@ -1034,7 +1067,7 @@ def gallery_images(set_id: int, status: str | None = None) -> list[dict]:
     return [dict(zip(_GIMG_COLS, r)) for r in rows]
 
 
-def choose_gallery_base(set_id: int, variant: int) -> int:
+def choose_gallery_base(set_id: int, variant: int, by: str = "") -> int:
     """Take every shot from `variant`. Returns how many beats were set.
 
     THE BASE IS ONE CLICK AND THE SWAPS ARE THE CORRECTIONS. Marking the whole
@@ -1044,13 +1077,14 @@ def choose_gallery_base(set_id: int, variant: int) -> int:
     with _conn() as c:
         c.execute("UPDATE gallery_images SET status='rejected' "
                   "WHERE set_id=?", (int(set_id),))
-        cur = c.execute("UPDATE gallery_images SET status='chosen' "
-                        "WHERE set_id=? AND variant=?",
-                        (int(set_id), int(variant)))
+        cur = c.execute("UPDATE gallery_images SET status='chosen', "
+                        "decided_by=? WHERE set_id=? AND variant=?",
+                        (by or None, int(set_id), int(variant)))
         return cur.rowcount
 
 
-def swap_gallery_beat(set_id: int, beat_index: int, variant: int) -> bool:
+def swap_gallery_beat(set_id: int, beat_index: int, variant: int,
+                      by: str = "") -> bool:
     """Take this one shot from `variant` instead. False if there is no such
     image — a beat one variant failed to render has nothing to swap to."""
     with _conn() as c:
@@ -1063,9 +1097,9 @@ def swap_gallery_beat(set_id: int, beat_index: int, variant: int) -> bool:
         c.execute("UPDATE gallery_images SET status='rejected' "
                   "WHERE set_id=? AND beat_index=?",
                   (int(set_id), int(beat_index)))
-        c.execute("UPDATE gallery_images SET status='chosen' "
+        c.execute("UPDATE gallery_images SET status='chosen', decided_by=? "
                   "WHERE set_id=? AND beat_index=? AND variant=?",
-                  (int(set_id), int(beat_index), int(variant)))
+                  (by or None, int(set_id), int(beat_index), int(variant)))
         return True
 
 
@@ -1086,18 +1120,21 @@ def chosen_gallery(set_id: int) -> list[dict]:
     return [by_beat[i] for i in wanted]
 
 
-def decide_gallery_set(set_id: int, status: str = "chosen") -> bool:
+def decide_gallery_set(set_id: int, status: str = "chosen",
+                       by: str = "") -> bool:
     with _conn() as c:
         cur = c.execute(
-            "UPDATE gallery_sets SET status=?, decided_at=datetime('now') "
-            "WHERE id=? AND status='pending'", (status, int(set_id)))
+            "UPDATE gallery_sets SET status=?, decided_at=datetime('now'), "
+            "decided_by=? WHERE id=? AND status='pending'",
+            (status, by or None, int(set_id)))
         return cur.rowcount > 0
 
 
 # ── voice takes ──────────────────────────────────────────────────────────────
 
 _VTAKE_COLS = ["id", "created_at", "set_id", "channel", "topic", "tone",
-               "text", "path", "status", "decided_at", "seconds", "spans"]
+               "text", "path", "status", "decided_at", "seconds", "spans",
+               "decided_by"]
 
 
 def save_voice_take(*, set_id: int, channel: str, topic: str, tone: str,
@@ -1131,7 +1168,7 @@ def voice_takes(set_id: int | None = None, status: str | None = None,
     return [dict(zip(_VTAKE_COLS, r)) for r in rows]
 
 
-def choose_voice_take(take_id: int) -> dict | None:
+def choose_voice_take(take_id: int, by: str = "") -> dict | None:
     """Mark one take chosen and its siblings passed over. Returns it.
 
     Same shape as choose_candidate, and for the same reason: the pair is what
@@ -1146,11 +1183,12 @@ def choose_voice_take(take_id: int) -> dict | None:
             return None
         take = dict(zip(_VTAKE_COLS, row))
         c.execute("UPDATE voice_takes SET status='chosen', "
-                  "decided_at=datetime('now') WHERE id=?", (int(take_id),))
+                  "decided_at=datetime('now'), decided_by=? WHERE id=?",
+                  (by or None, int(take_id)))
         c.execute("UPDATE voice_takes SET status='rejected', "
-                  "decided_at=datetime('now') "
+                  "decided_at=datetime('now'), decided_by=? "
                   "WHERE set_id=? AND id<>? AND status='pending'",
-                  (int(take["set_id"]), int(take_id)))
+                  (by or None, int(take["set_id"]), int(take_id)))
         take["status"] = "chosen"
         return take
 
@@ -1222,10 +1260,20 @@ def update_metadata(video_id: int, title: str = None, description: str = None):
         c.execute(f"UPDATE videos SET {', '.join(sets)} WHERE id=?", args)
 
 
-def set_upload_status(video_id: int, status: str):
-    """status: 'pending' | 'approved' | 'rejected'."""
+def set_upload_status(video_id: int, status: str, by: str = ""):
+    """status: 'pending' | 'approved' | 'rejected'.
+
+    `by` is stamped only when it is given, so the auto-approve sweep and any
+    caller that predates attribution leave the existing name alone instead of
+    blanking a decision a person actually made.
+    """
     with _conn() as c:
-        c.execute("UPDATE videos SET upload_status=? WHERE id=?", (status, video_id))
+        if by:
+            c.execute("UPDATE videos SET upload_status=?, decided_by=? "
+                      "WHERE id=?", (status, by, video_id))
+        else:
+            c.execute("UPDATE videos SET upload_status=? WHERE id=?",
+                      (status, video_id))
 
 
 def mark_upload_failed(video_id: int, error: str):

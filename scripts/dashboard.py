@@ -781,7 +781,7 @@ def _recent_videos(limit: int = 60, channel: str | None = None,
                    status: str | None = None) -> list[dict]:
     q = ("SELECT id, upload_date, niche, script_hook, title, score, "
          "hold_reason, youtube_id, run_id, channel, upload_status, "
-         "created_at, uploaded_at FROM videos")
+         "created_at, uploaded_at, decided_by FROM videos")
     where, args = [], []
     if channel:
         where.append("channel = ?"); args.append(channel)
@@ -798,7 +798,7 @@ def _recent_videos(limit: int = 60, channel: str | None = None,
         return []
     cols = ["id", "upload_date", "niche", "script_hook", "title", "score",
             "hold_reason", "youtube_id", "run_id", "channel", "upload_status",
-            "created_at", "uploaded_at"]
+            "created_at", "uploaded_at", "decided_by"]
     return [dict(zip(cols, r)) for r in rows]
 
 
@@ -1352,6 +1352,11 @@ PAGE_STYLE = """<!doctype html><html><head><meta charset="utf-8">
        escapes its scope degrades to a neutral edge instead of resolving to
        nothing and silently dropping the whole declaration. */
     --tone:    var(--dim);
+    /* Set inline per name chip, from the name itself. Same root default as
+       --tone and for the same reason: a use that escapes its element resolves
+       to a neutral colour instead of resolving to nothing, which silently
+       drops the whole declaration. */
+    --who:     var(--dim);
     --radius:  10px;   /* panels: cards, tables, code, images */
     --radius-sm: 8px;  /* controls: buttons, fields, messages  */
     --shadow:  0 1px 2px rgba(0,0,0,.28);
@@ -1589,6 +1594,9 @@ PAGE_STYLE = """<!doctype html><html><head><meta charset="utf-8">
   .draw-v { font-size: 12px; color: var(--dim); font-weight: 600; }
   .draw-w { font-size: 12px; color: var(--ok); font-weight: 600; }
   .pick { font-size: 12px; padding: 4px 8px; }
+  .by { font-size: 11px; font-weight: 600; padding: 2px 7px;
+        border-radius: 999px; white-space: nowrap; color: var(--who);
+        background: color-mix(in srgb, var(--who) 15%, transparent); }
   .tile.t-make    { --tone: var(--make); }
   .tile.t-review  { --tone: var(--review); }
   .tile.t-measure { --tone: var(--measure); }
@@ -2083,6 +2091,35 @@ def _run_keyframes(run_id: str | None, limit: int = 4) -> list[str]:
         return []
 
 
+# A STABLE COLOUR PER PERSON, from the name itself. Two people share this
+# channel, and a name printed in the same grey as everything else is a word you
+# have to read; a name that is always the same colour is one you recognise
+# without reading. Derived from the string rather than assigned, so adding a
+# third person needs no table and no migration — and so the colour a name has
+# is the same on every page it appears on.
+_BY_HUES = ("var(--make)", "var(--measure)", "var(--review)", "var(--accent)",
+            "var(--ok)", "var(--system)")
+
+
+def _by_hue(name: str) -> str:
+    return _BY_HUES[sum(ord(ch) for ch in name) % len(_BY_HUES)]
+
+
+def _by_badge(name: str | None) -> str:
+    """Who decided, as a small tinted chip. An em dash when nobody is recorded.
+
+    Blank means "not recorded" — a decision made before this column existed, or
+    with auth off — and it says so with a dash rather than inventing a name,
+    because an anonymous row and a row somebody actually owns must not look
+    alike.
+    """
+    name = (name or "").strip()
+    if not name:
+        return '<span class="muted">—</span>'
+    return (f'<span class="by" style="--who: {_by_hue(name)}">'
+            f'{_esc(name)}</span>')
+
+
 def _videos_table(videos: list[dict], *, previews: bool = False) -> str:
     """The queue table. `previews` adds a strip of that run's actual keyframes
     to each row — approving a video is a judgement about how it LOOKS, and
@@ -2118,11 +2155,13 @@ def _videos_table(videos: list[dict], *, previews: bool = False) -> str:
                  f'{went_out}</a></td>'
                  f'<td class="c-niche"><a class="row-link" href="/video/{v["id"]}">{_esc(v["niche"])}</a></td>'
                  f'<td><a class="row-link" href="/video/{v["id"]}">{title}</a></td>'
-                 f'<td>{score_html}</td><td>{_status_badge(v["upload_status"])}</td></tr>\n')
+                 f'<td>{score_html}</td><td>{_status_badge(v["upload_status"])}</td>'
+                 f'<td class="c-by">{_by_badge(v.get("decided_by"))}</td></tr>\n')
     preview_th = '<th class="c-preview">Preview</th>' if previews else ""
     return (f'<div class="tablewrap"><table><tr>{preview_th}<th>Made</th>'
             f'<th class="c-niche">Niche</th><th>Hook / Title</th>'
-            f"<th>Score</th><th>Status</th></tr>{rows}</table></div>")
+            f'<th>Score</th><th>Status</th><th class="c-by">By</th></tr>'
+            f"{rows}</table></div>")
 
 
 def _msg_banner() -> str:
@@ -3808,7 +3847,7 @@ def scripts_choose(candidate_id: int):
     auth.require("generate")
     try:
         import db_manager as dbm
-        chosen = dbm.choose_candidate(candidate_id)
+        chosen = dbm.choose_candidate(candidate_id, by=_whoami())
         if not chosen:
             return redirect("/scripts?error=" + _urlquote(
                 "that one is not pending — already decided?"))
@@ -3983,7 +4022,7 @@ def galleries_image(image_id: int):
 def galleries_base(set_id: int, variant: int):
     auth.require("generate")
     import db_manager as dbm
-    n = dbm.choose_gallery_base(set_id, variant)
+    n = dbm.choose_gallery_base(set_id, variant, by=_whoami())
     if not n:
         return redirect("/galleries?error=" + _urlquote("no such variant"))
     return redirect("/galleries?msg=" + _urlquote(
@@ -3996,7 +4035,7 @@ def galleries_base(set_id: int, variant: int):
 def galleries_swap(set_id: int, beat: int, variant: int):
     auth.require("generate")
     import db_manager as dbm
-    if not dbm.swap_gallery_beat(set_id, beat, variant):
+    if not dbm.swap_gallery_beat(set_id, beat, variant, by=_whoami()):
         return redirect("/galleries?error=" + _urlquote(
             "that draw has no picture for this shot"))
     return redirect("/galleries?msg=" + _urlquote(f"Shot {beat+1} swapped."))
@@ -4021,7 +4060,7 @@ def galleries_use(set_id: int):
                    if g["id"] == set_id), None)
         if not gs:
             return redirect("/galleries?error=" + _urlquote("no such set"))
-        if not dbm.decide_gallery_set(set_id, "chosen"):
+        if not dbm.decide_gallery_set(set_id, "chosen", by=_whoami()):
             return redirect("/galleries?error=" + _urlquote("already decided"))
         log_path = _launch_voice_takes(script_file=gs["script_file"],
                                        set_id=set_id,
@@ -4589,7 +4628,7 @@ def create_new():
         channel = load_channel().id
     except Exception:
         channel = "main_en"
-    pid = dbm.new_project(channel=channel, niche=niche)
+    pid = dbm.new_project(channel=channel, niche=niche, by=_whoami())
     return redirect(f"/create?project={pid}")
 
 
@@ -4614,6 +4653,17 @@ def create_back(project_id: int, stage: str):
         return redirect(f"/create?project={project_id}&error=" + _urlquote(str(e)))
     return redirect(f"/create?project={project_id}&msg=" + _urlquote(
         f"Back at the {stage} stage — everything after it is forgotten."))
+
+
+def _whoami() -> str:
+    """The signed-in name, for the decided_by column. "" when nobody is named.
+
+    Empty rather than a placeholder: a NULL in that column honestly means
+    "this predates attribution, or auth was off", and inventing "local" or
+    "unknown" would make an anonymous decision indistinguishable from one
+    somebody actually made. Every read treats a blank as "not recorded".
+    """
+    return (auth.current_user() or {}).get("name", "") or ""
 
 
 def _replacing(n: int, noun: str) -> str:
@@ -4727,7 +4777,7 @@ def create_topic_choose(project_id: int, topic_id: int):
 def create_script_choose(project_id: int, candidate_id: int):
     auth.require("generate")
     import db_manager as dbm
-    chosen = dbm.choose_candidate(candidate_id)
+    chosen = dbm.choose_candidate(candidate_id, by=_whoami())
     if not chosen:
         return redirect(f"/create?project={project_id}&error="
                         + _urlquote("that script is not pending"))
@@ -4748,7 +4798,7 @@ def create_gallery_choose(project_id: int, set_id: int):
     if not rows:
         return redirect(f"/create?project={project_id}&error=" + _urlquote(
             "every shot needs a picked picture first — take a base"))
-    dbm.decide_gallery_set(set_id, "chosen")
+    dbm.decide_gallery_set(set_id, "chosen", by=_whoami())
     dbm.update_project(project_id, gallery_id=set_id, stage="voice")
     return redirect(f"/create?project={project_id}&msg=" + _urlquote(
         f"{len(rows)} picture(s) settled."))
@@ -4758,7 +4808,7 @@ def create_gallery_choose(project_id: int, set_id: int):
 def create_voice_choose(project_id: int, take_id: int):
     auth.require("generate")
     import db_manager as dbm
-    take = dbm.choose_voice_take(take_id)
+    take = dbm.choose_voice_take(take_id, by=_whoami())
     if not take:
         return redirect(f"/create?project={project_id}&error="
                         + _urlquote("that take is not pending"))
@@ -5063,7 +5113,7 @@ def voice_choose(take_id: int):
     auth.require("generate")
     try:
         import db_manager as dbm
-        take = dbm.choose_voice_take(take_id)
+        take = dbm.choose_voice_take(take_id, by=_whoami())
         if not take:
             return redirect("/voice?error=" + _urlquote(
                 "that read is not pending — already decided?"))
@@ -6576,7 +6626,7 @@ def approve_video(video_id):
     # public video. Separate block, explicit do-not-retry message.
     try:
         db_manager.update_youtube_id(video_id, yt_id)
-        db_manager.set_upload_status(video_id, "approved")
+        db_manager.set_upload_status(video_id, "approved", by=_whoami())
         db_manager.set_publish_at(video_id, getattr(yt_mod, "LAST_PUBLISH_AT", ""))
     except Exception as db_err:
         return _redirect_detail(
@@ -6610,7 +6660,7 @@ def reject_video(video_id):
     if v["youtube_id"]:
         return _redirect_detail(video_id, error="already uploaded — can't reject")
     new_status = "pending" if v["upload_status"] == "rejected" else "rejected"
-    db_manager.set_upload_status(video_id, new_status)
+    db_manager.set_upload_status(video_id, new_status, by=_whoami())
     return _redirect_detail(video_id, ok=f"marked {new_status}")
 
 

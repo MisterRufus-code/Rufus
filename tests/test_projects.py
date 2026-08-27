@@ -770,3 +770,154 @@ def test_the_regen_route_retires_before_it_launches():
         assert f'superseded_by_regen(project_id, "{stage}")' in block
         assert block.index("superseded_by_regen") < block.index(launch), (
             f"{stage}: the old options must be retired before the new run starts")
+
+
+# ── who decided ──────────────────────────────────────────────────────────────
+
+def test_every_stage_records_who_decided(tmp_path, monkeypatch):
+    """THE GAP THIS CLOSES. Two people work this channel, and until these
+    columns the database recorded WHAT was chosen and never once WHOM by.
+    "Who made this video" had no answer to give."""
+    import db_manager as dbm
+    monkeypatch.setattr(dbm, "DB_FILE", tmp_path / "who.db")
+    dbm.init_db()
+
+    pid = dbm.new_project(channel="c", niche="n", by="Daniel")
+    cid = dbm.save_candidate(proposal_id=None, channel="c", niche="n",
+                             topic="T", hook_style="warning", hook="h",
+                             script="s", score=8, project_id=pid)
+    dbm.choose_candidate(cid, by="Daniel")
+    sid = dbm.save_gallery_set(candidate_id=cid, channel="c", niche="n",
+                               topic="T", script_file="s.txt", n_variants=2)
+    for beat in range(2):
+        for v in range(2):
+            dbm.save_gallery_image(set_id=sid, variant=v, beat_index=beat,
+                                   path=f"/{v}{beat}.png", prompt="p", seed=1)
+    dbm.choose_gallery_base(sid, 0, by="Daniel")
+    dbm.swap_gallery_beat(sid, 1, 1, by="Partner")
+    dbm.decide_gallery_set(sid, "chosen", by="Daniel")
+    tid = dbm.save_voice_take(set_id=sid, channel="c", topic="T", tone="calm",
+                              text="t", path="/a.mp3")
+    dbm.choose_voice_take(tid, by="Partner")
+
+    assert dbm.project(pid)["created_by"] == "Daniel"
+    assert dbm.candidates(project_id=pid)[0]["decided_by"] == "Daniel"
+    assert dbm.gallery_sets(status=None)[0]["decided_by"] == "Daniel"
+    assert dbm.voice_takes(set_id=sid)[0]["decided_by"] == "Partner"
+
+
+def test_the_swaps_are_credited_to_whoever_made_them(tmp_path, monkeypatch):
+    """Per shot, because the swaps are where the attention went: taking a base
+    is one click and correcting eight shots is eight judgements. A set credited
+    only to whoever pressed "take all from A" hides the person who did that
+    work."""
+    import db_manager as dbm
+    monkeypatch.setattr(dbm, "DB_FILE", tmp_path / "swap.db")
+    dbm.init_db()
+    sid = dbm.save_gallery_set(candidate_id=None, channel="c", niche="n",
+                               topic="T", script_file="s.txt", n_variants=2)
+    for beat in range(2):
+        for v in range(2):
+            dbm.save_gallery_image(set_id=sid, variant=v, beat_index=beat,
+                                   path=f"/{v}{beat}.png", prompt="p", seed=1)
+    dbm.choose_gallery_base(sid, 0, by="Daniel")
+    dbm.swap_gallery_beat(sid, 1, 1, by="Partner")
+
+    picked = {im["beat_index"]: im["decided_by"]
+              for im in dbm.gallery_images(sid, status="chosen")}
+    assert picked == {0: "Daniel", 1: "Partner"}
+
+
+def test_the_rejected_side_is_credited_too(tmp_path, monkeypatch):
+    """"I rejected these two" is the same act as "I chose that one" — a
+    preference pair labelled on only one side is half a record."""
+    import db_manager as dbm
+    monkeypatch.setattr(dbm, "DB_FILE", tmp_path / "pair.db")
+    dbm.init_db()
+    pid = dbm.new_project(channel="c", niche="n", by="Daniel")
+    ids = [dbm.save_candidate(proposal_id=None, channel="c", niche="n",
+                              topic="T", hook_style=st, hook="h", script="s",
+                              score=8, project_id=pid)
+           for st in ("warning", "shocking_stat", "counterintuitive")]
+    dbm.choose_candidate(ids[0], by="Daniel")
+    rows = dbm.candidates(project_id=pid)
+    assert {r["status"] for r in rows} == {"chosen", "rejected"}
+    assert all(r["decided_by"] == "Daniel" for r in rows)
+
+
+def test_an_unattributed_decision_stays_blank_rather_than_inventing_a_name(
+        tmp_path, monkeypatch):
+    """NULL honestly means "this predates attribution, or auth was off".
+    Inventing "local" would make an anonymous decision indistinguishable from
+    one somebody actually made."""
+    import db_manager as dbm
+    monkeypatch.setattr(dbm, "DB_FILE", tmp_path / "anon.db")
+    dbm.init_db()
+    pid = dbm.new_project(channel="c", niche="n")
+    cid = dbm.save_candidate(proposal_id=None, channel="c", niche="n",
+                             topic="T", hook_style="warning", hook="h",
+                             script="s", score=8, project_id=pid)
+    dbm.choose_candidate(cid)
+    assert dbm.project(pid)["created_by"] is None
+    assert dbm.candidates(project_id=pid)[0]["decided_by"] is None
+
+
+def test_approving_a_video_records_who(tmp_path, monkeypatch):
+    import db_manager as dbm
+    monkeypatch.setattr(dbm, "DB_FILE", tmp_path / "vid.db")
+    dbm.init_db()
+    vid = dbm.save_video(niche="n", script_hook="h", scene_desc="d",
+                         video_file="v.mp4", score=8)
+    dbm.set_upload_status(vid, "approved", by="Daniel")
+    with dbm._conn() as c:
+        row = c.execute("SELECT upload_status, decided_by FROM videos "
+                        "WHERE id=?", (vid,)).fetchone()
+    assert row == ("approved", "Daniel")
+
+
+def test_an_unnamed_status_change_does_not_blank_the_existing_name(
+        tmp_path, monkeypatch):
+    """The auto-approve sweep passes no name. It must not erase the person who
+    actually made the earlier decision."""
+    import db_manager as dbm
+    monkeypatch.setattr(dbm, "DB_FILE", tmp_path / "keepname.db")
+    dbm.init_db()
+    vid = dbm.save_video(niche="n", script_hook="h", scene_desc="d",
+                         video_file="v.mp4", score=8)
+    dbm.set_upload_status(vid, "approved", by="Daniel")
+    dbm.set_upload_status(vid, "pending")
+    with dbm._conn() as c:
+        row = c.execute("SELECT decided_by FROM videos WHERE id=?",
+                        (vid,)).fetchone()
+    assert row[0] == "Daniel"
+
+
+def test_every_decision_route_passes_the_signed_in_name():
+    """A column nothing writes to is the shape of bug this repo keeps having:
+    built, wired, and never actually fed."""
+    from pathlib import Path
+    import dashboard
+    src = Path(dashboard.__file__).read_text(encoding="utf-8")
+    for call in ("choose_candidate(", "choose_gallery_base(",
+                 "swap_gallery_beat(", "choose_voice_take(",
+                 "decide_gallery_set(", "new_project(",
+                 "set_upload_status(video_id"):
+        for line in src.splitlines():
+            if call in line and "def " not in line:
+                assert "_whoami()" in line or "by=" in line, (
+                    f"{call} called without a name: {line.strip()}")
+
+
+def test_a_name_gets_the_same_colour_everywhere():
+    """A name printed in the same grey as everything else is a word you have to
+    read; one that is always the same colour is one you recognise."""
+    import dashboard
+    assert dashboard._by_hue("Daniel") == dashboard._by_hue("Daniel")
+    chip = dashboard._by_badge("Daniel")
+    assert "Daniel" in chip and "--who:" in chip
+
+
+def test_nobody_recorded_shows_a_dash_not_a_made_up_name():
+    import dashboard
+    assert "—" in dashboard._by_badge(None)
+    assert "—" in dashboard._by_badge("")
