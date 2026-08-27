@@ -223,3 +223,85 @@ def test_no_word_timings_still_returns_the_spans(tmp_path, monkeypatch, capsys):
     shots = beat_timing.spoken_shots(mp3, 3)
     assert len(shots) == 3
     assert all("text" not in s or s["text"] == "" for s in shots)
+
+
+# ── hold rather than cut ────────────────────────────────────────────────────
+#
+# "Many images repeat one after another — not the same image, but a new one
+# very similar to the previous." Of course they did. Two consecutive sentences
+# about the same bank were two prompts about the same bank, drawn from noise
+# twice, with a cut between them the narration never asked for.
+
+def _shot(i, start, end, text):
+    return {"index": i, "start": start, "end": end,
+            "seconds": round(end - start, 2), "text": text}
+
+
+def test_two_shots_about_the_same_thing_share_one_picture():
+    shots = [_shot(0, 0, 2.2, "The Medici bank opened in Florence"),
+             _shot(1, 2.2, 4.4, "The bank lent to the Florence pope")]
+    out = beat_timing.merge_same_subject(shots)
+    assert len(out) == 1
+    assert out[0]["held"] == 2
+    assert out[0]["seconds"] == 4.4
+
+
+def test_two_shots_about_different_things_keep_their_cut():
+    shots = [_shot(0, 0, 2.0, "The Medici bank opened in Florence"),
+             _shot(1, 2.0, 4.0, "A cucumber farmer counted his coins")]
+    assert len(beat_timing.merge_same_subject(shots)) == 2
+
+
+def test_a_merge_never_passes_the_length_qc_complains_about():
+    """max_hold is QC's own max_hold_s. Merging past the number it already
+    knows how to report would trade one defect for another."""
+    shots = [_shot(0, 0, 3.4, "The Medici bank opened in Florence"),
+             _shot(1, 3.4, 6.8, "The bank lent to the Florence pope")]
+    assert len(beat_timing.merge_same_subject(shots, max_hold=5.0)) == 2
+
+
+def test_the_cap_comes_from_the_same_place_qc_reads_it():
+    import qc_check
+    import video_format as vf
+    assert qc_check.MAX_STATIC_RUN == vf.get("max_hold_s", 5.0)
+
+
+def test_stopwords_alone_are_not_a_shared_subject():
+    """A shot about the bank and a shot about the war share "the" and nothing
+    else. Matching on those would merge the whole video into one picture."""
+    shots = [_shot(0, 0, 2.0, "and then it was in the of a"),
+             _shot(1, 2.0, 4.0, "but the it was on a for the")]
+    assert len(beat_timing.merge_same_subject(shots)) == 2
+
+
+def test_a_short_shot_inside_a_long_one_counts_as_the_same_subject():
+    """Jaccard over the SMALLER set: a one-clause shot is about the same thing
+    if everything it names appears in the other, and dividing by the union
+    would punish it for being short."""
+    shots = [_shot(0, 0, 2.0,
+                   "The Medici bank in Florence lent money to popes and kings"),
+             _shot(1, 2.0, 3.5, "The bank collapsed")]
+    assert len(beat_timing.merge_same_subject(shots)) == 1
+
+
+def test_a_run_of_three_merges_only_as_far_as_the_cap_allows():
+    shots = [_shot(0, 0, 2.0, "the Medici bank in Florence"),
+             _shot(1, 2.0, 4.0, "the Medici bank lent"),
+             _shot(2, 4.0, 6.0, "the Medici bank collapsed")]
+    out = beat_timing.merge_same_subject(shots, max_hold=5.0)
+    assert len(out) == 2
+    assert out[0]["held"] == 2 and out[1]["held"] == 1
+
+
+def test_the_indices_are_renumbered_after_a_merge():
+    """clip[i] belongs to beat[i] everywhere downstream. A gap in the numbering
+    is every later picture on the wrong sentence."""
+    shots = [_shot(0, 0, 2.0, "the Medici bank"),
+             _shot(1, 2.0, 4.0, "the Medici bank again"),
+             _shot(2, 4.0, 6.0, "a cucumber farmer")]
+    out = beat_timing.merge_same_subject(shots)
+    assert [r["index"] for r in out] == list(range(len(out)))
+
+
+def test_an_empty_list_stays_empty():
+    assert beat_timing.merge_same_subject([]) == []

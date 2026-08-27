@@ -197,3 +197,80 @@ def test_a_shot_with_no_words_falls_back_rather_than_sliding_everything(
 
     gv.build(str(script), niche="money_history", channel="c", n_variants=1)
     assert seen["beats"] is None, "a hole means use the text split, not a short list"
+
+
+def test_the_prompt_count_follows_the_merge(tmp_path, monkeypatch):
+    """max_scenes has to follow the MERGED count. Left at the original beat
+    count it would let the prompt builder pad back to a number the audio no
+    longer has cuts for — the duplicate problem reappearing one layer down."""
+    import main as rufus_main
+    import voice_takes
+    import beat_timing
+    import comfy_client
+    import db_manager as dbm
+
+    script = tmp_path / "s.txt"
+    script.write_text("One. Two. Three.", encoding="utf-8")
+    monkeypatch.setattr(dbm, "DB_FILE", tmp_path / "m.db")
+    dbm.init_db()
+    monkeypatch.setattr(gv, "gallery_dir", lambda sid: tmp_path / f"m{sid}")
+    monkeypatch.setattr(rufus_main, "_target_beats", lambda s: 3)
+    monkeypatch.setattr(voice_takes, "build",
+                        lambda *a, **k: [{"path": "/take.mp3", "tone": "n"}])
+    monkeypatch.setattr(beat_timing, "spoken_shots", lambda mp3, n, *a: [
+        {"index": 0, "start": 0, "end": 2, "seconds": 2,
+         "text": "the Medici bank"},
+        {"index": 1, "start": 2, "end": 4, "seconds": 2,
+         "text": "the Medici bank again"},
+        {"index": 2, "start": 4, "end": 7, "seconds": 3,
+         "text": "a cucumber farmer"}])
+    seen = {}
+    monkeypatch.setattr(rufus_main, "_build_sd_prompts",
+                        lambda s, n, max_scenes=10, grow=False, beats=None:
+                        seen.update(max_scenes=max_scenes, beats=beats)
+                        or ["p"] * len(beats or []))
+    monkeypatch.setattr(comfy_client, "render_one_beat", lambda *a, **k: False)
+
+    gv.build(str(script), niche="money_history", channel="c", n_variants=1)
+    assert len(seen["beats"]) == 2, "the two bank shots became one"
+    assert seen["max_scenes"] == 2
+
+
+def test_the_stored_shot_lengths_describe_the_merged_shots(tmp_path,
+                                                           monkeypatch):
+    """The take's spans were measured against the UNMERGED count. Left alone,
+    the page would show a shot list one length and a picture list another."""
+    import json
+    import main as rufus_main
+    import voice_takes
+    import beat_timing
+    import comfy_client
+    import db_manager as dbm
+
+    script = tmp_path / "s.txt"
+    script.write_text("One. Two.", encoding="utf-8")
+    monkeypatch.setattr(dbm, "DB_FILE", tmp_path / "sp.db")
+    dbm.init_db()
+    monkeypatch.setattr(gv, "gallery_dir", lambda sid: tmp_path / f"s{sid}")
+    monkeypatch.setattr(rufus_main, "_target_beats", lambda s: 2)
+
+    def _takes(script_file, *, set_id, **kw):
+        dbm.save_voice_take(set_id=set_id, channel="c", topic="T", tone="n",
+                            text="x", path="/t.mp3", seconds=4.0,
+                            spans=json.dumps([{"index": 0}, {"index": 1}]))
+        return [{"path": "/t.mp3", "tone": "n"}]
+    monkeypatch.setattr(voice_takes, "build", _takes)
+    monkeypatch.setattr(beat_timing, "spoken_shots", lambda mp3, n, *a: [
+        {"index": 0, "start": 0, "end": 2, "seconds": 2, "text": "the bank"},
+        {"index": 1, "start": 2, "end": 4, "seconds": 2,
+         "text": "the bank again"}])
+    monkeypatch.setattr(rufus_main, "_build_sd_prompts",
+                        lambda s, n, max_scenes=10, grow=False, beats=None:
+                        ["p"] * len(beats or []))
+    monkeypatch.setattr(comfy_client, "render_one_beat", lambda *a, **k: False)
+
+    sid = gv.build(str(script), niche="money_history", channel="c",
+                   n_variants=1)
+    stored = json.loads(dbm.voice_takes(set_id=sid)[0]["spans"])
+    assert len(stored) == 1, "one held shot, one length"
+    assert stored[0]["held"] == 2

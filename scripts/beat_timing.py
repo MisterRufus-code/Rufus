@@ -138,6 +138,94 @@ def spoken_shots(mp3, n: int, tones: list[str] | None = None) -> list[dict]:
     return out
 
 
+# Words that carry no subject. A shot about "the bank" and a shot about "the
+# war" share "the" and nothing else, and matching on those would merge the
+# whole video into one picture.
+_STOP = frozenset("""
+a an the and or but if then than that this these those of in on at to for from
+by with as is are was were be been being it its it's he she they them his her
+their you your we our i me my not no so such very just also too then now than
+what which who whom whose when where why how all any both each few more most
+other some only own same s t can will don should could would may might must
+""".split())
+
+
+def _subject_words(text: str) -> set:
+    import re as _re
+    return {w for w in _re.findall(r"[a-z']+", (text or "").lower())
+            if w not in _STOP and len(w) > 2}
+
+
+def _same_subject(a: str, b: str, threshold: float = 0.34) -> bool:
+    """Whether two shots are about the same thing, by shared content words.
+
+    Deliberately lexical rather than a model call: this runs once per adjacent
+    pair on every gallery, the answer has to be the same every time for the
+    same script, and "do these two sentences share their nouns" is a question
+    a set intersection answers honestly. A model would be slower, cost money,
+    and disagree with itself between runs.
+
+    Jaccard over the SMALLER set, not the union: a one-clause shot next to a
+    long one is about the same thing if everything it names appears in the
+    other, and dividing by the union would punish it for being short.
+    """
+    wa, wb = _subject_words(a), _subject_words(b)
+    if not wa or not wb:
+        return False
+    return len(wa & wb) / min(len(wa), len(wb)) >= threshold
+
+
+def merge_same_subject(shots: list[dict], max_hold: float = 0.0,
+                       threshold: float = 0.34) -> list[dict]:
+    """Hold one picture across adjacent shots that are about the same thing.
+
+    THE COMPLAINT THIS ANSWERS, in the owner's words: "many images repeat one
+    after another — not the same image, but a new one very similar to the
+    previous". Of course they did. Two consecutive sentences about the same
+    bank were two prompts about the same bank, drawn from noise twice, and the
+    result was a pair of near-identical pictures with a cut between them that
+    the narration never asked for.
+
+    So they become one shot with one picture, held across both. Three things
+    fall out of that: the near-duplicates stop, the remaining pictures get more
+    time to be read, and the GPU draws fewer of them.
+
+    max_hold is QC's own max_hold_s — the point at which it starts reporting
+    "stretches over 5s without a cut". Merging past the number QC complains
+    about would trade one defect for another it already knows how to name.
+    """
+    if not shots:
+        return []
+    if max_hold <= 0:
+        try:
+            import video_format as _vf
+            max_hold = float(_vf.get("max_hold_s", 5.0))
+        except Exception:
+            max_hold = 5.0
+
+    out = [dict(shots[0])]
+    for nxt in shots[1:]:
+        cur = out[-1]
+        joined = float(nxt.get("end", 0)) - float(cur.get("start", 0))
+        if (joined <= max_hold
+                and _same_subject(cur.get("text", ""), nxt.get("text", ""),
+                                  threshold)):
+            cur["end"] = nxt.get("end", cur.get("end"))
+            cur["seconds"] = round(joined, 2)
+            cur["text"] = f'{cur.get("text", "")} {nxt.get("text", "")}'.strip()
+            cur["held"] = int(cur.get("held", 1)) + 1
+            continue
+        out.append(dict(nxt))
+    for i, r in enumerate(out):
+        r["index"] = i
+        r.setdefault("held", 1)
+    merged = len(shots) - len(out)
+    if merged:
+        print(f"[timing] {merged} shot(s) held rather than cut — adjacent "
+              f"sentences about the same thing share one picture")
+    return out
+
+
 def too_short(spans: list[dict], floor: float = 0.0) -> list[int]:
     """Shots at or under the minimum segment — the beats the narration cannot
     carry. Asking for more pictures than the audio can hold is what produced

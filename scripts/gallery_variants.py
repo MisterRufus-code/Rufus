@@ -122,6 +122,15 @@ def build(script_file: str, *, candidate_id: int | None = None,
             if takes:
                 import beat_timing
                 spoken = beat_timing.spoken_shots(takes[0]["path"], beats)
+                # HOLD RATHER THAN CUT, where two shots are about the same
+                # thing. "Many images repeat one after another — not the same
+                # image, but a new one very similar to the previous": of
+                # course they did. Two consecutive sentences about the same
+                # bank were two prompts about the same bank, drawn from noise
+                # twice, with a cut between them the narration never asked
+                # for. One picture across both stops the near-duplicates, gives
+                # the rest more time to be read, and draws fewer of them.
+                spoken = beat_timing.merge_same_subject(spoken)
         except Exception as e:
             print(f"[galleries] no voice takes ({e}) — the pictures will be "
                   f"drawn from a split of the script instead, and without "
@@ -129,9 +138,17 @@ def build(script_file: str, *, candidate_id: int | None = None,
 
     said = [r["text"] for r in spoken if r.get("text")]
     if spoken and len(said) == len(spoken):
+        held = sum(1 for r in spoken if int(r.get("held", 1)) > 1)
         print(f"[galleries] planning {len(spoken)} shot(s) from the words "
-              f"actually spoken over each one")
-        prompts = rufus_main._build_sd_prompts(script, niche, max_scenes=beats,
+              f"actually spoken over each one"
+              + (f", {held} of them held across more than one sentence"
+                 if held else ""))
+        # max_scenes follows the MERGED count. Leaving it at the original beat
+        # count would let the prompt builder pad back to a number the audio no
+        # longer has cuts for, which is the duplicate problem reappearing one
+        # layer down.
+        prompts = rufus_main._build_sd_prompts(script, niche,
+                                               max_scenes=len(said),
                                                beats=said)
     else:
         # A shot sitting in a pause has no words to draw from, and a partial
@@ -144,6 +161,20 @@ def build(script_file: str, *, candidate_id: int | None = None,
     if not prompts:
         print("[galleries] no prompts were planned — nothing to draw")
         return None
+
+    # The take's stored spans were measured against the UNMERGED count. Once
+    # shots are held, the page would show a shot list one length and a picture
+    # list another — so the merged spans replace them, and the seconds beside
+    # each picture describe the picture that is actually there.
+    if spoken and len(said) == len(spoken):
+        try:
+            import json as _json
+            import db_manager as _db
+            with _db._conn() as _c:
+                _c.execute("UPDATE voice_takes SET spans=? WHERE set_id=?",
+                           (_json.dumps(spoken), int(set_id)))
+        except Exception as e:
+            print(f"[galleries] could not store the merged shot lengths ({e})")
 
     print(f"[galleries] set #{set_id}: {n_variants} × {len(prompts)} "
           f"picture(s) → {out_dir}")
