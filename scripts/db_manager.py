@@ -208,6 +208,17 @@ def init_db():
         """)
         c.execute("CREATE INDEX IF NOT EXISTS idx_cand_proposal "
                   "ON script_candidates(proposal_id, status)")
+        # THE ONE LINK THE CHAIN WAS MISSING. project → script → gallery →
+        # voice already threads on the far side: gallery_sets.candidate_id is
+        # the chosen script, voice_takes.set_id is the chosen gallery. Only the
+        # first hop had nothing, because candidates were invented for the scout
+        # and the scout has proposals rather than projects.
+        try:
+            c.execute("ALTER TABLE script_candidates ADD COLUMN project_id INTEGER")
+        except Exception:
+            pass
+        c.execute("CREATE INDEX IF NOT EXISTS idx_cand_project "
+                  "ON script_candidates(project_id, status)")
         # A GATE THAT LABELS INSTEAD OF REJECTING. With a person ruling between
         # three finished scripts, a threshold that silently discards one is
         # deciding something the person is here to decide — and it was
@@ -638,26 +649,28 @@ def decide_proposal(proposal_id: int, status: str) -> bool:
 def save_candidate(*, proposal_id: int | None, channel: str, niche: str,
                    topic: str, hook_style: str, hook: str, script: str,
                    score: int, run_id: str = "", cost_usd: float = 0.0,
-                   fact_ok: bool = True, fact_reason: str = "") -> int:
+                   fact_ok: bool = True, fact_reason: str = "",
+                   project_id: int | None = None) -> int:
     with _conn() as c:
         cur = c.execute(
             "INSERT INTO script_candidates (proposal_id, channel, niche, "
             "topic, hook_style, hook, script, score, run_id, cost_usd, "
-            "fact_ok, fact_reason) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+            "fact_ok, fact_reason, project_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (proposal_id, channel, niche, topic, hook_style, hook, script,
              int(score), run_id, float(cost_usd), 1 if fact_ok else 0,
-             fact_reason))
+             fact_reason, project_id))
         return cur.lastrowid
 
 
 _CANDIDATE_COLS = ["id", "created_at", "proposal_id", "channel", "niche",
                    "topic", "hook_style", "hook", "script", "score", "run_id",
                    "cost_usd", "status", "decided_at", "fact_ok",
-                   "fact_reason"]
+                   "fact_reason", "project_id"]
 
 
 def candidates(proposal_id: int | None = None,
-               status: str | None = None, limit: int = 50) -> list[dict]:
+               status: str | None = None, limit: int = 50,
+               project_id: int | None = None) -> list[dict]:
     """The scripts a person was shown, newest first.
 
     Ordered by score within a proposal so the set reads best-first, because a
@@ -669,6 +682,9 @@ def candidates(proposal_id: int | None = None,
     if proposal_id is not None:
         where.append("proposal_id = ?")
         args.append(int(proposal_id))
+    if project_id is not None:
+        where.append("project_id = ?")
+        args.append(int(project_id))
     if status:
         where.append("status = ?")
         args.append(status)

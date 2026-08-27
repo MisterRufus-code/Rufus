@@ -1276,21 +1276,32 @@ def test_motion_is_dropped_for_anyone_who_asked_for_less_of_it():
 FLOW = ("/scout", "/scripts", "/galleries", "/voice")
 
 
-def test_the_four_decisions_live_under_make():
-    """They are not measurements. They are the four decisions a video is made
-    of, and Make is where somebody goes to make one."""
+def test_the_four_stage_pages_are_queues_rather_than_steps():
+    """THE SHAPE CHANGED WHEN THE WIZARD ARRIVED, and this assertion moved with
+    it. These four used to BE the flow, filed under Make. They are not steps
+    any more — /create walks all five decisions — they are queues: every
+    pending script across every project, every gallery waiting on a base. A
+    different question from "make me a video", which is why seven links under
+    one heading felt wrong before it broke the group-size rule."""
     groups = dict(dashboard.NAV_GROUPS)
     for href in FLOW:
-        assert href in groups["Make"], href
+        assert href in groups["Queues"], href
         assert href not in groups["Measure"], href
+    assert "/create" in groups["Make"]
 
 
 def test_the_flow_reads_in_the_order_it_happens():
     """A topic becomes scripts, a script becomes galleries, a gallery becomes
-    reads. Listed in any other order the group is an alphabet, not a sequence."""
-    make = [h for h in dict(dashboard.NAV_GROUPS)["Make"] if h in FLOW]
-    assert make == list(FLOW)
+    reads. Listed in any other order it is an alphabet, not a sequence — and
+    that has to hold in three places at once, or one of them is lying about
+    where you are."""
+    assert [h for h in dict(dashboard.NAV_GROUPS)["Queues"] if h in FLOW] \
+        == list(FLOW)
     assert [h for h, _label in dashboard.FLOW_STEPS] == list(FLOW)
+    assert [s for s, _t in dashboard._WIZARD_STAGES] == [
+        "topic", "script", "gallery", "voice", "render"]
+    assert dashboard._WIZARD_STAGES[-1][0] == "render", (
+        "the expensive irreversible step is last, behind every human judgement")
 
 
 def test_no_group_is_a_list_instead_of_a_group():

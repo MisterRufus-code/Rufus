@@ -168,7 +168,8 @@ class _pinned_style:
 
 def write_for(topic: str, *, proposal_id: int | None = None,
               niche: str | None = None, channel: str | None = None,
-              n: int | None = None) -> list[dict]:
+              n: int | None = None,
+              project_id: int | None = None) -> list[dict]:
     """Write and store the candidate set for `topic`. Returns the rows saved.
 
     Fail-open per candidate, like the rest of the pipeline: one style that
@@ -235,7 +236,7 @@ def write_for(topic: str, *, proposal_id: int | None = None,
             hook_style=style, hook=script_text.split("\n")[0][:300],
             script=script_text, score=int(result.get("score", 0) or 0),
             run_id=run_id, cost_usd=cost,
-            fact_ok=fact_ok, fact_reason=fact_reason)
+            fact_ok=fact_ok, fact_reason=fact_reason, project_id=project_id)
         saved.append({"id": row_id, "hook_style": style,
                       "score": int(result.get("score", 0) or 0),
                       "fact_ok": fact_ok, "cost_usd": cost})
@@ -261,6 +262,7 @@ if __name__ == "__main__":
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[1])
     ap.add_argument("topic")
     ap.add_argument("--proposal", type=int, default=None)
+    ap.add_argument("--project", type=int, default=None)
     ap.add_argument("--n", type=int, default=None)
     a = ap.parse_args()
-    write_for(a.topic, proposal_id=a.proposal, n=a.n)
+    write_for(a.topic, proposal_id=a.proposal, n=a.n, project_id=a.project)

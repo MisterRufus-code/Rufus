@@ -200,5 +200,8 @@ if __name__ == "__main__":
     ap.add_argument("--set", type=int, required=True)
     ap.add_argument("--topic", default="")
     ap.add_argument("--n", type=int, default=None)
+    ap.add_argument("--beats", type=int, default=None,
+                    help="how many pictures the video wants, so shot lengths "
+                         "can be measured from the recorded audio")
     a = ap.parse_args()
-    build(a.script_file, set_id=a.set, topic=a.topic, n=a.n)
+    build(a.script_file, set_id=a.set, topic=a.topic, n=a.n, n_beats=a.beats)

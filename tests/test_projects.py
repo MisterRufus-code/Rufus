@@ -148,3 +148,152 @@ def test_a_typed_topic_survives_a_research_outage(monkeypatch, capsys):
                         lambda *a, **k: (_ for _ in ()).throw(RuntimeError("down")))
     assert topic_options.take_topic("Tulip mania")["title"] == "Tulip mania"
     assert "using it as typed" in capsys.readouterr().out
+
+
+# ── the wizard ──────────────────────────────────────────────────────────────
+#
+# "You made a mess": four pages, none of which knew what the others decided.
+# One page now, the current stage on it, every earlier stage a link back.
+
+import pytest as _pytest  # noqa: E402
+
+
+@_pytest.fixture
+def client(tmp_path, monkeypatch):
+    import dashboard
+    import auth
+    monkeypatch.setattr(db_manager, "DB_FILE", tmp_path / "t.db")
+    db_manager.init_db()
+    monkeypatch.setattr(auth, "USERS_FILE", tmp_path / "users.json")
+    monkeypatch.setenv("RUFUS_AUTH_DISABLED", "1")
+    monkeypatch.setattr(dashboard, "ROOT", tmp_path)
+    monkeypatch.setenv("RUFUS_LOG_DIR", str(tmp_path / "logs"))
+    dashboard.app.config["TESTING"] = True
+    with dashboard.app.test_client() as c:
+        yield c
+
+
+def _start(client):
+    client.post("/create/new")
+    return db_manager.projects(status="open")[0]["id"]
+
+
+def test_a_fresh_dashboard_offers_to_start_one(client):
+    page = client.get("/create").get_data(as_text=True)
+    assert "Start a video" in page
+
+
+def test_a_new_project_opens_at_the_topic_stage(client):
+    pid = _start(client)
+    page = client.get(f"/create?project={pid}").get_data(as_text=True)
+    assert "What is it about?" in page
+    assert db_manager.project(pid)["stage"] == "topic"
+
+
+def test_suggesting_topics_fills_the_stage(client):
+    pid = _start(client)
+    client.post(f"/create/{pid}/regen/topic")
+    assert len(db_manager.project_topics(pid)) == 3
+
+
+def test_regen_replaces_the_options_rather_than_adding_to_them(client):
+    """The options are samples, not answers. A REGEN that appends gives you six
+    to read instead of three to choose between."""
+    pid = _start(client)
+    client.post(f"/create/{pid}/regen/topic")
+    client.post(f"/create/{pid}/regen/topic")
+    assert len(db_manager.project_topics(pid)) == 3
+
+
+def test_a_typed_topic_goes_straight_to_writing(client, monkeypatch):
+    """You said what you want. Nothing else is a question worth asking."""
+    import dashboard
+    started = {}
+    monkeypatch.setattr(dashboard, "_launch_candidates",
+                        lambda **kw: started.update(kw) or Path("c.log"))
+    pid = _start(client)
+    client.post(f"/create/{pid}/topic/custom", data={"topic": "Tulip mania"},
+                follow_redirects=True)
+    p = db_manager.project(pid)
+    assert p["title"] and p["topic_source"] == "typed"
+    assert p["stage"] == "script"
+    assert started.get("project_id") == pid
+
+
+def test_an_empty_typed_topic_is_refused(client):
+    pid = _start(client)
+    client.post(f"/create/{pid}/topic/custom", data={"topic": "  "})
+    assert db_manager.project(pid)["title"] is None
+
+
+# ── going back, which is the part that has to be right ──────────────────────
+
+def test_going_back_from_the_bar_forgets_what_came_after(client):
+    pid = _start(client)
+    db_manager.update_project(pid, title="T", script_id=1, script_file="s.txt",
+                              gallery_id=2, voice_id=3, stage="render")
+    client.post(f"/create/{pid}/back/script")
+    p = db_manager.project(pid)
+    assert p["stage"] == "script"
+    assert (p["script_id"], p["gallery_id"], p["voice_id"]) == (None, None, None)
+    assert p["title"] == "T"
+
+
+def test_the_bar_offers_a_way_back_to_earlier_stages_only(client):
+    """A link to a stage you have not reached is a link to an empty page."""
+    pid = _start(client)
+    db_manager.update_project(pid, title="T", script_id=1, script_file="s.txt",
+                              stage="gallery")
+    page = client.get(f"/create?project={pid}").get_data(as_text=True)
+    assert f"/create/{pid}/back/topic" in page
+    assert f"/create/{pid}/back/script" in page
+    assert f"/create/{pid}/back/voice" not in page
+
+
+def test_an_unknown_stage_is_refused_rather_than_guessed(client):
+    pid = _start(client)
+    client.post(f"/create/{pid}/back/colour-grade")
+    assert db_manager.project(pid)["stage"] == "topic"
+
+
+# ── the render is last, behind every judgement ──────────────────────────────
+
+def test_rendering_needs_every_decision_made(client, monkeypatch):
+    import dashboard
+    rendered = []
+    monkeypatch.setattr(dashboard, "_launch_run",
+                        lambda **kw: rendered.append(kw) or (None, Path("r.log")))
+    pid = _start(client)
+    db_manager.update_project(pid, title="T", stage="render")
+    client.post(f"/create/{pid}/render")
+    assert rendered == [], "a half-decided project must not render"
+
+
+def test_rendering_carries_every_choice_and_regenerates_none(client,
+                                                             monkeypatch):
+    import dashboard
+    launched = {}
+    monkeypatch.setattr(dashboard, "_launch_run",
+                        lambda **kw: launched.update(kw) or (None, Path("r.log")))
+    pid = _start(client)
+    sid = db_manager.save_gallery_set(candidate_id=1, channel="main_en",
+                                      niche="n", topic="T",
+                                      script_file="s.txt", n_variants=2)
+    tid = db_manager.save_voice_take(set_id=sid, channel="main_en", topic="T",
+                                     tone="weight", text="t", path="/a.mp3")
+    db_manager.update_project(pid, title="T", script_id=1, script_file="s.txt",
+                              gallery_id=sid, voice_id=tid, stage="render")
+    client.post(f"/create/{pid}/render")
+    assert launched["script_file"] == "s.txt"
+    assert launched["gallery_id"] == sid
+    assert launched["hook_tone"] == "weight"
+
+
+def test_abandoning_deletes_nothing(client):
+    """It cost real money and real GPU, and a project you gave up on is still
+    the record of three scripts somebody read and rejected."""
+    pid = _start(client)
+    client.post(f"/create/{pid}/regen/topic")
+    client.post(f"/create/{pid}/abandon")
+    assert db_manager.project(pid)["status"] == "abandoned"
+    assert len(db_manager.project_topics(pid)) == 3

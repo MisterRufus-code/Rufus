@@ -671,7 +671,8 @@ def _launch_run(*, niche: str | None = None, topic: str | None = None,
 
 
 def _launch_candidates(*, topic: str, proposal_id: int | None,
-                       channel: str | None = None) -> Path:
+                       channel: str | None = None,
+                       project_id: int | None = None) -> Path:
     """Write the script candidates for `topic` in a separate OS process.
 
     A SUBPROCESS FOR THE SAME REASON A RUN IS ONE. This Flask app runs
@@ -684,6 +685,8 @@ def _launch_candidates(*, topic: str, proposal_id: int | None,
     cmd = [sys.executable, str(ROOT / "scripts" / "script_candidates.py"), topic]
     if proposal_id is not None:
         cmd += ["--proposal", str(proposal_id)]
+    if project_id is not None:
+        cmd += ["--project", str(project_id)]
     env = os.environ.copy()
     env.update(_load_settings())
     env.setdefault("PYTHONUTF8", "1")
@@ -1684,7 +1687,8 @@ PAGE_STYLE = """<!doctype html><html><head><meta charset="utf-8">
 # Nav entries gated by permission — a partner never sees Settings or System,
 # because a link they can only get a 403 from is worse than no link at all.
 NAV_ITEMS = [
-    ("/generate",   "▶ Make a video",                     "generate"),
+    ("/create",     "✦ Make a video",                     "view"),
+    ("/generate",   "▶ Quick run (no choosing)",          "generate"),
     ("/thumbnails", "🎨 Thumbnails",                      "thumbnail"),
     ("/styles",     "🎨 Style",                           "settings"),
     ("/scout",      "🛰 Scout",                           "view"),
@@ -1720,7 +1724,7 @@ NAV_ITEMS = [
 # VIEW of it. The invariant that matters is that every registered page appears
 # somewhere here — a page that exists and is unreachable is worse than one
 # that was never written, and a test enforces it.
-NAV_PRIMARY = ("/scout", "/gallery", "/measure")
+NAV_PRIMARY = ("/create", "/gallery", "/measure")
 
 # GROUPED BY WHAT YOU CAME HERE TO DO, and the four choosing pages had been
 # filed under Measure — next to the analytics, because that is where a
@@ -1736,8 +1740,13 @@ NAV_PRIMARY = ("/scout", "/gallery", "/measure")
 # asks. It also leaves Setup holding nothing a viewer may open, which is what
 # keeps the empty-group rule testable with a real case.
 NAV_GROUPS = (
-    ("Make",    ("/scout", "/scripts", "/galleries", "/voice", "/generate",
-                 "/thumbnails")),
+    # MAKE IS WHERE YOU START ONE. /create walks all five decisions; the four
+    # per-stage pages are not steps any more, they are QUEUES — every pending
+    # script across every project, every gallery waiting on a base. Useful, and
+    # a different question from "make me a video", which is why seven links
+    # under one heading felt wrong before it broke the group-size rule.
+    ("Make",    ("/create", "/generate", "/thumbnails")),
+    ("Queues",  ("/scout", "/scripts", "/galleries", "/voice")),
     ("Review",  ("/gallery", "/history", "/failures", "/logs")),
     ("Measure", ("/measure", "/trending")),
     ("Setup",   ("/styles", "/voices", "/bench", "/system", "/settings")),
@@ -3839,6 +3848,556 @@ def galleries_use(set_id: int):
     return redirect("/voice?msg=" + _urlquote(
         f'{len(rows)} picture(s) settled. Recording three reads of the hook — '
         f'seconds, not minutes. Log: logs/{log_path.name}'))
+
+
+# ── One video, one page, five stages ─────────────────────────────────────────
+#
+# THE MESS THIS REPLACES, in the owner's words. Each choosing stage grew its
+# own page, and separately they work — but a person making a video does not
+# have four tasks, they have one. /scout, /scripts, /galleries and /voice are
+# four places to stand in a queue, none of which knows what the others decided.
+#
+# So: one page, the current stage on it, and every earlier stage reachable by
+# going back. The old pages stay — they are still the right view when you want
+# every pending script across every project at once — but this is the one a
+# video is actually made on.
+#
+# REGEN ON EVERY STAGE. The options at each step are samples, not answers, and
+# the honest thing to do with a set you do not like is draw another. It rebuilds
+# only the stage you are standing on.
+
+_WIZARD_STAGES = (
+    ("topic",   "Topic"),
+    ("script",  "Script"),
+    ("gallery", "Pictures"),
+    ("voice",   "Voice"),
+    ("render",  "Make it"),
+)
+
+
+def _wizard_bar(project: dict) -> str:
+    """Where this project is, and a way back to anything already decided."""
+    here = project.get("stage") or "topic"
+    order = [s for s, _t in _WIZARD_STAGES]
+    at = order.index(here) if here in order else 0
+    cells = []
+    for i, (stage, title) in enumerate(_WIZARD_STAGES):
+        inner = f'<span class="flow-i">{i + 1}</span>{title}'
+        if i < at:
+            # Earlier stages are links back. Later ones are not decided yet and
+            # a link to them would be a link to an empty page.
+            cells.append(
+                f'<form method="post" action="/create/{project["id"]}/back/'
+                f'{stage}" style="display:inline"><button class="flow-step" '
+                f'type="submit" title="go back and choose again">{inner}'
+                f'</button></form>')
+        else:
+            state = " here" if i == at else ""
+            cells.append(f'<span class="flow-step{state}">{inner}</span>')
+    return f'<nav class="flow" aria-label="the five stages">{"".join(cells)}</nav>'
+
+
+def _wizard_decided(p: dict) -> str:
+    bits = []
+    if p.get("title"):
+        bits.append(f'<strong>{_esc(p["title"])}</strong>')
+    for key, label in (("script_id", "script chosen"),
+                       ("gallery_id", "pictures chosen"),
+                       ("voice_id", "voice chosen")):
+        if p.get(key):
+            bits.append(label)
+    return f'<p class="muted">{" · ".join(bits)}</p>' if bits else ""
+
+
+def _regen(project_id: int, stage: str, label: str = "Give me another set") -> str:
+    return (f'<form method="post" action="/create/{project_id}/regen/{stage}" '
+            f'style="display:inline"><button type="submit">&#8635; {label}'
+            f'</button></form>')
+
+
+def _project_spans(p: dict) -> list:
+    """The measured shot lengths, from any take recorded for this project.
+
+    Any take: they were all measured against the same script and the same beat
+    count, and the takes differ in pace by a few per cent. Which one is chosen
+    changes the render's cut points, not whether shot three has room to be read.
+    """
+    import json as _json
+    try:
+        import db_manager as dbm
+        for t in dbm.voice_takes(set_id=p.get("gallery_id"), limit=10):
+            if t.get("spans"):
+                return _json.loads(t["spans"])
+    except Exception:
+        pass
+    return []
+
+
+def _wizard_topic(p: dict) -> str:
+    import db_manager as dbm
+    opts = dbm.project_topics(p["id"])
+    cards = ""
+    for o in opts:
+        cards += (
+            f'<div class="card" style="width:100%;margin-bottom:10px">'
+            f'<strong>{_esc(o["title"])}</strong>'
+            f'<p class="muted" style="margin:6px 0">{_esc(o["why"] or "")}</p>'
+            f'<form method="post" action="/create/{p["id"]}/topic/{o["id"]}">'
+            f'<button class="btn save" type="submit">Make this one</button>'
+            f'</form></div>')
+    if not opts:
+        cards = ('<p class="muted">No suggestions yet &mdash; press the button, '
+                 'or type the one you already want.</p>')
+    return (
+        '<h2 style="margin-top:22px">What is it about?</h2>'
+        '<p class="muted">Three worth making, each saying why it is here. Or '
+        'skip all of it and name the one you want &mdash; a topic you type is '
+        'not checked against trends or against what you have already made, '
+        'because you said what you want.</p>'
+        f'<div style="margin:10px 0">'
+        f'<form method="post" action="/create/{p["id"]}/regen/topic" '
+        f'style="display:inline"><button class="btn save" type="submit">'
+        f'Suggest 3 topics</button></form></div>'
+        f'{cards}'
+        f'<form method="post" action="/create/{p["id"]}/topic/custom" '
+        f'style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end;'
+        f'margin-top:16px">'
+        f'<div style="flex:1;min-width:220px">'
+        f'<label for="topic">&hellip;or a topic of your own</label>'
+        f'<input class="field" style="margin:6px 0 0" type="text" id="topic" '
+        f'name="topic" placeholder="e.g. Bretton Woods, Tulip mania" required>'
+        f'</div><button class="btn save" type="submit" style="height:38px">'
+        f'Use this</button></form>')
+
+
+def _wizard_script(p: dict) -> str:
+    import db_manager as dbm
+    rows = dbm.candidates(project_id=p["id"], status="pending", limit=20)
+    title = _esc(p.get("title") or "")
+    if not rows:
+        return (
+            f'<h2 style="margin-top:22px">Writing three scripts about '
+            f'&ldquo;{title}&rdquo;</h2>'
+            '<p class="muted">One per hook style &mdash; a minute or two. '
+            'Reload this page. If nothing appears, <a href="/logs">Logs</a> '
+            'says why.</p>'
+            f'<div style="margin:10px 0">'
+            f'{_regen(p["id"], "script", "Try again")}</div>')
+    cards = ""
+    for c in rows:
+        warn = ""
+        if not c.get("fact_ok", 1):
+            warn = (f'<div class="msg error" style="margin:8px 0">&#9888; the '
+                    f'source does not support this: '
+                    f'{_esc(c.get("fact_reason") or "unstated")}</div>')
+        words = len((c["script"] or "").split())
+        cards += (
+            f'<div class="card" style="width:100%;margin-bottom:10px">'
+            f'<div style="display:flex;justify-content:space-between;gap:12px">'
+            f'<strong>{_esc(c["hook"] or "—")}</strong>'
+            f'<span class="muted">{_esc(c["hook_style"] or "unpinned")} · '
+            f'{c["score"]}/10 · {words}w</span></div>{warn}'
+            f'<pre style="white-space:pre-wrap;font-size:13px;margin:8px 0">'
+            f'{_esc(c["script"] or "")}</pre>'
+            f'<form method="post" action="/create/{p["id"]}/script/{c["id"]}">'
+            f'<button class="btn save" type="submit">Make this one</button>'
+            f'</form></div>')
+    return (
+        f'<h2 style="margin-top:22px">Three scripts about '
+        f'&ldquo;{title}&rdquo;</h2>'
+        '<p class="muted">All three are about the topic you chose; they differ '
+        'in how they open. The score is shown, not enforced &mdash; nothing '
+        'was withheld for missing a bar, because that is your call. A red '
+        'warning means the source does not support a claim in it, which is the '
+        'one thing reading it cannot tell you.</p>'
+        f'<div style="margin:10px 0">{_regen(p["id"], "script")}</div>{cards}')
+
+
+def _wizard_gallery(p: dict) -> str:
+    import db_manager as dbm
+    sid = p.get("gallery_id")
+    if not sid:
+        sets = [g for g in dbm.gallery_sets(status=None, limit=30)
+                if g.get("candidate_id") == p.get("script_id")]
+        sid = sets[0]["id"] if sets else None
+    if not sid:
+        return (
+            '<h2 style="margin-top:22px">Recording the voice, then drawing the '
+            'pictures</h2>'
+            '<p class="muted">The voice is recorded first so the shot lengths '
+            'are measured from real audio rather than guessed from the word '
+            'count &mdash; which take gets used is the last thing you choose. '
+            'Two full galleries is about forty minutes of the GPU, so come '
+            'back rather than wait.</p>'
+            f'<div style="margin:10px 0">'
+            f'{_regen(p["id"], "gallery", "Start again")}</div>')
+    images = dbm.gallery_images(sid)
+    spans = _project_spans(p)
+    by_beat: dict = {}
+    for im in images:
+        by_beat.setdefault(im["beat_index"], []).append(im)
+    bases = ""
+    for v in sorted({im["variant"] for im in images}):
+        bases += (f'<form method="post" action="/galleries/{sid}/base/{v}" '
+                  f'style="display:inline"><button type="submit">Take all from '
+                  f'{chr(65 + v)}</button></form> ')
+    rows = ""
+    for beat in sorted(by_beat):
+        cells = ""
+        for im in sorted(by_beat[beat], key=lambda r: r["variant"]):
+            picked = im["status"] == "chosen"
+            swap = ""
+            if not picked:
+                swap = (f'<form method="post" action="/galleries/{sid}/swap/'
+                        f'{beat}/{im["variant"]}"><button type="submit">'
+                        f'use this one</button></form>')
+            cells += (
+                f'<td style="vertical-align:top;padding:6px;border:2px solid '
+                f'{"var(--ok)" if picked else "transparent"}">'
+                f'<img src="/galleries/image/{im["id"]}" style="width:150px;'
+                f'max-width:40vw;display:block" alt="shot {beat + 1}">'
+                f'<div class="muted" style="font-size:12px">'
+                f'{chr(65 + im["variant"])}{" · chosen" if picked else ""}'
+                f'</div>{swap}</td>')
+        secs = ""
+        if beat < len(spans):
+            secs = (f'<br><span style="font-size:11px">'
+                    f'{spans[beat]["seconds"]:.1f}s</span>')
+        prompt = (by_beat[beat][0]["prompt"] or "")[:120]
+        rows += (f'<tr><td class="muted" style="vertical-align:top">{beat + 1}'
+                 f'{secs}<br><span style="font-size:11px">{_esc(prompt)}'
+                 f'</span></td>{cells}</tr>')
+    return (
+        '<h2 style="margin-top:22px">Which pictures?</h2>'
+        '<p class="muted">Two complete draws of the same shots. Take one as a '
+        'base, then swap the shots the other won &mdash; a green border is what '
+        'ships. The seconds beside each shot are measured from the recorded '
+        'voice, not guessed, so you can see which pictures get time to be '
+        'read.</p>'
+        f'<div style="margin:10px 0">{bases}{_regen(p["id"], "gallery")}</div>'
+        f'<div style="overflow-x:auto"><table>{rows}</table></div>'
+        f'<form method="post" action="/create/{p["id"]}/gallery/{sid}" '
+        f'style="margin-top:14px"><button class="btn save" type="submit">'
+        f'These pictures</button></form>')
+
+
+def _wizard_voice(p: dict) -> str:
+    import db_manager as dbm
+    takes = dbm.voice_takes(set_id=p.get("gallery_id"), status="pending",
+                            limit=10)
+    if not takes:
+        return (
+            '<h2 style="margin-top:22px">Recording three takes</h2>'
+            '<p class="muted">Whole voiceovers, ready to use &mdash; they '
+            'differ in pace and weight.</p>'
+            f'<div style="margin:10px 0">'
+            f'{_regen(p["id"], "voice", "Try again")}</div>')
+    cards = ""
+    for t in takes:
+        secs = f' &middot; {t["seconds"]:.0f}s' if t.get("seconds") else ""
+        cards += (
+            f'<div class="card" style="width:100%;margin-bottom:10px">'
+            f'<strong>{_esc(t["tone"] or "—")}</strong>'
+            f'<span class="muted">{secs}</span>'
+            f'<audio controls preload="none" style="display:block;width:100%;'
+            f'margin:8px 0" src="/voice/audio/{t["id"]}"></audio>'
+            f'<form method="post" action="/create/{p["id"]}/voice/{t["id"]}">'
+            f'<button class="btn save" type="submit">Use this take</button>'
+            f'</form></div>')
+    return (
+        '<h2 style="margin-top:22px">Which read?</h2>'
+        '<p class="muted">Three complete voiceovers of the same script, '
+        'differing in pace and weight. Skip through rather than sitting '
+        'through &mdash; what you are judging is audible in ten seconds '
+        'anywhere in the file. The tone you pick also sizes this video&rsquo;s '
+        'pauses and grades its pictures.</p>'
+        f'<div style="margin:10px 0">{_regen(p["id"], "voice")}</div>{cards}')
+
+
+def _wizard_render(p: dict) -> str:
+    return (
+        '<h2 style="margin-top:22px">Everything is chosen</h2>'
+        '<p class="muted">Nothing below gets regenerated &mdash; the script you '
+        'read, the pictures you picked shot by shot and the take you listened '
+        'to are what gets made. It lands in the review queue like any other '
+        'video.</p>'
+        f'{_wizard_decided(p)}'
+        f'<form method="post" action="/create/{p["id"]}/render" '
+        f'style="margin-top:14px"><button class="btn save" type="submit">'
+        f'Make the video</button></form>')
+
+
+_WIZARD_BODY = {"topic": _wizard_topic, "script": _wizard_script,
+                "gallery": _wizard_gallery, "voice": _wizard_voice,
+                "render": _wizard_render}
+
+
+@app.route("/create")
+def create_page():
+    """One video, one page, five stages."""
+    auth.require("view")
+    import db_manager as dbm
+    pid = request.args.get("project", type=int)
+    try:
+        open_ones = dbm.projects(status="open", limit=10)
+        p = dbm.project(pid) if pid else (open_ones[0] if open_ones else None)
+    except Exception as e:
+        return _head() + ('<a class="back" href="/">&larr; back</a>'
+                          '<h2 style="margin-top:14px">Make a video</h2>'
+                          f'<div class="msg error">{_esc(str(e))}</div>'
+                          ) + PAGE_TAIL
+
+    if not p:
+        body = (
+            '<a class="back" href="/">&larr; back</a>'
+            '<h2 style="margin-top:14px">Make a video</h2>'
+            f'{_msg_banner()}'
+            '<p class="muted">Five decisions, one at a time: what it is about, '
+            'which script, which pictures, which read, then make it. You can go '
+            'back to any decision you have already made and choose again.</p>'
+            '<form method="post" action="/create/new" style="margin-top:14px">'
+            '<button class="btn save" type="submit">Start a video</button>'
+            '</form>')
+        return _head() + body + PAGE_TAIL
+
+    stage = p.get("stage") or "topic"
+    try:
+        inner = _WIZARD_BODY.get(stage, _wizard_topic)(p)
+    except Exception as e:
+        # One stage that cannot render must not cost the way back out of it.
+        inner = f'<div class="msg error">{_esc(str(e))}</div>'
+
+    others = ""
+    if len(open_ones) > 1:
+        links = " &middot; ".join(
+            f'<a href="/create?project={o["id"]}">'
+            f'{_esc(o["title"] or ("#" + str(o["id"])))}</a>'
+            for o in open_ones)
+        others = f'<p class="muted">Also open: {links}</p>'
+
+    body = (
+        '<a class="back" href="/">&larr; back</a>'
+        '<h2 style="margin-top:14px">Make a video</h2>'
+        f'{_msg_banner()}{_wizard_bar(p)}{_wizard_decided(p)}{inner}'
+        f'<form method="post" action="/create/{p["id"]}/abandon" '
+        f'style="margin-top:26px"><button type="submit">Abandon this one'
+        f'</button></form>{others}')
+    return _head() + body + PAGE_TAIL
+
+
+# ── the wizard's verbs ───────────────────────────────────────────────────────
+#
+# One rule runs through all of them: choosing at a stage advances to the next,
+# and going back to a stage forgets it and everything after it. The second half
+# is the one that is easy to skip and impossible to live without — pictures
+# drawn for a script you have replaced are not stale, they are pictures of a
+# different video.
+
+def _project_or_home(project_id: int):
+    import db_manager as dbm
+    p = dbm.project(project_id)
+    if not p:
+        return None, redirect("/create?error=" + _urlquote("no such project"))
+    return p, None
+
+
+@app.route("/create/new", methods=["POST"])
+def create_new():
+    auth.require("generate")
+    import db_manager as dbm
+    import research
+    try:
+        niche = research._load_niche()[1]
+    except Exception:
+        niche = "money_history"
+    try:
+        from channel_config import load_channel
+        channel = load_channel().id
+    except Exception:
+        channel = "main_en"
+    pid = dbm.new_project(channel=channel, niche=niche)
+    return redirect(f"/create?project={pid}")
+
+
+@app.route("/create/<int:project_id>/abandon", methods=["POST"])
+def create_abandon(project_id: int):
+    """Abandoned, not deleted. What was drawn and written stays on disk and in
+    the tables — it cost real money and real GPU, and a project you gave up on
+    is still the record of three scripts somebody read and rejected."""
+    auth.require("generate")
+    import db_manager as dbm
+    dbm.update_project(project_id, status="abandoned")
+    return redirect("/create?msg=" + _urlquote("Abandoned. Nothing was deleted."))
+
+
+@app.route("/create/<int:project_id>/back/<stage>", methods=["POST"])
+def create_back(project_id: int, stage: str):
+    auth.require("generate")
+    import db_manager as dbm
+    try:
+        dbm.clear_project_from(project_id, stage)
+    except ValueError as e:
+        return redirect(f"/create?project={project_id}&error=" + _urlquote(str(e)))
+    return redirect(f"/create?project={project_id}&msg=" + _urlquote(
+        f"Back at the {stage} stage — everything after it is forgotten."))
+
+
+@app.route("/create/<int:project_id>/regen/<stage>", methods=["POST"])
+def create_regen(project_id: int, stage: str):
+    """Draw this stage again. The options are samples, not answers."""
+    auth.require("generate")
+    import db_manager as dbm
+    p, bail = _project_or_home(project_id)
+    if bail:
+        return bail
+    try:
+        if stage == "topic":
+            import topic_options
+            opts = topic_options.suggest(p["niche"] or "money_history", 3)
+            n = dbm.save_project_topics(project_id, opts)
+            dbm.update_project(project_id, stage="topic")
+            return redirect(f"/create?project={project_id}&msg="
+                            + _urlquote(f"{n} topic(s) to choose from."))
+        if stage == "script":
+            if not p.get("title"):
+                return redirect(f"/create?project={project_id}&error="
+                                + _urlquote("choose a topic first"))
+            log = _launch_candidates(topic=p["title"], proposal_id=None,
+                                     channel=p["channel"],
+                                     project_id=project_id)
+            return redirect(f"/create?project={project_id}&msg=" + _urlquote(
+                f"Writing three scripts — a minute or two. Log: logs/{log.name}"))
+        if stage == "gallery":
+            if not p.get("script_file"):
+                return redirect(f"/create?project={project_id}&error="
+                                + _urlquote("choose a script first"))
+            log = _launch_galleries(script_file=p["script_file"],
+                                    candidate_id=p.get("script_id"),
+                                    topic=p.get("title") or "")
+            return redirect(f"/create?project={project_id}&msg=" + _urlquote(
+                f"Recording the voice, then drawing two galleries — about "
+                f"forty minutes. Log: logs/{log.name}"))
+        if stage == "voice":
+            if not p.get("gallery_id") or not p.get("script_file"):
+                return redirect(f"/create?project={project_id}&error="
+                                + _urlquote("settle the pictures first"))
+            log = _launch_voice_takes(script_file=p["script_file"],
+                                      set_id=p["gallery_id"],
+                                      topic=p.get("title") or "")
+            return redirect(f"/create?project={project_id}&msg=" + _urlquote(
+                f"Recording three takes. Log: logs/{log.name}"))
+    except Exception as e:
+        return redirect(f"/create?project={project_id}&error="
+                        + _urlquote(f"could not start: {e}"))
+    return redirect(f"/create?project={project_id}&error="
+                    + _urlquote(f"nothing to regenerate at {stage!r}"))
+
+
+@app.route("/create/<int:project_id>/topic/custom", methods=["POST"])
+def create_topic_custom(project_id: int):
+    """The topic you already wanted. No trending check, no de-duplication."""
+    auth.require("generate")
+    import db_manager as dbm
+    import topic_options
+    p, bail = _project_or_home(project_id)
+    if bail:
+        return bail
+    typed = (request.form.get("topic") or "").strip()
+    if not typed:
+        return redirect(f"/create?project={project_id}&error="
+                        + _urlquote("type a topic"))
+    got = topic_options.take_topic(typed, p["niche"] or "money_history")
+    dbm.update_project(project_id, title=got["title"],
+                       topic_source="typed", stage="script")
+    return redirect(f"/create/{project_id}/regen/script", code=307)
+
+
+@app.route("/create/<int:project_id>/topic/<int:topic_id>", methods=["POST"])
+def create_topic_choose(project_id: int, topic_id: int):
+    auth.require("generate")
+    import db_manager as dbm
+    got = dbm.choose_project_topic(topic_id)
+    if not got:
+        return redirect(f"/create?project={project_id}&error="
+                        + _urlquote("that one is not pending"))
+    dbm.update_project(project_id, title=got["title"],
+                       topic_source="suggested", stage="script")
+    return redirect(f"/create/{project_id}/regen/script", code=307)
+
+
+@app.route("/create/<int:project_id>/script/<int:candidate_id>",
+           methods=["POST"])
+def create_script_choose(project_id: int, candidate_id: int):
+    auth.require("generate")
+    import db_manager as dbm
+    chosen = dbm.choose_candidate(candidate_id)
+    if not chosen:
+        return redirect(f"/create?project={project_id}&error="
+                        + _urlquote("that script is not pending"))
+    out_dir = paths.log_dir() / "chosen_scripts"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    script_file = out_dir / f"candidate_{candidate_id}.txt"
+    script_file.write_text(chosen["script"] or "", encoding="utf-8")
+    dbm.update_project(project_id, script_id=candidate_id,
+                       script_file=str(script_file), stage="gallery")
+    return redirect(f"/create/{project_id}/regen/gallery", code=307)
+
+
+@app.route("/create/<int:project_id>/gallery/<int:set_id>", methods=["POST"])
+def create_gallery_choose(project_id: int, set_id: int):
+    auth.require("generate")
+    import db_manager as dbm
+    rows = dbm.chosen_gallery(set_id)
+    if not rows:
+        return redirect(f"/create?project={project_id}&error=" + _urlquote(
+            "every shot needs a picked picture first — take a base"))
+    dbm.decide_gallery_set(set_id, "chosen")
+    dbm.update_project(project_id, gallery_id=set_id, stage="voice")
+    return redirect(f"/create?project={project_id}&msg=" + _urlquote(
+        f"{len(rows)} picture(s) settled."))
+
+
+@app.route("/create/<int:project_id>/voice/<int:take_id>", methods=["POST"])
+def create_voice_choose(project_id: int, take_id: int):
+    auth.require("generate")
+    import db_manager as dbm
+    take = dbm.choose_voice_take(take_id)
+    if not take:
+        return redirect(f"/create?project={project_id}&error="
+                        + _urlquote("that take is not pending"))
+    dbm.update_project(project_id, voice_id=take_id, stage="render")
+    return redirect(f"/create?project={project_id}")
+
+
+@app.route("/create/<int:project_id>/render", methods=["POST"])
+def create_render(project_id: int):
+    """The last click. Everything it uses was chosen by a person."""
+    auth.require("generate")
+    import db_manager as dbm
+    p, bail = _project_or_home(project_id)
+    if bail:
+        return bail
+    missing = [name for name, key in (("a topic", "title"),
+                                      ("a script", "script_file"),
+                                      ("pictures", "gallery_id"),
+                                      ("a voice", "voice_id"))
+               if not p.get(key)]
+    if missing:
+        return redirect(f"/create?project={project_id}&error=" + _urlquote(
+            f"still needs {', '.join(missing)}"))
+    take = next((t for t in dbm.voice_takes(set_id=p["gallery_id"], limit=10)
+                 if t["id"] == p["voice_id"]), None)
+    try:
+        _, log = _launch_run(script_file=p["script_file"], channel=p["channel"],
+                             gallery_id=p["gallery_id"],
+                             hook_tone=(take or {}).get("tone"))
+    except Exception as e:
+        return redirect(f"/create?project={project_id}&error="
+                        + _urlquote(f"could not start: {e}"))
+    dbm.update_project(project_id, status="rendering")
+    return redirect("/create?msg=" + _urlquote(
+        f'Making "{p["title"]}" — it lands in the review queue like any other '
+        f'video. Log: logs/{log.name}'))
 
 
 # ── Choosing the narrator ────────────────────────────────────────────────────
