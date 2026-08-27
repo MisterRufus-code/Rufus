@@ -5403,7 +5403,14 @@ def mark_published(video_id: int):
     auth.require("approve")
     _require_localhost()
     raw = request.form.get("youtube", "")
-    if not db_manager.mark_published(video_id, raw):
+    try:
+        ok = db_manager.mark_published(video_id, raw)
+    except ValueError as e:
+        # The same link pasted onto a second video. Refused rather than
+        # accepted, because analytics joins on this column: the duplicate does
+        # not just mislabel one row, it credits both with one video's views.
+        return redirect(f"/video/{video_id}?error=" + _urlquote(str(e)))
+    if not ok:
         return redirect(f"/video/{video_id}?error=" + _urlquote(
             f"Couldn't find a YouTube id in {raw[:60]!r}. Paste the video's "
             f"link or its 11-character id."))

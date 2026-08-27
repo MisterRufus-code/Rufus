@@ -202,3 +202,62 @@ def test_learned_hooks_are_shown_when_they_exist(client, db, monkeypatch):
 
 def test_a_missing_learnings_file_is_not_an_error(db):
     assert dashboard._learnings("nope-not-a-channel") == {}
+
+
+def test_one_youtube_id_belongs_to_one_video(tmp_path, monkeypatch):
+    """THE DAMAGE THIS PREVENTS. Six rows in the owner's real database carry
+    the id kGVAHaObJ38 — six different mp4s, one link pasted six times. It is
+    an easy mistake from a phone and there was no guard.
+
+    The harm is not the wrong link. Analytics joins metrics on this column, so
+    all six were credited with a seventh video's views: identical counts, a
+    watch percentage of zero, across scripts with nothing in common. Five
+    videos that were never published looked published and performed like a
+    video they are not — data that teaches the wrong lesson, which is worse
+    than no data."""
+    import pytest
+    import db_manager as dbm
+    monkeypatch.setattr(dbm, "DB_FILE", tmp_path / "dup.db")
+    dbm.init_db()
+    a = dbm.save_video(niche="n", script_hook="a", scene_desc="d",
+                       video_file="a.mp4", score=8)
+    b = dbm.save_video(niche="n", script_hook="b", scene_desc="d",
+                       video_file="b.mp4", score=8)
+    assert dbm.mark_published(a, "https://youtu.be/kGVAHaObJ38")
+    with pytest.raises(ValueError) as e:
+        dbm.mark_published(b, "https://youtu.be/kGVAHaObJ38")
+    assert str(a) in str(e.value), "the error has to name the row that owns it"
+
+    with dbm._conn() as c:
+        n = c.execute("SELECT COUNT(*) FROM videos WHERE youtube_id=?",
+                      ("kGVAHaObJ38",)).fetchone()[0]
+    assert n == 1, "the second write must not have landed"
+
+
+def test_re_recording_the_same_video_is_still_allowed(tmp_path, monkeypatch):
+    """Correcting a link on the row that already owns it is not a duplicate."""
+    import db_manager as dbm
+    monkeypatch.setattr(dbm, "DB_FILE", tmp_path / "same.db")
+    dbm.init_db()
+    v = dbm.save_video(niche="n", script_hook="a", scene_desc="d",
+                       video_file="a.mp4", score=8)
+    assert dbm.mark_published(v, "https://youtu.be/kGVAHaObJ38")
+    assert dbm.mark_published(v, "https://youtu.be/kGVAHaObJ38")
+
+
+def test_the_audit_finds_ids_that_got_in_before_the_guard(tmp_path, monkeypatch):
+    """A guard added today does not clean up the rows that predate it, and
+    those rows still feed another video's views into every average."""
+    import db_manager as dbm
+    monkeypatch.setattr(dbm, "DB_FILE", tmp_path / "audit.db")
+    dbm.init_db()
+    ids = [dbm.save_video(niche="n", script_hook=str(i), scene_desc="d",
+                          video_file=f"{i}.mp4", score=8) for i in range(3)]
+    with dbm._conn() as c:          # written the way the old code would have
+        for i in ids:
+            c.execute("UPDATE videos SET youtube_id='kGVAHaObJ38' WHERE id=?", (i,))
+    dupes = dbm.duplicate_youtube_ids()
+    assert len(dupes) == 1
+    assert dupes[0]["youtube_id"] == "kGVAHaObJ38"
+    assert dupes[0]["count"] == 3
+    assert sorted(dupes[0]["video_ids"]) == sorted(ids)

@@ -1325,10 +1325,45 @@ def mark_published(video_id: int, youtube_id: str,
         return False
     when = published_at or datetime.now().strftime("%Y-%m-%d")
     with _conn() as c:
+        # ONE YOUTUBE ID BELONGS TO ONE VIDEO, and nothing here used to say so.
+        # Six rows in the owner's database carry the id kGVAHaObJ38 — six
+        # different mp4s, six different scripts, one link pasted six times. It
+        # is an easy mistake to make from a phone and there was no guard.
+        #
+        # The damage is not the wrong link. It is that analytics joins metrics
+        # on this column, so all six rows were credited with a SEVENTH video's
+        # views — identical view counts and a watch percentage of zero,
+        # spread across scripts that had nothing to do with each other. Five
+        # videos that were never published looked published and performed
+        # like a video they are not, which is worse than having no data: it
+        # is data that teaches the wrong lesson.
+        taken = c.execute("SELECT id FROM videos WHERE youtube_id=? AND id<>?",
+                          (yt, int(video_id))).fetchone()
+        if taken:
+            raise ValueError(
+                f"{yt} is already recorded as video #{taken[0]}. One YouTube "
+                f"id belongs to one video — if #{taken[0]} is wrong, clear it "
+                f"first; if this one is a different upload, use its own link.")
         c.execute("UPDATE videos SET youtube_id=?, upload_status='approved', "
                   "upload_date=?, uploaded_at=COALESCE(uploaded_at, ?) "
                   "WHERE id=?", (yt, when, published_at or _now(), video_id))
     return True
+
+
+def duplicate_youtube_ids() -> list[dict]:
+    """Ids claimed by more than one video, worst first.
+
+    Read by the audit on the measure page: a guard added today does not clean
+    up the rows that got in before it, and those rows are still feeding another
+    video's views into every average the learning loop computes.
+    """
+    with _conn() as c:
+        rows = c.execute(
+            "SELECT youtube_id, COUNT(*) n, GROUP_CONCAT(id) ids FROM videos "
+            "WHERE youtube_id IS NOT NULL AND youtube_id <> '' "
+            "GROUP BY youtube_id HAVING n > 1 ORDER BY n DESC").fetchall()
+    return [{"youtube_id": r[0], "count": r[1],
+             "video_ids": [int(x) for x in str(r[2]).split(",")]} for r in rows]
 
 
 def history(limit: int = 200, channel: str | None = None) -> list[dict]:
