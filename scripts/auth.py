@@ -32,6 +32,7 @@ SETUP
     python scripts/auth.py add james --role partner
     python scripts/auth.py add james --role partner --google james@gmail.com
     python scripts/auth.py list
+    python scripts/auth.py role james owner       # change a role, link unchanged
     python scripts/auth.py link james             # reprint a link without rotating the token
     python scripts/auth.py rotate owner           # NEW token, same user — for a leaked link
     python scripts/auth.py revoke james
@@ -240,6 +241,41 @@ def rotate_token(name: str) -> dict | None:
             u["token"] = _new_token()
             _save_users(users)
             return u
+    return None
+
+
+def set_role(name: str, role_name: str) -> dict | None:
+    """Change an existing user's role in place. Returns them, or None.
+
+    THE PATH THAT DID NOT EXIST, in the same shape rotate_token filled. A role
+    is a decision that gets revised — somebody added as a partner turns out to
+    be running the channel with you — and the only route was revoke, then add.
+    That works for everyone except the person it matters most for: revoke_user
+    refuses the last owner by design, so an owner could never be demoted, and
+    everyone else lost their sign-in link in the process. A role change is not
+    a new person; the link should survive it.
+
+    Refuses to remove the last owner for the same reason revoke_user does:
+    demoting the only owner leaves a dashboard nobody can administer, and no
+    command inside it can undo that.
+    """
+    if role_name not in ROLE_PERMISSIONS:
+        raise AuthError(f"Unknown role '{role_name}'. Valid: {', '.join(ROLES)}")
+    users = _load_users()
+    for u in users:
+        if u.get("name") != name:
+            continue
+        if u.get("role") == "owner" and role_name != "owner":
+            others = [x for x in users
+                      if x is not u and x.get("role") == "owner"]
+            if not others:
+                raise AuthError(
+                    f"'{name}' is the only owner — making them a "
+                    f"{role_name} would leave nobody who can add users or "
+                    f"change settings. Promote somebody else first.")
+        u["role"] = role_name
+        _save_users(users)
+        return u
     return None
 
 
@@ -620,6 +656,22 @@ def _cmd_revoke(name: str) -> int:
     return 0
 
 
+def _cmd_role(name: str, role_name: str) -> int:
+    try:
+        user = set_role(name, role_name)
+    except AuthError as e:
+        print(e)
+        return 1
+    if user is None:
+        print(f"No user called '{name}'. `auth.py list` shows who exists.")
+        return 1
+    print(f"'{name}' is now {role_name}. Their sign-in link is unchanged.")
+    if role_name == "owner":
+        print("  An owner can approve and upload to the channel, change "
+              "settings, delete files, and add or remove users.")
+    return 0
+
+
 def main(argv: list[str]) -> int:
     if not argv:
         print(__doc__)
@@ -642,6 +694,11 @@ def main(argv: list[str]) -> int:
             if i + 1 < len(argv):
                 google_email = argv[i + 1]
         return _cmd_add(argv[1], role_name, google_email)
+    if cmd == "role":
+        if len(argv) < 3:
+            print(f"usage: auth.py role <name> <{'|'.join(ROLES)}>")
+            return 1
+        return _cmd_role(argv[1], argv[2])
     if cmd == "list":
         return _cmd_list()
     if cmd == "link":
@@ -659,8 +716,8 @@ def main(argv: list[str]) -> int:
             print("usage: auth.py revoke <name>")
             return 1
         return _cmd_revoke(argv[1])
-    print(f"Unknown command '{cmd}'. Try: init | add | list | link | rotate "
-          f"| revoke")
+    print(f"Unknown command '{cmd}'. Try: init | add | role | list | link "
+          f"| rotate | revoke")
     return 1
 
 

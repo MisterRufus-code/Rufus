@@ -1031,3 +1031,81 @@ def test_an_empty_group_is_omitted_rather_than_rendered_bare(client):
     groups = re.findall(r'navgroup-t">([^<]+)<', header)
     assert "Setup" not in groups
     assert "Review" in groups, "a viewer can still review"
+
+
+def test_a_role_can_be_changed_without_reissuing_the_link(tmp_path, monkeypatch):
+    """THE PATH THAT DID NOT EXIST. A role is a decision that gets revised —
+    somebody added as a partner turns out to be running the channel with you —
+    and the only route was revoke then add, which hands them a new link and
+    invalidates the one they already have."""
+    import auth
+    monkeypatch.setattr(auth, "USERS_FILE", tmp_path / "u.json")
+    auth.add_user("owner", "owner")
+    james = auth.add_user("james", "partner")
+    token = james["token"]
+
+    got = auth.set_role("james", "owner")
+
+    assert got["role"] == "owner"
+    assert got["token"] == token, "a role change is not a new person"
+    assert auth.user_for_token(token)["role"] == "owner"
+
+
+def test_an_owner_role_carries_the_owner_powers(tmp_path, monkeypatch):
+    import auth
+    monkeypatch.setattr(auth, "USERS_FILE", tmp_path / "u.json")
+    auth.add_user("owner", "owner")
+    auth.add_user("james", "partner")
+    auth.set_role("james", "owner")
+    perms = auth.ROLE_PERMISSIONS[auth._load_users()[1]["role"]]
+    for p in ("approve", "settings", "manage_users", "delete"):
+        assert p in perms
+
+
+def test_the_last_owner_cannot_be_demoted(tmp_path, monkeypatch):
+    """Demoting the only owner leaves a dashboard nobody can administer, and
+    no command inside it can undo that. Same guard revoke_user has, for the
+    same reason."""
+    import pytest
+    import auth
+    monkeypatch.setattr(auth, "USERS_FILE", tmp_path / "u.json")
+    auth.add_user("owner", "owner")
+    auth.add_user("james", "partner")
+    with pytest.raises(auth.AuthError) as e:
+        auth.set_role("owner", "partner")
+    assert "only owner" in str(e.value)
+    assert auth._load_users()[0]["role"] == "owner"
+
+
+def test_demoting_an_owner_is_fine_when_another_one_remains(tmp_path, monkeypatch):
+    import auth
+    monkeypatch.setattr(auth, "USERS_FILE", tmp_path / "u.json")
+    auth.add_user("a", "owner")
+    auth.add_user("b", "owner")
+    assert auth.set_role("b", "partner")["role"] == "partner"
+
+
+def test_an_unknown_role_is_refused(tmp_path, monkeypatch):
+    import pytest
+    import auth
+    monkeypatch.setattr(auth, "USERS_FILE", tmp_path / "u.json")
+    auth.add_user("owner", "owner")
+    with pytest.raises(auth.AuthError):
+        auth.set_role("owner", "admin")
+
+
+def test_setting_a_role_on_a_stranger_returns_none(tmp_path, monkeypatch):
+    import auth
+    monkeypatch.setattr(auth, "USERS_FILE", tmp_path / "u.json")
+    auth.add_user("owner", "owner")
+    assert auth.set_role("nobody", "partner") is None
+
+
+def test_the_role_command_is_reachable_from_the_cli(tmp_path, monkeypatch, capsys):
+    import auth
+    monkeypatch.setattr(auth, "USERS_FILE", tmp_path / "u.json")
+    auth.add_user("owner", "owner")
+    auth.add_user("james", "partner")
+    assert auth.main(["role", "james", "owner"]) == 0
+    assert auth._load_users()[1]["role"] == "owner"
+    assert "role" in auth.__doc__, "the usage block has to mention it"

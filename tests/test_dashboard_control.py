@@ -1501,3 +1501,27 @@ def test_the_draws_stay_two_across_at_every_width():
     assert "repeat(2, 1fr)" in rule
     assert ".draws" not in src.split("@media", 1)[-1].split(".shot {", 1)[0] \
         or "repeat(2" in src, "no media query may collapse the pair"
+
+
+def test_the_users_page_can_change_a_role_in_place():
+    """Revoke-and-re-add hands somebody a new sign-in link and kills the one
+    they already have. A role change is not a new person."""
+    src = Path(dashboard.__file__).read_text(encoding="utf-8")
+    assert '/settings/users/role' in src
+    assert "auth.set_role(" in src
+
+
+def test_the_role_route_is_owner_only():
+    """Hiding the control is cosmetic; the route is the enforcement."""
+    src = Path(dashboard.__file__).read_text(encoding="utf-8")
+    body = src.split("def settings_users_role", 1)[1].split("\n@app.route", 1)[0]
+    assert 'auth.require("manage_users")' in body
+
+
+def test_the_last_owner_guard_lives_in_auth_not_in_the_route():
+    """A rule enforced in one of two front doors is a rule the other front
+    door has never heard of. The route must not re-implement it."""
+    src = Path(dashboard.__file__).read_text(encoding="utf-8")
+    body = src.split("def settings_users_role", 1)[1].split("\n@app.route", 1)[0]
+    assert "last_owner" not in body and "only owner" not in body
+    assert "auth.AuthError" in body, "it has to surface auth's refusal"

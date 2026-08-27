@@ -3324,8 +3324,25 @@ def _users_table_rows(users: list[dict]) -> str:
         via = (f'Google: {_esc(u["google_email"])}' if u.get("google_email")
                else "token link")
         name = _esc(u.get("name", ""))
+        # THE ROLE IS EDITABLE IN PLACE, not revoke-and-re-add. A role gets
+        # revised — somebody added as a partner turns out to be running the
+        # channel with you — and the old route handed them a new sign-in link
+        # and killed the one they already had. A role change is not a new
+        # person.
+        current = u.get("role", "")
+        options = "".join(
+            f'<option value="{r}"{" selected" if r == current else ""}>{r}</option>'
+            for r in auth.ROLES)
+        role_cell = (
+            f'<form method="post" action="/settings/users/role" '
+            f'style="display:flex;gap:6px;align-items:center">'
+            f'<input type="hidden" name="name" value="{name}">'
+            f'<select name="role" class="field" style="margin:0;padding:3px 6px;'
+            f'width:auto" aria-label="Role for {name}">{options}</select>'
+            f'<button type="submit" style="padding:4px 9px">Set</button>'
+            f'</form>')
         rows += (
-            f'<tr><td>{name}</td><td>{_esc(u.get("role",""))}</td><td>{via}</td>'
+            f'<tr><td>{name}</td><td>{role_cell}</td><td>{via}</td>'
             f'<td style="white-space:nowrap">'
             f'<form method="post" action="/settings/users/link" style="display:inline">'
             f'<input type="hidden" name="name" value="{name}">'
@@ -3403,6 +3420,27 @@ def settings_users_add():
     return redirect(
         f"/settings/users?ok={_urlquote(f'Added {name} as {role_name}.')}"
         f"&link={_urlquote(link)}&name={_urlquote(name)}")
+
+
+@app.route("/settings/users/role", methods=["POST"])
+def settings_users_role():
+    """Change a role in place, backed by the same auth.set_role() the CLI uses.
+
+    The last-owner guard lives in auth, not here — a rule enforced in one of
+    two front doors is a rule the other front door has never heard of.
+    """
+    auth.require("manage_users")
+    name = (request.form.get("name") or "").strip()
+    role_name = (request.form.get("role") or "").strip()
+    try:
+        user = auth.set_role(name, role_name)
+    except auth.AuthError as e:
+        return redirect("/settings/users?error=" + _urlquote(str(e)))
+    if user is None:
+        return redirect("/settings/users?error="
+                        + _urlquote(f"No user called {name!r}."))
+    return redirect("/settings/users?ok=" + _urlquote(
+        f"{name} is now {role_name}. Their sign-in link is unchanged."))
 
 
 @app.route("/settings/users/revoke", methods=["POST"])
