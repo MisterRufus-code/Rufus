@@ -32,6 +32,7 @@ separate thing to build, not a variant to choose between.
     RUFUS_VOICE_TAKE_HOOK_ONLY   0   record just the opening line instead
 """
 
+import json
 import os
 import sys
 from pathlib import Path
@@ -109,7 +110,8 @@ def tones_for(script: str, n: int) -> list[str]:
 
 
 def build(script_file: str, *, set_id: int, channel: str = "main_en",
-          topic: str = "", n: int | None = None) -> list[dict]:
+          topic: str = "", n: int | None = None,
+          n_beats: int | None = None) -> list[dict]:
     """Record the hook once per tone. Returns the rows saved.
 
     Fail-open per take, like every other loop here: a tone the backend chokes
@@ -150,9 +152,31 @@ def build(script_file: str, *, set_id: int, channel: str = "main_en",
         if not mp3.exists() or mp3.stat().st_size < 1_000:
             print(f"[takes] {tone}: the file came back empty")
             continue
+        # MEASURED NOW, SHOWN LATER. The whole reason a take is recorded
+        # before the pictures are drawn: shot lengths come from Whisper
+        # reading real audio, and until a take exists there is nothing to
+        # read. n_beats is how many pictures the video wants — pass it and
+        # the gallery stage can say "shot 3, 4.2s" beside each one.
+        spans, seconds = [], 0.0
+        if n_beats:
+            try:
+                import beat_timing
+                spans = beat_timing.measure(mp3, speech, n_beats, [tone])
+                seconds = spans[-1]["end"] if spans else 0.0
+                if spans:
+                    print(f"[takes]   {beat_timing.describe(spans)}")
+                short = beat_timing.too_short(spans)
+                if short:
+                    print(f"[takes]   ⚠ shot(s) {[i+1 for i in short]} land on "
+                          f"the minimum — the narration cannot carry that many "
+                          f"pictures")
+            except Exception as e:
+                print(f"[takes]   no shot lengths ({e})")
+
         row_id = db_manager.save_voice_take(
             set_id=set_id, channel=channel, topic=topic, tone=tone,
-            text=speech, path=str(mp3))
+            text=speech, path=str(mp3), seconds=seconds,
+            spans=json.dumps(spans) if spans else "")
         saved.append({"id": row_id, "tone": tone, "path": str(mp3)})
         print(f"[takes] #{row_id} {tone} — {mp3.name}")
 

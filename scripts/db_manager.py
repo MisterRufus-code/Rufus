@@ -290,11 +290,22 @@ def init_db():
                 text        TEXT,
                 path        TEXT,
                 status      TEXT DEFAULT 'pending',
-                decided_at  TEXT
+                decided_at  TEXT,
+                seconds     REAL DEFAULT 0,
+                spans       TEXT
             )
         """)
         c.execute("CREATE INDEX IF NOT EXISTS idx_vtake_set "
                   "ON voice_takes(set_id, status)")
+        # Measured from the audio by Whisper, not guessed from the word count.
+        # A take is recorded before the pictures are drawn precisely so the
+        # gallery stage can say how long each shot will be on screen.
+        for ddl in ("ALTER TABLE voice_takes ADD COLUMN seconds REAL DEFAULT 0",
+                    "ALTER TABLE voice_takes ADD COLUMN spans TEXT"):
+            try:
+                c.execute(ddl)
+            except Exception:
+                pass
         # ONE VIDEO IN PROGRESS, ACROSS ALL OF ITS STAGES.
         #
         # The four choosing stages each grew their own table and their own
@@ -954,16 +965,18 @@ def decide_gallery_set(set_id: int, status: str = "chosen") -> bool:
 # ── voice takes ──────────────────────────────────────────────────────────────
 
 _VTAKE_COLS = ["id", "created_at", "set_id", "channel", "topic", "tone",
-               "text", "path", "status", "decided_at"]
+               "text", "path", "status", "decided_at", "seconds", "spans"]
 
 
 def save_voice_take(*, set_id: int, channel: str, topic: str, tone: str,
-                    text: str, path: str) -> int:
+                    text: str, path: str, seconds: float = 0.0,
+                    spans: str = "") -> int:
     with _conn() as c:
         cur = c.execute(
             "INSERT INTO voice_takes (set_id, channel, topic, tone, text, "
-            "path) VALUES (?,?,?,?,?,?)",
-            (int(set_id), channel, topic, tone, text, str(path)))
+            "path, seconds, spans) VALUES (?,?,?,?,?,?,?,?)",
+            (int(set_id), channel, topic, tone, text, str(path),
+             float(seconds or 0), spans))
         return cur.lastrowid
 
 
