@@ -842,6 +842,56 @@ def projects(status: str | None = "open", limit: int = 20) -> list[dict]:
     return [dict(zip(_PROJECT_COLS, r)) for r in rows]
 
 
+# A project is "finished" when it is no longer in anybody's way. Open means
+# somebody is still choosing; rendering means main.py has it and the pictures
+# are being cut together. Both are the same answer to the only question the
+# rest of the dashboard asks — "is a video already being made?" — and treating
+# rendering as finished is what let a second video be started while the first
+# was still on the GPU.
+UNFINISHED_STATUSES = ("open", "rendering")
+
+
+def unfinished_projects(limit: int = 50) -> list[dict]:
+    """Every project still being made, newest first."""
+    marks = ",".join("?" * len(UNFINISHED_STATUSES))
+    with _conn() as c:
+        rows = c.execute(
+            f"SELECT {', '.join(_PROJECT_COLS)} FROM projects "
+            f"WHERE status IN ({marks}) ORDER BY id DESC LIMIT ?",
+            (*UNFINISHED_STATUSES, int(limit))).fetchall()
+    return [dict(zip(_PROJECT_COLS, r)) for r in rows]
+
+
+def active_project() -> dict | None:
+    """The one video being made, or None if the shop is empty.
+
+    ONE AT A TIME IS THE RULE THE OWNER ASKED FOR, and this is the single
+    question it turns on. Everything that starts work asks this first; if it
+    comes back with a row, there is nothing to decide.
+
+    Newest rather than oldest deliberately: /create has always shown the newest
+    open project, so the row this returns is the one already on screen. There
+    should only ever be one — but older databases predate the rule and can hold
+    several, and picking the same one the page picks means the block always
+    names a project the owner can actually see and abandon.
+    """
+    rows = unfinished_projects(limit=1)
+    return rows[0] if rows else None
+
+
+def finish_project(project_id: int, *, video_id: int | None = None) -> bool:
+    """Done. It stops blocking the next one.
+
+    Separate from abandoning even though both free the shop, because the two
+    are different history: abandoned means nobody wanted it, done means it
+    became a video. The measure pages read that difference.
+    """
+    fields: dict = {"status": "done"}
+    if video_id is not None:
+        fields["video_id"] = int(video_id)
+    return update_project(project_id, **fields)
+
+
 def update_project(project_id: int, **fields) -> bool:
     """Set any subset of a project's columns. Unknown keys are refused.
 
@@ -860,6 +910,31 @@ def update_project(project_id: int, **fields) -> bool:
             f"UPDATE projects SET {sets}, updated_at = datetime('now') "
             f"WHERE id = ?", (*fields.values(), int(project_id)))
         return cur.rowcount > 0
+
+
+def video_since(when: str) -> dict | None:
+    """The newest video row saved at or after `when` — {id, title, created_at}.
+
+    HOW A RENDER IS KNOWN TO BE OVER without main.py ever hearing of projects.
+    The dashboard launches a genuinely separate process and then has no handle
+    on it; the honest end-of-run signal available from here is that a video row
+    appeared. Bounding it by a timestamp is what makes that specific rather
+    than "some video exists" — and one-at-a-time is what makes it unambiguous,
+    because while a project is rendering no other render can be running to have
+    produced the row.
+
+    Returns None on an unusable timestamp rather than raising: this is called
+    to decide whether to draw a "still going" panel, and a bad string must cost
+    the auto-finish, not the page.
+    """
+    if not when:
+        return None
+    with _conn() as c:
+        row = c.execute(
+            "SELECT id, title, created_at FROM videos "
+            "WHERE created_at IS NOT NULL AND created_at >= ? "
+            "ORDER BY id DESC LIMIT 1", (str(when),)).fetchone()
+    return {"id": row[0], "title": row[1], "created_at": row[2]} if row else None
 
 
 def clear_project_from(project_id: int, stage: str) -> None:

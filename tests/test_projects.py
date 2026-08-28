@@ -1341,3 +1341,189 @@ def test_the_launch_waits_for_the_row_before_redirecting(tmp_path, monkeypatch):
     sid = dbm.save_gallery_set(candidate_id=42, channel="c", niche="n",
                                topic="T", script_file="s.txt", n_variants=2)
     assert dashboard._await_new_gallery(42, timeout=2) == sid
+
+
+# ── one video at a time ──────────────────────────────────────────────────────
+#
+# THE OWNER'S INSTRUCTION, VERBATIM: "i want creating only one video at a time
+# until one isnt done you cant create anew one". What he was looking at when he
+# said it was /galleries holding four stacked galleries from four different
+# half-made videos, one of them the dead ComfyUI run showing "0 shot(s)" with
+# nothing underneath — a page he had to sort through before he could make a
+# single decision on it.
+#
+# The rule has two halves and the second is the one that is easy to skip: a
+# block with no exit is worse than no block. A render that died without saying
+# so would otherwise hold the shop shut forever, so every test below that
+# closes the door also checks the way back out.
+
+def _client(tmp_path, monkeypatch, name="one.db"):
+    import db_manager as dbm
+    import dashboard
+    monkeypatch.setattr(dbm, "DB_FILE", tmp_path / name)
+    monkeypatch.setattr(dashboard, "db_manager", dbm, raising=False)
+    dbm.init_db()
+    return dashboard.app.test_client(), dbm
+
+
+def test_a_second_video_cannot_be_started_while_one_is_open(tmp_path,
+                                                            monkeypatch):
+    c, dbm = _client(tmp_path, monkeypatch, "second.db")
+    first = dbm.new_project(channel="main_en", niche="money_history")
+    c.post("/create/new", follow_redirects=False)
+    assert [p["id"] for p in dbm.unfinished_projects()] == [first], (
+        "a second project was created while the first was still open")
+
+
+def test_the_refusal_sends_you_to_the_one_in_the_way(tmp_path, monkeypatch):
+    """Not an error page. "You cannot start another" is only useful standing
+    next to the one you have to finish or abandon first."""
+    c, dbm = _client(tmp_path, monkeypatch, "inway.db")
+    first = dbm.new_project(channel="main_en", niche="money_history")
+    dbm.update_project(first, title="The Panic of 1893")
+    r = c.post("/create/new", follow_redirects=False)
+    assert r.status_code in (301, 302)
+    assert f"project={first}" in r.headers["Location"]
+    assert "Panic" in r.headers["Location"].replace("+", " ").replace("%20", " ")
+
+
+def test_a_rendering_video_still_counts_as_not_done(tmp_path, monkeypatch):
+    """RENDERING IS THE LONGEST PART AND IT USED TO BE INVISIBLE. `status`
+    left "open" the moment the last choice was made, so the block lifted while
+    the 3090 was still cutting the video together — which is exactly the window
+    in which a second one would be started."""
+    c, dbm = _client(tmp_path, monkeypatch, "rend.db")
+    pid = dbm.new_project(channel="main_en", niche="money_history")
+    dbm.update_project(pid, status="rendering")
+    assert (dbm.active_project() or {}).get("id") == pid
+    c.post("/create/new", follow_redirects=False)
+    assert len(dbm.unfinished_projects()) == 1
+
+
+def test_a_render_that_landed_stops_blocking_by_itself(tmp_path, monkeypatch):
+    """The automatic half of the exit. A video row saved after the render
+    started is this render's — one at a time is what makes that unambiguous."""
+    c, dbm = _client(tmp_path, monkeypatch, "landed.db")
+    pid = dbm.new_project(channel="main_en", niche="money_history")
+    dbm.update_project(pid, status="rendering")
+    vid = dbm.save_video(niche="n", script_hook="h", scene_desc="d",
+                         video_file="out.mp4", score=8)
+    c.get("/create")
+    assert dbm.project(pid)["status"] == "done"
+    assert dbm.project(pid)["video_id"] == vid
+    assert dbm.active_project() is None
+
+
+def test_a_render_that_died_can_be_closed_by_hand(tmp_path, monkeypatch):
+    """The other half, and the reason the automatic one is not enough. A
+    crashed run writes no video row, so nothing would ever close it and every
+    future video would be refused by a project nobody could get rid of."""
+    c, dbm = _client(tmp_path, monkeypatch, "died.db")
+    pid = dbm.new_project(channel="main_en", niche="money_history")
+    dbm.update_project(pid, status="rendering")
+    c.post(f"/create/{pid}/finish", follow_redirects=False)
+    assert dbm.project(pid)["status"] == "done"
+    assert dbm.active_project() is None
+    r = c.post("/create/new", follow_redirects=False)
+    assert "error" not in r.headers["Location"], "the shop should be open again"
+
+
+def test_a_rendering_project_is_not_offered_the_render_button_again(
+        tmp_path, monkeypatch):
+    """One nervous second click would otherwise render the same video twice."""
+    c, dbm = _client(tmp_path, monkeypatch, "twice.db")
+    pid = dbm.new_project(channel="main_en", niche="money_history")
+    dbm.update_project(pid, stage="render", status="rendering",
+                       title="Rome", script_file="s.txt", gallery_id=1,
+                       voice_id=1)
+    page = c.get(f"/create?project={pid}").get_data(as_text=True)
+    assert "Being made" in page
+    assert f"/create/{pid}/render" not in page
+
+
+def test_approving_a_topic_is_refused_while_a_video_is_being_made(
+        tmp_path, monkeypatch):
+    """THE SECOND DOOR. /scout wrote three scripts owned by no project at all,
+    so the rule that counts videos in progress could not see them — which is
+    how nine scripts across three topics came to be stacked on one page."""
+    c, dbm = _client(tmp_path, monkeypatch, "door.db")
+    dbm.new_project(channel="main_en", niche="money_history")
+    prop = dbm.save_proposal(channel="main_en", niche="money_history",
+                             topic="Tulips", evidence="e")
+    r = c.post(f"/scout/{prop}/approve", follow_redirects=False)
+    assert "error" in r.headers["Location"]
+    assert dbm.proposals(status="pending")[0]["id"] == prop, (
+        "a refused approval must not spend the proposal"
+    )
+    assert dbm.candidates(limit=10) == []
+
+
+# ── the queues are a view of that one video ──────────────────────────────────
+
+def test_the_gallery_page_shows_one_set_and_not_the_pile(tmp_path, monkeypatch):
+    """Four stacked galleries was the screen he sent. The older sets are not
+    deleted — they stop being presented as a decision, because they are not."""
+    c, dbm = _client(tmp_path, monkeypatch, "pile.db")
+    old = dbm.save_gallery_set(candidate_id=1, channel="c", niche="n",
+                               topic="Argentina", script_file="a.txt",
+                               n_variants=2)
+    dbm.save_gallery_image(set_id=old, variant=0, beat_index=0,
+                           path="/nope/a.png", prompt="an old shot", seed=1)
+    pid = dbm.new_project(channel="c", niche="n")
+    dbm.update_project(pid, script_id=7, stage="gallery")
+    mine = dbm.save_gallery_set(candidate_id=7, channel="c", niche="n",
+                                topic="Croesus", script_file="b.txt",
+                                n_variants=2)
+    dbm.save_gallery_image(set_id=mine, variant=0, beat_index=0,
+                           path="/nope/b.png", prompt="todays shot", seed=2)
+
+    page = c.get("/galleries").get_data(as_text=True)
+    assert "Croesus" in page
+    assert "Argentina" not in page
+    assert dbm.gallery_sets(status="pending", limit=10), "nothing was deleted"
+
+
+def test_an_empty_set_offers_the_live_page_not_zero_shots(tmp_path,
+                                                          monkeypatch):
+    """"0 shot(s), 2 draw(s) each" with nothing under it is not a choice, it is
+    a progress bar — and there is a page that is one."""
+    c, dbm = _client(tmp_path, monkeypatch, "empty.db")
+    pid = dbm.new_project(channel="c", niche="n")
+    dbm.update_project(pid, script_id=3, stage="gallery")
+    sid = dbm.save_gallery_set(candidate_id=3, channel="c", niche="n",
+                               topic="Croesus", script_file="b.txt",
+                               n_variants=2)
+    page = c.get("/galleries").get_data(as_text=True)
+    assert f"/drawing/{sid}" in page
+    assert "0 shot(s)" not in page
+
+
+def test_the_badges_count_what_the_pages_show(tmp_path, monkeypatch):
+    """A number that disagrees with the page under it is worse than no number:
+    the bar said four galleries were waiting over a page holding one."""
+    c, dbm = _client(tmp_path, monkeypatch, "badge.db")
+    import dashboard
+    dbm.save_gallery_set(candidate_id=1, channel="c", niche="n", topic="old",
+                         script_file="a.txt", n_variants=2)
+    pid = dbm.new_project(channel="c", niche="n")
+    dbm.update_project(pid, script_id=9, stage="gallery")
+    dbm.save_gallery_set(candidate_id=9, channel="c", niche="n", topic="mine",
+                         script_file="b.txt", n_variants=2)
+    assert dashboard._flow_counts()["/galleries"] == 1
+
+
+def test_with_nothing_in_flight_the_queues_are_empty(tmp_path, monkeypatch):
+    """The truthful empty state. Offering a gallery for a video you are not
+    making is what turned three decision pages into three inventories."""
+    c, dbm = _client(tmp_path, monkeypatch, "quiet.db")
+    dbm.save_candidate(proposal_id=1, channel="c", niche="n", topic="old",
+                       hook_style="warning", hook="h", script="s", score=8)
+    sid = dbm.save_gallery_set(candidate_id=1, channel="c", niche="n",
+                               topic="old", script_file="a.txt", n_variants=2)
+    dbm.save_voice_take(set_id=sid, channel="c", topic="old", tone="tension",
+                        text="t", path="/nope.mp3")
+    import dashboard
+    assert dbm.active_project() is None
+    assert dashboard._sets_being_chosen(dbm) == []
+    assert dashboard._candidates_being_chosen(dbm) == []
+    assert dashboard._takes_being_chosen(dbm) == []

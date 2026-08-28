@@ -1579,6 +1579,10 @@ PAGE_STYLE = """<!doctype html><html><head><meta charset="utf-8">
   pre { background: var(--surface); border: 1px solid var(--border);
         border-radius: var(--radius); box-shadow: var(--shadow);
         color: var(--text); }
+  /* The last few lines of the newest run log, where a render is the only
+     thing on screen and "is it still going" is the only question. */
+  .logtail { padding: 12px; font-size: 12px; line-height: 1.5;
+             overflow-x: auto; white-space: pre; color: var(--dim); }
 
   .msg { padding: 11px 14px; border-radius: var(--radius-sm); margin-bottom: 14px;
          font-size: 14px; border: 1px solid transparent; }
@@ -2042,12 +2046,15 @@ def _flow_counts() -> dict:
         out["/scout"] = dbm.pending_proposal_count()
         # SETS, NOT ROWS. Three scripts on one topic is ONE decision; counting
         # the cards would say 3 and send someone looking for three topics.
+        # COUNTED THE SAME WAY THE PAGES LIST, which they were not: the
+        # badges counted every pending row in the database while the pages
+        # show only the video being made, so the bar said 4 over a page
+        # holding 1. A number that disagrees with the page under it is worse
+        # than no number.
         out["/scripts"] = len({(c["proposal_id"], c["topic"])
-                               for c in dbm.candidates(status="pending",
-                                                       limit=200)})
-        out["/galleries"] = len(dbm.gallery_sets(status="pending", limit=50))
-        out["/voice"] = len({t["set_id"] for t in
-                             dbm.voice_takes(status="pending", limit=200)})
+                               for c in _candidates_being_chosen(dbm)})
+        out["/galleries"] = len(_sets_being_chosen(dbm))
+        out["/voice"] = len({t["set_id"] for t in _takes_being_chosen(dbm)})
     except Exception:
         pass
     return out
@@ -4237,8 +4244,20 @@ def scout_approve(proposal_id: int):
     between three finished scripts.
     """
     auth.require("generate")
+    import db_manager as dbm
+    # THE SECOND DOOR INTO THE SAME ROOM. Approving a topic here wrote three
+    # scripts belonging to no project at all, which is how /scripts came to
+    # hold nine scripts across three topics with no way to tell which were
+    # today's: two entrances, one of them not counted by the thing that counts
+    # videos in progress. So this starts a project like every other entrance,
+    # and is refused by the same rule.
+    busy = dbm.active_project()
+    if busy:
+        what = busy.get("title") or f"#{busy['id']}"
+        return redirect("/scout?error=" + _urlquote(
+            f'One video at a time — "{what}" is still being made. Finish or '
+            f'abandon it in Make a video, then approve this one.'))
     try:
-        import db_manager as dbm
         row = next((p for p in dbm.proposals(status="pending", limit=200)
                     if p["id"] == proposal_id), None)
         if not row:
@@ -4246,14 +4265,18 @@ def scout_approve(proposal_id: int):
                 "that proposal is not pending — already decided?"))
         if not dbm.decide_proposal(proposal_id, "approved"):
             return redirect("/scout?error=" + _urlquote("could not record it"))
+        ch, ni = row["channel"], row["niche"]
+        pid = dbm.new_project(channel=ch, niche=ni, by=_whoami())
+        dbm.update_project(pid, title=row["topic"], topic_source="scout",
+                           stage="script")
         log_path = _launch_candidates(topic=row["topic"],
                                       proposal_id=proposal_id,
-                                      channel=row["channel"])
+                                      channel=row["channel"],
+                                      project_id=pid)
     except Exception as e:
         return redirect("/scout?error=" + _urlquote(f"could not start: {e}"))
-    return redirect("/scripts?msg=" + _urlquote(
-        f'Writing three scripts about "{row["topic"]}" — a minute or two. '
-        f'Reload this page. Log: logs/{log_path.name}'))
+    return redirect(f"/create?project={pid}&msg=" + _urlquote(
+        f'Writing three scripts about "{row["topic"]}" — a minute or two.'))
 
 
 @app.route("/scout/<int:proposal_id>/reject", methods=["POST"])
@@ -4285,7 +4308,7 @@ def scripts_page():
     auth.require("view")
     try:
         import db_manager as dbm
-        pending = dbm.candidates(status="pending", limit=60)
+        pending = _candidates_being_chosen(dbm)
     except Exception as e:
         body = (f'<a class="back" href="/">← back</a><h2 style="margin-top:14px">'
                 f'Choose a script</h2><div class="msg error">{_esc(str(e))}</div>')
@@ -4439,6 +4462,76 @@ def _shot_line(prompt: str, limit: int = 110) -> str:
     return text if len(text) <= limit else text[:limit - 1].rstrip() + "…"
 
 
+# ── the three queues, narrowed to the one video being made ──────────────────
+#
+# THESE PAGES WERE INVENTORIES. Each listed every pending row in the database,
+# which is right in a shop making several videos at once and wrong in one that
+# is not: "seven reads waiting" on a channel with one video in flight means six
+# of them belong to sittings that ended days ago, and the owner has to work out
+# which three of the nine scripts on screen are today's before he can choose.
+#
+# One video at a time makes the answer exact — the queue is that project's
+# options, or it is empty. Nothing is deleted and nothing is hidden from
+# /history; the older rows simply stop being presented as a decision, because
+# they are not one any more.
+#
+# All three take `dbm` rather than importing it, so a test can hand them a
+# fake without touching a database, and all three fail closed to [] when
+# nothing is in flight.
+
+def _candidates_being_chosen(dbm) -> list[dict]:
+    """The scripts to choose between — this video's, or none."""
+    p = dbm.active_project()
+    if not p:
+        return []
+    return [c for c in dbm.candidates(status="pending", limit=60)
+            if c.get("project_id") == p["id"]]
+
+
+def _takes_being_chosen(dbm) -> list[dict]:
+    """The reads to choose between — this video's gallery's, or none."""
+    p = dbm.active_project()
+    if not p:
+        return []
+    sid = p.get("gallery_id")
+    if sid is None:
+        sets = _sets_being_chosen(dbm)
+        sid = sets[0]["id"] if sets else None
+    if sid is None:
+        return []
+    return [t for t in dbm.voice_takes(status="pending", limit=60)
+            if t.get("set_id") == sid]
+
+
+def _sets_being_chosen(dbm) -> list[dict]:
+    """The gallery to choose from — one, belonging to the video being made.
+
+    THIS PAGE WAS A PILE. It listed the six newest pending sets, so the owner
+    opened it onto four stacked galleries from four different projects — one
+    of them the dead ComfyUI run, showing "0 shot(s), 2 draw(s) each" with
+    nothing underneath it — and had to work out which of them was today's. His
+    instruction was exactly that: remove all this, one video at a time.
+
+    So it shows the set for the one project in flight and nothing else. The
+    others are not deleted and not hidden from history; they simply stop being
+    offered as a decision, because they are not one. With nothing in flight
+    there is nothing to choose, which is a truer empty state than "here is a
+    gallery, for a video you are not making".
+
+    One, and the newest, because a regen draws a second set for the same
+    script and the one you asked for last is the one you meant.
+    """
+    p = dbm.active_project()
+    if not p:
+        return []
+    cand = p.get("script_id")
+    if cand is None:
+        return []
+    mine = [g for g in dbm.gallery_sets(status="pending", limit=50)
+            if g.get("candidate_id") == cand]
+    return mine[:1]
+
+
 @app.route("/galleries")
 def galleries_page():
     """Two complete galleries, side by side, one row per shot.
@@ -4452,7 +4545,7 @@ def galleries_page():
     auth.require("view")
     try:
         import db_manager as dbm
-        sets = dbm.gallery_sets(status="pending", limit=6)
+        sets = _sets_being_chosen(dbm)
     except Exception as e:
         body = (f'<a class="back" href="/">← back</a><h2 style="margin-top:14px">'
                 f'Choose the pictures</h2><div class="msg error">'
@@ -4468,6 +4561,19 @@ def galleries_page():
         by_beat: dict = {}
         for im in images:
             by_beat.setdefault(im["beat_index"], []).append(im)
+
+        # A SET WITH NOTHING IN IT IS NOT A CHOICE, IT IS A PROGRESS BAR.
+        # The owner's screen showed "0 shot(s), 2 draw(s) each" with empty
+        # space under it — that set was still being drawn (or had died being
+        # drawn), and the page that answers both is the live one.
+        if not by_beat:
+            blocks += (
+                f'<h2 style="margin-top:22px">{_esc(gs["topic"] or "—")}</h2>'
+                f'<p class="muted">No pictures yet. '
+                f'<a href="/drawing/{gs["id"]}">Watch it being drawn</a> '
+                f'&mdash; that page fills in as each one lands, and says so if '
+                f'the renderer has stopped.</p>')
+            continue
 
         bases = ""
         if auth.can("generate"):
@@ -4530,10 +4636,11 @@ def galleries_page():
                    f'{rows}')
 
     if not sets:
-        blocks = ('<p class="muted">Nothing waiting. Choose a script on '
-                  '<a href="/scripts">Choose a script</a> and two galleries '
-                  'for it are drawn here — about forty minutes of the GPU, so '
-                  'come back rather than wait.</p>')
+        blocks = ('<p class="muted">Nothing to choose. Pictures are drawn '
+                  'for the video you are making, so this fills up once a '
+                  'script is chosen in <a href="/create">Make a video</a> '
+                  '&mdash; and it holds that one gallery, not every gallery '
+                  'ever drawn.</p>')
 
     body = f"""
     <a class="back" href="/">← back</a>
@@ -5149,6 +5256,59 @@ _WIZARD_BODY = {"topic": _wizard_topic, "script": _wizard_script,
                 "render": _wizard_render}
 
 
+def _wizard_rendering(p: dict) -> str:
+    """The sixth panel: it is being made, and there is nothing left to decide.
+
+    Without this the render stage drew its own "Make the video" button again,
+    on a project already on the GPU — one nervous second click and the same
+    video renders twice.
+    """
+    lines = _newest_log_lines(6)
+    tail = ""
+    if lines:
+        tail = ('<pre class="logtail">'
+                + "\n".join(_esc(l) for l in lines) + '</pre>')
+    return (
+        '<h2 style="margin-top:22px">Being made</h2>'
+        '<p class="muted">Everything was chosen; this is the render. It takes '
+        'as long as it takes &mdash; the bar at the bottom of every page is '
+        'following it, and it lands in the review queue on its own. This page '
+        'clears itself the moment the video exists.</p>'
+        f'{tail}'
+        f'{_wizard_decided(p)}'
+        f'<form method="post" action="/create/{p["id"]}/finish" '
+        f'style="margin-top:14px"><button type="submit">'
+        f'It is finished &mdash; let me start the next one</button></form>'
+        '<p class="muted" style="margin-top:6px">Only if it plainly is. This '
+        'is the way out when a render died without saying so, and pressing it '
+        'early just means two videos on the GPU at once.</p>')
+
+
+def _leftover_projects(unfinished: list[dict], current_id: int) -> str:
+    """Older unfinished projects, with the way to close each one.
+
+    ONE AT A TIME IS THE RULE FROM NOW ON, and it cannot retroactively close
+    what was started before it. A database with four half-made videos in it
+    would otherwise sit permanently blocked with no button anywhere admitting
+    why. So they are named, and each carries the one thing that clears it.
+    """
+    others = [o for o in unfinished if o["id"] != current_id]
+    if not others:
+        return ""
+    rows = ""
+    for o in others:
+        what = _esc(o.get("title") or f'#{o["id"]}')
+        rows += (f'<div class="shot-h" style="justify-content:space-between">'
+                 f'<a href="/create?project={o["id"]}">{what}</a>'
+                 f'<form method="post" action="/create/{o["id"]}/abandon">'
+                 f'<button type="submit">Abandon</button></form></div>')
+    return (f'<h2 style="margin-top:26px">Left over from before</h2>'
+            f'<p class="muted">{len(others)} other video(s) were started back '
+            f'when several could be open at once. Only one is made at a time '
+            f'now, so these are in the way &mdash; finish or abandon each.</p>'
+            f'{rows}')
+
+
 @app.route("/create")
 def create_page():
     """One video, one page, five stages."""
@@ -5156,8 +5316,19 @@ def create_page():
     import db_manager as dbm
     pid = request.args.get("project", type=int)
     try:
-        open_ones = dbm.projects(status="open", limit=10)
-        p = dbm.project(pid) if pid else (open_ones[0] if open_ones else None)
+        unfinished = dbm.unfinished_projects(limit=20)
+        # A render that has already landed must not keep the shop shut. The
+        # row appeared after the project started rendering, and while one is
+        # rendering nothing else can be, so it is this project's video.
+        for o in list(unfinished):
+            if o.get("status") != "rendering":
+                continue
+            made = dbm.video_since(o.get("updated_at") or "")
+            if made:
+                dbm.finish_project(o["id"], video_id=made["id"])
+                unfinished = [x for x in unfinished if x["id"] != o["id"]]
+        open_ones = unfinished
+        p = dbm.project(pid) if pid else (unfinished[0] if unfinished else None)
     except Exception as e:
         return _head() + ('<a class="back" href="/">&larr; back</a>'
                           '<h2 style="margin-top:14px">Make a video</h2>'
@@ -5180,18 +5351,15 @@ def create_page():
 
     stage = p.get("stage") or "topic"
     try:
-        inner = _WIZARD_BODY.get(stage, _wizard_topic)(p)
+        if (p.get("status") or "open") == "rendering":
+            inner = _wizard_rendering(p)
+        else:
+            inner = _WIZARD_BODY.get(stage, _wizard_topic)(p)
     except Exception as e:
         # One stage that cannot render must not cost the way back out of it.
         inner = f'<div class="msg error">{_esc(str(e))}</div>'
 
-    others = ""
-    if len(open_ones) > 1:
-        links = " &middot; ".join(
-            f'<a href="/create?project={o["id"]}">'
-            f'{_esc(o["title"] or ("#" + str(o["id"])))}</a>'
-            for o in open_ones)
-        others = f'<p class="muted">Also open: {links}</p>'
+    others = _leftover_projects(open_ones, p["id"])
 
     body = (
         '<a class="back" href="/">&larr; back</a>'
@@ -5221,9 +5389,26 @@ def _project_or_home(project_id: int):
 
 @app.route("/create/new", methods=["POST"])
 def create_new():
+    """Start a video — unless one is already being made.
+
+    ONE AT A TIME, AND THE BLOCK IS HERE RATHER THAN ONLY ON THE BUTTON.
+    Hiding the button is what a page does; refusing the POST is what makes it
+    true, because the button is not the only way in — a bookmark, a double
+    click on a slow connection and a second browser tab all reach this.
+
+    The refusal is a redirect INTO the project that is in the way, not an
+    error page. "You cannot start another" is only useful next to the one you
+    have to finish or abandon first.
+    """
     auth.require("generate")
     import db_manager as dbm
     import research
+    busy = dbm.active_project()
+    if busy:
+        what = busy.get("title") or f"#{busy['id']}"
+        return redirect(f"/create?project={busy['id']}&error=" + _urlquote(
+            f'One video at a time. "{what}" is still being made — finish it, '
+            f'or abandon it at the bottom of this page, then start the next.'))
     try:
         niche = research._load_niche()[1]
     except Exception:
@@ -5540,6 +5725,28 @@ def create_tidy():
     return redirect("/create?msg=" + _urlquote(
         f"{n} option(s) from finished or abandoned projects left the queues. "
         f"Nothing was deleted."))
+
+
+@app.route("/create/<int:project_id>/finish", methods=["POST"])
+def create_finish(project_id: int):
+    """Close a render by hand, when the automatic close cannot see it.
+
+    /create closes a rendering project the moment a video row lands after it
+    started, which covers every run that reaches the end. This is for the runs
+    that do not: a crash, a kill, a power cut. Without it, one dead render
+    would block every future video with no button anywhere that admits it.
+    """
+    auth.require("generate")
+    import db_manager as dbm
+    p, bail = _project_or_home(project_id)
+    if bail:
+        return bail
+    made = dbm.video_since(p.get("updated_at") or "")
+    dbm.finish_project(project_id, video_id=(made or {}).get("id"))
+    dbm.retire_project_options(project_id)
+    where = (f' It is video #{made["id"]} in the review queue.' if made
+             else " No video row appeared, so nothing was linked to it.")
+    return redirect("/create?msg=" + _urlquote(f"Closed.{where}"))
 
 
 @app.route("/create/<int:project_id>/abandon", methods=["POST"])
@@ -5989,7 +6196,7 @@ def voice_page():
     auth.require("view")
     try:
         import db_manager as dbm
-        takes = dbm.voice_takes(status="pending", limit=30)
+        takes = _takes_being_chosen(dbm)
     except Exception as e:
         body = (f'<a class="back" href="/">← back</a><h2 style="margin-top:14px">'
                 f'Choose how it opens</h2><div class="msg error">'

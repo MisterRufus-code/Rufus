@@ -1417,8 +1417,17 @@ def test_approving_a_topic_buys_scripts_and_not_a_render(client, monkeypatch):
         evidence="e")
     r = client.post(f"/scout/{pid}/approve", follow_redirects=False)
     assert r.status_code in (301, 302)
-    assert started == {"topic": "The Panic of 1893", "proposal_id": pid,
-                       "channel": "main_en"}
+    # AND IT OPENS THE PROJECT THEY BELONG TO. Approving used to write three
+    # scripts owned by nothing, which is how /scripts came to hold nine across
+    # three topics: two ways in, one of them invisible to the thing that counts
+    # videos in progress.
+    assert started["topic"] == "The Panic of 1893"
+    assert started["proposal_id"] == pid
+    assert started["channel"] == "main_en"
+    opened = db_manager.active_project()
+    assert opened is not None, "approving a topic must start a project"
+    assert started["project_id"] == opened["id"]
+    assert opened["title"] == "The Panic of 1893"
     assert rendered == [], "approving a topic must not start a render"
     assert db_manager.proposals(status="approved")[0]["id"] == pid
 
@@ -1437,11 +1446,29 @@ def test_a_proposal_cannot_be_approved_twice(client, monkeypatch):
 
 # ── choosing between three finished scripts ─────────────────────────────────
 
+def _open_project(**fields):
+    """The video being made, which is what every queue page is now a view of.
+
+    ONE AT A TIME MEANS THE QUEUES ARE NOT INVENTORIES. /scripts, /galleries
+    and /voice show the options belonging to the project in flight and nothing
+    else, so a fixture that writes rows owned by no project is writing rows no
+    page will ever show. Every helper below hangs its rows off this one.
+    """
+    existing = db_manager.active_project()
+    pid = existing["id"] if existing else db_manager.new_project(
+        channel="main_en", niche="money_history", by="test")
+    if fields:
+        db_manager.update_project(pid, **fields)
+    return pid
+
+
 def _candidates(topic="The Panic of 1893", proposal_id=1):
+    pid = _open_project(title=topic, stage="script")
     return [db_manager.save_candidate(
         proposal_id=proposal_id, channel="main_en", niche="money_history",
         topic=topic, hook_style=style, hook=f"Hook {i}",
-        script=f"Hook {i}\nBody of script {i}.", score=7 + i, cost_usd=0.02)
+        script=f"Hook {i}\nBody of script {i}.", score=7 + i, cost_usd=0.02,
+        project_id=pid)
         for i, style in enumerate(["counterintuitive", "shocking_stat",
                                    "warning"])]
 
@@ -1503,6 +1530,9 @@ def test_a_script_cannot_be_chosen_twice(client, monkeypatch):
 # ── choosing the pictures ───────────────────────────────────────────────────
 
 def _gallery(beats=3, variants=2, topic="Rome"):
+    # candidate_id=1 and the project pointed at it: /galleries shows the set
+    # belonging to the video being made, so an orphan set is an invisible one.
+    _open_project(title=topic, stage="gallery", script_id=1)
     set_id = db_manager.save_gallery_set(
         candidate_id=1, channel="main_en", niche="money_history", topic=topic,
         script_file="logs/chosen_scripts/candidate_1.txt", n_variants=variants)
@@ -1576,6 +1606,7 @@ def test_a_gallery_cannot_be_settled_twice(client, monkeypatch):
 # ── choosing how it opens ───────────────────────────────────────────────────
 
 def _takes(set_id, topic="Rome"):
+    _open_project(stage="voice", gallery_id=set_id)
     return [db_manager.save_voice_take(
         set_id=set_id, channel="main_en", topic=topic, tone=tone,
         text="You checked your portfolio today.", path=f"/nope/{tone}.mp3")
@@ -1636,7 +1667,7 @@ def test_an_empty_voice_page_says_where_reads_come_from(client):
 
 def test_an_empty_gallery_page_says_where_pictures_come_from(client):
     page = client.get("/galleries").get_data(as_text=True)
-    assert "Nothing waiting" in page and "/scripts" in page
+    assert "Nothing to choose" in page and "/create" in page
 
 
 def test_an_empty_choose_page_says_where_scripts_come_from(client):
@@ -1739,7 +1770,8 @@ def test_a_fact_gate_failure_is_visible_on_the_card(client):
         proposal_id=7, channel="main_en", niche="money_history", topic="Rome",
         hook_style="shocking_stat", hook="Ninety per cent gone.",
         script="Ninety per cent gone.\nBody.", score=9, cost_usd=0.02,
-        fact_ok=False, fact_reason="the source gives no silver percentage")
+        fact_ok=False, fact_reason="the source gives no silver percentage",
+        project_id=_open_project(title="Rome", stage="script"))
     page = client.get("/scripts").get_data(as_text=True)
     assert "the source does not support this" in page
     assert "no silver percentage" in page
@@ -1751,7 +1783,8 @@ def test_a_low_score_is_shown_and_not_hidden(client):
     db_manager.save_candidate(
         proposal_id=8, channel="main_en", niche="money_history", topic="Tulips",
         hook_style="warning", hook="A weak one.", script="A weak one.\nBody.",
-        score=4, cost_usd=0.02)
+        score=4, cost_usd=0.02,
+        project_id=_open_project(title="Tulips", stage="script"))
     page = client.get("/scripts").get_data(as_text=True)
     assert "4/10" in page
     assert "A weak one." in page
@@ -1762,10 +1795,11 @@ def test_a_topic_with_three_scripts_counts_as_one_decision(client):
     """The flow badge counts DECISIONS, not cards. Three scripts on one topic
     is one thing to rule on; counting the rows would say 3 and send somebody
     looking for three topics."""
+    pid = _open_project(title="One topic", stage="script")
     for style in ("counterintuitive", "shocking_stat", "warning"):
         db_manager.save_candidate(
             proposal_id=42, channel="c", niche="n", topic="One topic",
-            hook_style=style, hook="h", script="s", score=8)
+            hook_style=style, hook="h", script="s", score=8, project_id=pid)
     assert dashboard._flow_counts()["/scripts"] == 1
 
 
