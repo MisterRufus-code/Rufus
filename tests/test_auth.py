@@ -957,7 +957,8 @@ def test_the_front_page_row_carries_the_time(client):
     db_manager.save_video(niche="finance", script_hook="a fresh hook",
                           scene_desc="s", video_file="a.mp4", score=8)
     client.get(f"/?token={OWNER_TOKEN}")
-    page = client.get("/").data.decode("utf-8", "replace")
+    # /review, since the front page now lists only what actually went out.
+    page = client.get("/review").data.decode("utf-8", "replace")
     row = db_manager.history()[0]
     assert row["created_at"][:10] in page
     assert row["created_at"][11:16] in page, "the hour and minute never rendered"

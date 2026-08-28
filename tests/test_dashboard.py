@@ -52,13 +52,15 @@ def test_index_empty_db_does_not_crash(client):
 
 def test_index_shows_stats_and_rows(client):
     _seed(n_approved=2, n_pending=1)
-    r = client.get("/")
-    assert r.status_code == 200
-    body = r.data.decode()
-    assert "Hook 0" in body
-    assert "PendingHook 0" in body
-    assert "pending" in body
-    assert "approved" in body
+    home = client.get("/")
+    assert home.status_code == 200
+    body = home.data.decode()
+    # The counts stay on the front page; the rows moved to /review, which is
+    # the whole point of the split.
+    assert "awaiting review" in body
+    assert "approved / uploaded" in body
+    queue = client.get("/review").get_data(as_text=True)
+    assert "PendingHook 0" in queue
 
 
 def test_index_pending_section_lists_only_pending(client):
@@ -69,26 +71,30 @@ def test_index_pending_section_lists_only_pending(client):
     pending_id = db_manager.save_video(niche="finance", script_hook="Hook B",
                                        scene_desc="s", video_file="h.mp4",
                                        score=5)
-    r = client.get("/")
-    body = r.data.decode()
-    pending_section = body.split("Awaiting your review")[1].split("All recent videos")[0]
-    assert f'/video/{pending_id}"' in pending_section
-    assert f'/video/{approved_id}"' not in pending_section
+    body = client.get("/review").get_data(as_text=True)
+    assert f'/video/{pending_id}"' in body
+    assert f'/video/{approved_id}"' not in body
 
 
 def test_index_escapes_script_content_xss(client):
     db_manager.save_video(niche="finance", script_hook="<script>alert(1)</script>",
-                          scene_desc="s", video_file="v.mp4", score=9)
-    r = client.get("/")
-    assert b"<script>alert(1)</script>" not in r.data
-    assert b"&lt;script&gt;" in r.data
+                          scene_desc="s", video_file="v.mp4", score=9,
+                          youtube_id="ytxss", upload_status="approved")
+    # Both pages render a hook, so both have to escape it.
+    for path in ("/", "/review"):
+        data = client.get(path).data
+        assert b"<script>alert(1)</script>" not in data
+    assert b"&lt;script&gt;" in client.get("/").data
 
 
 def test_index_channel_filter(client):
+    # Uploaded, because the front page now lists what actually went out.
     db_manager.save_video(niche="finance", script_hook="ChA", scene_desc="s",
-                          video_file="a.mp4", score=9, channel="chan_a")
+                          video_file="a.mp4", score=9, channel="chan_a",
+                          youtube_id="ytA", upload_status="approved")
     db_manager.save_video(niche="finance", script_hook="ChB", scene_desc="s",
-                          video_file="b.mp4", score=9, channel="chan_b")
+                          video_file="b.mp4", score=9, channel="chan_b",
+                          youtube_id="ytB", upload_status="approved")
     r = client.get("/?channel=chan_a")
     body = r.data.decode()
     assert "ChA" in body
@@ -638,11 +644,20 @@ def test_request_topic_handles_popen_failure_gracefully(client, monkeypatch, tmp
     assert "failed to start" in r.data.decode()
 
 
-def test_index_has_topic_request_form(client):
-    r = client.get("/")
-    body = r.data.decode()
-    assert 'action="/request-topic"' in body
-    assert 'name="topic"' in body
+def test_the_topic_request_path_still_has_a_front_door(client):
+    """The quick topic box came off the home page in the minimal rebuild. The
+    route it posted to is still live and still reachable — from /trending,
+    where a rising query is queued with one click. A route with no UI left is
+    this repo's oldest bug shape, so this asserts the door exists."""
+    from pathlib import Path
+    src = Path(dashboard.__file__).read_text(encoding="utf-8")
+    page = src.split("def trending", 1)[1].split("\n@app.route", 1)[0]
+    assert 'action="/request-topic"' in page
+    # Asserted on the source, not the render: the button only appears when
+    # pytrends actually returns something, and pytrends is optional. The
+    # question here is whether the door exists in the code, not whether a
+    # third-party package happened to answer on this machine.
+    assert client.get("/trending").status_code == 200
 
 
 # ── Root-cause attribution (backlog: bottleneck breakdown) ────────────────────
@@ -1762,7 +1777,7 @@ def test_the_home_page_leads_with_what_is_waiting(client):
     page = client.get("/").get_data(as_text=True)
     body = page.split("</header>", 1)[1]
     assert 'class="tiles"' in body
-    assert body.index('class="tiles"') < body.index("Score trend")
+    assert body.index('class="tiles"') < body.index("Analytics and stats")
 
 
 def test_the_home_page_does_not_repeat_the_flow_bar_under_the_tiles(client):
@@ -1780,4 +1795,4 @@ def test_the_home_page_puts_the_general_numbers_beside_the_tiles(client):
     scroll: the four totals sat below the review table, where nobody reaches
     them."""
     body = client.get("/").get_data(as_text=True).split("</header>", 1)[1]
-    assert body.index('class="cards"') < body.index("Awaiting your review")
+    assert body.index('class="cards"') < body.index("Last five out")

@@ -269,7 +269,11 @@ def test_pending_queue_shows_keyframe_previews(client, tmp_path):
                           video_file="a.mp4", score=9, run_id="run_prev",
                           upload_status="pending")
     client.get(f"/?token={OWNER_TOKEN}")
-    html = client.get("/").get_data(as_text=True)
+    # The queue moved to /review in the minimal home rebuild. The previews
+    # exist for the same reason as ever: approving a video is a judgement
+    # about how it LOOKS, and making that call otherwise means opening every
+    # row one at a time.
+    html = client.get("/review").get_data(as_text=True)
     assert "/debug/run_prev/01.png" in html
 
 

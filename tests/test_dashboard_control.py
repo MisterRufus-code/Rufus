@@ -293,8 +293,13 @@ def test_the_front_page_leads_with_what_to_change(client, monkeypatch):
          {"title": "second thing", "severity": "medium"}],
         {"state": "needs work", "detail": "Pictures are held too long"}))
     page = client.get("/").get_data(as_text=True)
-    assert page.index("Pictures are held too long") < page.index("Make a video about")
+    # The advice card went with the minimal rebuild; the tile carries the line
+    # itself now. A box labelled "what to change" that does not say what to
+    # change is a signpost to a signpost.
+    assert "Pictures are held too long" in page
     assert "and 1 more" in page
+    tile = page.split('class="tile t-measure"', 1)[1].split("</a>", 1)[0]
+    assert "Pictures are held too long" in tile
 
 
 def test_a_broken_advisor_never_breaks_the_front_page(client, monkeypatch):
@@ -477,7 +482,9 @@ def _failed(run_id="run-x", ago=120.0, **over):
 def test_a_crashed_run_is_reported_on_the_front_page(client, monkeypatch):
     monkeypatch.setattr(dashboard.run_progress, "read_all", lambda: [_failed()])
     monkeypatch.setattr(dashboard, "_orphaned_debug_runs", lambda limit=40: [])
-    page = client.get("/").get_data(as_text=True)
+    # Reported beside the queue it concerns, rather than on a front page that
+    # is now four blocks long.
+    page = client.get("/review").get_data(as_text=True)
     assert "run-x" in page
     assert "no seed: every source refused" in page
     assert "step 1/7" in page
@@ -564,27 +571,52 @@ def test_a_broken_failure_lookup_never_breaks_the_front_page(client, monkeypatch
     assert client.get("/").status_code == 200
 
 
-def test_what_needs_you_comes_before_what_you_could_make(client, monkeypatch):
+def test_what_needs_you_is_the_first_thing_on_the_page(client, monkeypatch):
     """The topic box used to open this page, which answers "what now" with
     "make another video" before anybody has said whether the last four are any
-    good."""
-    waiting = [{"id": 7, "score": 8, "title": "A waiting video", "script_hook": "",
-                "niche": "money_history", "upload_status": "pending",
-                "run_id": "", "created_at": "2026-08-21 09:30:00",
-                "uploaded_at": None}]
+    good. The greeting band carries that now: the hour and the name on the
+    left, and what is actually waiting — each part a link — filling the rest,
+    because the largest element on the page should not be spending itself on
+    the time of day."""
+    monkeypatch.setattr(dashboard, "_flow_counts",
+                        lambda: {"/scripts": 3, "/galleries": 1, "/voice": 0})
+    monkeypatch.setattr(dashboard, "_stats",
+                        lambda *a, **k: {"pending": 75, "uploaded": 25,
+                                         "rejected": 0, "avg_score": 5.8})
+    body = client.get("/").get_data(as_text=True).split("</header>", 1)[1]
+    band = body.split('class="hi"', 1)[1].split("</section>", 1)[0]
+    assert "3 scripts" in band and 'href="/scripts"' in band
+    assert "1 gallery" in band, "one is singular"
+    assert "gallerys" not in band, "the plural is per word, not an appended s"
+    assert "0 " not in band, "a zero is not something waiting on you"
+    assert "75 to review" in band and 'href="/review"' in band
+    assert body.index('class="hi"') < body.index('class="tiles"')
 
-    def _videos(limit=60, channel=None, status=None):
-        return waiting if status == "pending" else []
 
-    monkeypatch.setattr(dashboard, "_recent_videos", _videos)
-    page = client.get("/").get_data(as_text=True)
-    assert page.index("Awaiting your review (1)") < page.index("Make a video about")
+def test_an_empty_day_says_so_rather_than_showing_nothing(client, monkeypatch):
+    """Knowing there is nothing to do is worth as much as a list of things."""
+    monkeypatch.setattr(dashboard, "_flow_counts", lambda: {})
+    monkeypatch.setattr(dashboard, "_stats",
+                        lambda *a, **k: {"pending": 0, "uploaded": 0,
+                                         "rejected": 0, "avg_score": 0})
+    body = client.get("/").get_data(as_text=True)
+    assert "Nothing is waiting on you" in body
 
+
+def test_the_greeting_uses_the_name_of_whoever_is_signed_in(monkeypatch):
+    """The point of it, now that two people share this."""
+    monkeypatch.setattr(dashboard.auth, "current_user",
+                        lambda: {"name": "Daniel", "role": "owner"})
+    assert "Daniel" in dashboard._greeting()
+    monkeypatch.setattr(dashboard.auth, "current_user", lambda: None)
+    got = dashboard._greeting()
+    assert "Good " in got and "None" not in got, (
+        "nobody signed in gets the greeting without a name, not a placeholder")
 
 def test_an_empty_queue_says_so_instead_of_showing_a_bare_zero(client, monkeypatch):
     monkeypatch.setattr(dashboard, "_recent_videos",
                         lambda limit=60, channel=None, status=None: [])
-    page = client.get("/").get_data(as_text=True)
+    page = client.get("/review").get_data(as_text=True)
     assert "Nothing is waiting on you" in page
 
 
@@ -1401,8 +1433,10 @@ def test_no_log_path_is_built_by_hand():
 def test_the_home_page_opens_with_somewhere_to_go(client):
     page = client.get("/").get_data(as_text=True)
     body = page.split("</header>", 1)[1]
-    assert 'class="tiles"' in body
-    assert body.index('class="tiles"') < body.index("Score trend")
+    assert 'class="hi"' in body and 'class="tiles"' in body
+    # Who you are, then where you can go, then the numbers.
+    assert body.index('class="hi"') < body.index('class="tiles"')
+    assert body.index('class="tiles"') < body.index("Analytics and stats")
 
 
 def test_every_tile_is_a_real_link(client):
@@ -1411,8 +1445,12 @@ def test_every_tile_is_a_real_link(client):
     import re
     page = client.get("/").get_data(as_text=True)
     tiles = re.findall(r'<a class="tile[^"]*" href="([^"]+)"', page)
-    assert len(tiles) >= 6
+    # Four, from the owner's sketch. It was ten — every page in the nav, tiled
+    # — which put a launcher above a launcher.
+    assert len(tiles) == 4
     assert all(h.startswith(("/", "#")) for h in tiles)
+    rules = {r.rule for r in dashboard.app.url_map.iter_rules()}
+    assert all(h in rules for h in tiles if h.startswith("/")), sorted(tiles)
 
 
 def test_every_tile_says_what_it_is_for(client):
@@ -1420,7 +1458,7 @@ def test_every_tile_says_what_it_is_for(client):
     says what it does before you click it."""
     import re
     page = client.get("/").get_data(as_text=True)
-    assert len(re.findall(r'class="tile-b"', page)) >= 6
+    assert len(re.findall(r'class="tile-b"', page)) == 4
 
 
 def test_a_tile_count_is_in_the_label_and_not_only_in_the_badge():
@@ -1428,7 +1466,7 @@ def test_a_tile_count_is_in_the_label_and_not_only_in_the_badge():
     the aria-label too — and the label reads as a sentence rather than as a
     noun with a digit stuck to it."""
     src = Path(dashboard.__file__).read_text(encoding="utf-8")
-    block = src.split("def _home_tiles(", 1)[1][:1200]
+    block = src.split("def _home_tiles(", 1)[1][:2400]
     assert 'label = f"{title}, {n} waiting"' in block
     assert "aria-label=" in block
 

@@ -1613,6 +1613,18 @@ PAGE_STYLE = """<!doctype html><html><head><meta charset="utf-8">
             flex-wrap: wrap; font-size: 12px; }
   .note form { grid-column: 2; grid-row: 1 / span 2; }
   .note-bell { color: var(--accent); font-size: 11px; }
+  .hi { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: baseline;
+        padding: 16px 20px; margin-bottom: 16px; border-radius: var(--radius);
+        border: 1px solid var(--border);
+        background: linear-gradient(120deg,
+          color-mix(in srgb, var(--make) 16%, transparent),
+          color-mix(in srgb, var(--measure) 12%, transparent)),
+          var(--surface); }
+  .hi-h { font-size: 26px; font-weight: 600; margin: 0; letter-spacing: -.01em; }
+  .hi-q { font-size: 14px; color: var(--dim); }
+  .hi-q a { color: inherit; font-weight: 600; text-decoration: none;
+            border-bottom: 1px solid var(--border); }
+  .hi-q a:hover { color: var(--text); border-bottom-color: var(--accent); }
   .tile.t-make    { --tone: var(--make); }
   .tile.t-review  { --tone: var(--review); }
   .tile.t-measure { --tone: var(--measure); }
@@ -1784,6 +1796,7 @@ NAV_ITEMS = [
     ("/measure",    "📊 Measure",                         "view"),
     ("/history",    "🕰 History",                         "view"),
     ("/message",    "📣 Send a message",                  "generate"),
+    ("/review",     "⏳ Awaiting review",                 "view"),
     ("/logs",       "📜 Logs",                            "view"),
     ("/system",     "🖥 System",                          "system"),
     ("/settings",   "⚙ Settings",                         "settings"),
@@ -1824,7 +1837,8 @@ NAV_GROUPS = (
     # under one heading felt wrong before it broke the group-size rule.
     ("Make",    ("/create", "/generate", "/thumbnails")),
     ("Queues",  ("/scout", "/scripts", "/galleries", "/voice")),
-    ("Review",  ("/gallery", "/history", "/failures", "/logs", "/message")),
+    ("Review",  ("/review", "/gallery", "/history", "/failures", "/message")),
+    ("Logs",    ("/logs",)),
     ("Measure", ("/measure", "/trending")),
     ("Setup",   ("/styles", "/voices", "/bench", "/system", "/settings")),
 )
@@ -2220,26 +2234,22 @@ def _msg_banner() -> str:
 
 _HOME_TILES = (
     # (href, title, what it is for, group, count key)
-    ("/create",    "Make a video",      "Five decisions, one at a time",
+    #
+    # FOUR, FROM THE OWNER'S OWN SKETCH. This was ten — every page in the nav,
+    # tiled — which put a launcher above a launcher and made the home page a
+    # second copy of the menu. The sketch asks a narrower question: what are
+    # the four things worth putting on the front of this, and the answer is one
+    # box to start work, one to find a subject, one to be told what to fix, and
+    # one to see what went out. Everything else is a nav click away and was
+    # never worth the vertical space.
+    ("/create",   "Make a video",     "Five decisions, one at a time",
      "make",    "create"),
-    ("/scripts",   "Scripts waiting",   "Three per topic, pick one",
-     "make",    "/scripts"),
-    ("/galleries", "Pictures waiting",  "Two draws, swap shot by shot",
-     "make",    "/galleries"),
-    ("/voice",     "Reads waiting",     "Three takes, pick the pace",
-     "make",    "/voice"),
-    ("/",          "Awaiting review",   "Finished videos, approve or reject",
-     "review",  "pending"),
-    ("/gallery",   "Gallery",           "Everything made, newest first",
-     "review",  None),
-    ("/measure",   "Measure",           "What to change, and whether it worked",
+    ("/trending", "Trending topics",  "Rising on Google, money and history",
+     "make",    None),
+    ("/measure",  "What to change",   "The one thing worth fixing next",
      "measure", None),
-    ("/scout",     "Scout",             "What the neighbours did that worked",
-     "measure", "/scout"),
-    ("/styles",    "Look and narrator", "Style, voices, workflow bench",
-     "system",  None),
-    ("/settings",  "Settings",          "Keys, schedule, channels",
-     "system",  None),
+    ("/gallery",  "Recent uploads",   "The last five that went out",
+     "review",  None),
 )
 
 
@@ -2260,9 +2270,21 @@ def _home_tiles(stats: dict) -> str:
     counts = _home_tile_counts(stats)
     cells = []
     for href, title, blurb, group, key in _HOME_TILES:
-        # "/" is the page we are on; the others have to be reachable.
         if href != "/" and href not in allowed:
             continue
+        # THE MEASURE TILE SAYS THE THING, not the category. A box labelled
+        # "what to change" that does not say what to change is a signpost to a
+        # signpost — and the front page used to carry the actual line, which is
+        # the one piece of that block worth keeping when the block goes.
+        if href == "/measure":
+            try:
+                items, ready = _advice_now()
+                if items:
+                    blurb = items[0]["title"]
+                    if len(items) > 1:
+                        blurb += f" · and {len(items) - 1} more"
+            except Exception as e:
+                print(f"[dashboard] advice tile unavailable: {e}")
         n = counts.get(key) if key else None
         badge = ""
         label = title
@@ -2280,13 +2302,70 @@ def _home_tiles(stats: dict) -> str:
     return f'<div class="tiles">{"".join(cells)}</div>'
 
 
+def _greeting() -> str:
+    """"Good evening, Daniel" — the hour and the name, from the sketch.
+
+    The name comes from whoever is signed in, which is the point of it now
+    that two people share this. Nobody signed in gets the greeting without a
+    name rather than a guess or a placeholder.
+    """
+    hour = time.localtime().tm_hour
+    part = ("morning" if 5 <= hour < 12 else
+            "afternoon" if 12 <= hour < 18 else "evening")
+    who = _whoami()
+    return f"Good {part}, {_esc(who)}" if who else f"Good {part}"
+
+
+def _waiting_line() -> str:
+    """What actually needs a person, in one line, each part a link.
+
+    THE BAND WAS SAYING THE TIME OF DAY AND NOTHING ELSE. It is the largest
+    thing on the page; spending it on a greeting alone wastes the one place
+    the eye lands first. So the greeting keeps the left of it and this fills
+    the rest — and when there is genuinely nothing waiting it says so, which
+    is also worth knowing at a glance.
+    """
+    bits = []
+    try:
+        flow = _flow_counts()
+        # The plural is carried per word rather than by adding "s", because
+        # "gallery" does not take one and the page said "2 gallerys".
+        for href, one, many in (("/scripts", "script", "scripts"),
+                                ("/galleries", "gallery", "galleries"),
+                                ("/voice", "read", "reads")):
+            n = flow.get(href, 0)
+            if n:
+                bits.append(f'<a href="{href}">{n} {one if n == 1 else many}</a>')
+    except Exception:
+        pass
+    try:
+        import db_manager as dbm
+        n = dbm.open_note_count()
+        if n:
+            bits.append(f'<a href="/message">{n} note{"" if n == 1 else "s"}</a>')
+    except Exception:
+        pass
+    try:
+        pend = _stats().get("pending", 0)
+        if pend:
+            bits.append(f'<a href="/review">{pend} to review</a>')
+    except Exception:
+        pass
+    if not bits:
+        return '<span class="hi-q">Nothing is waiting on you.</span>'
+    return '<span class="hi-q">' + " · ".join(bits) + " waiting</span>"
+
+
 @app.route("/")
 def index():
     channel = request.args.get("channel") or None
     stats   = _stats(channel=channel)
     videos  = _recent_videos(limit=60, channel=channel)
-    pending = _recent_videos(limit=60, channel=channel, status="pending")
-    rejects = _top_rejections(channel=channel)
+    # "5 Recent uploaded videos" in the sketch means UPLOADED. `videos` is
+    # everything made, and 86 of 111 of those never left the queue — a list
+    # titled "recent uploads" that is mostly things which never went out is
+    # the kind of wrong that looks right.
+    recent_out = [v for v in videos if v.get("youtube_id")]
     channels = _channels()
 
     # oldest -> newest for the trend line
@@ -2299,110 +2378,79 @@ def index():
             links.append(f'<a href="/?channel={_esc(ch)}">{_esc(ch)}</a>')
         filt_html = f'<div class="filters">{"".join(links)}</div>'
 
-    channel_options = "".join(f'<option value="{_esc(ch)}">{_esc(ch)}</option>' for ch in channels)
-    topic_form = f"""
-    <h2 class="sec s-make">🎯 Make a video about a specific topic</h2>
-    <p class="muted">Runs in the background (can take a while) — resolved to a
-       real Wikipedia article so it's still fact-grounded, then shows up in
-       the pending list below like any other video. Never auto-uploads.</p>
-    <form method="post" action="/request-topic" style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;margin-bottom:24px">
-      <div style="flex:1;min-width:220px">
-        <label for="topic">Topic</label>
-        <input class="field" style="margin:6px 0 0" type="text" id="topic" name="topic"
-               placeholder="e.g. Bretton Woods, Tulip mania..." required>
-      </div>
-      {f'''<div><label for="channel">Channel</label>
-        <select class="field" style="margin:6px 0 0" id="channel" name="channel">
-          <option value="">(default)</option>{channel_options}
-        </select></div>''' if channels else ""}
-      <button class="btn save" type="submit" style="height:38px">Queue it</button>
-    </form>
-    """
-
     cards = f"""
     <div class="cards">
-      <a class="card tone t-pending" href="#review" style="text-decoration:none;color:inherit"><div class="num">{stats['pending']}</div><div class="label">awaiting review</div></a>
+      <a class="card tone t-pending" href="/review" style="text-decoration:none;color:inherit"><div class="num">{stats['pending']}</div><div class="label">awaiting review</div></a>
       <div class="card tone t-ok"><div class="num">{stats['uploaded']}</div><div class="label">approved / uploaded</div></div>
       <div class="card tone t-bad"><div class="num">{stats['rejected']}</div><div class="label">rejected</div></div>
       <div class="card tone t-info"><div class="num">{stats['avg_score']}</div><div class="label">avg score</div></div>
     </div>
     """
 
-    reject_html = ""
-    if rejects:
-        items = "".join(f"<li>{_esc(r['reason'])} — <b>{r['count']}×</b></li>" for r in rejects)
-        reject_html = f"<ul>{items}</ul>"
-    else:
-        reject_html = "<p class='muted'>No rejected attempts recorded yet.</p>"
-
-    # THE ONE THING TO DO NEXT, above everything else on the page. The front
-    # page opened on a topic box, which assumes the answer to "what now" is
-    # always "make another video" — and when four of the last six runs share a
-    # defect, another video is precisely the wrong move. This is the top
-    # finding from /advice, in a line, with a way through to it.
-    advice_html = ""
-    try:
-        items, ready = _advice_now()
-        tone = {"needs work": "held", "workable": "pending",
-                "good": "ok", "unmeasured": "pending"}.get(ready["state"], "pending")
-        top = (f' — <strong>{_esc(items[0]["title"])}</strong>' if items else "")
-        more = (f' <span class="muted">and {len(items) - 1} more</span>'
-                if len(items) > 1 else "")
-        advice_html = (
-            f'<div class="card" style="width:100%;margin-bottom:18px">'
-            f'<span class="badge {tone}">{_esc(ready["state"])}</span>{top}{more}'
-            f'<div class="muted" style="margin-top:6px">'
-            f'<a href="/advice">what to change →</a> · '
-            f'<a href="/insights">the measurements →</a></div></div>')
-    except Exception as e:                       # never break the front page
-        print(f"[dashboard] advice summary unavailable: {e}")
-
-    # WHAT NEEDS YOU, BEFORE WHAT YOU COULD MAKE. This page used to open on
-    # the topic box, which answers "what now" with "make another video" before
-    # anybody has said whether the last four are any good. When something is
-    # waiting on a decision, that IS what the page is for; the topic box is
-    # still here, one screen down, for when the queue is empty.
-    if pending:
-        review_block = (f'<h2 id="review" class="sec s-review">⏳ Awaiting your '
-                        f'review ({len(pending)})</h2>'
-                        f'{_videos_table(pending, previews=True)}')
-    else:
-        review_block = ('<h2 id="review" class="sec s-review">⏳ Awaiting your review (0)</h2>'
-                        '<p class="muted">Nothing is waiting on you. Queue a '
-                        'topic below, or leave it to the schedule.</p>')
-
-    # WHERE YOU CAN GO, THEN HOW IT IS GOING. The tiles carry the same four
-    # waiting-counts the flow bar did, plus /create and the six pages the flow
-    # bar never covered, so stacking both put the identical four numbers in two
-    # rows one above the other — the duplication this dashboard keeps growing
-    # and keeps having to be cut back out. The flow bar stays on the four stage
-    # pages, where its `current` marks which step you are standing on and the
-    # tiles are not drawn; here it had nothing left to say.
+    # MINIMAL, TO THE SKETCH. This page had grown ten tiles, four stat cards,
+    # a failure panel, an advice card, a topic form, a channel filter, a
+    # sparkline, a sixty-row review table and a rejection list — eleven blocks,
+    # each one added because it was worth knowing, together adding up to a page
+    # nobody could read. The sketch asks for four: who you are and what needs
+    # you, four ways in, the numbers, and what went out.
     #
-    # The stat cards move up beside the tiles because "general details" is half
-    # of what a home page is for, and four numbers sitting five blocks down,
-    # under a full review table, are details nobody scrolls to.
+    # Everything removed still exists. The review queue moved to /review rather
+    # than being deleted, the failures to /failures, the trend and the
+    # rejections to /measure. A front page is a place to start from, not the
+    # place everything has to be.
     body = f"""
+    <section class="hi">
+      <h1 class="hi-h">{_greeting()}</h1>
+      {_waiting_line()}
+    </section>
+    {_msg_banner()}
     {_home_tiles(stats)}
+    {filt_html}
+    <h2 class="sec s-measure">Analytics and stats</h2>
     {cards}
+    {_sparkline_svg(scored)}
+    <h2 class="sec s-review">Last five out</h2>
+    {_videos_table(recent_out[:5])}
+    """
+    return _head() + body + PAGE_TAIL
+
+
+@app.route("/review")
+def review_queue():
+    """Everything waiting on an approve or a reject.
+
+    Lifted off the front page, where sixty rows with keyframe strips were the
+    tallest thing on it by an order of magnitude. It is the most important
+    list in the dashboard and it earns its own page — the home page carries
+    the count and a link, which is what the count is for.
+    """
+    auth.require("view")
+    channel = request.args.get("channel") or None
+    pending = _recent_videos(limit=200, channel=channel, status="pending")
+    rejects = _top_rejections(channel=channel)
+
+    if rejects:
+        items = "".join(f"<li>{_esc(r['reason'])} &mdash; <b>{r['count']}&times;</b></li>"
+                        for r in rejects)
+        reject_html = (f'<details style="margin-top:26px"><summary>Most common '
+                       f'script rejections</summary><ul>{items}</ul></details>')
+    else:
+        reject_html = ""
+
+    if pending:
+        table = _videos_table(pending, previews=True)
+    else:
+        table = ('<p class="muted">Nothing is waiting on you. Queue a topic on '
+                 '<a href="/create">Make a video</a>, or leave it to the '
+                 'schedule.</p>')
+
+    body = f"""
+    <a class="back" href="/">&larr; back</a>
+    <h2 style="margin-top:14px">Awaiting your review ({len(pending)})</h2>
     {_msg_banner()}
     {_failure_notice()}
-    {advice_html}
-    {review_block}
-    {topic_form}
-    {filt_html}
-    <h2>Score trend (oldest → newest)</h2>
-    {_sparkline_svg(scored)}
-    <div class="grid2">
-      <div>
-        <h2>All recent videos</h2>
-        {_videos_table(videos)}
-      </div>
-      <div>
-        <h2>Most common script rejections</h2>
-        {reject_html}
-      </div>
-    </div>
+    {table}
+    {reject_html}
     """
     return _head() + body + PAGE_TAIL
 
