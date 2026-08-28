@@ -1,81 +1,89 @@
 {
-  "16": {
-    "class_type": "UNETLoader",
+  "9": {
     "inputs": {
-      "unet_name": "z_image_turbo_bf16.safetensors",
-      "weight_dtype": "fp8_e4m3fn"
-    }
+      "filename_prefix": "ComfyUI",
+      "images": ["65", 0]
+    },
+    "class_type": "SaveImage",
+    "_meta": { "title": "Save Image" }
   },
-  "18": {
-    "class_type": "CLIPLoader",
+  "62": {
     "inputs": {
       "clip_name": "qwen_3_4b.safetensors",
       "type": "lumina2",
       "device": "default"
-    }
+    },
+    "class_type": "CLIPLoader",
+    "_meta": { "title": "Load CLIP" }
   },
-  "11": {
-    "class_type": "ModelSamplingAuraFlow",
+  "63": {
+    "inputs": { "vae_name": "ae.safetensors" },
+    "class_type": "VAELoader",
+    "_meta": { "title": "Load VAE" }
+  },
+  "65": {
     "inputs": {
-      "shift": 3,
-      "model": ["16", 0]
-    }
+      "samples": ["70", 0],
+      "vae": ["63", 0]
+    },
+    "class_type": "VAEDecode",
+    "_meta": { "title": "VAE Decode" }
   },
-  "6": {
-    "class_type": "CLIPTextEncode",
+  "66": {
+    "inputs": {
+      "unet_name": "z_image_turbo_bf16.safetensors",
+      "weight_dtype": "default"
+    },
+    "class_type": "UNETLoader",
+    "_meta": { "title": "Load Diffusion Model" }
+  },
+  "67": {
     "inputs": {
       "text": "RUFUS_PROMPT",
-      "clip": ["18", 0]
-    }
-  },
-  "7": {
+      "clip": ["62", 0]
+    },
     "class_type": "CLIPTextEncode",
-    "inputs": {
-      "text": "",
-      "clip": ["18", 0]
-    }
+    "_meta": { "title": "CLIP Text Encode (Prompt)" }
   },
-  "13": {
-    "class_type": "EmptySD3LatentImage",
+  "68": {
     "inputs": {
       "width": 832,
       "height": 1472,
       "batch_size": 1
-    }
+    },
+    "class_type": "EmptySD3LatentImage",
+    "_meta": { "title": "EmptySD3LatentImage" }
   },
-  "3": {
-    "class_type": "KSampler",
+  "69": {
     "inputs": {
-      "seed": 47447417949230,
-      "steps": 9,
-      "cfg": 1,
-      "sampler_name": "euler",
+      "shift": 3,
+      "model": ["66", 0]
+    },
+    "class_type": "ModelSamplingAuraFlow",
+    "_meta": { "title": "ModelSamplingAuraFlow" }
+  },
+  "70": {
+    "inputs": {
+      "seed": 42,
+      "steps": 8,
+      "cfg": 2,
+      "sampler_name": "res_multistep",
       "scheduler": "simple",
       "denoise": 1,
-      "model": ["11", 0],
-      "positive": ["6", 0],
-      "negative": ["7", 0],
-      "latent_image": ["13", 0]
-    }
+      "model": ["69", 0],
+      "positive": ["67", 0],
+      "negative": ["71", 0],
+      "latent_image": ["68", 0]
+    },
+    "class_type": "KSampler",
+    "_meta": { "title": "KSampler" }
   },
-  "17": {
-    "class_type": "VAELoader",
+  "71": {
     "inputs": {
-      "vae_name": "ae.safetensors"
-    }
-  },
-  "8": {
-    "class_type": "VAEDecode",
-    "inputs": {
-      "samples": ["3", 0],
-      "vae": ["17", 0]
-    }
-  },
-  "9": {
-    "class_type": "SaveImage",
-    "inputs": {
-      "filename_prefix": "rufus_stills",
-      "images": ["8", 0]
-    }
+      "text": "RUFUS_NEGATIVE",
+      "clip": ["62", 0]
+    },
+    "class_type": "CLIPTextEncode",
+    "_meta": { "title": "CLIP Text Encode (Negative)" }
   }
 }
