@@ -4916,7 +4916,8 @@ def create_page():
             'back to any decision you have already made and choose again.</p>'
             '<form method="post" action="/create/new" style="margin-top:14px">'
             '<button class="btn save" type="submit">Start a video</button>'
-            '</form>')
+            '</form>'
+            f'{_stale_notice()}')
         return _head() + body + PAGE_TAIL
 
     stage = p.get("stage") or "topic"
@@ -4978,6 +4979,69 @@ def create_new():
     return redirect(f"/create?project={pid}")
 
 
+def _stale_notice() -> str:
+    """Offer the sweep only when there is something to sweep.
+
+    A permanently visible "tidy up" button is a chore the page invents; one
+    that appears because twenty-one reads really are waiting from sittings
+    that ended days ago is the page telling you something true.
+
+    Counted by asking the sweep itself on a throwaway basis would mean doing
+    the work to decide whether to offer it, so this mirrors its rule instead:
+    anything pending that is not part of an open project.
+    """
+    try:
+        import db_manager as dbm
+        open_ids = {p["id"] for p in dbm.projects(status="open", limit=200)}
+        live_cands = {c["id"] for c in dbm.candidates(limit=1000)
+                      if c.get("project_id") in open_ids}
+        live_sets = {g["id"] for g in dbm.gallery_sets(status=None, limit=500)
+                     if g.get("candidate_id") in live_cands}
+        stale = sum(1 for c in dbm.candidates(status="pending", limit=500)
+                    if c.get("project_id") not in open_ids)
+        stale += sum(1 for g in dbm.gallery_sets(status="pending", limit=500)
+                     if g["id"] not in live_sets)
+        stale += sum(1 for t in dbm.voice_takes(status="pending", limit=500)
+                     if t.get("set_id") not in live_sets)
+    except Exception:
+        return ""
+    if not stale:
+        return ""
+    return (f'<div class="msg" style="margin-top:22px">'
+            f'<b>{stale}</b> option(s) are still waiting in the queues from '
+            f'sittings you have already finished or abandoned. They make '
+            f'/scripts, /galleries and /voice look busier than they are.'
+            f'<form method="post" action="/create/tidy" style="margin-top:10px">'
+            f'<button type="submit">Clear them out</button></form>'
+            f'<div class="muted" style="margin-top:6px">Nothing is deleted '
+            f'&mdash; they stop being offered. Anything belonging to a video '
+            f'you have open is left alone.</div></div>')
+
+
+@app.route("/create/tidy", methods=["POST"])
+def create_tidy():
+    """Clear the queues of everything not belonging to an open project.
+
+    Retiring on close fixes this going forward and does nothing about what has
+    already piled up. This is the sweep for that, and it is safe to press at
+    any time: it only ever touches rows whose project is finished or
+    abandoned, and rows with no project at all are left alone.
+    """
+    auth.require("generate")
+    import db_manager as dbm
+    try:
+        n = dbm.retire_all_stale_options()
+    except Exception as e:
+        return redirect("/create?error=" + _urlquote(f"could not tidy: {e}"))
+    if not n:
+        return redirect("/create?msg=" + _urlquote(
+            "Nothing stale — every option waiting belongs to a project you "
+            "still have open."))
+    return redirect("/create?msg=" + _urlquote(
+        f"{n} option(s) from finished or abandoned projects left the queues. "
+        f"Nothing was deleted."))
+
+
 @app.route("/create/<int:project_id>/abandon", methods=["POST"])
 def create_abandon(project_id: int):
     """Abandoned, not deleted. What was drawn and written stays on disk and in
@@ -4986,7 +5050,14 @@ def create_abandon(project_id: int):
     auth.require("generate")
     import db_manager as dbm
     dbm.update_project(project_id, status="abandoned")
-    return redirect("/create?msg=" + _urlquote("Abandoned. Nothing was deleted."))
+    # AND IT STOPS ASKING. The stage queues count every pending row in the
+    # database with no idea which project it belongs to, so a project's
+    # leftovers used to sit in /scripts, /galleries and /voice forever — next
+    # to today's, making the badges say seven reads are waiting when one is.
+    n = dbm.retire_project_options(project_id)
+    tail = f" {n} leftover option(s) left the queues." if n else ""
+    return redirect("/create?msg=" + _urlquote(
+        f"Abandoned. Nothing was deleted.{tail}"))
 
 
 @app.route("/create/<int:project_id>/back/<stage>", methods=["POST"])
@@ -5188,6 +5259,10 @@ def create_render(project_id: int):
         return redirect(f"/create?project={project_id}&error="
                         + _urlquote(f"could not start: {e}"))
     dbm.update_project(project_id, status="rendering")
+    # Decided, so it stops asking — same reason as abandoning. What was not
+    # chosen at each stage is kept as the losing half of the pair; it just
+    # stops being offered.
+    dbm.retire_project_options(project_id)
     return redirect("/create?msg=" + _urlquote(
         f'Making "{p["title"]}" — it lands in the review queue like any other '
         f'video. Log: logs/{log.name}'))

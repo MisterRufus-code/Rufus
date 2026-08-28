@@ -296,7 +296,27 @@ def test_abandoning_deletes_nothing(client):
     client.post(f"/create/{pid}/regen/topic")
     client.post(f"/create/{pid}/abandon")
     assert db_manager.project(pid)["status"] == "abandoned"
+    # status=None, because abandoning now RETIRES what was still pending — the
+    # rows are all still there, they have just stopped being offered.
+    assert len(db_manager.project_topics(pid, status=None)) == 3
+
+
+def test_abandoning_takes_its_leftovers_out_of_the_queues(client):
+    """"I don't want all this mass with all the scripts mixed and mixed
+    gallery — I want to make the generation live, not save it for after."
+
+    The stage queues count every pending row in the database with no idea
+    which project it belongs to, so the leftovers of a project abandoned last
+    week sat in /scripts, /galleries and /voice forever, next to today's. The
+    badges said seven reads were waiting when one was."""
+    pid = _start(client)
+    client.post(f"/create/{pid}/regen/topic")
     assert len(db_manager.project_topics(pid)) == 3
+
+    client.post(f"/create/{pid}/abandon")
+
+    assert db_manager.project_topics(pid) == [], "nothing of it is still offered"
+    assert len(db_manager.project_topics(pid, status=None)) == 3, "and nothing is gone"
 
 
 # ── going back has to give the options back ─────────────────────────────────
@@ -998,3 +1018,115 @@ def test_the_note_count_survives_a_database_that_will_not_answer(monkeypatch):
     import db_manager as dbm
     monkeypatch.setattr(dbm, "_conn", lambda: (_ for _ in ()).throw(RuntimeError))
     assert dbm.open_note_count() == 0
+
+
+def test_the_sweep_clears_finished_projects_and_spares_the_open_one(
+        tmp_path, monkeypatch):
+    """The backlog that already exists. Retiring on close fixes it going
+    forward and does nothing about the seven reads, two galleries and three
+    scripts already piled up from sittings that ended days ago."""
+    import db_manager as dbm
+    monkeypatch.setattr(dbm, "DB_FILE", tmp_path / "sweep.db")
+    dbm.init_db()
+
+    done = dbm.new_project(channel="c", niche="n")
+    live = dbm.new_project(channel="c", niche="n")
+    for pid in (done, live):
+        for style in ("warning", "shocking_stat", "counterintuitive"):
+            dbm.save_candidate(proposal_id=None, channel="c", niche="n",
+                               topic="T", hook_style=style, hook="h",
+                               script="s", score=8, project_id=pid)
+    dbm.update_project(done, status="abandoned")
+    assert len(dbm.candidates(status="pending", limit=100)) == 6
+
+    n = dbm.retire_all_stale_options()
+
+    assert n == 3
+    left = dbm.candidates(status="pending", limit=100)
+    assert len(left) == 3
+    assert {c["project_id"] for c in left} == {live}, (
+        "the project you still have open must be untouched")
+
+
+def test_the_sweep_clears_rows_that_belong_to_no_project(tmp_path, monkeypatch):
+    """These are the pile. In the owner's database only 4 of 30 waiting
+    options belonged to a project at all — the rest came from the older
+    per-stage path, which starts a stage without opening a project, so there
+    is nothing to finish and nothing that ever takes them out of the queues.
+
+    An earlier version of this spared them, reasoning that a queue somebody
+    might still be working from should not be swept. Wrong call: they ARE the
+    pile, and the protection that matters is the project open right now."""
+    import db_manager as dbm
+    monkeypatch.setattr(dbm, "DB_FILE", tmp_path / "orphan.db")
+    dbm.init_db()
+    dbm.save_candidate(proposal_id=7, channel="c", niche="n", topic="T",
+                       hook_style="warning", hook="h", script="s", score=8)
+    assert dbm.retire_all_stale_options() == 1
+    assert dbm.candidates(status="pending", limit=10) == []
+    assert len(dbm.candidates(status=None, limit=10)) == 1, "kept, not deleted"
+
+
+def test_the_sweep_spares_the_project_you_have_open(tmp_path, monkeypatch):
+    """Including its gallery and its reads, which hang off it through the
+    chosen script rather than carrying a project id of their own."""
+    import db_manager as dbm
+    monkeypatch.setattr(dbm, "DB_FILE", tmp_path / "live.db")
+    dbm.init_db()
+    pid = dbm.new_project(channel="c", niche="n")
+    cid = dbm.save_candidate(proposal_id=None, channel="c", niche="n",
+                             topic="T", hook_style="warning", hook="h",
+                             script="s", score=8, project_id=pid)
+    sid = dbm.save_gallery_set(candidate_id=cid, channel="c", niche="n",
+                               topic="T", script_file="s.txt", n_variants=2)
+    dbm.save_voice_take(set_id=sid, channel="c", topic="T", tone="calm",
+                        text="t", path="/a.mp3")
+    # ...and a stray from an older sitting, with no project.
+    dbm.save_candidate(proposal_id=9, channel="c", niche="n", topic="Old",
+                       hook_style="warning", hook="h", script="s", score=8)
+
+    assert dbm.retire_all_stale_options() == 1
+
+    assert [c["id"] for c in dbm.candidates(status="pending", limit=10)] == [cid]
+    assert [g["id"] for g in dbm.gallery_sets(status="pending")] == [sid]
+    assert len(dbm.voice_takes(set_id=sid, status="pending")) == 1
+
+
+def test_the_sweep_is_safe_to_run_twice(tmp_path, monkeypatch):
+    import db_manager as dbm
+    monkeypatch.setattr(dbm, "DB_FILE", tmp_path / "twice.db")
+    dbm.init_db()
+    pid = dbm.new_project(channel="c", niche="n")
+    dbm.save_candidate(proposal_id=None, channel="c", niche="n", topic="T",
+                       hook_style="warning", hook="h", script="s", score=8,
+                       project_id=pid)
+    dbm.update_project(pid, status="abandoned")
+    assert dbm.retire_all_stale_options() == 1
+    assert dbm.retire_all_stale_options() == 0
+
+
+def test_nothing_is_deleted_by_the_sweep(tmp_path, monkeypatch):
+    """A retired option is still half of a labelled pair, which is why the
+    losers are kept at all."""
+    import db_manager as dbm
+    monkeypatch.setattr(dbm, "DB_FILE", tmp_path / "keep.db")
+    dbm.init_db()
+    pid = dbm.new_project(channel="c", niche="n")
+    dbm.save_candidate(proposal_id=None, channel="c", niche="n", topic="T",
+                       hook_style="warning", hook="h", script="s", score=8,
+                       project_id=pid)
+    dbm.update_project(pid, status="abandoned")
+    dbm.retire_all_stale_options()
+    assert len(dbm.candidates(project_id=pid, status=None)) == 1
+
+
+def test_the_tidy_offer_only_appears_when_there_is_something_to_tidy():
+    """A permanently visible "tidy up" button is a chore the page invents; one
+    that appears because seven reads really are waiting is the page telling
+    you something true."""
+    from pathlib import Path
+    import dashboard
+    src = Path(dashboard.__file__).read_text(encoding="utf-8")
+    body = src.split("def _stale_notice", 1)[1].split("\ndef ", 1)[0]
+    assert "if not stale:" in body and 'return ""' in body
+    assert "/create/tidy" in body

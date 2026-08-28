@@ -973,6 +973,99 @@ def open_note_count() -> int:
         return 0
 
 
+def retire_project_options(project_id: int) -> int:
+    """Take everything still pending in a project out of the queues.
+
+    WHY A FINISHED PROJECT MUST STOP ASKING. /scripts, /galleries and /voice
+    count every pending row in the database, with no idea which project it
+    belongs to. So the leftovers of a project you abandoned last week — the two
+    scripts you did not pick, the gallery you moved on from, the reads you
+    never chose — sit in those queues forever, next to today's, and the badges
+    say seven reads are waiting when one is.
+
+    The owner's words for it: "I don't want all this mass with all the scripts
+    mixed and mixed gallery — I want to make the generation live, not save it
+    for after." A queue that outlives the decision it belonged to is the
+    opposite of live.
+
+    Retired, not deleted, for the reason everything here is: the row that lost
+    is half of a labelled pair, and that is why the losers are kept at all.
+    """
+    total = 0
+    for stage in ("script", "gallery", "voice"):
+        try:
+            total += superseded_by_regen(project_id, stage)
+        except Exception:
+            pass
+    with _conn() as c:
+        c.execute("UPDATE project_topics SET status='superseded' "
+                  "WHERE project_id=? AND status='pending'", (int(project_id),))
+    return total
+
+
+def retire_all_stale_options() -> int:
+    """Clear the queues of everything not part of a project you have open.
+
+    THE BACKLOG THAT ALREADY EXISTS. Retiring on close fixes this going
+    forward and does nothing about what has already piled up. In the owner's
+    database that is 3 scripts, 2 galleries and 21 voice takes — and only 4 of
+    them belong to a project at all. The rest came from the older per-stage
+    path, which starts a stage without opening a project, so there is nothing
+    to finish and nothing that ever takes them out of the queues.
+
+    An earlier version of this spared those, reasoning that a queue somebody
+    might still be working from should not be swept. That was the wrong call:
+    they are the whole pile the owner is looking at, and "I want to make the
+    generation live, not save it for after" is not a request to preserve a
+    queue nobody opened in a week. The protection that matters is the project
+    you have open right now, and that is what this keeps.
+
+    Retired, not deleted. Every row stays as the losing half of its pair.
+    """
+    with _conn() as c:
+        open_ids = {r[0] for r in c.execute(
+            "SELECT id FROM projects WHERE status = 'open'")}
+        live_cands = set()
+        if open_ids:
+            marks = ",".join("?" * len(open_ids))
+            live_cands = {r[0] for r in c.execute(
+                f"SELECT id FROM script_candidates WHERE project_id IN ({marks})",
+                tuple(open_ids))}
+        live_sets = set()
+        if live_cands:
+            marks = ",".join("?" * len(live_cands))
+            live_sets = {r[0] for r in c.execute(
+                f"SELECT id FROM gallery_sets WHERE candidate_id IN ({marks})",
+                tuple(live_cands))}
+
+        n = 0
+        def keep(col, ids):
+            if not ids:
+                return "", ()
+            marks = ",".join("?" * len(ids))
+            return f" AND ({col} IS NULL OR {col} NOT IN ({marks}))", tuple(ids)
+
+        clause, args = keep("project_id", open_ids)
+        n += c.execute(
+            "UPDATE script_candidates SET status='superseded' "
+            "WHERE status='pending'" + clause, args).rowcount or 0
+
+        clause, args = keep("id", live_sets)
+        n += c.execute(
+            "UPDATE gallery_sets SET status='superseded' "
+            "WHERE status='pending'" + clause, args).rowcount or 0
+
+        clause, args = keep("set_id", live_sets)
+        n += c.execute(
+            "UPDATE voice_takes SET status='superseded' "
+            "WHERE status='pending'" + clause, args).rowcount or 0
+
+        clause, args = keep("project_id", open_ids)
+        c.execute("UPDATE project_topics SET status='superseded' "
+                  "WHERE status='pending'" + clause, args)
+    return n
+
+
 def superseded_by_regen(project_id: int, stage: str) -> int:
     """Retire the pending options AT `stage`, ahead of drawing new ones.
 
