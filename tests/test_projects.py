@@ -605,18 +605,71 @@ def test_a_finished_gallery_offers_the_choice(client):
 
 
 def test_an_in_progress_set_gets_an_eta(db):
-    """created_at was read only on the not-yet-chosen path, so every set the
-    project already pointed at reported no estimate at all."""
+    """The estimate comes from the spacing between the pictures that actually
+    landed. Three written in the same instant have no spacing to measure — and
+    there is no fallback any more, because the fallback was the sum that
+    reported twelve hours for a draw doing one every nineteen seconds."""
     import dashboard
     pid = _project(db)
     sid = db.save_gallery_set(candidate_id=8, channel="c", niche="n",
                               topic="T", script_file="s.txt", n_variants=2)
     db.update_project(pid, script_id=8, gallery_id=sid, stage="gallery")
-    for b in range(3):
-        db.save_gallery_image(set_id=sid, variant=0, beat_index=b,
-                              path=f"/a{b}.png", prompt="p", seed=1)
+    db.set_gallery_beats(sid, 8)
+    with db._conn() as c:
+        for b in range(3):
+            c.execute("INSERT INTO gallery_images (set_id,variant,beat_index,"
+                      "path,prompt,seed,created_at) VALUES (?,?,?,?,?,?,"
+                      "datetime('now',?))",
+                      (sid, 0, b, f"/a{b}.png", "p", 1, f"-{(3-b)*19} seconds"))
+
     prog = dashboard._project_progress(db.project(pid))
+
     assert prog["working"] is True
+    assert prog["stalled"] is False
+    assert prog["eta_seconds"] is not None
+    assert 18 <= prog["rate_seconds"] <= 20
+
+
+def test_a_draw_that_stopped_says_so_instead_of_estimating(db):
+    """THE SCREEN THAT CAUSED REAL DAMAGE. The bar promised "~12h 10m left"
+    for a set that had not gained a picture in hours, so the owner turned
+    ComfyUI OFF trying to unstick it — which is what a person does when the
+    screen insists something is still happening."""
+    import dashboard
+    pid = _project(db)
+    sid = db.save_gallery_set(candidate_id=8, channel="c", niche="n",
+                              topic="T", script_file="s.txt", n_variants=2)
+    db.update_project(pid, script_id=8, gallery_id=sid, stage="gallery")
+    db.set_gallery_beats(sid, 19)
+    with db._conn() as c:
+        for b in range(9):
+            c.execute("INSERT INTO gallery_images (set_id,variant,beat_index,"
+                      "path,prompt,seed,created_at) VALUES (?,?,?,?,?,?,"
+                      "datetime('now','-3 hours'))",
+                      (sid, 0, b, f"/a{b}.png", "p", 1))
+
+    prog = dashboard._project_progress(db.project(pid))
+
+    assert prog["stalled"] is True
+    assert prog["eta_seconds"] is None, "no estimate for work that stopped"
+    assert prog["quiet_seconds"] > 3000
+
+
+def test_a_set_still_moving_is_not_called_stalled(db):
+    import dashboard
+    pid = _project(db)
+    sid = db.save_gallery_set(candidate_id=8, channel="c", niche="n",
+                              topic="T", script_file="s.txt", n_variants=2)
+    db.update_project(pid, script_id=8, gallery_id=sid, stage="gallery")
+    db.set_gallery_beats(sid, 19)
+    with db._conn() as c:
+        for b in range(9):
+            c.execute("INSERT INTO gallery_images (set_id,variant,beat_index,"
+                      "path,prompt,seed,created_at) VALUES (?,?,?,?,?,?,"
+                      "datetime('now',?))",
+                      (sid, 0, b, f"/a{b}.png", "p", 1, f"-{(9-b)*19} seconds"))
+    prog = dashboard._project_progress(db.project(pid))
+    assert prog["stalled"] is False
     assert prog["eta_seconds"] is not None
 
 

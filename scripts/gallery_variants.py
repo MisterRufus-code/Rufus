@@ -205,8 +205,26 @@ def build(script_file: str, *, candidate_id: int | None = None,
     print(f"[galleries] set #{set_id}: {n_variants} × {len(prompts)} "
           f"picture(s) → {out_dir}")
 
+    # FAIL-OPEN PER IMAGE IS RIGHT; FAIL-OPEN PER BACKEND IS NOT. A beat that
+    # will not draw leaves that variant short and the other one covers the
+    # shot — that is the contract this loop was written to. But when ComfyUI
+    # goes away, render_one_beat returns False for EVERY remaining prompt, and
+    # the loop cheerfully burned through all thirty-eight of them in a few
+    # seconds, drew nothing, and finished. The set then sits at 9 of 38 for
+    # ever while the dashboard quotes an estimate for work that stopped.
+    #
+    # So: a handful of consecutive failures is a dead server, not bad luck.
+    # Stop, say so, and leave what was drawn — the pictures that landed are
+    # still good and re-running picks up from an empty set rather than a
+    # poisoned one.
+    GIVE_UP_AFTER = 4
+    misses = 0
+
     drawn = 0
+    stopped = False
     for variant in range(n_variants):
+        if stopped:
+            break
         # ONE BASE SEED PER VARIANT, offset by beat. Two variants that shared a
         # seed would draw the same picture twice and the choice would be
         # between a thing and itself; a seed re-rolled per image would make the
@@ -219,9 +237,21 @@ def build(script_file: str, *, candidate_id: int | None = None,
             ok = comfy_client.render_one_beat(styled[i], png, seed=seed,
                                               niche=niche)
             if not ok:
+                misses += 1
+                if misses >= GIVE_UP_AFTER:
+                    print(f"[galleries] {misses} draws in a row came back "
+                          f"empty — treating the renderer as gone rather than "
+                          f"burning through the remaining prompts against it.")
+                    print(f"[galleries] check ComfyUI is up at "
+                          f"{comfy_client._host()}, then press 'Give me "
+                          f"another set'. The {drawn} picture(s) already drawn "
+                          f"are kept.")
+                    stopped = True
+                    break
                 print(f"[galleries] variant {variant} beat {i}: no image — "
                       f"the other variant still covers this shot")
                 continue
+            misses = 0
             # THE SHOT IS STORED, NOT THE STYLED PROMPT. This row is read
             # in two places and neither wants the style block: the page prints
             # it under the picture, where six hundred identical words would
@@ -233,8 +263,12 @@ def build(script_file: str, *, candidate_id: int | None = None,
                 prompt=prompt, seed=seed)
             drawn += 1
 
-    print(f"[galleries] set #{set_id}: {drawn} picture(s) drawn — "
-          f"choose at /galleries")
+    if stopped:
+        print(f"[galleries] set #{set_id}: STOPPED after {drawn} of "
+              f"{len(prompts) * n_variants} picture(s).")
+    else:
+        print(f"[galleries] set #{set_id}: {drawn} picture(s) drawn — "
+              f"choose at /galleries")
     return set_id
 
 

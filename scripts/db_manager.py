@@ -1226,6 +1226,30 @@ def save_gallery_image(*, set_id: int, variant: int, beat_index: int,
         return cur.lastrowid
 
 
+def seconds_since_last_picture(set_id: int) -> float | None:
+    """How long since anything landed in this set, or None if nothing has.
+
+    A set that is not finished and has not gained a picture in minutes is not
+    slow, it is stopped — and the difference matters, because the dashboard
+    was quoting a twelve-hour estimate for a draw that had died. The owner
+    turned ComfyUI off trying to fix it, which is what a person does when the
+    screen insists something is still happening.
+    """
+    with _conn() as c:
+        row = c.execute(
+            "SELECT MAX(created_at) FROM gallery_images WHERE set_id=? "
+            "AND created_at IS NOT NULL", (int(set_id),)).fetchone()
+    if not row or not row[0]:
+        return None
+    import time as _t
+    from datetime import datetime, timezone
+    try:
+        t = datetime.fromisoformat(str(row[0])).replace(tzinfo=timezone.utc)
+    except ValueError:
+        return None
+    return max(0.0, _t.time() - t.timestamp())
+
+
 def gallery_draw_rate(set_id: int, window: int = 6) -> float | None:
     """Seconds per picture, measured from the last few that actually landed.
 

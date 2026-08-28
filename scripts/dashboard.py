@@ -311,6 +311,11 @@ def _current_job() -> dict | None:
 # and only these two are known not to belong.
 _NOT_A_RUN_LOG = {"dashboard.log", "watchdog.log"}
 
+# Longer than any single picture takes and shorter than a person's patience.
+# One draw is ~19s on the owner's 3090; four minutes of silence on an
+# unfinished set is not a slow picture, it is a dead renderer.
+STALLED_AFTER_SECONDS = 240
+
 _GPU_CACHE = {"at": 0.0, "value": None}
 
 
@@ -1760,6 +1765,8 @@ PAGE_STYLE = """<!doctype html><html><head><meta charset="utf-8">
               font-weight: 600; color: var(--dim);
               background: color-mix(in srgb, var(--bg) 78%, transparent);
               border-radius: 4px; padding: 0 4px; }
+  #draw.stalled .draw-n { color: var(--bad); }
+  #draw.stalled #draw-sub { color: var(--bad); }
   .draw-log { margin-top: 20px; font-size: 11px; line-height: 1.5;
               color: var(--dim); background: var(--surface);
               border: 1px solid var(--border); border-radius: var(--radius);
@@ -4653,8 +4660,8 @@ def _project_progress(p: dict) -> dict:
     import db_manager as dbm
 
     out = {"working": False, "done": 0, "total": 0, "label": "",
-           "eta_seconds": None, "starting": False,
-           "stage": p.get("stage") or "topic"}
+           "eta_seconds": None, "starting": False, "stalled": False,
+           "quiet_seconds": None, "stage": p.get("stage") or "topic"}
     stage = out["stage"]
     started = None
     try:
@@ -4706,6 +4713,17 @@ def _project_progress(p: dict) -> dict:
                 if rate and total > len(images):
                     out["rate_seconds"] = round(rate, 1)
                     out["eta_seconds"] = int(rate * (total - len(images)))
+                # STOPPED IS NOT SLOW. Nothing landing for minutes on an
+                # unfinished set means the draw died — ComfyUI gone, the
+                # subprocess killed, the machine asleep. Quoting an estimate
+                # for that is how the owner came to turn ComfyUI OFF trying to
+                # unstick it: the screen kept insisting work was in progress.
+                quiet = dbm.seconds_since_last_picture(sid)
+                if total and len(images) < total and quiet is not None \
+                        and quiet > STALLED_AFTER_SECONDS:
+                    out["stalled"] = True
+                    out["quiet_seconds"] = int(quiet)
+                    out["eta_seconds"] = None
                 # THE BLIND WINDOW BEFORE THE FIRST PICTURE. gallery_variants
                 # writes the set row first, then records three voice takes,
                 # then calls the storyboard, and only THEN sets n_beats and
@@ -4734,8 +4752,14 @@ def _project_progress(p: dict) -> dict:
     # press the button and go and watch the ComfyUI console.
     out["working"] = (out["total"] > 0 and out["done"] < out["total"]) \
         or bool(out.get("starting"))
-    if out.get("eta_seconds") is not None:
-        return out          # already measured from real timestamps
+    if out.get("eta_seconds") is not None or out.get("stalled"):
+        return out          # measured from real timestamps, or not moving
+    if out["stage"] == "gallery":
+        # No estimate rather than a made-up one. Dividing by the time since
+        # the set row was written is what produced "~12h 10m left" for a draw
+        # that was doing one picture every nineteen seconds, and the same sum
+        # is still wrong for a set drawn before created_at existed.
+        return out
     if not out["working"] or not out["done"] or not started:
         return out
     try:
@@ -5304,6 +5328,14 @@ DRAWING_JS = """
     var sub = document.getElementById('draw-sub');
     if (d.finished) {
       sub.textContent = 'Done — every picture is drawn.';
+    } else if (d.stalled) {
+      // STOPPED IS NOT SLOW. Quoting an estimate here is what made the owner
+      // turn ComfyUI off trying to unstick a draw that had already died.
+      root.classList.add('stalled');
+      sub.innerHTML = 'Stopped — nothing has arrived for ' + fmt(d.quiet_seconds)
+        + '. ' + (d.gpu_up === false
+            ? 'ComfyUI is not answering: start it, then draw again.'
+            : 'ComfyUI is answering, so the run itself ended — draw again.');
     } else if (!d.total) {
       sub.textContent = 'Recording the voice, then planning the shots…';
     } else if (d.eta_seconds != null) {
@@ -5337,6 +5369,8 @@ DRAWING_JS = """
       clearInterval(timer);
       sub.innerHTML = 'Done &mdash; <a href="/create">choose the pictures &rarr;</a>';
     }
+    var again = document.getElementById('draw-again');
+    if (again) { again.style.display = d.stalled ? '' : 'none'; }
   }
 
   function poll() {
@@ -5385,6 +5419,26 @@ def drawing_page(set_id: int):
         return _head() + ('<a class="back" href="/">&larr; back</a>'
                           '<div class="msg error">No such gallery.</div>'
                           ) + PAGE_TAIL
+    # The project that owns this set, so "draw it again" has somewhere to
+    # post. A set reaches its project through the chosen script rather than
+    # carrying a project id of its own.
+    project_id = None
+    try:
+        cid = row.get("candidate_id")
+        if cid:
+            cand = next((c for c in dbm.candidates(limit=500)
+                         if c["id"] == cid), None)
+            project_id = (cand or {}).get("project_id")
+    except Exception:
+        pass
+    again = ""
+    if project_id and auth.can("generate"):
+        again = (f'<div id="draw-again" style="display:none;margin-bottom:16px">'
+                 f'<form method="post" action="/create/{project_id}/regen/gallery">'
+                 f'<button class="btn save" type="submit">Draw it again</button>'
+                 f'</form><div class="muted" style="margin-top:6px">The '
+                 f'pictures already drawn are kept; this starts a fresh pair '
+                 f'of draws.</div></div>')
     body = f"""
     <a class="back" href="/create">&larr; back to the video</a>
     <h2 style="margin-top:14px">Drawing &mdash; {_esc(row["topic"] or "")}</h2>
@@ -5399,6 +5453,7 @@ def drawing_page(set_id: int):
       </div>
       <div class="progress" style="min-width:100%;height:8px;margin:0 0 18px">
         <i id="draw-fill" style="width:0%"></i></div>
+      {again}
       <div id="draw-grid" class="draw-grid"></div>
       <pre id="draw-log" class="draw-log"></pre>
     </div>
@@ -5422,6 +5477,13 @@ def api_drawing(set_id: int):
     total = beats * variants
     rate = dbm.gallery_draw_rate(set_id)
     done = len(images)
+    quiet = dbm.seconds_since_last_picture(set_id)
+    finished = bool(total and done >= total)
+    # Not moving, and not because it is done. The renderer is what to check —
+    # so say that, and say whether it is even answering.
+    stalled = bool(total and not finished and quiet is not None
+                   and quiet > STALLED_AFTER_SECONDS)
+    gpu_up = _comfyui_reachable() if stalled else None
     # THE SLOTS ARE THE POINT. Sending the full grid — arrived and not — lets
     # the page show the shape of the job from the first poll instead of
     # growing a row at a time out of nothing.
@@ -5443,9 +5505,13 @@ def api_drawing(set_id: int):
         "total": total,
         "beats": beats,
         "variants": variants,
-        "finished": bool(total and done >= total),
+        "finished": finished,
+        "stalled": stalled,
+        "quiet_seconds": int(quiet) if quiet is not None else None,
+        "gpu_up": gpu_up,
         "rate_seconds": round(rate, 1) if rate else None,
-        "eta_seconds": int(rate * (total - done)) if rate and total > done else None,
+        "eta_seconds": (int(rate * (total - done))
+                        if rate and total > done and not stalled else None),
         "slots": slots,
         "log": _newest_log_lines(6),
         "status": row.get("status") or "",
