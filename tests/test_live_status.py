@@ -445,3 +445,118 @@ def test_generate_page_still_requires_generate_permission(client):
     refactor, so a viewer got 200 instead of 403. Locks in the fix."""
     client.get(f"/?token={VIEWER_TOKEN}")
     assert client.get("/generate").status_code == 403
+
+
+# ── the bottom status bar ────────────────────────────────────────────────────
+
+def test_a_gallery_being_drawn_shows_in_the_bar(client, monkeypatch):
+    """THE COMPLAINT THIS ANSWERS. `runs` tracks main.py's eight steps.
+    Drawing a gallery from the wizard is not one of them, so through forty
+    minutes of rendering the bar said "Idle — not making a video" while the
+    owner watched ComfyUI churn in another window."""
+    pid = db_manager.new_project(channel="main_en", niche="money_history")
+    db_manager.update_project(pid, title="Bretton Woods", stage="gallery")
+    cid = db_manager.save_candidate(proposal_id=None, channel="main_en",
+                            niche="money_history", topic="T",
+                            hook_style="warning", hook="h", script="s",
+                            score=8, project_id=pid)
+    db_manager.update_project(pid, script_id=cid)
+    sid = db_manager.save_gallery_set(candidate_id=cid, channel="main_en",
+                              niche="money_history", topic="T",
+                              script_file="s.txt", n_variants=2)
+    db_manager.set_gallery_beats(sid, 8)
+    for v in (0, 1):
+        db_manager.save_gallery_image(set_id=sid, variant=v, beat_index=0,
+                              path=f"/{v}.png", prompt="p", seed=1)
+
+    client.get(f"/?token={OWNER_TOKEN}")
+    job = client.get("/api/status").get_json()["job"]
+
+    assert job is not None, "the bar has to know a gallery is being drawn"
+    assert job["title"] == "Bretton Woods"
+    assert (job["done"], job["total"]) == (2, 16)
+
+
+def test_the_planning_phase_counts_as_working(client):
+    """gallery_variants writes the set row, then records three voice takes,
+    then calls the storyboard, and only THEN sets n_beats and starts drawing.
+    For those several minutes there is no target and no image — and the bar
+    used to call that idle."""
+    pid = db_manager.new_project(channel="main_en", niche="money_history")
+    db_manager.update_project(pid, title="Croesus", stage="gallery")
+    cid = db_manager.save_candidate(proposal_id=None, channel="main_en",
+                            niche="money_history", topic="T",
+                            hook_style="warning", hook="h", script="s",
+                            score=8, project_id=pid)
+    db_manager.update_project(pid, script_id=cid)
+    db_manager.save_gallery_set(candidate_id=cid, channel="main_en",
+                        niche="money_history", topic="T",
+                        script_file="s.txt", n_variants=2)
+
+    client.get(f"/?token={OWNER_TOKEN}")
+    job = client.get("/api/status").get_json()["job"]
+
+    assert job is not None
+    assert job["total"] == 0
+    assert "voice" in job["label"], "and it says what phase it is in"
+
+
+def test_the_bar_carries_the_gpu_temperature(client, monkeypatch):
+    import dashboard
+    monkeypatch.setattr(dashboard, "_GPU_CACHE", {"at": 0.0, "value": None})
+
+    class Out:
+        stdout = "63\n"
+    monkeypatch.setattr(dashboard.subprocess, "run", lambda *a, **k: Out())
+    client.get(f"/?token={OWNER_TOKEN}")
+    assert client.get("/api/status").get_json()["gpu_temp_c"] == 63
+
+
+def test_a_machine_that_will_not_report_its_temperature_says_nothing(
+        client, monkeypatch):
+    """Absent rather than blank. A field that never fills is noise — which is
+    also why CPU temperature is not here at all: on Windows it needs WMI or
+    LibreHardwareMonitor and usually an elevated process."""
+    import dashboard
+    monkeypatch.setattr(dashboard, "_GPU_CACHE", {"at": 0.0, "value": None})
+    def boom(*a, **k):
+        raise FileNotFoundError("nvidia-smi")
+    monkeypatch.setattr(dashboard.subprocess, "run", boom)
+    client.get(f"/?token={OWNER_TOKEN}")
+    assert client.get("/api/status").get_json()["gpu_temp_c"] is None
+
+
+def test_the_bar_tails_the_newest_log(client, tmp_path, monkeypatch):
+    """"If it possible see few lines of terminal of comfy/the run." The
+    dashboard cannot read ComfyUI's console — that belongs to a process it did
+    not start — but every run it launches writes a log saying the same things
+    in the pipeline's own words."""
+    import dashboard, paths
+    monkeypatch.setattr(paths, "log_dir", lambda: tmp_path)
+    (tmp_path / "galleries_1.log").write_text(
+        "one\ntwo\nthree\nfour\n", encoding="utf-8")
+    client.get(f"/?token={OWNER_TOKEN}")
+    tail = client.get("/api/status").get_json()["log_tail"]
+    assert tail == ["two", "three", "four"], "the LAST few lines"
+
+
+def test_a_stale_log_is_not_presented_as_live(client, tmp_path, monkeypatch):
+    """A three-day-old log shown in a live status bar is a lie it tells at a
+    glance."""
+    import os, time
+    import paths
+    monkeypatch.setattr(paths, "log_dir", lambda: tmp_path)
+    old = tmp_path / "galleries_old.log"
+    old.write_text("ancient\n", encoding="utf-8")
+    long_ago = time.time() - 60 * 60 * 24 * 3
+    os.utime(old, (long_ago, long_ago))
+    client.get(f"/?token={OWNER_TOKEN}")
+    assert client.get("/api/status").get_json()["log_tail"] == []
+
+
+def test_the_log_tail_is_written_as_text_not_markup():
+    """A log line is arbitrary text — a prompt with an angle bracket in it must
+    not become markup in the status bar."""
+    import dashboard
+    assert "lg.textContent" in dashboard.LIVEBAR_JS
+    assert "lg.innerHTML" not in dashboard.LIVEBAR_JS

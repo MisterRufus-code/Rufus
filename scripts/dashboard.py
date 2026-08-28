@@ -192,7 +192,7 @@ def login():
       <button class="btn save" type="submit">Sign in</button>
     </form>
     """
-    return PAGE_STYLE + '<header><h1>🎬 Rufus Dashboard</h1></header>\n<main>\n' \
+    return PAGE_STYLE + '<header><h1>🎬 ThePaperTrails</h1></header>\n<main>\n' \
         + body + PAGE_TAIL, 401
 
 
@@ -277,6 +277,96 @@ def healthz():
     return {"ok": True}, 200
 
 
+def _current_job() -> dict | None:
+    """The open project's stage, how far in, and how long is left.
+
+    WHY NOT THE RUN PROGRESS ALREADY IN THIS PAYLOAD. That tracks main.py's
+    eight steps and is written by a full pipeline run. Drawing a gallery from
+    the wizard is not one of those, so while thirty-two pictures were being
+    rendered the bar said "Idle — not making a video" and the owner, watching
+    ComfyUI churn in another window, quite reasonably asked what was going on.
+    """
+    try:
+        import db_manager as dbm
+        for p in dbm.projects(status="open", limit=5):
+            prog = _project_progress(p)
+            if not prog.get("working"):
+                continue
+            return {
+                "title": p.get("title") or "",
+                "stage": prog.get("stage"),
+                "done": prog.get("done", 0),
+                "total": prog.get("total", 0),
+                "label": prog.get("label", ""),
+                "eta_seconds": prog.get("eta_seconds"),
+                "project": p["id"],
+            }
+    except Exception:
+        pass
+    return None
+
+
+_GPU_CACHE = {"at": 0.0, "value": None}
+
+
+def _gpu_temp() -> int | None:
+    """The GPU's temperature in Celsius, or None if it cannot be read.
+
+    nvidia-smi, because it ships with the driver and needs no admin rights.
+    CPU temperature is deliberately NOT here: on Windows it needs WMI or
+    LibreHardwareMonitor and usually an elevated process, and a field that is
+    blank forever is worse than a field that does not exist.
+
+    Cached for ten seconds. This is polled by every open tab on a five-second
+    timer, and spawning a process per tab per poll to read one number is a
+    cost with nothing to show for it.
+    """
+    import time as _t
+    if _t.time() - _GPU_CACHE["at"] < 10:
+        return _GPU_CACHE["value"]
+    val = None
+    try:
+        out = subprocess.run(
+            ["nvidia-smi", "--query-gpu=temperature.gpu",
+             "--format=csv,noheader,nounits"],
+            capture_output=True, text=True, timeout=4)
+        line = (out.stdout or "").strip().splitlines()
+        if line:
+            val = int(line[0].strip())
+    except Exception:
+        val = None
+    _GPU_CACHE.update(at=_t.time(), value=val)
+    return val
+
+
+def _newest_log_lines(n: int = 3) -> list[str]:
+    """The last few lines of whichever log was written to most recently.
+
+    THE OWNER ASKED FOR THIS BY NAME: "if it possible see few lines of terminal
+    of comfy/the run". This is the closest honest version — the dashboard
+    cannot read ComfyUI's console, which belongs to another process it did not
+    start, but every run it launches writes its own log, and that log says the
+    same things in the pipeline's own words.
+
+    Newest file by modification time, so it follows whatever is actually
+    running without being told which stage that is.
+    """
+    try:
+        d = paths.log_dir()
+        files = [f for f in d.glob("*.log") if f.is_file()]
+        if not files:
+            return []
+        newest = max(files, key=lambda f: f.stat().st_mtime)
+        # Only if it is recent. A three-day-old log presented as live status is
+        # a lie the bar tells at a glance.
+        if time.time() - newest.stat().st_mtime > 900:
+            return []
+        tail = newest.read_text(encoding="utf-8", errors="replace").splitlines()
+        return [ln.rstrip() for ln in tail[-n:] if ln.strip()]
+    except Exception:
+        return []
+
+
 @app.route("/api/status")
 def api_status():
     """Live machine + pipeline state, polled by the status bar on every page.
@@ -331,6 +421,13 @@ def api_status():
         # packages it should have.
         "interpreter_warning": _wrong_interpreter(),
         "busy": any(r["running"] for r in runs),
+        "gpu_temp_c": _gpu_temp(),
+        # What the machine is saying right now, in its own words.
+        "log_tail": _newest_log_lines(),
+        # The stage a person is actually waiting on, with its own count and
+        # estimate — the run-progress numbers above describe main.py's eight
+        # steps, which say nothing while a gallery is drawing.
+        "job": _current_job(),
         "runs": runs,
         "queue": {
             "pending": stats.get("pending", 0),
@@ -1324,7 +1421,7 @@ def _sparkline_svg(scores: list[int], width: int = 320, height: int = 64,
 
 PAGE_STYLE = """<!doctype html><html><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Rufus Dashboard</title>
+<title>ThePaperTrails</title>
 <style>
   /* ONE PALETTE, DEFINED ONCE. The previous stylesheet hardcoded #171a21 and
      #2a2d34 in a dozen rules and patched light mode with a dozen more
@@ -1683,10 +1780,26 @@ PAGE_STYLE = """<!doctype html><html><head><meta charset="utf-8">
             padding: 12px 14px; margin-bottom: 10px; }
 
   /* Live status bar — polls /api/status, no page reload */
-  #livebar { display: flex; gap: 16px; flex-wrap: wrap; align-items: center;
-             background: var(--surface); border: 1px solid var(--border);
-             border-radius: var(--radius); padding: 10px 14px;
-             margin-bottom: 16px; font-size: 13px; box-shadow: var(--shadow); }
+  /* Pinned along the bottom of the window, above everything, on every page.
+     A strip you glance at while reading something else cannot be a strip that
+     scrolls away. body gets padding to match so the last row of a long page is
+     never hidden underneath it. */
+  #livebar { position: fixed; left: 0; right: 0; bottom: 0; z-index: 40;
+             display: flex; gap: 16px; flex-wrap: wrap; align-items: center;
+             background: color-mix(in srgb, var(--surface) 94%, transparent);
+             backdrop-filter: blur(8px);
+             border-top: 1px solid var(--border);
+             padding: 8px 18px; font-size: 13px;
+             box-shadow: 0 -2px 12px -6px rgba(0,0,0,.4); }
+  body { padding-bottom: 76px; }
+  /* The last few lines of whatever is running, in the machine's own words.
+     Fixed height so a chatty log cannot push the page around. */
+  #livelog { flex: 1 1 100%; margin: 0; font-family: ui-monospace,
+             "SFMono-Regular", Menlo, monospace; font-size: 11px;
+             line-height: 1.45; color: var(--dim); max-height: 42px;
+             overflow: hidden; white-space: pre-wrap; word-break: break-word; }
+  .temp { font-variant-numeric: tabular-nums; }
+  .temp.hot { color: var(--warn); font-weight: 600; }
   #livebar .dot { width: 9px; height: 9px; border-radius: 50%;
                   display: inline-block; margin-right: 6px; vertical-align: middle; }
   .dot.on   { background: var(--ok);     box-shadow: 0 0 0 3px color-mix(in srgb, var(--ok) 18%, transparent); }
@@ -1736,8 +1849,10 @@ PAGE_STYLE = """<!doctype html><html><head><meta charset="utf-8">
     .c-preview, .c-niche { display: none; }
     /* The status bar wrapped to nowhere: white-space:nowrap on a 390px screen
        put the end of every message past the right edge. */
-    #livebar { font-size: 12px; gap: 8px; }
+    #livebar { font-size: 12px; gap: 8px; padding: 6px 12px; }
     #livebar .item { white-space: normal; }
+    #livelog { display: none; }   /* no room for it, and it is the least of it */
+    body { padding-bottom: 92px; }
     /* Tap targets. The review queue is worked from a phone. */
     .btn { padding: 12px 20px; }
     th, td { padding: 12px 10px; }
@@ -1926,9 +2041,32 @@ LIVEBAR_JS = """
     bits.push('<span class="item"><span class="dot ' + (d.comfyui ? 'on' : 'off')
               + '"></span>GPU ' + (d.comfyui ? 'ready' : 'offline') + '</span>');
     var active = (d.runs || []).filter(function (r) { return r.running; });
-    if (!active.length) {
+    // GPU TEMPERATURE, when the driver will say. Absent rather than blank
+    // when it will not — a field that never fills is noise.
+    if (d.gpu_temp_c !== null && d.gpu_temp_c !== undefined) {
+      var hot = d.gpu_temp_c >= 80 ? ' hot' : '';
+      bits.push('<span class="item temp' + hot + '">GPU '
+                + d.gpu_temp_c + '\\u00B0C</span>');
+    }
+    // THE STAGE A PERSON IS ACTUALLY WAITING ON. `runs` covers main.py's eight
+    // steps; drawing a gallery from the wizard is not one of them, so this bar
+    // used to say "Idle" through forty minutes of rendering.
+    var j = d.job;
+    if (j) {
+      var jt = j.total
+        ? j.done + '/' + j.total + ' ' + (j.label || '')
+        : (j.label || 'starting') + '\\u2026';
+      var jpct = j.total ? Math.round((j.done / j.total) * 100) : 0;
+      bits.push('<span class="item"><span class="dot busy"></span>'
+                + '<b>' + (j.title || j.stage) + '</b> \\u2014 ' + jt
+                + (j.eta_seconds != null
+                   ? ' <span class="muted">(~' + fmt(j.eta_seconds) + ' left)</span>'
+                   : '') + '</span>');
+      bits.push('<span class="progress"><i style="width:' + jpct + '%"></i></span>');
+    }
+    if (!active.length && !j) {
       bits.push('<span class="item"><span class="dot on"></span>Idle \\u2014 not making a video</span>');
-    } else {
+    } else if (active.length) {
       active.forEach(function (r) {
         var pct = r.total ? Math.round((r.step / r.total) * 100) : 0;
         var cls = r.stale ? 'warn' : 'busy';
@@ -1942,9 +2080,17 @@ LIVEBAR_JS = """
       });
     }
     var q = d.queue || {};
-    bits.push('<span class="item"><a class="navlink" style="margin:0" href="/">'
+    bits.push('<span class="item"><a class="navlink" style="margin:0" href="/review">'
               + (q.pending || 0) + ' awaiting review</a></span>');
+    // The last few lines of whatever is running, in the machine's own words.
+    // textContent, not innerHTML: a log line is arbitrary text and a stray
+    // angle bracket in a prompt must not become markup.
+    if (d.log_tail && d.log_tail.length) {
+      bits.push('<pre id="livelog"></pre>');
+    }
     el.innerHTML = bits.join('');
+    var lg = document.getElementById('livelog');
+    if (lg) { lg.textContent = d.log_tail.join('\\n'); }
   }
   function poll() {
     fetch('/api/status', { headers: { 'Accept': 'application/json' } })
@@ -2040,8 +2186,14 @@ def _head() -> str:
         who = (f'<span class="whoami">{_esc(user.get("name", "?"))}'
                f'<span class="role">{_esc(user.get("role", "?"))}</span>'
                f' · <a class="navlink" href="/logout" style="margin-left:6px">sign out</a></span>')
-    return (PAGE_STYLE + '<header><a href="/"><h1>🎬 Rufus Dashboard</h1></a>\n'
+    return (PAGE_STYLE + '<header><a href="/"><h1>🎬 ThePaperTrails</h1></a>\n'
             + links + _format_switch() + who + "</header>\n<main>\n"
+            # PINNED TO THE BOTTOM, ON EVERY PAGE. It used to sit inside <main>
+            # at the top, which meant it scrolled away exactly when a long page
+            # was being read — and the one thing it answers ("is the machine
+            # doing anything, and how far in") is the thing you want while
+            # looking at something else. The sketch put it along the bottom for
+            # that reason.
             + '<div id="livebar"><span class="item">'
               '<span class="dot warn"></span>checking…</span></div>\n'
             + LIVEBAR_JS)
@@ -4459,7 +4611,8 @@ def _project_progress(p: dict) -> dict:
     import db_manager as dbm
 
     out = {"working": False, "done": 0, "total": 0, "label": "",
-           "eta_seconds": None, "stage": p.get("stage") or "topic"}
+           "eta_seconds": None, "starting": False,
+           "stage": p.get("stage") or "topic"}
     stage = out["stage"]
     started = None
     try:
@@ -4502,6 +4655,22 @@ def _project_progress(p: dict) -> dict:
                     total = max(len(images), beats * variants)
                 out.update(done=len(images), total=total,
                            label="pictures drawn")
+                # THE BLIND WINDOW BEFORE THE FIRST PICTURE. gallery_variants
+                # writes the set row first, then records three voice takes,
+                # then calls the storyboard, and only THEN sets n_beats and
+                # starts drawing. For those several minutes n_beats is 0 and
+                # no image exists, so total was 0, `working` was False, and the
+                # page showed the finished-gallery view with an empty table —
+                # while the owner watched ComfyUI churning in another window
+                # and asked why the dashboard said nothing.
+                #
+                # A set row that exists and is still pending IS work in
+                # progress. What is unknown at that moment is the size of it,
+                # not whether it is happening.
+                if not total and (row or {}).get("status") == "pending":
+                    out.update(starting=True,
+                               label="recording the voice, then planning the "
+                                     "shots")
         elif stage == "voice":
             rows = dbm.voice_takes(set_id=p.get("gallery_id"), limit=10)
             out.update(done=len(rows), total=3, label="takes recorded")
@@ -4512,7 +4681,8 @@ def _project_progress(p: dict) -> dict:
     # `done < total` alone said False for a set with a target it had not
     # started, which is exactly the state a person is looking at when they
     # press the button and go and watch the ComfyUI console.
-    out["working"] = out["total"] > 0 and out["done"] < out["total"]
+    out["working"] = (out["total"] > 0 and out["done"] < out["total"]) \
+        or bool(out.get("starting"))
     if not out["working"] or not out["done"] or not started:
         return out
     try:
@@ -4545,9 +4715,15 @@ def _working_panel(p: dict, prog: dict, what: str) -> str:
            f'overflow:hidden;margin:10px 0">'
            f'<div id="wizard-bar-fill" style="height:100%;width:{pct}%;'
            f'background:var(--accent);transition:width .4s"></div></div>')
-    counted = (f'<p class="muted" id="wizard-count">{done} of {total} '
-               f'{prog["label"]}{" · " + eta if eta else ""}</p>'
-               ) if total else '<p class="muted" id="wizard-count"></p>' 
+    if total:
+        counted = (f'<p class="muted" id="wizard-count">{done} of {total} '
+                   f'{prog["label"]}{" · " + eta if eta else ""}</p>')
+    else:
+        # No target yet. Say what IS happening rather than nothing — an empty
+        # line under a zero-width bar is indistinguishable from a stuck page,
+        # and this phase runs for minutes.
+        counted = (f'<p class="muted" id="wizard-count">'
+                   f'{_esc(prog.get("label") or "starting")}&hellip;</p>')
     # The wrapper carries the project id and whether work is in flight; the
     # poller below reads both off it. Without it the page is static again and
     # the only way forward is the F5 this replaces.

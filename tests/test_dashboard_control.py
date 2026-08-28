@@ -705,12 +705,28 @@ def test_every_panel_is_the_same_panel():
     """A card, a table, a log block, a script block and the status bar are all
     the same idea — content raised off the background — and each had arrived
     at its own combination of the four properties that say so."""
+    # #livebar is deliberately NOT in this list any more. It stopped being a
+    # panel when it was pinned to the bottom of the window: it now spans edge
+    # to edge with a top border only, which is what chrome looks like. A
+    # rounded, shadowed, four-sided card floating over the bottom of the page
+    # would read as content that had come loose.
     for selector in (".card", ".orphan", ".thumbcard", ".style-card",
-                     "#livebar", "table", "pre", ".script"):
+                     "table", "pre", ".script"):
         rule = _rule(selector)
         for expected in ("background:var(--surface)", "1pxsolidvar(--border)",
                          "border-radius:var(--radius)", "box-shadow:var(--shadow)"):
             assert expected in rule, f"{selector} is missing {expected}"
+
+
+def test_the_status_bar_is_pinned_and_the_page_clears_it():
+    """A strip you glance at while reading something else cannot be a strip
+    that scrolls away — and a fixed bar with no matching body padding hides
+    the last row of every long page underneath itself."""
+    bar = _rule("#livebar")
+    assert "position:fixed" in bar and "bottom:0" in bar
+    assert "border-top:1pxsolidvar(--border)" in bar
+    body = _rule("body")
+    assert "padding-bottom:" in body, "the page has to clear the fixed bar"
 
 
 def test_the_light_palette_redefines_every_colour_it_needs_to():
