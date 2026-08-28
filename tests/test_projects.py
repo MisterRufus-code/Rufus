@@ -1527,3 +1527,67 @@ def test_with_nothing_in_flight_the_queues_are_empty(tmp_path, monkeypatch):
     assert dashboard._sets_being_chosen(dbm) == []
     assert dashboard._candidates_being_chosen(dbm) == []
     assert dashboard._takes_being_chosen(dbm) == []
+
+
+# ── the last decision: what the words look like, and who gets told ───────────
+
+def test_the_render_page_offers_the_subtitle_styles(tmp_path, monkeypatch):
+    """"Everything is chosen" was not quite true — the captions are half of
+    what this format is, they are burned in, and nobody had ever been asked."""
+    import caption_styles
+    c, dbm = _client(tmp_path, monkeypatch, "caps.db")
+    pid = dbm.new_project(channel="main_en", niche="money_history")
+    dbm.update_project(pid, stage="render", title="Croesus",
+                       script_file="s.txt", gallery_id=1, voice_id=1)
+    page = c.get(f"/create?project={pid}").get_data(as_text=True)
+    for key in caption_styles.names():
+        assert f'value="{key}"' in page, key
+    assert f'value="{caption_styles.DEFAULT}" checked' in page, (
+        "the look already shipping must be the one preselected")
+
+
+def test_the_chosen_style_reaches_the_render(tmp_path, monkeypatch):
+    """A picker whose answer never leaves the page is this repo's oldest bug:
+    built, wired, tested and never actually fed."""
+    import dashboard
+    c, dbm = _client(tmp_path, monkeypatch, "caps2.db")
+    sent = {}
+    monkeypatch.setattr(dashboard, "_launch_run",
+                        lambda **kw: sent.update(kw) or (None, Path("r.log")))
+    pid = dbm.new_project(channel="main_en", niche="money_history")
+    dbm.update_project(pid, stage="render", title="Croesus",
+                       script_file="s.txt", gallery_id=1, voice_id=1)
+    c.post(f"/create/{pid}/render", data={"captions": "boxed", "tell_me": "1"})
+    assert sent["captions"] == "boxed"
+    assert sent["tell_me"] is True
+
+
+def test_a_style_nobody_offers_is_not_rendered(tmp_path, monkeypatch):
+    """A hand-typed POST must not reach the renderer's environment. Falling
+    back to the default beats a video rendered in a look that does not exist."""
+    import dashboard, caption_styles
+    c, dbm = _client(tmp_path, monkeypatch, "caps3.db")
+    sent = {}
+    monkeypatch.setattr(dashboard, "_launch_run",
+                        lambda **kw: sent.update(kw) or (None, Path("r.log")))
+    pid = dbm.new_project(channel="main_en", niche="money_history")
+    dbm.update_project(pid, stage="render", title="C", script_file="s.txt",
+                       gallery_id=1, voice_id=1)
+    c.post(f"/create/{pid}/render", data={"captions": "; rm -rf /"})
+    assert sent["captions"] == caption_styles.DEFAULT
+
+
+def test_not_asking_to_be_told_leaves_the_run_exactly_as_it_was(tmp_path,
+                                                                monkeypatch):
+    """An unattended cron render must keep precisely the notifications it had.
+    The extra ping is what the button buys, and nothing else turns it on."""
+    import dashboard
+    c, dbm = _client(tmp_path, monkeypatch, "quiet2.db")
+    sent = {}
+    monkeypatch.setattr(dashboard, "_launch_run",
+                        lambda **kw: sent.update(kw) or (None, Path("r.log")))
+    pid = dbm.new_project(channel="main_en", niche="money_history")
+    dbm.update_project(pid, stage="render", title="C", script_file="s.txt",
+                       gallery_id=1, voice_id=1)
+    c.post(f"/create/{pid}/render", data={"captions": "format"})
+    assert sent["tell_me"] is False

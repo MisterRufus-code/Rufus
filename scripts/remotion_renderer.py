@@ -157,6 +157,24 @@ def render(script: str, bg_paths: "Path | list[Path]", out_dir: Path,
             {"text": text, "start": round(start, 3), "end": round(end, 3)}
             for start, end, text in audio_gen._cluster_words(segments, audio_dur)
         ]
+        # HALF OF A CHOSEN CAPTION STYLE REACHES THIS ENGINE AND HALF DOES NOT,
+        # and the person who chose it deserves to hear which. The grouping and
+        # the casing are above, from the shared clusterer, so they are honoured
+        # here exactly as on the FFmpeg path. The LOOK — size, height, outline,
+        # box, colour — is written into an ASS style line that only FFmpeg
+        # burns; Remotion draws its captions in TSX. Silently ignoring the
+        # visual half is precisely the failure this repo keeps having, so it is
+        # said in the log rather than discovered in the finished file.
+        try:
+            import caption_styles
+            chosen = caption_styles.name()
+            if chosen != caption_styles.DEFAULT:
+                print(f"[captions] style {chosen!r}: {audio_gen.CLUSTER_SIZE} "
+                      f"word(s) per card and the casing apply here; its size, "
+                      f"position and colour do not — those are the FFmpeg "
+                      f"renderer's, and this run is Remotion.")
+        except Exception:
+            pass
         # AND THE RAW STREAM, KEPT SEPARATELY. The captions above are grouped
         # and cased for READING — four words to a card in long-form. The insert
         # planner is not reading them: it looks up one noun at a time and needs

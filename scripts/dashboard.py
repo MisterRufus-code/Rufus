@@ -521,6 +521,20 @@ SETTINGS_FILE = ROOT / "config" / "dashboard_settings.json"
 #   text               free text
 #   secret             free text, rendered masked (webhooks, tokens)
 #   number             free text, validated as a number on save
+def _caption_style_kind() -> str:
+    """The caption picker's option list, built from caption_styles itself.
+
+    Same reason the image-style list is checked against config/styles.json: a
+    look the picker cannot offer is a look nobody uses, and a hand-copied list
+    is a list that drifts.
+    """
+    try:
+        import caption_styles
+        return "select:" + ",".join(caption_styles.names())
+    except Exception:
+        return "text"
+
+
 SETTINGS_GROUPS = [
     ("Look", "How the pictures are drawn.", [
         # EVERY PRESET IN THE FILE, not the three that existed when this list
@@ -533,6 +547,12 @@ SETTINGS_GROUPS = [
          "Named look from config/styles.json, appended to every image prompt "
          "byte for byte. Leave at (default) to use the niche's own style_suffix. "
          "Render one of each on the Style page before choosing."),
+        ("RUFUS_CAPTIONS", "Subtitle style", _caption_style_kind(),
+         "How the burned-in words look: how many at a time, whether they "
+         "shout, how big and where on the frame. This is the DEFAULT for "
+         "unattended runs — the render page lets you pick a different one per "
+         "video. Fully applied by the FFmpeg renderer; the Remotion engine "
+         "takes the wording and casing but draws its own look."),
         ("RUFUS_STILLS_DETAIL", "Style override (literal)", "text",
          "A style block written out in full. Beats the preset above — for a "
          "one-off experiment that does not deserve a name yet."),
@@ -734,7 +754,9 @@ _LAUNCHED: dict[str, subprocess.Popen] = {}
 def _launch_run(*, niche: str | None = None, topic: str | None = None,
                 channel: str | None = None, script_file: str | None = None,
                 gallery_id: int | None = None,
-                hook_tone: str | None = None) -> tuple[subprocess.Popen, Path]:
+                hook_tone: str | None = None,
+                captions: str | None = None,
+                tell_me: bool = False) -> tuple[subprocess.Popen, Path]:
     """Fire-and-forget: a genuinely separate OS process, not an in-process
     call — this Flask app runs threaded=False (see approve_video's
     _scoped_env note), so a call that blocks for the 5-45+ minutes a video
@@ -768,6 +790,13 @@ def _launch_run(*, niche: str | None = None, topic: str | None = None,
         env["RUFUS_GALLERY"] = str(gallery_id)
     if hook_tone:
         env["RUFUS_HOOK_TONE"] = hook_tone
+    # Both after _load_settings for the same reason RUFUS_GALLERY is: the
+    # settings file holds this channel's DEFAULT caption style, and these two
+    # are facts about this one render.
+    if captions:
+        env["RUFUS_CAPTIONS"] = captions
+    if tell_me:
+        env["RUFUS_TELL_ME"] = "1"
     # THE CHILD'S STDOUT IS A FILE, so Python has no console to ask and falls
     # back to the system ANSI code page — cp1255 here, which has no ✗ and no
     # em-dash. A real run died mid-report on exactly that. The .bat launchers
@@ -1716,6 +1745,14 @@ PAGE_STYLE = """<!doctype html><html><head><meta charset="utf-8">
   .draw-v { font-size: 12px; color: var(--dim); font-weight: 600; }
   .draw-w { font-size: 12px; color: var(--ok); font-weight: 600; }
   .pick { font-size: 12px; padding: 4px 8px; }
+  /* One choice per line, the control beside the sentence that explains it.
+     A radio with a bare label is a guess; the trade-off is the choice. */
+  .pick-row { display: flex; gap: 12px; align-items: flex-start;
+              padding: 12px; margin-bottom: 8px; cursor: pointer;
+              border: 1px solid var(--border); border-radius: var(--radius);
+              background: var(--surface); font-size: 14px; }
+  .pick-row:hover { border-color: var(--accent); }
+  .pick-row input { margin-top: 4px; flex: none; }
   .by { font-size: 11px; font-weight: 600; padding: 2px 7px;
         border-radius: 999px; white-space: nowrap; color: var(--who);
         background: color-mix(in srgb, var(--who) 15%, transparent); }
@@ -5238,6 +5275,28 @@ def _wizard_voice(p: dict) -> str:
         f'<div style="margin:10px 0">{_regen(p["id"], "voice")}</div>{cards}')
 
 
+def _caption_choices(selected: str = "") -> str:
+    """The subtitle looks, as radio buttons with the trade-off written out.
+
+    A dropdown of five words would be a guess every time. What separates these
+    is what they do to a viewer — one word shouting is a different video from
+    four words sitting at the bottom edge — so each carries the sentence that
+    says so, and the one already shipping is preselected.
+    """
+    import caption_styles as cs
+    chosen = selected or cs.DEFAULT
+    out = ""
+    for key in cs.names():
+        pre = cs.PRESETS[key]
+        mark = " checked" if key == chosen else ""
+        out += (f'<label class="pick-row">'
+                f'<input type="radio" name="captions" value="{key}"{mark}>'
+                f'<span><strong>{_esc(pre["label"])}</strong>'
+                f'<span class="muted" style="display:block">'
+                f'{_esc(pre["blurb"])}</span></span></label>')
+    return out
+
+
 def _wizard_render(p: dict) -> str:
     return (
         '<h2 style="margin-top:22px">Everything is chosen</h2>'
@@ -5247,8 +5306,24 @@ def _wizard_render(p: dict) -> str:
         'video.</p>'
         f'{_wizard_decided(p)}'
         f'<form method="post" action="/create/{p["id"]}/render" '
-        f'style="margin-top:14px"><button class="btn save" type="submit">'
-        f'Make the video</button></form>')
+        f'style="margin-top:18px">'
+        '<h2 style="margin-top:0">Words on screen</h2>'
+        '<p class="muted">The captions are half of what this format is, and '
+        'they are burned in &mdash; changing your mind later means rendering '
+        'the video again. Everything else about the look was decided further '
+        'back; this is the last one.</p>'
+        f'{_caption_choices()}'
+        '<h2 style="margin-top:22px">When it is done</h2>'
+        '<label class="pick-row"><input type="checkbox" name="tell_me" '
+        'value="1" checked><span><strong>Send it to me</strong>'
+        '<span class="muted" style="display:block">The finished video is '
+        'posted to Discord and a push goes to your phone, whatever the render '
+        'decides to do with it &mdash; queued for review, held by QC or '
+        'uploaded. Nothing announced a render that was held, so a video that '
+        'failed its checks was a silence you had to go looking for.</span>'
+        '</span></label>'
+        '<button class="btn save" type="submit" style="margin-top:16px">'
+        'Make the video</button></form>')
 
 
 _WIZARD_BODY = {"topic": _wizard_topic, "script": _wizard_script,
@@ -5991,10 +6066,20 @@ def create_render(project_id: int):
             f"still needs {', '.join(missing)}"))
     take = next((t for t in dbm.voice_takes(set_id=p["gallery_id"], limit=10)
                  if t["id"] == p["voice_id"]), None)
+    # The last two decisions, and the only ones on this page. Both are
+    # validated here rather than trusted into the child's environment: a
+    # caption style is a name from a fixed list, and anything else is the
+    # default rather than a video rendered in a look nobody picked.
+    import caption_styles
+    captions = (request.form.get("captions") or "").strip().lower()
+    if captions not in caption_styles.PRESETS:
+        captions = caption_styles.DEFAULT
+    tell_me = bool(request.form.get("tell_me"))
     try:
         _, log = _launch_run(script_file=p["script_file"], channel=p["channel"],
                              gallery_id=p["gallery_id"],
-                             hook_tone=(take or {}).get("tone"))
+                             hook_tone=(take or {}).get("tone"),
+                             captions=captions, tell_me=tell_me)
     except Exception as e:
         return redirect(f"/create?project={project_id}&error="
                         + _urlquote(f"could not start: {e}"))
@@ -6003,9 +6088,11 @@ def create_render(project_id: int):
     # chosen at each stage is kept as the losing half of the pair; it just
     # stops being offered.
     dbm.retire_project_options(project_id)
-    return redirect("/create?msg=" + _urlquote(
-        f'Making "{p["title"]}" — it lands in the review queue like any other '
-        f'video. Log: logs/{log.name}'))
+    look = caption_styles.PRESETS[captions]["label"].lower()
+    told = (" It is sent to you the moment it exists." if tell_me else "")
+    return redirect(f"/create?project={project_id}&msg=" + _urlquote(
+        f'Making "{p["title"]}" — captions: {look}.{told} '
+        f'Log: logs/{log.name}'))
 
 
 # ── Choosing the narrator ────────────────────────────────────────────────────

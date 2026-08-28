@@ -2235,7 +2235,14 @@ def run(skip_upload: bool = False, niche_override: str = None, output_dir: Path 
     min_score = _hold_min_score
     final_score = result.get("score", 0)
 
+    # WHICH OF THE SIX ENDINGS THIS RUN REACHED. Only the review branch ever
+    # announced itself, so a video the QC held finished in silence and sat on
+    # disk until somebody thought to look — and the render page now has a
+    # button that promises to tell you either way.
+    ending, ending_detail, already_sent = "review", "", False
+
     if skip_upload:
+        ending = "skipped"
         print("[ 7 / 7 ]  Upload skipped (--skip-upload)\n")
     elif not auto_upload:
         print(f"[ 7 / 7 ]  Queued for review (id={db_id}) — approve in the "
@@ -2253,24 +2260,31 @@ def run(skip_upload: bool = False, niche_override: str = None, output_dir: Path 
                 score=result.get("score", 0), niche=active,
                 video_id=db_id, hold_reason=hold_reason,
                 video_path=output_path)
+            already_sent = True
         except Exception as e:
             print(f"           ⚠ notification skipped (non-fatal): {e}")
     elif qc is not None and not qc.get("ok", True):
+        ending, ending_detail = "qc", "; ".join(qc["critical"])
         print(f"[ 7 / 7 ]  Upload held — output failed QC: {'; '.join(qc['critical'])}")
         print(f"           Video saved for review: {output_path}\n")
     elif facts_hold:
+        ending, ending_detail = "facts", str(facts_hold)
         print(f"[ 7 / 7 ]  Upload held — factual integrity flag: {facts_hold}")
         print(f"           Verify against the source, then upload manually if it's fine.")
         print(f"           Video saved for review: {output_path}\n")
     elif scene_hold:
+        ending, ending_detail = "scene", str(scene_hold)
         print(f"[ 7 / 7 ]  Upload held — the plan never found a real moment: {scene_hold}")
         print(f"           The seed is usually the cause: a concept article has "
               f"no event in it to film.")
         print(f"           Video saved for review: {output_path}\n")
     elif seed_hold:
+        ending, ending_detail = "seed", str(seed_hold)
         print(f"[ 7 / 7 ]  Upload held — no source passed the supervisor: {seed_hold}")
         print(f"           Video saved for review: {output_path}\n")
     elif final_score < min_score:
+        ending = "score"
+        ending_detail = f"{final_score}/10, and the bar is {min_score}/10"
         print(f"[ 7 / 7 ]  Upload held — score {final_score}/10 < {min_score}/10 threshold.")
         print(f"           Video saved for review: {output_path}\n")
     else:
@@ -2286,6 +2300,7 @@ def run(skip_upload: bool = False, niche_override: str = None, output_dir: Path 
             yt_url, yt_id = upload(output_path, script, thumbnail_path=thumb_path,
                                    metadata=meta, source_url=seed.get("url") or None,
                                    seed_source=seed.get("source"))
+            ending = "uploaded"
             print(f"           → {yt_url}\n")
 
             if db_id and yt_id:
@@ -2301,6 +2316,7 @@ def run(skip_upload: bool = False, niche_override: str = None, output_dir: Path 
                     print(f"           ⚠ DB youtube_id update failed (video IS uploaded): {e}")
         except Exception as e:
             yt_url = None
+            ending, ending_detail = "upload_failed", str(e)
             print(f"           ✗ Upload failed: {e}")
             print(f"           Video saved locally: {output_path} — check YouTube "
                   f"Studio before re-uploading (may have partially gone through)\n")
@@ -2329,6 +2345,22 @@ def run(skip_upload: bool = False, niche_override: str = None, output_dir: Path 
     # run in progress" — --rotate could only ever produce its FIRST video.
     # Abnormal exits (sys.exit mid-run) terminate the whole process, where
     # the atexit-registered _release_lock covers it.
+    # ASKED FOR, NOT ASSUMED. RUFUS_TELL_ME is set by the render button on the
+    # dashboard — "send it to me when it is done" — and by nothing else, so an
+    # unattended cron run keeps exactly the notifications it had. The review
+    # branch has already sent the video, and sending it twice is worse than
+    # not sending it at all.
+    if os.environ.get("RUFUS_TELL_ME", "").strip() and not already_sent:
+        try:
+            import notify
+            notify.notify_finished(
+                title=(meta or {}).get("title")
+                or script.strip().split("\n")[0][:80],
+                outcome=ending, detail=ending_detail, video_id=db_id,
+                video_path=output_path, youtube_url=yt_url)
+        except Exception as e:
+            print(f"  ⚠ could not send the finished video (non-fatal): {e}")
+
     _release_lock()
     run_progress.update(7, "queued for review")
     run_progress.finish("done")

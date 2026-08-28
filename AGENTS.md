@@ -234,6 +234,27 @@ it. Note the shape of that fix: the captions are grouped for READING, while the
 insert planner needs one word at a time, so they are two lists built from one
 transcript, not one list used twice.
 
+**A per-video decision belongs on the page that makes the video; a
+per-channel one belongs in Settings.** The caption look sat in
+`video_format.PROFILES` next to the frame size and the QC bounds, so changing
+it changed every future video at once and nobody found it. It is now a preset
+in `scripts/caption_styles.py` picked on the render page, with Settings holding
+only the default for unattended runs. Two rules keep that honest: the default
+preset overrides *nothing*, so the per-format numbers still stand and the cron
+renders are unchanged; and preset sizes are shares of the FRAME HEIGHT rather
+than multiples of the format's own number — long-form already ships the
+broadcast look, so scaling its 58px by 0.45 to "make it broadcast" lands at
+26px, produced by asking for the thing it was already doing.
+
+**When only one of several endings makes a sound, the silent ones are where
+work goes to die.** A render can finish six ways — queued for review, uploaded,
+held by QC, held on facts, held on the scene plan, held on score — and exactly
+one of them notified anybody. A video the QC held finished in complete silence
+and sat on disk until somebody thought to look, which is not something you find
+out about, it is something you eventually notice. Every branch now records
+which ending it reached and one place announces it, with a test asserting the
+map covers every value `main.py` can set.
+
 ## Writing tests here
 
 Tests run with no GPU, no ComfyUI, no API keys, and no network. Mock at the HTTP

@@ -57,6 +57,7 @@ FONTS_DIR  = ROOT / "assets" / "fonts"
 # Short, 1920×1080 for long-form. Read at import: a run does not change
 # format halfway through, and every consumer below wants plain ints.
 import video_format as _vf
+import caption_styles as _cs
 W, H         = _vf.dimensions()
 FPS          = 30
 # THE TIMELINE CEILING, AND IT TRUNCATES. Line ~1225 clamps the transcribed
@@ -71,8 +72,17 @@ MIN_DUR      = float(_vf.get("render_min_s", 30.0))
 # Words per caption, and whether it shouts. 1 and uppercase is the Hormozi
 # Shorts style and stays exactly that for Shorts; see video_format for why a
 # nine-minute explainer takes phrases in natural case instead.
-CLUSTER_SIZE = max(1, int(_vf.get("caption_words", 1)))
-CAPTION_UPPER = bool(_vf.get("caption_upper", True))
+# THE CHOSEN LOOK, over the format's own numbers. A preset says only what it
+# changes; everything it is silent about still comes from video_format, so a
+# style picked for a Short is still a Short's proportions and a style picked
+# for long-form is still long-form's. See caption_styles for what a preset may
+# and may not reach.
+CAPTIONS = _cs.resolve({k: _vf.get(k) for k in
+                        ("caption_size", "caption_margin_v",
+                         "caption_words", "caption_upper")},
+                       frame_height=H)
+CLUSTER_SIZE = CAPTIONS["words"]
+CAPTION_UPPER = CAPTIONS["upper"]
 # The colour sweep along the bottom edge — a retention device that competes
 # with YouTube's own scrubber on anything long enough to have one.
 RETENTION_BAR = bool(_vf.get("retention_bar", True))
@@ -189,8 +199,8 @@ FONT_FILE = FONTS_DIR / "Anton-Regular.ttf"
 # for a phone held at arm's length with the Shorts UI covering the bottom
 # fifth; on a 1080-tall landscape frame the same numbers are 13% of the height
 # with the words sitting halfway up the picture. See video_format.PROFILES.
-FONTSIZE  = _vf.get("caption_size", 140)
-MARGIN_V  = _vf.get("caption_margin_v", 600)
+FONTSIZE  = CAPTIONS["size"]
+MARGIN_V  = CAPTIONS["margin_v"]
 
 # Hard ceiling for a single ffmpeg render pass — a hung/looping ffmpeg must
 # fail the attempt (and fall through to the simple pipeline), never freeze an
@@ -613,15 +623,23 @@ def build_ass(segments, ass_path: Path, audio_dur: float,
         "ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, "
         "Alignment, MarginL, MarginR, MarginV, Encoding\n"
         f"Style: Default,{font_name},{FONTSIZE},"
-        f"&H00FFFFFF,&H000000FF,&H00000000,&H80000000,"
-        f"-1,0,0,0,100,100,0,0,1,4,2,2,60,60,{MARGIN_V},1\n\n"
+        f"{CAPTIONS['primary']},&H000000FF,&H00000000,{CAPTIONS['back']},"
+        f"-1,0,0,0,100,100,0,0,{CAPTIONS['border_style']},"
+        f"{CAPTIONS['outline']},{CAPTIONS['shadow']},2,60,60,{MARGIN_V},1\n\n"
         "[Events]\n"
         "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"
     )
     lines = []
-    for start, end, text in _cluster_words(segments, audio_dur):
+    # A style may turn the words off entirely. The header still goes out — an
+    # ASS file with a style block and no events is valid, burns nothing, and
+    # keeps the render path identical instead of growing a second branch
+    # through ffmpeg for the one case where a filter is missing.
+    for start, end, text in (_cluster_words(segments, audio_dur)
+                             if CAPTIONS["enabled"] else ()):
         hot = _is_highlight(text, emphasis)
-        c = accent if hot else WHITE
+        # The niche's accent unless the chosen style is specifically about
+        # colour — see caption_styles.resolve.
+        c = (CAPTIONS["accent"] or accent) if hot else CAPTIONS["primary"]
         # Staggered pop: highlights (numbers/$/%/opinion words) get the biggest
         # fastest pop to punch emphasis; regular words get a subtler scale.
         if hot:
@@ -630,9 +648,14 @@ def build_ass(segments, ass_path: Path, audio_dur: float,
             scale_start, pop_ms = 122, 62
         else:
             scale_start, pop_ms = 112, 88   # subtle scale, slower — background words
-        styled = (f"{{\\c{c}\\shad2"
-                  f"\\fscx{scale_start}\\fscy{scale_start}"
-                  f"\\t(0,{pop_ms},\\fscx100\\fscy100)}}{text}")
+        # A style without the pop is a style with no \t at all, not one that
+        # animates from 100 to 100: the tag is what makes libass re-render the
+        # line every frame, and a subtitle look chosen for being calm should
+        # not cost the same CPU as the one chosen for being loud.
+        motion = (f"\\fscx{scale_start}\\fscy{scale_start}"
+                  f"\\t(0,{pop_ms},\\fscx100\\fscy100)"
+                  if CAPTIONS["pop"] else "")
+        styled = f"{{\\c{c}\\shad{CAPTIONS['shadow']}{motion}}}{text}"
         lines.append(f"Dialogue: 0,{_ts(start)},{_ts(end)},Default,,0,0,0,,{styled}")
     ass_path.write_text(header + "\n".join(lines), encoding="utf-8")
 

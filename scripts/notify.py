@@ -352,6 +352,58 @@ def notify_pending_review(*, title: str, score, niche: str,
     return ok
 
 
+# Every way a render can end, and what to say about it. The point of the map
+# is that there are SIX of them and only one used to make a sound: a video the
+# QC held, or one whose score missed the bar, finished in complete silence and
+# sat on disk until somebody thought to look. "It seems like nothing happened"
+# is not a bug report anyone can act on.
+_OUTCOMES = {
+    "review":    ("is waiting for you", "queued for review"),
+    "uploaded":  ("went up", "uploaded to YouTube"),
+    "qc":        ("was held", "it failed QC"),
+    "facts":     ("was held", "a factual integrity flag"),
+    "scene":     ("was held", "the plan never found a real moment"),
+    "seed":      ("was held", "no source passed the supervisor"),
+    "score":     ("was held", "the score missed the threshold"),
+    "upload_failed": ("did not go up", "the upload failed"),
+    "skipped":   ("was made", "upload skipped"),
+}
+
+
+def notify_finished(*, title: str, outcome: str, detail: str = "",
+                    video_id=None, video_path=None,
+                    youtube_url: str | None = None) -> bool:
+    """A render ended — here is the video and here is what became of it.
+
+    NOT THE SAME THING AS notify_pending_review, which announces one of the
+    six endings. This one fires on all of them, and it is what the render
+    page's "send it to me" asks for: the owner pressed a button, walked away,
+    and is owed an answer whichever way it went.
+
+    The video itself goes to Discord because Discord is the only configured
+    backend that can carry a payload; the phone backends get the sentence and
+    a deep link to the row. Best-effort throughout — a render that finished is
+    not made unfinished by a webhook that timed out.
+    """
+    verb, why = _OUTCOMES.get(outcome, ("finished", outcome or ""))
+    link = youtube_url or _dashboard_url()
+    if not youtube_url and link and video_id is not None:
+        link = f"{link}/video/{video_id}"
+    lines = [why] if why else []
+    if detail:
+        lines.append(detail)
+    if link:
+        lines.append(link)
+    ok = send(f'Rufus: "{title}" {verb}', "\n".join(lines) or verb,
+              url=link, priority="high")
+    if video_path:
+        try:
+            send_file(video_path, caption=f"🎬 {title} — {why}")
+        except Exception as e:                     # never fatal, always traced
+            print(f"[notify] finished video not posted ({e})")
+    return ok
+
+
 def notify_published(*, title: str, youtube_id: str | None = None,
                      score=None, niche: str | None = None,
                      video_path=None, by: str | None = None) -> bool:

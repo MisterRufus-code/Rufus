@@ -133,3 +133,68 @@ def test_run_failed_truncates_a_long_reason(monkeypatch):
 def test_run_failed_no_backend_is_a_noop(monkeypatch):
     _clear(monkeypatch)
     assert notify.notify_run_failed("boom") is False
+
+
+# ── the render that ended, whichever way it ended ────────────────────────────
+
+def test_a_held_video_is_announced_like_an_approved_one(monkeypatch):
+    """SIX ENDINGS, ONE OF THEM AUDIBLE. Only the review branch ever notified,
+    so a video the QC held finished in complete silence and sat on disk until
+    somebody thought to look — which is not something you find out about, it is
+    something you eventually notice."""
+    _clear(monkeypatch)
+    monkeypatch.setenv("RUFUS_NTFY_TOPIC", "rufus")
+    with patch.object(notify.requests, "post", return_value=_ok()) as post:
+        assert notify.notify_finished(title="Croesus", outcome="qc",
+                                      detail="silent for 4s") is True
+    body = post.call_args.kwargs["data"].decode("utf-8")
+    assert "failed QC" in body
+    assert "silent for 4s" in body
+    assert "was held" in post.call_args.kwargs["headers"]["Title"]
+
+
+def test_an_upload_is_announced_with_the_youtube_link(monkeypatch):
+    _clear(monkeypatch)
+    monkeypatch.setenv("RUFUS_NTFY_TOPIC", "rufus")
+    with patch.object(notify.requests, "post", return_value=_ok()) as post:
+        notify.notify_finished(title="Croesus", outcome="uploaded",
+                               youtube_url="https://youtu.be/abc")
+    assert post.call_args.kwargs["headers"]["Click"] == "https://youtu.be/abc"
+
+
+def test_the_video_itself_goes_to_discord(monkeypatch, tmp_path):
+    """The phone backends can carry a link and not a payload; Discord is the
+    only one that can hand you the thing you are being asked to judge."""
+    _clear(monkeypatch)
+    monkeypatch.setenv("RUFUS_DISCORD_WEBHOOK", "https://discord.test/hook")
+    mp4 = tmp_path / "out.mp4"
+    mp4.write_bytes(b"x" * 1024)
+    with patch.object(notify.requests, "post", return_value=_ok()) as post:
+        notify.notify_finished(title="Croesus", outcome="review",
+                               video_path=mp4)
+    assert any("files" in c.kwargs for c in post.call_args_list), (
+        "the finished video was never attached")
+
+
+def test_a_dead_webhook_does_not_unfinish_a_finished_render(monkeypatch,
+                                                            tmp_path):
+    """Fail-open, same contract as every other sender here."""
+    _clear(monkeypatch)
+    monkeypatch.setenv("RUFUS_NTFY_TOPIC", "rufus")
+    monkeypatch.setenv("RUFUS_DISCORD_WEBHOOK", "https://discord.test/hook")
+    mp4 = tmp_path / "out.mp4"
+    mp4.write_bytes(b"x" * 1024)
+    with patch.object(notify.requests, "post", side_effect=OSError("no route")):
+        assert notify.notify_finished(title="C", outcome="review",
+                                      video_path=mp4) is False
+
+
+def test_every_ending_the_pipeline_can_reach_has_something_to_say():
+    """A run that ends in a state this map has no entry for would announce the
+    raw internal word. main.py sets exactly these."""
+    import re
+    from pathlib import Path
+    src = (Path(notify.__file__).parent / "main.py").read_text(encoding="utf-8")
+    used = set(re.findall(r'ending(?:, ending_detail)? = "([a-z_]+)"', src))
+    assert used, "main.py stopped recording which ending it reached"
+    assert used <= set(notify._OUTCOMES), used - set(notify._OUTCOMES)
