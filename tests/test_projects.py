@@ -564,16 +564,28 @@ def test_a_gallery_still_drawing_shows_progress_not_a_half_empty_table(client):
 
 
 def test_the_pictures_drawn_so_far_are_shown_while_it_works(client):
+    """They are shown in the drawing room now, not squeezed into the wizard
+    step. Forty minutes of GPU behind a bar and a sentence is why the owner
+    watched ComfyUI's console in another window instead."""
     pid = _start(client)
     sid = db_manager.save_gallery_set(candidate_id=6, channel="c", niche="n",
                                       topic="T", script_file="s.txt",
                                       n_variants=2)
     db_manager.update_project(pid, title="T", script_id=6,
                               script_file="s.txt", stage="gallery")
+    db_manager.set_gallery_beats(sid, 2)
     img = db_manager.save_gallery_image(set_id=sid, variant=0, beat_index=0,
                                         path="/a.png", prompt="p", seed=1)
+
+    # the wizard sends you there
     page = client.get(f"/create?project={pid}").get_data(as_text=True)
-    assert f"/galleries/image/{img}" in page
+    assert f'href="/drawing/{sid}"' in page
+
+    # and there they are
+    d = client.get(f"/api/drawing/{sid}").get_json()
+    assert d["done"] == 1 and d["total"] == 4
+    assert any(sl["image"] == img for sl in d["slots"])
+    assert len(d["slots"]) == 4, "the ones still to come are slots too"
 
 
 def test_a_finished_gallery_offers_the_choice(client):
@@ -1130,3 +1142,149 @@ def test_the_tidy_offer_only_appears_when_there_is_something_to_tidy():
     body = src.split("def _stale_notice", 1)[1].split("\ndef ", 1)[0]
     assert "if not stale:" in body and 'return ""' in body
     assert "/create/tidy" in body
+
+
+# ── the drawing room ─────────────────────────────────────────────────────────
+
+def _drawn(dbm, sid, n, seconds_apart=19):
+    """n pictures, evenly spaced, ending now."""
+    with dbm._conn() as c:
+        for i in range(n):
+            c.execute(
+                "INSERT INTO gallery_images (set_id,variant,beat_index,path,"
+                "prompt,seed,created_at) VALUES (?,?,?,?,?,?,datetime('now',?))",
+                (sid, i % 2, i // 2, f"/{i}.png", "p", 1,
+                 f"-{(n - i) * seconds_apart} seconds"))
+
+
+def test_the_estimate_is_measured_from_the_pictures_not_the_set_row(
+        tmp_path, monkeypatch):
+    """THE NUMBER THAT WAS WRONG ON SCREEN. The old estimate divided the time
+    since the SET ROW was written by the pictures drawn — and that row exists
+    before three voice takes and a storyboard call. Nine of thirty-eight drawn
+    reported ELEVEN HOURS remaining while ComfyUI was visibly doing one every
+    nineteen seconds."""
+    import db_manager as dbm
+    monkeypatch.setattr(dbm, "DB_FILE", tmp_path / "eta.db")
+    dbm.init_db()
+    sid = dbm.save_gallery_set(candidate_id=1, channel="c", niche="n",
+                               topic="T", script_file="s.txt", n_variants=2)
+    # The set row is three hours old; drawing began three minutes ago.
+    with dbm._conn() as c:
+        c.execute("UPDATE gallery_sets SET created_at=datetime('now','-3 hours') "
+                  "WHERE id=?", (sid,))
+    dbm.set_gallery_beats(sid, 19)
+    _drawn(dbm, sid, 9)
+
+    rate = dbm.gallery_draw_rate(sid)
+
+    assert 18 <= rate <= 20, f"measured {rate}s, expected about 19"
+    eta_minutes = rate * (38 - 9) / 60
+    assert eta_minutes < 15, f"{eta_minutes:.0f} min — the set row leaked in again"
+
+
+def test_no_estimate_at_all_rather_than_a_made_up_one(tmp_path, monkeypatch):
+    """A set drawn before created_at existed, or one with a single picture,
+    has nothing to measure. The page shows no estimate instead of inventing."""
+    import db_manager as dbm
+    monkeypatch.setattr(dbm, "DB_FILE", tmp_path / "none.db")
+    dbm.init_db()
+    sid = dbm.save_gallery_set(candidate_id=1, channel="c", niche="n",
+                               topic="T", script_file="s.txt", n_variants=2)
+    assert dbm.gallery_draw_rate(sid) is None
+    _drawn(dbm, sid, 1)
+    assert dbm.gallery_draw_rate(sid) is None, "one picture is not a rate"
+
+
+def test_the_rate_follows_a_machine_that_slows_down(tmp_path, monkeypatch):
+    """A trailing window, not the whole run: a box that starts throttling
+    halfway through should move the estimate rather than be averaged away by
+    the fast start."""
+    import db_manager as dbm
+    monkeypatch.setattr(dbm, "DB_FILE", tmp_path / "slow.db")
+    dbm.init_db()
+    sid = dbm.save_gallery_set(candidate_id=1, channel="c", niche="n",
+                               topic="T", script_file="s.txt", n_variants=2)
+    with dbm._conn() as c:
+        # ten fast ones long ago, then six slow ones just now
+        for i in range(10):
+            c.execute("INSERT INTO gallery_images (set_id,variant,beat_index,"
+                      "path,prompt,seed,created_at) VALUES (?,?,?,?,?,?,"
+                      "datetime('now',?))",
+                      (sid, 0, i, f"/f{i}.png", "p", 1, f"-{2000 - i*5} seconds"))
+        for i in range(6):
+            c.execute("INSERT INTO gallery_images (set_id,variant,beat_index,"
+                      "path,prompt,seed,created_at) VALUES (?,?,?,?,?,?,"
+                      "datetime('now',?))",
+                      (sid, 1, i, f"/s{i}.png", "p", 1, f"-{600 - i*100} seconds"))
+    assert dbm.gallery_draw_rate(sid) > 50, "the recent slowdown has to show"
+
+
+def test_the_room_sends_every_slot_including_the_empty_ones(tmp_path, monkeypatch):
+    """The shape of the job is visible from the first poll rather than growing
+    a row at a time out of nothing."""
+    import db_manager as dbm
+    import dashboard
+    monkeypatch.setattr(dbm, "DB_FILE", tmp_path / "slots.db")
+    monkeypatch.setattr(dashboard, "db_manager", dbm)
+    dbm.init_db()
+    sid = dbm.save_gallery_set(candidate_id=1, channel="c", niche="n",
+                               topic="T", script_file="s.txt", n_variants=2)
+    dbm.set_gallery_beats(sid, 5)
+    _drawn(dbm, sid, 3)
+
+    d = dashboard.app.test_client().get(f"/api/drawing/{sid}").get_json()
+
+    assert d["total"] == 10 and d["done"] == 3
+    assert len(d["slots"]) == 10
+    assert sum(1 for s in d["slots"] if s["image"]) == 3
+    assert d["finished"] is False
+
+
+def test_the_room_knows_when_it_is_finished(tmp_path, monkeypatch):
+    import db_manager as dbm
+    import dashboard
+    monkeypatch.setattr(dbm, "DB_FILE", tmp_path / "fin.db")
+    monkeypatch.setattr(dashboard, "db_manager", dbm)
+    dbm.init_db()
+    sid = dbm.save_gallery_set(candidate_id=1, channel="c", niche="n",
+                               topic="T", script_file="s.txt", n_variants=2)
+    dbm.set_gallery_beats(sid, 2)
+    _drawn(dbm, sid, 4)
+    d = dashboard.app.test_client().get(f"/api/drawing/{sid}").get_json()
+    assert d["finished"] is True
+    assert d["eta_seconds"] is None, "nothing left to wait for"
+
+
+def test_the_status_bar_ignores_the_dashboards_own_log(tmp_path, monkeypatch):
+    """THE LINES THAT WERE ON SCREEN. serve.ps1 redirects the dashboard's
+    stdout to logs/dashboard.log and Flask writes an access line for every
+    poll — including the poll that draws the bar — so it was always the most
+    recently modified file and always won. The owner's status bar reported
+    `GET /api/status HTTP/1.1 200` back at him while a gallery rendered."""
+    import dashboard, paths
+    monkeypatch.setattr(paths, "log_dir", lambda: tmp_path)
+    (tmp_path / "galleries_1.log").write_text("[galleries] drawing\n",
+                                              encoding="utf-8")
+    (tmp_path / "dashboard.log").write_text(
+        '127.0.0.1 - - "GET /api/status HTTP/1.1" 200 -\n', encoding="utf-8")
+    lines = dashboard._newest_log_lines()
+    assert lines == ["[galleries] drawing"]
+    assert not any("api/status" in ln for ln in lines)
+
+
+def test_the_launch_waits_for_the_row_before_redirecting(tmp_path, monkeypatch):
+    """gallery_variants writes its set row as its first act, but it is a
+    separate process. Redirecting immediately would land on a page for a set
+    that does not exist; guessing the next id is wrong the moment two things
+    run at once."""
+    import db_manager as dbm
+    import dashboard
+    monkeypatch.setattr(dbm, "DB_FILE", tmp_path / "wait.db")
+    dbm.init_db()
+    assert dashboard._await_new_gallery(None) is None
+    assert dashboard._await_new_gallery(42, timeout=0.5) is None, (
+        "a launch that never wrote a row must not send you to an empty room")
+    sid = dbm.save_gallery_set(candidate_id=42, channel="c", niche="n",
+                               topic="T", script_file="s.txt", n_variants=2)
+    assert dashboard._await_new_gallery(42, timeout=2) == sid

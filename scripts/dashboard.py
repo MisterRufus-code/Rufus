@@ -306,6 +306,11 @@ def _current_job() -> dict | None:
     return None
 
 
+# Logs that are about the dashboard rather than about a run. Named rather
+# than pattern-matched: a new run kind should appear in the bar automatically,
+# and only these two are known not to belong.
+_NOT_A_RUN_LOG = {"dashboard.log", "watchdog.log"}
+
 _GPU_CACHE = {"at": 0.0, "value": None}
 
 
@@ -353,7 +358,14 @@ def _newest_log_lines(n: int = 3) -> list[str]:
     """
     try:
         d = paths.log_dir()
-        files = [f for f in d.glob("*.log") if f.is_file()]
+        # NOT dashboard.log. The dashboard redirects its own stdout there
+        # and Flask writes an access line for every poll — including the poll
+        # that draws this bar — so it is always the most recently modified file
+        # in the directory and always won. The owner watched his status bar
+        # report `GET /api/status HTTP/1.1 200` back at him while a gallery was
+        # rendering. What belongs here is what the RUN is saying.
+        files = [f for f in d.glob("*.log")
+                 if f.is_file() and f.name not in _NOT_A_RUN_LOG]
         if not files:
             return []
         newest = max(files, key=lambda f: f.stat().st_mtime)
@@ -1726,6 +1738,36 @@ PAGE_STYLE = """<!doctype html><html><head><meta charset="utf-8">
   .hi-q a { color: inherit; font-weight: 600; text-decoration: none;
             border-bottom: 1px solid var(--border); }
   .hi-q a:hover { color: var(--text); border-bottom-color: var(--accent); }
+  /* The drawing room. Empty frames from the first poll, so the shape of the
+     job is visible before any of it has arrived. */
+  .draw-head { display: flex; justify-content: space-between; align-items: flex-end;
+               gap: 16px; flex-wrap: wrap; margin: 12px 0 8px; }
+  .draw-n { font-size: 26px; font-weight: 600; letter-spacing: -.01em; }
+  .draw-of { color: var(--dim); font-weight: 400; font-size: 15px; }
+  .draw-rate { font-size: 12px; font-variant-numeric: tabular-nums; }
+  .draw-grid { display: grid; gap: 8px;
+               grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); }
+  .draw-cell { position: relative; }
+  .draw-slot { aspect-ratio: 9 / 16; border-radius: var(--radius-sm);
+               background: var(--surface); border: 1px solid var(--border);
+               overflow: hidden; display: grid; place-items: center; }
+  .draw-slot img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  /* An arrived picture announces itself once, then stops moving. */
+  .draw-cell.in .draw-slot { border-color: var(--ok); animation: land .45s ease-out; }
+  @keyframes land { from { opacity: 0; transform: scale(.96); }
+                    to   { opacity: 1; transform: none; } }
+  .draw-tag { position: absolute; left: 4px; top: 4px; font-size: 11px;
+              font-weight: 600; color: var(--dim);
+              background: color-mix(in srgb, var(--bg) 78%, transparent);
+              border-radius: 4px; padding: 0 4px; }
+  .draw-log { margin-top: 20px; font-size: 11px; line-height: 1.5;
+              color: var(--dim); background: var(--surface);
+              border: 1px solid var(--border); border-radius: var(--radius);
+              padding: 12px; max-height: 132px; overflow: auto;
+              white-space: pre-wrap; word-break: break-word; }
+  @media (prefers-reduced-motion: reduce) {
+    .draw-cell.in .draw-slot { animation: none; }
+  }
   .tile.t-make    { --tone: var(--make); }
   .tile.t-review  { --tone: var(--review); }
   .tile.t-measure { --tone: var(--measure); }
@@ -4655,6 +4697,15 @@ def _project_progress(p: dict) -> dict:
                     total = max(len(images), beats * variants)
                 out.update(done=len(images), total=total,
                            label="pictures drawn")
+                # MEASURED FROM THE PICTURES, NOT FROM THE SET ROW. See
+                # gallery_draw_rate: dividing by the time since the row was
+                # written averages in three voice takes and a storyboard call,
+                # which is how nine of thirty-eight came to report eleven hours
+                # remaining at nineteen seconds a picture.
+                rate = dbm.gallery_draw_rate(sid)
+                if rate and total > len(images):
+                    out["rate_seconds"] = round(rate, 1)
+                    out["eta_seconds"] = int(rate * (total - len(images)))
                 # THE BLIND WINDOW BEFORE THE FIRST PICTURE. gallery_variants
                 # writes the set row first, then records three voice takes,
                 # then calls the storyboard, and only THEN sets n_beats and
@@ -4683,6 +4734,8 @@ def _project_progress(p: dict) -> dict:
     # press the button and go and watch the ComfyUI console.
     out["working"] = (out["total"] > 0 and out["done"] < out["total"]) \
         or bool(out.get("starting"))
+    if out.get("eta_seconds") is not None:
+        return out          # already measured from real timestamps
     if not out["working"] or not out["done"] or not started:
         return out
     try:
@@ -4992,14 +5045,19 @@ def _wizard_gallery(p: dict) -> str:
     # to say that more was coming. Forty minutes of that reads as broken.
     prog = _project_progress(p)
     if prog.get("working"):
+        # WATCH IT SOMEWHERE THAT IS ONLY THAT. Forty minutes of GPU behind a
+        # wizard step with a bar and a sentence is why the owner watched
+        # ComfyUI's console in another window instead.
         return (
             _working_panel(p, prog, "Drawing the pictures")
-            + '<p class="muted">They appear here as they finish &mdash; the '
-              'first draw completes before the second starts, so expect one '
-              'column to fill before the other begins.</p>'
+            + f'<p style="margin:14px 0"><a class="btn save" '
+              f'style="text-decoration:none;display:inline-block" '
+              f'href="/drawing/{sid}">Watch it draw &rarr;</a></p>'
+            + '<p class="muted">Every picture appears the moment it lands. '
+              'You can leave that page open, or close it &mdash; the drawing '
+              'does not depend on it.</p>'
             + f'<div style="margin:10px 0">'
-              f'{_regen(p["id"], "gallery", "Start again")}</div>'
-            + f'<div style="overflow-x:auto"><table>{rows}</table></div>')
+              f'{_regen(p["id"], "gallery", "Start again")}</div>')
 
     return (
         '<h2 style="margin-top:22px">Which pictures?</h2>'
@@ -5194,6 +5252,206 @@ def _stale_notice() -> str:
             f'you have open is left alone.</div></div>')
 
 
+# ── the poller ───────────────────────────────────────────────────────────────
+#
+# Vanilla and inline, like every other script here: no build step, and it works
+# on a phone with nothing but the tailnet.
+#
+# ONLY WHAT CHANGED IS TOUCHED. Rewriting the whole grid every two seconds
+# would restart every image download and make the page flicker — which is the
+# "not smooth" the owner is describing. Slots are created once and then only
+# filled.
+DRAWING_JS = """
+<script>
+(function () {
+  var root = document.getElementById('draw');
+  if (!root) return;
+  var setId = root.getAttribute('data-set');
+  var grid  = document.getElementById('draw-grid');
+  var built = false;
+
+  function fmt(s) {
+    s = Math.max(0, Math.round(s));
+    if (s < 60) return s + 's';
+    var m = Math.floor(s / 60);
+    if (m < 60) return m + 'm';
+    return Math.floor(m / 60) + 'h ' + (m % 60) + 'm';
+  }
+
+  function key(sl) { return sl.variant + '_' + sl.beat; }
+
+  function build(d) {
+    grid.innerHTML = '';
+    d.slots.forEach(function (sl) {
+      var cell = document.createElement('div');
+      cell.className = 'draw-cell';
+      cell.id = 'c' + key(sl);
+      cell.innerHTML = '<div class="draw-slot"></div>'
+        + '<div class="draw-tag">' + String.fromCharCode(65 + sl.variant)
+        + (sl.beat + 1) + '</div>';
+      grid.appendChild(cell);
+    });
+    built = true;
+  }
+
+  function render(d) {
+    if (!d.ok) return;
+    document.getElementById('draw-done').textContent = d.done;
+    document.getElementById('draw-total').textContent = d.total || '?';
+    var pct = d.total ? Math.round(100 * d.done / d.total) : 0;
+    document.getElementById('draw-fill').style.width = pct + '%';
+
+    var sub = document.getElementById('draw-sub');
+    if (d.finished) {
+      sub.textContent = 'Done — every picture is drawn.';
+    } else if (!d.total) {
+      sub.textContent = 'Recording the voice, then planning the shots…';
+    } else if (d.eta_seconds != null) {
+      sub.textContent = 'about ' + fmt(d.eta_seconds) + ' left';
+    } else {
+      sub.textContent = 'drawing…';
+    }
+    document.getElementById('draw-rate').textContent =
+      d.rate_seconds ? d.rate_seconds + 's a picture' : '';
+
+    if (!built && d.slots.length) build(d);
+    // Fill only the slots that have arrived and are still empty. Re-setting a
+    // src that is already correct makes the browser re-fetch and the picture
+    // blink, which across thirty-eight of them looks like a page fighting
+    // itself.
+    d.slots.forEach(function (sl) {
+      if (!sl.image) return;
+      var cell = document.getElementById('c' + key(sl));
+      if (!cell || cell.getAttribute('data-filled')) return;
+      var slot = cell.querySelector('.draw-slot');
+      slot.innerHTML = '<img loading="lazy" src="/galleries/image/'
+        + sl.image + '" alt="">';
+      cell.setAttribute('data-filled', '1');
+      cell.className = 'draw-cell in';
+    });
+
+    var lg = document.getElementById('draw-log');
+    lg.textContent = (d.log || []).join('\\n');
+
+    if (d.finished) {
+      clearInterval(timer);
+      sub.innerHTML = 'Done &mdash; <a href="/create">choose the pictures &rarr;</a>';
+    }
+  }
+
+  function poll() {
+    fetch('/api/drawing/' + setId, { headers: { 'Accept': 'application/json' } })
+      .then(function (r) { return r.ok ? r.json() : Promise.reject(r.status); })
+      .then(render)
+      .catch(function () {
+        document.getElementById('draw-sub').textContent =
+          'Lost the connection — it keeps drawing; this page will catch up.';
+      });
+  }
+  poll();
+  // Two seconds. A picture lands every ~19s, so this is responsive without
+  // being wasteful, and the payload is one small query plus a log tail.
+  var timer = setInterval(poll, 2000);
+})();
+</script>
+"""
+
+
+# ── the drawing room ─────────────────────────────────────────────────────────
+#
+# A PAGE THAT IS ONLY THE DRAWING. Forty minutes of GPU is the longest wait in
+# this pipeline and it used to happen behind a wizard step that showed a bar
+# and a sentence. The owner watched ComfyUI's console in another window
+# instead, which is the honest verdict on that: the dashboard was not showing
+# the thing he wanted to watch.
+#
+# So the pictures themselves are the progress. Each one appears the moment it
+# lands, in its own slot, and the slots that have not arrived are visible as
+# empty frames — so the shape of what is coming is there from the first second
+# rather than assembling itself out of nothing.
+#
+# IT UPDATES IN PLACE. A reloading page loses your scroll position every few
+# seconds, which is what "not smooth" means when the thing you are doing is
+# watching. One small JSON poll, and only the slots that changed are touched.
+
+@app.route("/drawing/<int:set_id>")
+def drawing_page(set_id: int):
+    """Watch a gallery being drawn."""
+    auth.require("view")
+    import db_manager as dbm
+    row = next((g for g in dbm.gallery_sets(status=None, limit=200)
+                if g["id"] == set_id), None)
+    if not row:
+        return _head() + ('<a class="back" href="/">&larr; back</a>'
+                          '<div class="msg error">No such gallery.</div>'
+                          ) + PAGE_TAIL
+    body = f"""
+    <a class="back" href="/create">&larr; back to the video</a>
+    <h2 style="margin-top:14px">Drawing &mdash; {_esc(row["topic"] or "")}</h2>
+    <div id="draw" data-set="{set_id}">
+      <div class="draw-head">
+        <div>
+          <div class="draw-n"><span id="draw-done">&mdash;</span>
+            <span class="draw-of">of <span id="draw-total">&mdash;</span></span></div>
+          <div class="muted" id="draw-sub">looking&hellip;</div>
+        </div>
+        <div class="draw-rate muted" id="draw-rate"></div>
+      </div>
+      <div class="progress" style="min-width:100%;height:8px;margin:0 0 18px">
+        <i id="draw-fill" style="width:0%"></i></div>
+      <div id="draw-grid" class="draw-grid"></div>
+      <pre id="draw-log" class="draw-log"></pre>
+    </div>
+    {DRAWING_JS}
+    """
+    return _head() + body + PAGE_TAIL
+
+
+@app.route("/api/drawing/<int:set_id>")
+def api_drawing(set_id: int):
+    """Everything the drawing page redraws itself from, in one small payload."""
+    auth.require("view")
+    import db_manager as dbm
+    row = next((g for g in dbm.gallery_sets(status=None, limit=200)
+                if g["id"] == set_id), None)
+    if not row:
+        return {"ok": False}, 404
+    images = dbm.gallery_images(set_id)
+    variants = int(row.get("n_variants") or 2)
+    beats = int(row.get("n_beats") or 0)
+    total = beats * variants
+    rate = dbm.gallery_draw_rate(set_id)
+    done = len(images)
+    # THE SLOTS ARE THE POINT. Sending the full grid — arrived and not — lets
+    # the page show the shape of the job from the first poll instead of
+    # growing a row at a time out of nothing.
+    have = {(im["variant"], im["beat_index"]): im["id"] for im in images}
+    slots = []
+    if beats:
+        for v in range(variants):
+            for b in range(beats):
+                slots.append({"variant": v, "beat": b,
+                              "image": have.get((v, b))})
+    else:
+        # No plan yet: show what has arrived, if anything, and nothing else.
+        for im in images:
+            slots.append({"variant": im["variant"], "beat": im["beat_index"],
+                          "image": im["id"]})
+    return {
+        "ok": True,
+        "done": done,
+        "total": total,
+        "beats": beats,
+        "variants": variants,
+        "finished": bool(total and done >= total),
+        "rate_seconds": round(rate, 1) if rate else None,
+        "eta_seconds": int(rate * (total - done)) if rate and total > done else None,
+        "slots": slots,
+        "log": _newest_log_lines(6),
+        "status": row.get("status") or "",
+    }, 200
+
+
 @app.route("/create/tidy", methods=["POST"])
 def create_tidy():
     """Clear the queues of everything not belonging to an open project.
@@ -5259,6 +5517,33 @@ def _whoami() -> str:
     return (auth.current_user() or {}).get("name", "") or ""
 
 
+def _await_new_gallery(script_id, timeout: float = 12.0):
+    """The id of the set the launch is about to create, or None.
+
+    gallery_variants writes its set row as its first act, but it is a separate
+    process and that takes a second or two to start. Redirecting immediately
+    would land on a page for a set that does not exist yet; guessing the next
+    id would be wrong the moment two things run at once. So this waits for the
+    row to actually appear.
+
+    Bounded, and None on timeout: a launch that failed must send you back to
+    the wizard with the buttons on it, not to a room that will never fill.
+    """
+    if not script_id:
+        return None
+    import db_manager as dbm
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            for g in dbm.gallery_sets(status="pending", limit=10):
+                if g.get("candidate_id") == script_id:
+                    return g["id"]
+        except Exception:
+            pass
+        time.sleep(0.4)
+    return None
+
+
 def _replacing(n: int, noun: str) -> str:
     """", replacing the 3 you had" — or nothing at all when there were none.
 
@@ -5308,13 +5593,19 @@ def create_regen(project_id: int, stage: str):
                 return redirect(f"/create?project={project_id}&error="
                                 + _urlquote("choose a script first"))
             gone = dbm.superseded_by_regen(project_id, "gallery")
-            log = _launch_galleries(script_file=p["script_file"],
-                                    candidate_id=p.get("script_id"),
-                                    topic=p.get("title") or "")
+            _launch_galleries(script_file=p["script_file"],
+                              candidate_id=p.get("script_id"),
+                              topic=p.get("title") or "")
+            # STRAIGHT INTO THE ROOM. The set row is written by the subprocess
+            # a moment from now, so this waits for it rather than guessing an
+            # id — and falls back to the wizard if it never appears, which is
+            # the case where the launch itself failed.
+            sid = _await_new_gallery(p.get("script_id"))
+            if sid:
+                return redirect(f"/drawing/{sid}")
             return redirect(f"/create?project={project_id}&msg=" + _urlquote(
                 f"Recording the voice, then drawing two galleries"
-                f"{_replacing(gone, 'set')} — about forty minutes. "
-                f"Log: logs/{log.name}"))
+                f"{_replacing(gone, 'set')} — about forty minutes."))
         if stage == "voice":
             if not p.get("gallery_id") or not p.get("script_file"):
                 return redirect(f"/create?project={project_id}&error="

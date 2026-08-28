@@ -307,10 +307,20 @@ def init_db():
         # base is one click and correcting eight shots is eight judgements, and
         # a set credited only to whoever pressed "take all from A" would hide
         # the person who actually did that work.
-        try:
-            c.execute("ALTER TABLE gallery_images ADD COLUMN decided_by TEXT")
-        except Exception:
-            pass
+        for ddl in ("ALTER TABLE gallery_images ADD COLUMN decided_by TEXT",
+                    # WHEN EACH PICTURE LANDED, which is the only honest basis
+                    # for "how long is left". The estimate used to divide the
+                    # time since the SET ROW was written by the pictures drawn
+                    # — and that row is written before three voice takes and a
+                    # storyboard call, so hours of setup were being averaged
+                    # into the per-picture rate. Nine of thirty-eight drawn
+                    # reported eleven hours remaining while ComfyUI was doing
+                    # one every nineteen seconds.
+                    "ALTER TABLE gallery_images ADD COLUMN created_at TEXT"):
+            try:
+                c.execute(ddl)
+            except Exception:
+                pass
         # THREE READS OF THE HOOK, AND ONLY THE HOOK.
         #
         # Audio is the one thing on this list that cannot be skimmed — it plays
@@ -1177,7 +1187,7 @@ _GSET_COLS = ["id", "created_at", "candidate_id", "channel", "niche", "topic",
               "script_file", "n_variants", "status", "decided_at", "n_beats",
               "decided_by"]
 _GIMG_COLS = ["id", "set_id", "variant", "beat_index", "path", "prompt",
-              "seed", "status", "decided_by"]
+              "seed", "status", "decided_by", "created_at"]
 
 
 def save_gallery_set(*, candidate_id: int | None, channel: str, niche: str,
@@ -1210,10 +1220,47 @@ def save_gallery_image(*, set_id: int, variant: int, beat_index: int,
     with _conn() as c:
         cur = c.execute(
             "INSERT INTO gallery_images (set_id, variant, beat_index, path, "
-            "prompt, seed) VALUES (?,?,?,?,?,?)",
+            "prompt, seed, created_at) VALUES (?,?,?,?,?,?,datetime('now'))",
             (int(set_id), int(variant), int(beat_index), str(path), prompt,
              int(seed)))
         return cur.lastrowid
+
+
+def gallery_draw_rate(set_id: int, window: int = 6) -> float | None:
+    """Seconds per picture, measured from the last few that actually landed.
+
+    THE ONLY HONEST BASIS FOR AN ESTIMATE. The old one divided the time since
+    the SET ROW was written by the number drawn — and that row exists before
+    three voice takes and a storyboard call, so a set created three hours ago
+    whose drawing began five minutes ago reported twenty-three minutes per
+    picture and eleven hours remaining, while ComfyUI was visibly doing one
+    every nineteen seconds.
+
+    A trailing window rather than the whole run, because the rate is not
+    constant: the first picture pays for the model load, and a machine that
+    starts thermal-throttling halfway through should move the estimate rather
+    than be averaged away by the fast start.
+
+    None when there is nothing to measure — fewer than two timestamped
+    pictures, or a set drawn before this column existed. The caller shows no
+    estimate at all rather than a made-up one.
+    """
+    with _conn() as c:
+        rows = c.execute(
+            "SELECT created_at FROM gallery_images WHERE set_id=? "
+            "AND created_at IS NOT NULL ORDER BY id DESC LIMIT ?",
+            (int(set_id), int(window) + 1)).fetchall()
+    if len(rows) < 2:
+        return None
+    from datetime import datetime, timezone
+    try:
+        stamps = sorted(
+            datetime.fromisoformat(str(r[0])).replace(
+                tzinfo=timezone.utc).timestamp() for r in rows)
+    except ValueError:
+        return None
+    span = stamps[-1] - stamps[0]
+    return span / (len(stamps) - 1) if span > 0 else None
 
 
 def gallery_sets(status: str | None = "pending", limit: int = 20) -> list[dict]:
