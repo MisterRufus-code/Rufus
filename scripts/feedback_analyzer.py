@@ -45,9 +45,45 @@ def _analyze_channel(channel):
                 FROM metrics
                 WHERE id IN (SELECT MAX(id) FROM metrics GROUP BY video_id)
             ) m ON m.video_id = v.id
-            WHERE v.channel = ? OR v.channel IS NULL
+            WHERE (v.channel = ? OR v.channel IS NULL)
+              -- A YOUTUBE ID SHARED BY TWO ROWS CANNOT BE ATTRIBUTED, and a
+              -- row that cannot be attributed must not vote. Six videos in
+              -- this channel's database carried the id kGVAHaObJ38 — one link
+              -- recorded against six different scripts — so all six joined to
+              -- a SEVENTH video's metrics: the same view count, the same
+              -- likes, and a watch percentage of zero.
+              --
+              -- Zero watch_pct is fatal here specifically, because engagement
+              -- is watch_pct × log(likes) × log(views). Zero times anything is
+              -- zero, so every one of them sorted to the bottom and every one
+              -- was written into losing_hooks. All four entries in that list
+              -- were these rows. The flywheel was not learning that those
+              -- hooks failed; it was learning that a data-entry mistake looks
+              -- like failure, and then feeding that back into the hook prompt.
+              AND (v.youtube_id IS NULL OR v.youtube_id = '' OR v.youtube_id IN (
+                    SELECT youtube_id FROM videos
+                    WHERE youtube_id IS NOT NULL AND youtube_id <> ''
+                    GROUP BY youtube_id HAVING COUNT(*) = 1))
             ORDER BY v.id DESC
         """, (channel.id,)).fetchall()
+
+    # SAID OUT LOUD, because a silently smaller sample is how this went
+    # unnoticed for a week. The rows are still in the database and still fixable
+    # — the owner clears the wrong link and they come back into the learning.
+    try:
+        import db_manager
+        dupes = db_manager.duplicate_youtube_ids()
+    except Exception:
+        dupes = []
+    if dupes:
+        n = sum(d["count"] for d in dupes)
+        print(f"[feedback] ⚠ {n} video(s) excluded: {len(dupes)} YouTube id(s) "
+              f"are claimed by more than one row, so their views belong to "
+              f"whichever video really owns the link.")
+        for d in dupes:
+            print(f"[feedback]   {d['youtube_id']} → videos "
+                  f"{', '.join(str(i) for i in d['video_ids'])}")
+        print(f"[feedback]   Clear the wrong ones and they rejoin the learning.")
 
     if len(rows) < 3:
         print(f"[feedback] {channel.id}: not enough data ({len(rows)} videos with "

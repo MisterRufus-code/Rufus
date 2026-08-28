@@ -179,9 +179,14 @@ def test_the_first_fetch_is_honest_about_needing_a_browser(client, db, monkeypat
     assert "sign-in" in r.headers["Location"] or "sign" in r.headers["Location"]
 
 
-def test_it_says_how_far_off_the_learning_threshold_is(client, db):
+def test_it_says_how_far_off_the_learning_threshold_is(client, db, monkeypatch):
     """feedback_analyzer refuses to draw conclusions from fewer than three
-    measured videos. An empty section that does not say why looks broken."""
+    measured videos. An empty section that does not say why looks broken.
+
+    _learnings is stubbed empty on purpose: the repo now ships a real
+    config/learnings.json, and without this the page renders THOSE hooks and
+    never reaches the branch under test."""
+    monkeypatch.setattr(dashboard, "_learnings", lambda channel=None: {})
     a = db.save_video("money_history", "a", "s", "/tmp/a.mp4")
     db.mark_published(a, "dQw4w9WgXcQ")
     db.save_metrics(a, views=10, watch_pct=30.0, ctr=0.0, likes=1)
@@ -200,7 +205,19 @@ def test_learned_hooks_are_shown_when_they_exist(client, db, monkeypatch):
     assert "the loop actually closing" in page
 
 
-def test_a_missing_learnings_file_is_not_an_error(db):
+def test_a_missing_learnings_file_is_not_an_error(db, tmp_path, monkeypatch):
+    """Pointed at a path that does not exist, rather than at a channel name
+    that happens not to have one. This used to pass because the repo shipped
+    no config/learnings.json at all — then a real one was committed, the
+    fallback found it, and the test failed for a reason that had nothing to
+    do with what it was checking."""
+    import channel_config
+
+    class Missing:
+        id = "nope-not-a-channel"
+        learnings_path = tmp_path / "does-not-exist.json"
+
+    monkeypatch.setattr(channel_config, "load_channel", lambda c=None: Missing())
     assert dashboard._learnings("nope-not-a-channel") == {}
 
 
