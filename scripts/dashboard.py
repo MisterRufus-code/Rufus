@@ -807,7 +807,11 @@ def _video_detail(video_id: int) -> dict | None:
          "seed_type, seed_source, seed_content, seed_url, youtube_id, video_file, score, "
          "run_id, score_specificity, score_hook, score_compression, score_loop, "
          "score_human, attempts_used, final_temperature, score_reasoning, "
-         "title, channel, hold_reason, description, upload_status "
+         "title, channel, hold_reason, description, upload_status, "
+         # The evidence for which of two rows really owns a shared link.
+         # Without it the duplicate audit called the ONE genuine upload
+         # "never uploaded" and offered to clear the only correct row.
+         "uploaded_at, decided_by "
          "FROM videos WHERE id = ?")
     try:
         with db_manager._conn() as c:
@@ -822,7 +826,7 @@ def _video_detail(video_id: int) -> dict | None:
             "score_specificity", "score_hook", "score_compression",
             "score_loop", "score_human", "attempts_used", "final_temperature",
             "score_reasoning", "title", "channel", "hold_reason",
-            "description", "upload_status"]
+            "description", "upload_status", "uploaded_at", "decided_by"]
     return dict(zip(cols, row))
 
 
@@ -2570,7 +2574,75 @@ _MEASURE_SECTIONS = (
     ("what-goes-wrong", "What keeps going wrong", "_insights_body"),
     ("does-score-predict", "Does the score predict anything", "_performance_body"),
     ("is-the-loop-closed", "Is the loop closed", "_tracking_body"),
+    ("links-that-collide", "Links claimed twice", "_duplicate_links_body"),
 )
+
+
+def _duplicate_links_body() -> str:
+    """Videos claiming a YouTube link another video also claims.
+
+    WHY THIS EARNS A SECTION. Analytics joins view counts on youtube_id, so a
+    link recorded against two videos gives both the numbers of whichever one
+    really owns it. In this channel six rows carried kGVAHaObJ38 and all six
+    were credited with a seventh video's views — the same count, the same
+    likes, a watch percentage of zero. Zero watch time is fatal to the
+    engagement score, so all six sorted to the bottom and every one of them
+    was written into losing_hooks and fed back into the hook prompt.
+
+    feedback_analyzer now refuses to score them, which stops the bleeding but
+    does not clean the wound: the rows are still wrong and still missing from
+    the learning. This is where they get fixed.
+    """
+    import db_manager as dbm
+    dupes = dbm.duplicate_youtube_ids()
+    if not dupes:
+        return ('<p class="muted">Every YouTube link belongs to exactly one '
+                'video. Nothing to fix.</p>')
+
+    blocks = ""
+    for d in dupes:
+        rows = ""
+        for vid in d["video_ids"]:
+            v = _video_detail(vid) or {}
+            title = _esc((v.get("title") or v.get("script_hook") or "")[:70])
+            went = v.get("uploaded_at")
+            # The one with an upload timestamp is the one that really went out.
+            mark = ('<span class="badge ok">has an upload time</span>'
+                    if went else '<span class="badge held">never uploaded</span>')
+            clear = ""
+            if auth.can("approve"):
+                clear = (f'<form method="post" action="/video/{vid}/unlink" '
+                         f'style="display:inline" onsubmit="return confirm('
+                         f'\'Take the link off video {vid}? It goes back to '
+                         f'pending.\');">'
+                         f'<button class="btn reject" type="submit" '
+                         f'style="padding:4px 10px">not this one</button></form>')
+            rows += (f'<tr><td><a class="row-link" href="/video/{vid}">'
+                     f'#{vid}</a></td><td>{title}</td><td>{mark}</td>'
+                     f'<td>{clear}</td></tr>')
+        blocks += (f'<p class="muted" style="margin-top:16px"><code>'
+                   f'{_esc(d["youtube_id"])}</code> is claimed by '
+                   f'<b>{d["count"]}</b> videos. Only one of them is really '
+                   f'that link; the rest were never published and are being '
+                   f'credited with its views.</p>'
+                   f'<div class="tablewrap"><table><tr><th>Video</th>'
+                   f'<th>Hook / Title</th><th>Evidence</th><th></th></tr>'
+                   f'{rows}</table></div>')
+    return (blocks + '<p class="muted" style="margin-top:14px">Clearing a link '
+            'puts that video back in the review queue and returns it to the '
+            'learning. Its fetched metrics are kept &mdash; they are a record '
+            'of what happened, not a claim about this video.</p>')
+
+
+@app.route("/video/<int:video_id>/unlink", methods=["POST"])
+def unlink_video(video_id: int):
+    """Take a wrong YouTube link off a video."""
+    auth.require("approve")
+    if not db_manager.clear_youtube_id(video_id, by=_whoami()):
+        return _redirect_detail(video_id, error="that video has no link on it")
+    return _redirect_detail(video_id, ok=(
+        "link removed — back in the review queue, and back in the learning "
+        "on the next analyser run"))
 
 
 @app.route("/measure")

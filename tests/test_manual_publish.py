@@ -278,3 +278,104 @@ def test_the_audit_finds_ids_that_got_in_before_the_guard(tmp_path, monkeypatch)
     assert dupes[0]["youtube_id"] == "kGVAHaObJ38"
     assert dupes[0]["count"] == 3
     assert sorted(dupes[0]["video_ids"]) == sorted(ids)
+
+
+def test_a_wrong_link_can_be_taken_off(tmp_path, monkeypatch):
+    """THE OPERATION THE ADVICE ASSUMED EXISTED. duplicate_youtube_ids reports
+    the collision, feedback_analyzer excludes those rows and prints "clear the
+    wrong ones and they rejoin the learning" — and there was no way to clear
+    one. Not in the dashboard, not in the CLI, nowhere. Advice naming an action
+    the software cannot perform reads as a fix and delivers nothing."""
+    import db_manager as dbm
+    monkeypatch.setattr(dbm, "DB_FILE", tmp_path / "unlink.db")
+    dbm.init_db()
+    v = dbm.save_video(niche="n", script_hook="h", scene_desc="d",
+                       video_file="v.mp4", score=8)
+    dbm.mark_published(v, "https://youtu.be/kGVAHaObJ38")
+
+    assert dbm.clear_youtube_id(v, by="Daniel") is True
+
+    with dbm._conn() as c:
+        yt, status, up = c.execute(
+            "SELECT youtube_id, upload_status, uploaded_at FROM videos "
+            "WHERE id=?", (v,)).fetchone()
+    assert yt is None and up is None
+    assert status == "pending", (
+        "a video whose link belonged to another video was never published; "
+        "leaving it approved keeps it out of the review queue")
+
+
+def test_clearing_a_link_that_is_not_there_is_refused(tmp_path, monkeypatch):
+    import db_manager as dbm
+    monkeypatch.setattr(dbm, "DB_FILE", tmp_path / "noop.db")
+    dbm.init_db()
+    v = dbm.save_video(niche="n", script_hook="h", scene_desc="d",
+                       video_file="v.mp4", score=8)
+    assert dbm.clear_youtube_id(v) is False
+
+
+def test_the_fetched_metrics_are_kept(tmp_path, monkeypatch):
+    """They are a record of what was fetched under that id. Deleting them
+    would hide that this happened rather than undo it."""
+    import db_manager as dbm
+    monkeypatch.setattr(dbm, "DB_FILE", tmp_path / "keepm.db")
+    dbm.init_db()
+    v = dbm.save_video(niche="n", script_hook="h", scene_desc="d",
+                       video_file="v.mp4", score=8)
+    dbm.mark_published(v, "kGVAHaObJ38")
+    dbm.save_metrics(v, views=957, watch_pct=0.0, ctr=0.0, likes=10)
+    dbm.clear_youtube_id(v)
+    with dbm._conn() as c:
+        assert c.execute("SELECT COUNT(*) FROM metrics WHERE video_id=?",
+                         (v,)).fetchone()[0] == 1
+
+
+def test_clearing_a_link_frees_it_for_the_row_that_owns_it(tmp_path, monkeypatch):
+    """The whole point: once the wrong claims are gone, mark_published accepts
+    the link on the video that really is it."""
+    import pytest
+    import db_manager as dbm
+    monkeypatch.setattr(dbm, "DB_FILE", tmp_path / "free.db")
+    dbm.init_db()
+    wrong = dbm.save_video(niche="n", script_hook="a", scene_desc="d",
+                           video_file="a.mp4", score=8)
+    right = dbm.save_video(niche="n", script_hook="b", scene_desc="d",
+                           video_file="b.mp4", score=8)
+    dbm.mark_published(wrong, "kGVAHaObJ38")
+    with pytest.raises(ValueError):
+        dbm.mark_published(right, "kGVAHaObJ38")
+    dbm.clear_youtube_id(wrong)
+    assert dbm.mark_published(right, "kGVAHaObJ38") is True
+    assert dbm.duplicate_youtube_ids() == []
+
+
+def test_the_measure_page_shows_which_row_really_uploaded(client, db):
+    """The evidence for which of the rows to keep. _video_detail did not select
+    uploaded_at, so the audit called the ONE genuine upload "never uploaded"
+    and offered to clear the only correct row."""
+    a = db.save_video("money_history", "wrong one", "s", "/tmp/a.mp4")
+    b = db.save_video("money_history", "the real one", "s", "/tmp/b.mp4")
+    with db._conn() as c:
+        c.execute("UPDATE videos SET youtube_id='kGVAHaObJ38' WHERE id IN (?,?)",
+                  (a, b))
+        c.execute("UPDATE videos SET uploaded_at='2026-08-18 12:20:05' "
+                  "WHERE id=?", (b,))
+    page = client.get("/measure").get_data(as_text=True)
+    section = page.split('id="links-that-collide"', 1)[1].split("</section>", 1)[0]
+    assert "kGVAHaObJ38" in section
+    rows = section.split("<tr>")
+    said = {r.split("#")[1].split("<")[0]: ("never uploaded" in r)
+            for r in rows if "#" in r}
+    assert said[str(a)] is True
+    assert said[str(b)] is False, "the row with an upload time is the keeper"
+
+
+def test_unlinking_needs_the_approve_permission():
+    """It puts a video back in the review queue and changes what the learning
+    sees. A viewer may look; they may not rewrite what was published."""
+    from pathlib import Path
+    import dashboard
+    src = Path(dashboard.__file__).read_text(encoding="utf-8")
+    body = src.split("def unlink_video", 1)[1].split("\n@app.route", 1)[0]
+    assert 'auth.require("approve")' in body
+    assert "_whoami()" in body, "who cleared it is worth recording"

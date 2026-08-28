@@ -1433,6 +1433,32 @@ def mark_published(video_id: int, youtube_id: str,
     return True
 
 
+def clear_youtube_id(video_id: int, by: str = "") -> bool:
+    """Take a wrong link off a video. False if it had none.
+
+    THE OPERATION THE ADVICE ASSUMED EXISTED. duplicate_youtube_ids reports
+    that six rows claim one link, feedback_analyzer excludes them and prints
+    "clear the wrong ones and they rejoin the learning" — and there was no way
+    to clear one. Not in the dashboard, not in the CLI, nowhere. Advice that
+    names an action the software cannot perform is worse than no advice: it
+    reads as a fix and delivers nothing.
+
+    The row goes back to pending, because that is what it actually is. A video
+    whose link belonged to a different video was never published, and leaving
+    it 'approved' would keep it out of the review queue — invisible in both
+    directions. Its metrics rows are left alone: they are a record of what was
+    fetched under that id, and deleting them would hide that this happened
+    rather than undo it.
+    """
+    with _conn() as c:
+        cur = c.execute(
+            "UPDATE videos SET youtube_id=NULL, uploaded_at=NULL, "
+            "upload_status='pending', decided_by=COALESCE(?, decided_by) "
+            "WHERE id=? AND youtube_id IS NOT NULL AND youtube_id <> ''",
+            (by or None, int(video_id)))
+        return cur.rowcount > 0
+
+
 def duplicate_youtube_ids() -> list[dict]:
     """Ids claimed by more than one video, worst first.
 
