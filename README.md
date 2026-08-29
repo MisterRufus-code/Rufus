@@ -695,6 +695,19 @@ The same list, with a *Back up now* and a *Restore*, is on **/system**.
 
 ---
 
+## When something goes wrong
+
+**[docs/RUNBOOK.md](docs/RUNBOOK.md)** — what you see, what is actually
+happening, what to do. Written from the failures that really happened on this
+machine: the gallery that stopped at 9 of 38, the twelve-hour estimate that was
+arithmetic on the wrong timestamp, the six videos sharing one YouTube id, the
+voice that went flat because something upgraded past a numpy pin.
+
+Each entry names the check that would have told you sooner, so the page gets
+shorter as the software learns to say these things itself.
+
+---
+
 ## Which build is this
 
 ```bash
