@@ -630,6 +630,35 @@ have been copied. After scrubbing, rotate: `python scripts/auth.py rotate <name>
 
 ---
 
+## Taking your work out
+
+```bash
+python scripts/export_data.py            # into rufus-export-<timestamp>/
+```
+
+Not a copy of `rufus.db` — that is a proprietary schema readable by this
+program and nothing else, which is a hostage dressed as a backup. This is the
+same content as CSV and plain text: openable in a spreadsheet, loadable by
+pandas, diffable in git.
+
+- `videos.csv` — every video, its score, its published id
+- `decisions.csv` — **the one that matters.** Every choice you made and what
+  you chose it *over*: three scripts and which won, two draws per shot and
+  which shipped, three reads and which was used. A preference pair is not a row
+  anywhere in the database — it is one chosen sibling and its rejected
+  siblings, implied by a grouping — so reassembling it is the work the export
+  exists to do rather than leave to whoever opens the file.
+- `projects.csv`, `spend.csv`, and `scripts/` — the writing as plain text
+  files, because a script is something a person reads and a CSV cell with
+  escaped newlines is not.
+
+No credentials, no sign-in tokens, no users file. An export gets emailed,
+uploaded to a spreadsheet service and left in a downloads folder; those are not
+your data, they are the keys to the building. `README.txt` inside says what was
+collected and what was left out. Also a button on **/system**.
+
+---
+
 ## Backups
 
 ```bash

@@ -42,6 +42,10 @@ rufus.db-*
 # into a repository that may be handed to somebody.
 backups/
 rufus.replaced-*.db
+# And an export, for the same reason: it is the same content in a friendlier
+# shape, so committing one would put every script and every decision into the
+# history just as surely.
+rufus-export-*/
 rufus.*.lock*
 rufus.lock*
 

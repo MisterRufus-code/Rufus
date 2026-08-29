@@ -51,6 +51,11 @@ to a clean URL, the access log is filtered before it is written, and
 `logscrub.py` finds and removes the ones already on disk. If you have run this
 dashboard before, scan once and rotate — rewriting a file revokes nothing.
 
+**You can take your work out.** `export_data.py` writes everything as CSV and
+plain text — including `decisions.csv`, every choice you made paired with what
+you chose it over, which is not a row anywhere in the database but the shape of
+several. No credentials leave with it.
+
 **Backups.** `rufus.db` holds every judgement anybody has made on this channel
 and nothing copied it. One verified snapshot a day, taken by whichever of the
 dashboard or a run opens the database first; twelve kept; restore from the

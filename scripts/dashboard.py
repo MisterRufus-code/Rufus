@@ -3477,8 +3477,35 @@ def system_status():
        deleting a lock file by hand.</p>
     <h2>Backups</h2>
     {_backup_panel()}
+    <h2>Take your work out</h2>
+    <p class="muted">Everything you have made, as CSV and plain text &mdash;
+       the videos, the scripts, what each cost, and every choice you made with
+       what you chose it over. Nothing in it needs Rufus to read it, and
+       nothing in it is a credential.</p>
+    <form method="post" action="/system/export"><button type="submit">
+      Export everything</button></form>
     """
     return _head() + body + PAGE_TAIL
+
+
+@app.route("/system/export", methods=["POST"])
+def system_export():
+    """Hand over the work in formats other things can read.
+
+    NOT A COPY OF rufus.db, which is a proprietary schema readable by this
+    program and nothing else — a hostage dressed as a backup. This is the
+    honest half of the argument for keeping the source closed: a product that
+    will not let you take your data out is relying on the export being hard.
+    """
+    auth.require("system")
+    import export_data
+    try:
+        dest = export_data.export()
+    except Exception as e:
+        return redirect("/system?error=" + _urlquote(f"export failed: {e}"))
+    return redirect("/system?msg=" + _urlquote(
+        f"Written to {dest.name} beside the program. CSV and plain text; "
+        f"README.txt inside says what was collected and what was left out."))
 
 
 def _available_niches() -> list[str]:
