@@ -49,6 +49,7 @@ Environment:
 import html
 import json
 import os
+import logging
 import re
 import subprocess
 import sys
@@ -60,7 +61,7 @@ from pathlib import Path
 import console
 console.force_utf8()   # the dashboard prints ✓/✗ too — see console.py
 import paths
-from urllib.parse import quote as _urlquote
+from urllib.parse import quote as _urlquote, urlencode
 
 import requests
 from filelock import FileLock, Timeout
@@ -138,7 +139,8 @@ def _authenticate():
 
 @app.after_request
 def _persist_token(response):
-    """Turn a ?token=… sign-in link into a cookie, once.
+    """Turn a ?token=… sign-in link into a cookie, once, and get the token out
+    of the URL immediately.
 
     The partner opens one link on their phone and stays signed in; the token
     stops trailing in every subsequent URL (and out of browser history and
@@ -146,13 +148,99 @@ def _persist_token(response):
     SameSite=Strict so another site can't drive a POST here with their
     cookie attached — this dashboard's mutating routes are plain HTML forms
     with no CSRF token of their own, and Strict is what closes that.
+
+    THE REDIRECT IS THE PART THAT WAS MISSING, and the token stayed put in
+    four places because of it: the address bar, the browser history, the
+    Referer header of every link clicked from that page, and — the one that
+    matters most — the access log. serve.ps1 sends this process's stderr to
+    logs/dashboard.log, Werkzeug writes a line per request containing the full
+    request target, and auth.py prints these links to the same stream when it
+    creates a user. So the OWNER'S token could sit in plaintext in a file that
+    a backup copies and a support bundle would collect. Redirecting to the same
+    page without it means the token appears in at most one line, and
+    _redact_request_line below removes it from that one too.
+
+    Only for a GET that returned HTML: an API endpoint called with ?token= must
+    get its JSON, not a 302.
     """
     token = request.args.get("token", "").strip()
-    if token and auth.auth_enabled() and auth.user_for_token(token):
-        response.set_cookie(auth.COOKIE_NAME, token, max_age=auth.COOKIE_MAX_AGE,
-                            httponly=True, samesite="Strict",
-                            secure=request.headers.get("X-Forwarded-Proto") == "https")
-    return response
+    if not (token and auth.auth_enabled() and auth.user_for_token(token)):
+        return response
+    response.set_cookie(auth.COOKIE_NAME, token, max_age=auth.COOKIE_MAX_AGE,
+                        httponly=True, samesite="Strict",
+                        secure=request.headers.get("X-Forwarded-Proto") == "https")
+    if request.method != "GET" or not response.content_type.startswith("text/html"):
+        return response
+    rest = {k: v for k, v in request.args.items(multi=True) if k != "token"}
+    clean = request.path + (("?" + urlencode(rest)) if rest else "")
+    clean_response = redirect(clean)
+    clean_response.set_cookie(
+        auth.COOKIE_NAME, token, max_age=auth.COOKIE_MAX_AGE,
+        httponly=True, samesite="Strict",
+        secure=request.headers.get("X-Forwarded-Proto") == "https")
+    return clean_response
+
+
+def _redact_request_line(text: str) -> str:
+    """Replace the value of any credential-shaped query parameter.
+
+    The pattern lives in logscrub, which also cleans the lines already on
+    disk. One copy of it: two regexes for the same job drift, and the one that
+    drifts is the one nobody notices has stopped matching.
+    """
+    import logscrub
+    return logscrub.redact(text)
+
+
+class _RedactSecrets(logging.Filter):
+    """Strip credentials out of the access log before it is written.
+
+    A LOG IS A FILE SOMEBODY ELSE ENDS UP READING. It is copied by a backup,
+    collected by a support bundle, pasted into a bug report and left on a disk
+    that gets sold. Werkzeug logs the full request target, so one sign-in link
+    opened once puts an owner credential in plaintext there for as long as the
+    file lives.
+
+    Filtering at the logger rather than sanitising at each call site because
+    this has to hold for lines this codebase does not write — Werkzeug's access
+    line is the one that leaked, and nothing here ever formatted it.
+    """
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        try:
+            if isinstance(record.msg, str):
+                record.msg = _redact_request_line(record.msg)
+            if record.args:
+                if isinstance(record.args, dict):
+                    record.args = {k: (_redact_request_line(v)
+                                       if isinstance(v, str) else v)
+                                   for k, v in record.args.items()}
+                else:
+                    record.args = tuple(
+                        _redact_request_line(a) if isinstance(a, str) else a
+                        for a in record.args)
+        except Exception:
+            # A filter that raises drops the log line entirely, which would
+            # trade a credential leak for a blind server.
+            pass
+        return True
+
+
+def _install_log_redaction() -> None:
+    """On the access logger and the root, so nothing routes around it."""
+    for name in ("werkzeug", ""):
+        logger = logging.getLogger(name)
+        if not any(isinstance(f, _RedactSecrets) for f in logger.filters):
+            logger.addFilter(_RedactSecrets())
+    # Filters on a logger do not apply to records that arrive from child
+    # loggers, so the handlers get one too — that is the path an access line
+    # actually takes to stderr.
+    for handler in logging.getLogger().handlers:
+        if not any(isinstance(f, _RedactSecrets) for f in handler.filters):
+            handler.addFilter(_RedactSecrets())
+
+
+_install_log_redaction()
 
 
 @app.route("/login")

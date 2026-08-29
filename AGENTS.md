@@ -320,6 +320,23 @@ every committed transaction still in its write-ahead log, so it will not open
 at all. That is a safety copy discovered to be empty on the day it is needed,
 and a test written to check the copy was intact is what caught it.
 
+**A log is a file somebody else ends up reading.** It is copied by a backup,
+collected by a support bundle, pasted into a bug report and left on a disk that
+gets sold. `auth.py` prints sign-in links containing a token, `serve.ps1` sends
+the dashboard's stderr to `logs/dashboard.log`, and Werkzeug writes the full
+request target on every line — so one sign-in put an owner credential in
+plaintext there for as long as the file lived. Three separate fixes were needed
+and each covers a case the others do not: the sign-in redirects to a clean URL
+(source), a logging filter redacts the access line (anything this codebase
+never formatted), and `logscrub.py` cleans what is already on disk. The filter
+goes on the logger rather than at call sites for exactly that middle reason.
+
+The pattern lives in one module and the dashboard imports it — two regexes for
+the same job drift, and the one that drifts is the one nobody notices has
+stopped matching. And a scrub always ends by saying **rotate anyway**: a secret
+that sat in a file may already have been copied, rewriting revokes nothing, and
+a clean scan that reads as safety is worse than no scan.
+
 ## Writing tests here
 
 Tests run with no GPU, no ComfyUI, no API keys, and no network. Mock at the HTTP

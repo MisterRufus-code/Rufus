@@ -353,6 +353,27 @@ def run() -> None:
     except Exception as e:
         warn("Licensing", f"could not be checked: {e}")
 
+    # ── Credentials sitting in the log files ────────────────────────────────
+    #
+    # auth.py prints sign-in links containing a token, serve.ps1 sends this
+    # process's stderr to logs/dashboard.log, and Werkzeug writes the full
+    # request target on every line. Both halves are closed going forward; what
+    # is already on disk is not, and a log file is exactly what gets copied
+    # into a backup, a support bundle or a bug report.
+    try:
+        import logscrub
+        leaks = logscrub.scan()
+        if leaks:
+            total = sum(r["hits"] for r in leaks)
+            err("Credentials in logs",
+                f"{total} in {len(leaks)} file(s) — run "
+                f"`python scripts/logscrub.py --fix`, then rotate them, "
+                f"because rewriting a file revokes nothing")
+        else:
+            ok("No credentials in the log files")
+    except Exception as e:
+        warn("Log credential scan", f"could not run: {e}")
+
     # ── Print results ────────────────────────────────────────────────────────────
     try:
         import version as _v

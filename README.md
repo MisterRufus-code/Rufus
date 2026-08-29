@@ -605,6 +605,31 @@ want it pinned, same as the existing CTA-comment note.
 
 ---
 
+## Credentials in the logs
+
+```bash
+python scripts/logscrub.py          # scan; changes nothing
+python scripts/logscrub.py --fix    # replace the values in place
+```
+
+`auth.py add` prints a sign-in link containing that user's token — the token
+*is* the credential, and the link is how you hand it over. `serve.ps1` sends the
+dashboard's stderr to `logs/dashboard.log`, and Werkzeug writes one line per
+request containing the full request target. So opening a sign-in link once
+recorded an owner credential in plaintext, in a file that a backup copies, a
+bug report gets pasted into, and an old disk outlives.
+
+Both halves are closed now: a `?token=` sign-in redirects to a clean URL so the
+token leaves the address bar, the history and the `Referer` too, and a logging
+filter strips credential-shaped values out of the access line before it is
+written. Neither touches a line written last month, which is what the command
+above is for — `health_check.py` fails if it finds any.
+
+**Rewriting the file revokes nothing.** A secret that sat in a log may already
+have been copied. After scrubbing, rotate: `python scripts/auth.py rotate <name>`.
+
+---
+
 ## Backups
 
 ```bash

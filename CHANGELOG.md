@@ -46,6 +46,11 @@ lands, and says so when the renderer has stopped rather than quoting an ETA at
 a dead run. The gallery loop gives up after four empty draws instead of burning
 every remaining prompt against a ComfyUI that is not there.
 
+**Sign-in tokens no longer end up in the logs.** A `?token=` link now redirects
+to a clean URL, the access log is filtered before it is written, and
+`logscrub.py` finds and removes the ones already on disk. If you have run this
+dashboard before, scan once and rotate — rewriting a file revokes nothing.
+
 **Backups.** `rufus.db` holds every judgement anybody has made on this channel
 and nothing copied it. One verified snapshot a day, taken by whichever of the
 dashboard or a run opens the database first; twelve kept; restore from the

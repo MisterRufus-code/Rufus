@@ -159,18 +159,101 @@ def test_healthz_needs_no_token(client):
 
 
 def test_owner_token_opens_the_queue(client):
-    assert client.get(f"/?token={OWNER_TOKEN}").status_code == 200
+    assert client.get(f"/?token={OWNER_TOKEN}",
+                      follow_redirects=True).status_code == 200
 
 
 def test_partner_token_opens_the_queue(client):
-    assert client.get(f"/?token={PARTNER_TOKEN}").status_code == 200
+    assert client.get(f"/?token={PARTNER_TOKEN}",
+                      follow_redirects=True).status_code == 200
 
 
 def test_token_is_persisted_as_a_cookie(client):
-    r = client.get(f"/?token={PARTNER_TOKEN}")
+    r = client.get(f"/?token={PARTNER_TOKEN}", follow_redirects=True)
     assert r.status_code == 200
     # Subsequent request carries no token in the URL and must still work.
     assert client.get("/").status_code == 200
+
+
+def test_a_sign_in_link_does_not_leave_the_token_in_the_url(client):
+    """FOUR PLACES IT STAYED, and the last one is the one that matters. The
+    address bar, the browser history, the Referer header of every link clicked
+    from that page — and the access log, because serve.ps1 sends this
+    process's stderr to logs/dashboard.log and Werkzeug writes a line per
+    request containing the full request target. An owner's sign-in link opened
+    once would put an owner credential in plaintext in a file that a backup
+    copies and a support bundle would collect."""
+    r = client.get(f"/?token={PARTNER_TOKEN}")
+    assert r.status_code in (301, 302)
+    assert "token" not in r.headers["Location"]
+    assert auth.COOKIE_NAME in r.headers.get("Set-Cookie", ""), (
+        "the redirect has to carry the cookie or the sign-in is lost")
+
+
+def test_other_query_parameters_survive_the_clean_up(client):
+    """A message banner in the URL is not a credential, and losing it would
+    swallow whatever the page was trying to tell somebody."""
+    r = client.get(f"/?token={PARTNER_TOKEN}&msg=hello")
+    assert "msg=hello" in r.headers["Location"]
+    assert "token" not in r.headers["Location"]
+
+
+def test_an_api_call_with_a_token_gets_its_answer_not_a_redirect(client):
+    """Only a GET that returned HTML is redirected. A poller signing in with a
+    token needs its JSON."""
+    r = client.get(f"/api/status?token={PARTNER_TOKEN}")
+    assert r.status_code == 200
+    assert r.get_json() is not None
+
+
+def test_a_bad_token_is_not_redirected_into_looking_like_a_sign_in(client):
+    """The clean-up runs only for a token that actually resolved to a user;
+    otherwise a wrong link would bounce to a page that looks signed in."""
+    r = client.get("/?token=not-a-real-token")
+    assert r.status_code != 302 or "token" in r.headers.get("Location", "")
+
+
+# ── and the log the leak actually landed in ─────────────────────────────────
+
+def test_credentials_are_stripped_from_the_access_log():
+    """Filtered at the logger rather than sanitised at each call site, because
+    this has to hold for lines this codebase never formatted — Werkzeug's
+    access line is the one that leaked."""
+    line = dashboard._redact_request_line(
+        'GET /?token=owner-token-for-tests HTTP/1.1')
+    assert "owner-token-for-tests" not in line
+    assert "[redacted]" in line
+
+
+def test_the_oauth_code_and_state_are_stripped_too():
+    """A Google callback carries a one-time code that is a credential for as
+    long as it is unspent."""
+    line = dashboard._redact_request_line(
+        "GET /auth/google/callback?code=4/0AbCd&state=xyz HTTP/1.1")
+    assert "4/0AbCd" not in line and "xyz" not in line
+
+
+def test_an_ordinary_request_line_is_left_alone():
+    """A redactor that mangles every line makes the log useless, which is its
+    own kind of failure."""
+    line = "GET /api/status HTTP/1.1"
+    assert dashboard._redact_request_line(line) == line
+
+
+def test_the_filter_is_installed_on_the_logger_that_actually_writes():
+    import logging
+    dashboard._install_log_redaction()
+    werkzeug = logging.getLogger("werkzeug")
+    assert any(isinstance(f, dashboard._RedactSecrets) for f in werkzeug.filters)
+
+
+def test_a_filter_that_cannot_redact_still_lets_the_line_through():
+    """A filter that raises drops the log line entirely, trading a credential
+    leak for a blind server."""
+    import logging
+    record = logging.LogRecord("werkzeug", logging.INFO, "x", 1,
+                               object(), None, None)
+    assert dashboard._RedactSecrets().filter(record) is True
 
 
 def test_cookie_is_httponly_and_samesite_strict(client):
