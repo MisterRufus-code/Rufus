@@ -605,6 +605,29 @@ want it pinned, same as the existing CTA-comment note.
 
 ---
 
+## Which build is this
+
+```bash
+python scripts/version.py
+```
+
+The version is written by hand in `scripts/version.py` and recorded in
+[CHANGELOG.md](CHANGELOG.md); everything else is read off the machine when you
+ask — the commit from git, whether the tree has uncommitted changes, the Python
+and the platform. A build fingerprint a stale constant could get wrong is worse
+than none, because it is believed. A copy taken without `.git` says so rather
+than guessing.
+
+It appears at the foot of every dashboard page, in the header of each run log,
+and **on every video row**. That last one is the point: the standing complaint
+about this project is code running ahead of evidence, and the measure pages
+compared videos against each other while the variable that changed most between
+them — the code — was recorded nowhere. "Did the code get better?" on the
+Measure page is now arithmetic instead of memory, and stays silent until at
+least two builds have enough videos behind them to mean anything.
+
+---
+
 ## Before you spend anything
 
 ```bash

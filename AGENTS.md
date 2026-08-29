@@ -292,6 +292,16 @@ CHILD would get (`os.environ` plus the saved settings), not its own, and
 withholds the render button rather than greying it out: a disabled control
 invites a second click, a reason invites a fix.
 
+**Bump `VERSION` in `scripts/version.py` in the same commit as the change that
+earns it, and say what it does for the owner in `CHANGELOG.md`.** Nothing
+derives the version from tags or dates — one that moves on its own announces a
+release that did not happen. Everything else in that module is measured when
+asked (the commit, whether the tree is dirty), because a build fingerprint a
+stale constant could get wrong is worse than none: it is believed. The version
+lands on every video row at save time and never changes afterwards — it records
+what produced the file, not what is installed now, which is what makes the
+"Did the code get better?" panel arithmetic rather than memory.
+
 ## Writing tests here
 
 Tests run with no GPU, no ComfyUI, no API keys, and no network. Mock at the HTTP

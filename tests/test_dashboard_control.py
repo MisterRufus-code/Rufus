@@ -1301,7 +1301,13 @@ def test_the_page_still_works_without_the_script():
     """No build step and no framework — and nothing here may be load-bearing.
     Every behaviour degrades to the page as it was."""
     assert "<script>" in dashboard.INTERACT_JS
-    assert dashboard.PAGE_TAIL.startswith("</main>")
+    # The tail closes main and then the document. It opens with the build
+    # footer, which sits INSIDE main so it inherits the page's width and
+    # padding — a support line hanging off the left edge of a wide screen
+    # would be worse than none.
+    assert "</main>" in dashboard.PAGE_TAIL
+    assert dashboard.PAGE_TAIL.index("</main>") < dashboard.PAGE_TAIL.index(
+        "<script>"), "the script tag belongs after the content it enhances"
     assert dashboard.PAGE_TAIL.endswith("</body></html>")
 
 

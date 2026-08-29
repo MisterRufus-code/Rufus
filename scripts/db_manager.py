@@ -116,6 +116,15 @@ def init_db():
             # renamed the old rows keep saying who it was at the time, which
             # is the honest answer for a record of decisions.
             "ALTER TABLE videos ADD COLUMN decided_by TEXT",
+            # WHICH BUILD MADE THIS. The standing complaint about this
+            # project is code running ahead of evidence: changes made on
+            # judgement with no way to tell afterwards whether they
+            # helped. The measure pages compare videos against each
+            # other and could not see the variable that changed most
+            # between them. Stamped at save time, never updated after —
+            # it records what produced the file, not what is installed
+            # now.
+            "ALTER TABLE videos ADD COLUMN rufus_version TEXT",
         ):
             try:
                 c.execute(ddl)
@@ -478,6 +487,20 @@ def _now() -> str:
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 
+def _version_stamp() -> str | None:
+    """Which build is saving this row, or None when that cannot be known.
+
+    Fail-open and never raises: a video that rendered must be recorded even if
+    the version cannot be read. None is honest — the alternative, a default
+    string, would put a wrong build on a real row and be believed later.
+    """
+    try:
+        import version
+        return version.stamp()
+    except Exception:
+        return None
+
+
 def save_video(niche: str, script_hook: str, scene_desc: str,
                video_file: str, youtube_id: str = None, score: int = 0,
                script_full: str = None,
@@ -504,8 +527,8 @@ def save_video(niche: str, script_hook: str, scene_desc: str,
             " run_id, score_specificity, score_hook, score_compression, "
             " score_loop, score_human, attempts_used, final_temperature, "
             " score_reasoning, title, channel, hold_reason, description, "
-            " upload_status, created_at) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            " upload_status, created_at, rufus_version) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (niche, script_hook, script_full, scene_desc,
              seed_type, seed_source, seed_content, seed_url,
              youtube_id, video_file, score,
@@ -514,9 +537,50 @@ def save_video(niche: str, script_hook: str, scene_desc: str,
              crits.get("compression"), crits.get("loop"), crits.get("human"),
              attempts_used, final_temperature, score_reasoning,
              title, channel, hold_reason, description, upload_status,
-             _now()),
+             _now(), _version_stamp()),
         )
         return cur.lastrowid
+
+
+# Below this many videos on a build, its average is one bad topic away from
+# saying anything you like. Matches the guard the correlation panel already
+# uses — the number is not the point, having one is.
+MIN_VIDEOS_PER_VERSION = 5
+
+
+def score_by_version(min_videos: int = MIN_VIDEOS_PER_VERSION) -> list[dict]:
+    """Average score per build, newest build first, for builds with enough
+    videos to mean anything.
+
+    THE QUESTION THIS PROJECT COULD NOT ASK. Every change to the writer, the
+    style block, the supervisor and the scorer has been made on judgement, and
+    afterwards there was no way to tell whether it helped — the measure pages
+    compare videos against each other while the variable that changed most
+    between them, the code, was not recorded anywhere.
+
+    Builds under the floor are dropped rather than shown with a caveat: an
+    average over two videos rendered next to an average over forty invites
+    exactly the reading it cannot support, and this project's whole complaint
+    is acting on evidence that was not there.
+    """
+    with _conn() as c:
+        rows = c.execute(
+            "SELECT rufus_version, COUNT(*), AVG(score), MAX(created_at) "
+            "FROM videos WHERE rufus_version IS NOT NULL AND rufus_version <> '' "
+            "GROUP BY rufus_version ORDER BY MAX(created_at) DESC").fetchall()
+    return [{"version": r[0], "videos": r[1], "avg_score": round(r[2] or 0, 2),
+             "last": r[3]}
+            for r in rows if (r[1] or 0) >= int(min_videos)]
+
+
+def videos_without_a_version() -> int:
+    """Rows from before builds were recorded. Named rather than hidden: the
+    comparison above is silent about them, and "why does this only cover
+    forty of my ninety videos" deserves an answer on the page."""
+    with _conn() as c:
+        return c.execute(
+            "SELECT COUNT(*) FROM videos "
+            "WHERE rufus_version IS NULL OR rufus_version = ''").fetchone()[0]
 
 
 def save_attempt(*, run_id: str, niche: str, seed_type: str, phase: str,

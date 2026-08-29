@@ -1494,6 +1494,16 @@ def run(skip_upload: bool = False, niche_override: str = None, output_dir: Path 
     import preflight
     preflight.check_or_exit(skip_upload=skip_upload)
 
+    # WHICH BUILD MADE THIS VIDEO, in the log that describes making it. Every
+    # run leaves a log file, and a log that does not say what produced it is a
+    # record nobody can act on months later — the same reason the row itself
+    # carries the stamp.
+    try:
+        import version
+        print(f"[run] {version.stamp()}")
+    except Exception:
+        pass
+
     # Channel resolution FIRST (read-only) so the instance lock can be
     # per-channel — see _acquire_lock. Legacy installs without channels.json
     # get a synthesized "main_en" channel — behavior unchanged.

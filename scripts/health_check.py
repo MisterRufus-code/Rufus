@@ -354,7 +354,12 @@ def run() -> None:
         warn("Licensing", f"could not be checked: {e}")
 
     # ── Print results ────────────────────────────────────────────────────────────
-    print("\nRufus Health Check")
+    try:
+        import version as _v
+        header = f"\n{_v.stamp()} — health check"
+    except Exception:
+        header = "\nRufus Health Check"
+    print(header)
     print("=" * 42)
     for line in ok_lines:
         print(line)

@@ -1603,6 +1603,10 @@ PAGE_STYLE = """<!doctype html><html><head><meta charset="utf-8">
   .badge.pending { background: color-mix(in srgb, var(--warn) 18%, transparent);color: var(--warn); }
 
   .muted { color: var(--dim); font-size: 13px; line-height: 1.5; }
+  /* Which build this is. Quiet on purpose — it is needed once, in a support
+     conversation, and should never compete with the page it sits under. */
+  .build { color: var(--dim); font-size: 11px; margin-top: 20px;
+           padding-top: 12px; border-top: 1px solid var(--border); }
   code { background: color-mix(in srgb, var(--dim) 14%, transparent);
          padding: 1px 5px; border-radius: 4px; font-size: 12px; }
   pre { background: var(--surface); border: 1px solid var(--border);
@@ -2344,7 +2348,31 @@ INTERACT_JS = """
 </script>
 """
 
-PAGE_TAIL = "</main>" + INTERACT_JS + "</body></html>"
+def _build_line() -> str:
+    """Which build this is, at the bottom of every page.
+
+    "Which version are you running?" is the opening question of every
+    conversation about software somebody paid for, and until now nothing in
+    this product could answer it. It is a footer rather than a page because
+    the answer is needed while you are looking at whatever went wrong, not
+    after navigating to find it.
+    """
+    try:
+        import version
+        return (f'<footer class="build">{_esc(version.stamp())}</footer>')
+    except Exception:
+        return ""
+
+
+# COMPUTED ONCE, AND THAT IS CORRECT RATHER THAN A SHORTCUT. A footer read at
+# render time would be the careful choice if the running code could change
+# under it — but this app does not hot-reload, so new code means a restart, and
+# a restart re-imports this. The value can never be stale in a way anybody
+# could observe. An earlier attempt made PAGE_TAIL a str subclass computing
+# itself on use; it broke `PAGE_TAIL.startswith("</main>")` in a test that was
+# right to check, because a string whose str value disagrees with itself is a
+# trap for every future reader.
+PAGE_TAIL = _build_line() + "</main>" + INTERACT_JS + "</body></html>"
 
 
 # ── Routes ─────────────────────────────────────────────────────────────────────
@@ -2968,6 +2996,54 @@ def _performance_body():
                      f"(n={b['n']})</span></div>\n")
         correlation_html = bars
 
+    # ── did the code get better, and is there evidence for saying so ────────
+    #
+    # THE QUESTION THIS PROJECT HAS NEVER BEEN ABLE TO ASK. Its standing
+    # complaint is code running ahead of evidence — the writer, the style
+    # block, the supervisor and the scorer all changed on judgement, and
+    # afterwards nothing could tell you whether any of it helped, because the
+    # variable that changed most between two videos was not recorded on
+    # either. Builds are stamped onto every row now, so this is arithmetic
+    # instead of memory.
+    #
+    # Deliberately silent until it has something to say. One build is not a
+    # comparison, and a build with three videos behind it is one bad topic
+    # from any conclusion you like.
+    floor = 5
+    try:
+        import db_manager as _dbm
+        floor = _dbm.MIN_VIDEOS_PER_VERSION
+        by_version = _dbm.score_by_version()
+        unstamped = _dbm.videos_without_a_version()
+    except Exception as e:
+        by_version, unstamped = [], 0
+        print(f"[dashboard] version comparison unavailable: {e}")
+
+    if len(by_version) >= 2:
+        rows_v = ""
+        for v in by_version:
+            rows_v += (f"<div style='margin:6px 0'>"
+                       f"<span style='display:inline-block;width:230px'>"
+                       f"{_esc(v['version'])}</span>"
+                       f"<b>{v['avg_score']}</b> "
+                       f"<span class='muted'>avg score (n={v['videos']})</span>"
+                       f"</div>\n")
+        version_html = rows_v
+    elif by_version:
+        version_html = (f"<p class='muted'>One build has enough videos behind "
+                        f"it so far ({_esc(by_version[0]['version'])}, "
+                        f"n={by_version[0]['videos']}). A second one with at "
+                        f"least {floor} makes this a comparison.</p>")
+    else:
+        version_html = (f"<p class='muted'>No build has {floor} videos "
+                        f"behind it yet. Averages under that are one bad topic "
+                        f"from saying anything you like, so nothing is shown "
+                        f"rather than something that reads like a finding.</p>")
+    if unstamped:
+        version_html += (f"<p class='muted'>{unstamped} video(s) were made "
+                         f"before builds were recorded and are not in this "
+                         f"comparison.</p>")
+
     table_html = "<p class='muted'>No uploaded videos in the last 90 days.</p>"
     if rows:
         trs = ""
@@ -2990,6 +3066,12 @@ def _performance_body():
     <p class="muted">Average views per internal score bucket — pulled from
        the same YouTube Analytics data analytics_fetcher.py already collects.</p>
     {correlation_html}
+    <h2 style="margin-top:22px">Did the code get better?</h2>
+    <p class="muted">Average internal score per build. Every video records
+       which build made it, so a change to the writer or the style block can be
+       checked rather than remembered &mdash; which is the one thing this
+       project has never been able to do.</p>
+    {version_html}
     <h2>Videos (last 90 days)</h2>
     {filt_html}
     {table_html}
