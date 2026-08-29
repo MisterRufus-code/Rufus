@@ -255,6 +255,20 @@ out about, it is something you eventually notice. Every branch now records
 which ending it reached and one place announces it, with a test asserting the
 map covers every value `main.py` can set.
 
+**A tool that reports on compliance must never claim more than it read.** The
+licence manifest in `scripts/licensing.py` ships with every verdict unset, and
+that is the feature rather than an omission: a table of confident licences is
+correct on the day it is written and stale silently thereafter, which is the
+same failure as every other constant here that outlived the fact it recorded —
+except that this one reads like an authority while it does it. So the manifest
+holds the QUESTIONS and the primary-source URL; the answers live in
+`config/licences.json` with a name and a date attached, and anything unread is
+reported as unread. The only licences stated as fact are the ones read at
+runtime from each installed package's own metadata, because that is the one
+part the machine can actually check. Absent and corrupt are not the same
+answer here either — an answers file that lost a brace must fall back to
+"nothing is cleared", never to silence.
+
 ## Writing tests here
 
 Tests run with no GPU, no ComfyUI, no API keys, and no network. Mock at the HTTP

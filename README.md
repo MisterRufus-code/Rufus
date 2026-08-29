@@ -605,6 +605,53 @@ want it pinned, same as the existing CTA-comment note.
 
 ---
 
+## What this is made of, and what you may do with it
+
+Rufus assembles a video out of other people's work: a text model writes the
+script, an image model draws every shot, a voice model reads it, a music source
+scores it, a font sets the captions. Those licences do not all say the same
+thing. Several permit use and forbid **commercial** use — which is exactly what
+a monetised channel is — and nothing about switching engines tells you that.
+The picker sells XTTS on quality and VRAM; its licence is a model licence
+governing what the model may be used *for*.
+
+Two separate questions run through this, and collapsing them produces confident
+answers to the wrong one:
+
+- **May I sell copies of Rufus?** Set by the licences of the code shipped or
+  imported. One core dependency is copyleft; ffmpeg's licence depends on how
+  *your* build was compiled, not on ffmpeg.
+- **May I make money from the videos?** Set by the model **weights** and the
+  asset sources, plus the terms of any cloud API. A permissively licensed
+  program can still produce output you may not sell.
+
+```bash
+python scripts/licensing.py          # what's switched on, and what's unchecked
+python scripts/licensing.py record z-image conditional --by daniel \
+    --note "what the page actually said"
+```
+
+It reads each installed dependency's licence from that package's own metadata
+(requirements.txt holds floors, not versions, so a hand-written table answers
+for whatever pip resolved on the day somebody typed it), works out which models
+and services the **current** configuration actually switches on, and names every
+one whose terms nobody has read.
+
+**It ships with nothing cleared, deliberately.** A manifest with confident
+verdicts baked in is right the day it is written and stale silently thereafter;
+an unanswered question that says so is worth more than a checked-in guess that
+reads like a fact. Answers live in `config/licences.json` with a name and a date
+on each, so they can be re-checked when terms change. `health_check.py` warns
+while any question is open — a warning, never an error, because unchecked is the
+normal state of a fresh install and must not block a first render. The same
+sheet is at **/licence** in the dashboard, one click from the page that answers
+each question.
+
+Not legal advice. It is the list of questions, kept honest and kept current
+with your actual configuration.
+
+---
+
 ## Security invariants
 
 - `config/keys.json` and `config/users.json` are **gitignored** — never commit

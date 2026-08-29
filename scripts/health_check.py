@@ -329,6 +329,30 @@ def run() -> None:
     else:
         warn("YouTube OAuth token", "not found – run main.py once manually to complete OAuth flow")
 
+    # ── What this configuration is made of ──────────────────────────────────────
+    #
+    # A WARNING AND NEVER AN ERROR, because an unanswered licence question is
+    # the normal state of a fresh install and must not stop somebody's first
+    # render. It appears here because this is the script a person runs before
+    # committing to a setup, and "the model drawing every one of your pictures
+    # may not permit what you are about to do with them" is worth knowing then
+    # rather than after a hundred videos.
+    try:
+        import licensing
+        lic = licensing.report()
+        if lic["blocking"]:
+            names = ", ".join(r["name"] for r in lic["blocking"])
+            err("Licensing", f"{names} recorded as forbidding what this "
+                             f"channel does — see python scripts/licensing.py")
+        elif lic["open"]:
+            warn("Licensing", f"{len(lic['open'])} component(s) in use whose "
+                              f"terms nobody has checked "
+                              f"(python scripts/licensing.py)")
+        else:
+            ok("Licensing  (every part in use checked and cleared)")
+    except Exception as e:
+        warn("Licensing", f"could not be checked: {e}")
+
     # ── Print results ────────────────────────────────────────────────────────────
     print("\nRufus Health Check")
     print("=" * 42)

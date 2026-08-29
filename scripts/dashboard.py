@@ -2008,6 +2008,7 @@ NAV_ITEMS = [
     ("/review",     "⏳ Awaiting review",                 "view"),
     ("/logs",       "📜 Logs",                            "view"),
     ("/system",     "🖥 System",                          "system"),
+    ("/licence",    "⚖ What this is made of",             "settings"),
     ("/settings",   "⚙ Settings",                         "settings"),
 ]
 
@@ -2049,7 +2050,8 @@ NAV_GROUPS = (
     ("Review",  ("/review", "/gallery", "/history", "/failures", "/message")),
     ("Logs",    ("/logs",)),
     ("Measure", ("/measure", "/trending")),
-    ("Setup",   ("/styles", "/voices", "/bench", "/system", "/settings")),
+    ("Setup",   ("/styles", "/voices", "/bench", "/licence", "/system",
+                 "/settings")),
 )
 
 # ── the four decisions, and which of them is waiting for you ─────────────────
@@ -2993,6 +2995,142 @@ def _performance_body():
     {table_html}
     """
     return body
+
+
+@app.route("/licence")
+def licence_page():
+    """What this configuration is made of, and what each part permits.
+
+    THE QUESTION A CHANNEL CANNOT ANSWER FROM INSIDE ITSELF. Rufus assembles a
+    video out of other people's work, and several of those licences permit use
+    while forbidding COMMERCIAL use — which is what a monetised channel is. The
+    engine pickers sell their options on quality and VRAM; not one of them has
+    ever mentioned what switching changes about the rights to the result.
+
+    This page is the answer sheet, and its most important property is that it
+    starts empty. Nothing here is cleared until somebody read the page and
+    said so, with their name and the date on it, because a licence table that
+    ships with confident verdicts is right on the day it is written and stale
+    silently thereafter.
+    """
+    auth.require("settings")
+    import licensing
+    r = licensing.report()
+
+    def _rows(rows: list) -> str:
+        out = ""
+        for row in rows:
+            which = ("selling copies of Rufus"
+                     if row["question"] == licensing.SELL
+                     else "money from the videos")
+            rec = row["recorded"] or {}
+            if row["verdict"] == licensing.UNKNOWN:
+                state = '<span class="muted">nobody has checked</span>'
+            else:
+                who = _esc(rec.get("by") or "—")
+                state = (f'<strong>{_esc(row["verdict"])}</strong> '
+                         f'<span class="muted">&mdash; {who}, '
+                         f'{_esc(rec.get("on") or "—")}</span>')
+            buttons = ""
+            if auth.can("settings"):
+                for verdict, label in ((licensing.YES, "Cleared"),
+                                       (licensing.CONDITIONAL, "With limits"),
+                                       (licensing.NO, "Not allowed")):
+                    buttons += (
+                        f'<form method="post" action="/licence/{row["key"]}" '
+                        f'style="display:inline"><input type="hidden" '
+                        f'name="verdict" value="{verdict}">'
+                        f'<button class="pick" type="submit">{label}</button>'
+                        f'</form> ')
+            note = (f'<div class="muted" style="margin-top:6px">'
+                    f'{_esc(row["note"])}</div>' if row["note"] else "")
+            said = (f'<div class="muted" style="margin-top:6px">'
+                    f'&ldquo;{_esc(rec["note"])}&rdquo;</div>'
+                    if rec.get("note") else "")
+            out += (
+                f'<div class="card" style="width:100%;margin-bottom:10px">'
+                f'<div class="shot-h" style="justify-content:space-between">'
+                f'<strong>{_esc(row["name"])}</strong>{state}</div>'
+                f'<div class="muted">{_esc(row["what"])} &middot; gates '
+                f'{which}</div>{note}{said}'
+                f'<div style="margin-top:8px">'
+                f'<a href="{_esc(row["source"])}" target="_blank" '
+                f'rel="noopener noreferrer">read the terms</a> &nbsp; '
+                f'{buttons}</div></div>')
+        return out
+
+    pkgs = ""
+    flagged = [p for p in r["packages"]
+               if p["family"] in ("copyleft", licensing.UNKNOWN)]
+    for p in flagged:
+        why = ("copyleft &mdash; free to use, obligations attach if you "
+               "redistribute" if p["family"] == "copyleft"
+               else "declares no licence in its own metadata")
+        pkgs += (f'<div class="shot-h" style="justify-content:space-between">'
+                 f'<span>{_esc(p["package"])} {_esc(p["version"])}</span>'
+                 f'<span class="muted">{_esc(p["licence"]) or "—"} '
+                 f'&middot; {why}</span></div>')
+    if not flagged:
+        pkgs = ('<p class="muted">Every core dependency declares a permissive '
+                'licence.</p>')
+
+    head = ""
+    if r["blocking"]:
+        head += (f'<div class="msg error">{len(r["blocking"])} part(s) of this '
+                 f'configuration have been checked and came back forbidding '
+                 f'what this channel does. Changing the engine is the fix, not '
+                 f'changing this page.</div>')
+    if r["open"]:
+        head += (f'<div class="msg">{len(r["open"])} question(s) nobody has '
+                 f'answered. Open each link, read what it actually says, and '
+                 f'record it &mdash; that is twenty minutes once, against a '
+                 f'channel built on an assumption.</div>')
+    if not r["blocking"] and not r["open"]:
+        head += ('<div class="msg ok">Every part in use has been checked and '
+                 'cleared.</div>')
+
+    body = f"""
+    <a class="back" href="/">&larr; back</a>
+    <h2 style="margin-top:14px">What this is made of</h2>
+    <p class="muted">Rufus assembles a video out of other people&rsquo;s work.
+    Some of those licences permit use and forbid commercial use, which is what
+    a monetised channel is &mdash; and the engine pickers sell their options on
+    quality and VRAM without ever mentioning it. Two separate questions run
+    through this page: may you sell copies of the software, and may you make
+    money from the videos. A part can be fine for one and fatal for the
+    other.</p>
+    {_msg_banner()}
+    {head}
+    <h2 style="margin-top:22px">In use right now</h2>
+    {_rows(r["active"])}
+    <h2 style="margin-top:22px">Dependencies worth knowing about</h2>
+    <p class="muted">Read from each installed package&rsquo;s own metadata
+    rather than from a list somebody typed &mdash; requirements.txt holds
+    floors, not versions, so a hand-written table answers for whatever pip
+    resolved on the day it was written.</p>
+    {pkgs}
+    <h2 style="margin-top:22px">Not switched on</h2>
+    <p class="muted">Listed because switching engines is one setting, and the
+    question a switch opens is worth seeing before the switch rather than after
+    a hundred videos.</p>
+    {_rows(r["inactive"])}
+    """
+    return _head() + body + PAGE_TAIL
+
+
+@app.route("/licence/<key>", methods=["POST"])
+def licence_record(key: str):
+    """Record what a page actually said, with a name and a date on it."""
+    auth.require("settings")
+    import licensing
+    verdict = (request.form.get("verdict") or "").strip().lower()
+    try:
+        licensing.record(key, verdict, by=_whoami())
+    except ValueError as e:
+        return redirect("/licence?error=" + _urlquote(str(e)))
+    return redirect("/licence?msg=" + _urlquote(
+        f"Recorded. It stays attributed to you and dated, so it can be "
+        f"re-checked when the terms change."))
 
 
 @app.route("/system")
