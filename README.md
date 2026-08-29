@@ -605,6 +605,42 @@ want it pinned, same as the existing CTA-comment note.
 
 ---
 
+## Backups
+
+```bash
+python scripts/backup.py                 # snapshot now
+python scripts/backup.py list            # every snapshot, each one verified
+python scripts/backup.py restore latest  # put one back
+```
+
+`rufus.db` is not a cache. The videos are on disk and could be re-rendered;
+what the database holds is every **judgement** — which of three scripts was
+preferred and which two were passed over, which draw won each shot, what each
+published video scored, which YouTube ids belong to this channel. The labelled
+preference pairs this project keeps calling the product live in that one file.
+
+One snapshot is taken automatically the first time the dashboard or a run opens
+the database each day, because the losses that matter are the ones nobody saw
+coming — by definition nobody pressed a button first. Twelve are kept.
+
+Three things this does that `cp rufus.db backup.db` does not:
+
+- **SQLite's online backup API, not a file copy.** Copying a WAL-mode database
+  while a run is writing gives a torn file whose main and `-wal` disagree — a
+  backup that restores into corruption.
+- **Every snapshot is opened and integrity-checked before it is kept**, and one
+  that fails is deleted rather than left looking like a safety net. A backup
+  nobody has opened is a belief. The check also refuses a file that is valid
+  SQLite and empty, which is what snapshotting an uninitialised database gives
+  you and which looks fine from the outside.
+- **Restoring is undoable.** The database being replaced is moved aside with a
+  timestamp — along with its journal, so the copy actually opens — never
+  deleted. Restoring the wrong snapshot is a mistake somebody makes at 2am.
+
+The same list, with a *Back up now* and a *Restore*, is on **/system**.
+
+---
+
 ## Which build is this
 
 ```bash

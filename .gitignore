@@ -36,6 +36,12 @@ run_log.txt
 logs/
 rufus.db
 rufus.db-*
+# Snapshots, and the database a restore moved aside. Both are copies of
+# the file above and belong on the machine, never in the history —
+# committing one would put every published id and every human decision
+# into a repository that may be handed to somebody.
+backups/
+rufus.replaced-*.db
 rufus.*.lock*
 rufus.lock*
 

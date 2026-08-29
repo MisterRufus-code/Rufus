@@ -2372,6 +2372,17 @@ def _build_line() -> str:
 # itself on use; it broke `PAGE_TAIL.startswith("</main>")` in a test that was
 # right to check, because a string whose str value disagrees with itself is a
 # trap for every future reader.
+# ONE SNAPSHOT A DAY, TAKEN BY WHATEVER OPENS FIRST. A button somebody presses
+# before doing something risky is the wrong shape for this: the losses that
+# matter are the ones nobody saw coming, and by definition nobody pressed a
+# button first. Costs a directory glob on the days it has already happened.
+try:
+    import backup as _backup
+    _backup.snapshot_daily()
+except Exception as _e:                 # never keeps the dashboard from starting
+    print(f"[dashboard] daily snapshot skipped: {_e}")
+
+
 PAGE_TAIL = _build_line() + "</main>" + INTERACT_JS + "</body></html>"
 
 
@@ -3215,6 +3226,103 @@ def licence_record(key: str):
         f"re-checked when the terms change."))
 
 
+def _backup_panel() -> str:
+    """The snapshots, their age, and the two things you can do with them.
+
+    WHAT IS IN THAT FILE is why this is on a page at all. Not videos — those
+    are on disk and could be re-rendered. What the database holds is every
+    JUDGEMENT: which of three scripts was preferred and which two were passed
+    over, which draw won each shot, what each published video scored, which
+    YouTube ids belong to this channel. Losing it loses the accumulated
+    attention of every sitting.
+    """
+    try:
+        import backup
+        rows = backup.snapshots()
+    except Exception as e:
+        return f'<p class="muted">Backups unavailable: {_esc(str(e))}</p>'
+
+    take = ""
+    if auth.can("system"):
+        take = ('<form method="post" action="/system/backup" '
+                'style="display:inline"><button class="btn save" '
+                'type="submit">Back up now</button></form>')
+
+    if not rows:
+        return (f'<div class="msg error">No snapshot has ever been taken. '
+                f'Every decision anybody has made on this channel is in one '
+                f'file with no copy of it.</div>{take}')
+
+    newest = rows[0]
+    age_h = (time.time() - newest.stat().st_mtime) / 3600.0
+    when = (f"{age_h * 60:.0f} minutes ago" if age_h < 1
+            else f"{age_h:.0f} hours ago" if age_h < 48
+            else f"{age_h / 24:.0f} days ago")
+    lead = (f'<p class="muted">{len(rows)} snapshot(s). The newest is '
+            f'<strong>{when}</strong>. One is taken automatically the first '
+            f'time anything opens the database each day.</p>')
+    if age_h > 48:
+        lead = (f'<div class="msg error">The newest snapshot is {when}. '
+                f'Anything decided since then exists in one file only.</div>'
+                + lead)
+
+    listing = ""
+    for path in rows[:8]:
+        restore_btn = ""
+        if auth.can("system"):
+            confirm = _esc(json.dumps(
+                f"Replace the live database with {path.name}? "
+                f"The current one is moved aside, not deleted, so this can be "
+                f"undone."))
+            restore_btn = (
+                f'<form method="post" action="/system/restore" '
+                f'style="display:inline" onsubmit="return confirm({confirm});">'
+                f'<input type="hidden" name="snapshot" value="{_esc(path.name)}">'
+                f'<button type="submit">Restore</button></form>')
+        listing += (f'<div class="shot-h" style="justify-content:space-between">'
+                    f'<span>{_esc(path.name)}</span>'
+                    f'<span class="muted">{path.stat().st_size // 1024}KB '
+                    f'{restore_btn}</span></div>')
+    return lead + listing + f'<div style="margin-top:10px">{take}</div>'
+
+
+@app.route("/system/backup", methods=["POST"])
+def system_backup():
+    auth.require("system")
+    import backup
+    path = backup.snapshot(reason=f"by-{_whoami() or 'owner'}")
+    if not path:
+        return redirect("/system?error=" + _urlquote(
+            "The snapshot could not be taken or did not verify — nothing was "
+            "kept, because a bad file in the backup directory is worse than an "
+            "empty one. Check the log."))
+    return redirect("/system?msg=" + _urlquote(
+        f"{path.name} — opened, integrity-checked and kept."))
+
+
+@app.route("/system/restore", methods=["POST"])
+def system_restore():
+    """Put a snapshot back. Undoable by construction: the database being
+    replaced is moved aside with a timestamp rather than deleted, because
+    restoring the wrong one is a mistake somebody makes at 2am."""
+    auth.require("system")
+    import backup
+    name = (request.form.get("snapshot") or "").strip()
+    # By name from the listing, never by path from the form: a filename that
+    # could address anything on disk is how a restore button becomes a way to
+    # read arbitrary files.
+    chosen = next((p for p in backup.snapshots() if p.name == name), None)
+    if not chosen:
+        return redirect("/system?error=" + _urlquote("no such snapshot"))
+    try:
+        displaced = backup.restore(chosen)
+    except Exception as e:
+        return redirect("/system?error=" + _urlquote(f"refused: {e}"))
+    return redirect("/system?msg=" + _urlquote(
+        f"Restored {chosen.name}. The database it replaced is beside it as "
+        f"{displaced.name} — nothing was deleted."))
+
+
 @app.route("/system")
 def system_status():
     """Status + process control for THIS PC's automation: is ComfyUI up, is
@@ -3268,6 +3376,8 @@ def system_status():
        running long, its channel still shows "running" until its .lock file
        is removed — check /failures for a crashed/orphaned run before
        deleting a lock file by hand.</p>
+    <h2>Backups</h2>
+    {_backup_panel()}
     """
     return _head() + body + PAGE_TAIL
 

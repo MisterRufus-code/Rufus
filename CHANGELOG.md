@@ -46,6 +46,12 @@ lands, and says so when the renderer has stopped rather than quoting an ETA at
 a dead run. The gallery loop gives up after four empty draws instead of burning
 every remaining prompt against a ComfyUI that is not there.
 
+**Backups.** `rufus.db` holds every judgement anybody has made on this channel
+and nothing copied it. One verified snapshot a day, taken by whichever of the
+dashboard or a run opens the database first; twelve kept; restore from the
+command line or from `/system`, with the displaced database moved aside rather
+than deleted.
+
 **Versions.** This file, `scripts/version.py`, a build line at the foot of
 every dashboard page, and the build stamped onto every video row.
 

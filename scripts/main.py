@@ -1504,6 +1504,15 @@ def run(skip_upload: bool = False, niche_override: str = None, output_dir: Path 
     except Exception:
         pass
 
+    # A run is the thing most likely to be interrupted by a power cut, and the
+    # database it is about to write to holds every decision anybody has made.
+    # Once a day, whoever gets here first.
+    try:
+        import backup
+        backup.snapshot_daily()
+    except Exception as e:
+        print(f"[run] daily snapshot skipped (non-fatal): {e}")
+
     # Channel resolution FIRST (read-only) so the instance lock can be
     # per-channel — see _acquire_lock. Legacy installs without channels.json
     # get a synthesized "main_en" channel — behavior unchanged.

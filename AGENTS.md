@@ -302,6 +302,24 @@ lands on every video row at save time and never changes afterwards — it record
 what produced the file, not what is installed now, which is what makes the
 "Did the code get better?" panel arithmetic rather than memory.
 
+**A backup nobody has opened is a belief, not a backup.** `rufus.db` holds
+every human judgement this project has collected and nothing copied it. Three
+things in `scripts/backup.py` are load-bearing and none is obvious: it uses
+SQLite's online backup API rather than a file copy, because a WAL-mode database
+copied while a run is writing produces a snapshot whose main file and `-wal`
+disagree; every snapshot is opened and integrity-checked before it is kept, and
+one that fails is deleted rather than left counting as protection; and the
+verification refuses a file that is valid SQLite and empty, which is what
+snapshotting an uninitialised database gives you and which is indistinguishable
+from a good backup by size and extension.
+
+Restoring moves the displaced database aside **with its sidecars**. Deleting
+them instead — which the first version did — clears them out of the way of the
+restored file and simultaneously strips the "we kept your old data" copy of
+every committed transaction still in its write-ahead log, so it will not open
+at all. That is a safety copy discovered to be empty on the day it is needed,
+and a test written to check the copy was intact is what caught it.
+
 ## Writing tests here
 
 Tests run with no GPU, no ComfyUI, no API keys, and no network. Mock at the HTTP
