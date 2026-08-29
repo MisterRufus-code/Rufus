@@ -212,6 +212,34 @@ def test_both_entry_points_take_it():
         assert "snapshot_daily()" in src, name
 
 
+def test_importing_the_dashboard_does_not_write_a_backup():
+    """WHERE THE FIRST VERSION PUT IT, AND WHY CI WAS RIGHT TO REFUSE IT.
+    Importing a module must not write to disk: a tool that merely inspects the
+    file, a test that imports every script, an editor's autocomplete would each
+    have taken a snapshot and printed a line about it — and the suite has a
+    test asserting that importing every module under both formats prints
+    nothing, which is exactly the guard that caught it.
+
+    It passed locally only because a backups/ directory already existed there,
+    so the call no-opped and said nothing. A clean machine exposed it
+    immediately, which is what a clean machine is for."""
+    src = (Path(__file__).parent.parent / "scripts" / "dashboard.py").read_text(
+        encoding="utf-8")
+    at_import = src[:src.index("if __name__ ==")]
+    for line in at_import.splitlines():
+        stripped = line.strip()
+        if (not stripped or stripped.startswith(("#", '"', "'", "def "))
+                or line.startswith((" ", "\t"))):
+            continue        # a comment, or inside some function's body
+        assert "snapshot_daily()" not in stripped, (
+            f"the daily snapshot runs at import time: {stripped}")
+        assert "_daily_snapshot()" not in stripped, (
+            f"the daily snapshot runs at import time: {stripped}")
+    after = src[src.index("if __name__ =="):]
+    assert "_daily_snapshot()" in after, (
+        "and it still has to happen when the dashboard actually starts")
+
+
 def test_the_restore_button_addresses_snapshots_by_name_not_by_path():
     """A filename from a form that could address anything on disk is how a
     restore button becomes a way to read arbitrary files — the same reasoning

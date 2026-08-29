@@ -320,6 +320,16 @@ every committed transaction still in its write-ahead log, so it will not open
 at all. That is a safety copy discovered to be empty on the day it is needed,
 and a test written to check the copy was intact is what caught it.
 
+The daily snapshot is called from the dashboard's **startup**, not from its
+import, and that distinction cost a red CI run. Importing a module must not
+write to disk: a tool inspecting the file, the test that imports every script,
+an editor's autocomplete would each have taken a backup and printed a line
+about it. `test_every_module_still_imports_under_either_format` is the guard,
+and it caught this immediately — but only on CI, because locally a `backups/`
+directory already existed, the call no-opped and said nothing. **A green local
+run on a machine that has been used is weaker evidence than a red one on a
+clean machine.** When a change adds state, delete that state and run again.
+
 **A log is a file somebody else ends up reading.** It is copied by a backup,
 collected by a support bundle, pasted into a bug report and left on a disk that
 gets sold. `auth.py` prints sign-in links containing a token, `serve.ps1` sends

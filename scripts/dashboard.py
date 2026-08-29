@@ -2460,15 +2460,26 @@ def _build_line() -> str:
 # itself on use; it broke `PAGE_TAIL.startswith("</main>")` in a test that was
 # right to check, because a string whose str value disagrees with itself is a
 # trap for every future reader.
-# ONE SNAPSHOT A DAY, TAKEN BY WHATEVER OPENS FIRST. A button somebody presses
-# before doing something risky is the wrong shape for this: the losses that
-# matter are the ones nobody saw coming, and by definition nobody pressed a
-# button first. Costs a directory glob on the days it has already happened.
-try:
-    import backup as _backup
-    _backup.snapshot_daily()
-except Exception as _e:                 # never keeps the dashboard from starting
-    print(f"[dashboard] daily snapshot skipped: {_e}")
+def _daily_snapshot() -> None:
+    """One snapshot a day, taken when the dashboard actually STARTS.
+
+    A button somebody presses before doing something risky is the wrong shape
+    for this: the losses that matter are the ones nobody saw coming, and by
+    definition nobody pressed a button first. So it happens on its own.
+
+    CALLED FROM STARTUP AND NOT FROM IMPORT, which is where the first version
+    put it and which CI was right to refuse. Importing a module must not write
+    to disk — a tool that merely inspects this file, a test that imports every
+    script, an editor's autocomplete, would each have taken a backup and
+    printed a line about it. It passed locally only because a backups/
+    directory already existed there, so the call no-opped and said nothing: a
+    latent order dependence that a clean machine exposed immediately.
+    """
+    try:
+        import backup
+        backup.snapshot_daily()
+    except Exception as e:              # never keeps the dashboard from starting
+        print(f"[dashboard] daily snapshot skipped: {e}")
 
 
 PAGE_TAIL = _build_line() + "</main>" + INTERACT_JS + "</body></html>"
@@ -8893,6 +8904,7 @@ def _human_gap(seconds: float) -> str:
 
 
 if __name__ == "__main__":
+    _daily_snapshot()
     host = os.environ.get("RUFUS_DASHBOARD_HOST", "127.0.0.1")
     port = int(os.environ.get("RUFUS_DASHBOARD_PORT", "8765"))
 
