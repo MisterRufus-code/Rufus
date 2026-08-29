@@ -20,6 +20,21 @@ import db_manager  # noqa: E402
 import topic_options  # noqa: E402
 
 
+@pytest.fixture(autouse=True)
+def _machine_is_ready(request, monkeypatch):
+    """These tests are about what the wizard DECIDES, not about whether the
+    box running pytest has an OpenAI key and ffmpeg on PATH. The preflight is
+    tested for itself in test_preflight.py; here it must not be the reason a
+    render did or did not start.
+
+    Mark a test `@pytest.mark.real_preflight` to exercise the real one.
+    """
+    if request.node.get_closest_marker("real_preflight"):
+        return
+    import dashboard
+    monkeypatch.setattr(dashboard, "_run_blockers", lambda: [], raising=False)
+
+
 @pytest.fixture
 def db(tmp_path, monkeypatch):
     monkeypatch.setattr(db_manager, "DB_FILE", tmp_path / "t.db")
@@ -1591,3 +1606,71 @@ def test_not_asking_to_be_told_leaves_the_run_exactly_as_it_was(tmp_path,
                        gallery_id=1, voice_id=1)
     c.post(f"/create/{pid}/render", data={"captions": "format"})
     assert sent["tell_me"] is False
+
+
+# ── and the last click is not offered when it could not succeed ─────────────
+
+def test_the_render_button_is_withheld_when_a_run_could_not_finish(
+        tmp_path, monkeypatch):
+    """EVERYTHING IS CHOSEN IS NOT THE SAME AS EVERYTHING IS READY. This is the
+    click that commits hours of the GPU, and it used to be offered whatever
+    state the machine was in — a missing key produced a subprocess that
+    researched, wrote and drew before discovering it could not finish.
+
+    Withheld rather than greyed out: a disabled control invites a second click,
+    a reason invites a fix."""
+    import dashboard, preflight
+    c, dbm = _client(tmp_path, monkeypatch, "block.db")
+    monkeypatch.setattr(dashboard, "_run_blockers", lambda: [preflight.Blocker(
+        "config/keys.json does not exist",
+        "Every run writes its script with a language model.",
+        "Copy the template and put your key in it.")])
+    pid = dbm.new_project(channel="main_en", niche="money_history")
+    dbm.update_project(pid, stage="render", title="Croesus",
+                       script_file="s.txt", gallery_id=1, voice_id=1)
+    page = c.get(f"/create?project={pid}").get_data(as_text=True)
+    assert "keys.json does not exist" in page
+    assert "Copy the template" in page, "a reason without a fix is an errno"
+    assert f"/create/{pid}/render" not in page
+
+
+def test_the_render_post_is_refused_too_and_nothing_is_launched(
+        tmp_path, monkeypatch):
+    """Withholding the button is what a page does; refusing the POST is what
+    makes it true. A stale tab reaches this route directly."""
+    import dashboard, preflight
+    c, dbm = _client(tmp_path, monkeypatch, "block2.db")
+    launched = []
+    monkeypatch.setattr(dashboard, "_launch_run",
+                        lambda **kw: launched.append(kw) or (None, Path("r.log")))
+    monkeypatch.setattr(dashboard, "_run_blockers", lambda: [preflight.Blocker(
+        "ffmpeg is not on PATH", "Nothing can be assembled.",
+        "winget install Gyan.FFmpeg")])
+    pid = dbm.new_project(channel="main_en", niche="money_history")
+    dbm.update_project(pid, stage="render", title="C", script_file="s.txt",
+                       gallery_id=1, voice_id=1)
+    r = c.post(f"/create/{pid}/render", data={"captions": "format"})
+    assert launched == [], "a doomed subprocess was spawned anyway"
+    assert "error" in r.headers["Location"]
+    assert dbm.project(pid)["status"] == "open", (
+        "a refused render must not mark the project as rendering")
+
+
+@pytest.mark.real_preflight
+def test_the_preflight_reads_the_environment_the_child_would_get(
+        tmp_path, monkeypatch):
+    """_launch_run layers config/settings over the dashboard's own environment
+    before spawning main.py, so a picture engine chosen in Settings hours ago
+    is a fact about the RUN. Asking os.environ checks the wrong machine's
+    configuration and clears a render that is about to fail."""
+    import dashboard
+    import preflight
+    seen = {}
+    monkeypatch.setattr(dashboard, "_load_settings",
+                        lambda: {"RUFUS_VIDEO_SOURCE": "pexels"})
+    monkeypatch.setattr(preflight, "blockers",
+                        lambda env, **kw: seen.update(env) or [])
+    dashboard._run_blockers()
+    assert seen.get("RUFUS_VIDEO_SOURCE") == "pexels", (
+        "the preflight was asked about the dashboard's environment, not the "
+        "one the render would actually get")

@@ -40,3 +40,11 @@ def _isolate_the_user_store(tmp_path_factory):
         yield
     finally:
         auth.USERS_FILE = real
+
+
+def pytest_configure(config):
+    """Registered so an unknown-marker warning never masks a real one."""
+    config.addinivalue_line(
+        "markers",
+        "real_preflight: exercise the real run preflight instead of the stub "
+        "that keeps wizard tests independent of this box's setup")

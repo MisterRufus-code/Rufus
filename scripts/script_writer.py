@@ -56,10 +56,32 @@ def _load_niche():
 
 
 def _load_key() -> str:
-    keys = json.loads(KEYS_FILE.read_text(encoding="utf-8"))
-    key  = keys.get("openai", "")
+    """The OpenAI key, or a sentence explaining what to do about it.
+
+    THE MISSING-FILE CASE HAD NO MESSAGE and it is the one every new machine
+    hits. "Key not set" was written for a file that exists with a blank value;
+    a file that is not there at all fell through to json.loads and raised
+    FileNotFoundError, which is what a fresh install actually saw at step 4:
+    a Python errno naming a path nobody had heard of. preflight.py now stops a
+    run before this point, but anything importing this module directly still
+    lands here, and an errno is not an instruction.
+    """
+    try:
+        keys = json.loads(KEYS_FILE.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        raise ValueError(
+            "config/keys.json does not exist — copy config/keys.json.template "
+            "to config/keys.json and put your OpenAI key in it as \"openai\". "
+            "Run `python scripts/preflight.py` to check the rest.") from None
+    except (OSError, ValueError) as e:
+        raise ValueError(
+            f"config/keys.json could not be read ({e}) — on a hand-edited file "
+            f"this is usually a trailing comma or a missing quote.") from None
+    key = (keys.get("openai") or "").strip()
     if not key or key.startswith("YOUR_") or key.startswith("FILL_"):
-        raise ValueError("OpenAI key not set in config/keys.json")
+        raise ValueError(
+            "config/keys.json has no OpenAI key — its \"openai\" value is "
+            "empty or still the template placeholder.")
     return key
 
 

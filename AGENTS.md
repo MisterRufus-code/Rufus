@@ -269,6 +269,29 @@ part the machine can actually check. Absent and corrupt are not the same
 answer here either — an answers file that lost a brace must fall back to
 "nothing is cleared", never to silence.
 
+**Check the cheap precondition before spending the expensive thing, and check
+it FIRST.** The fact gate already runs before FLUX time for exactly this
+reason; the run itself had no such gate. On a machine with no
+`config/keys.json` — the state every new install is in — `main.py` fetched a
+dozen feeds, tried Reddit, OpenAlex, StackExchange, the Library of Congress and
+eight Wikipedia articles, rejected four seeds through the supervisor, printed
+"Pre-analysis failed (non-fatal)" about the very file it was about to die on,
+and stopped at step 4 with a raw `FileNotFoundError`. Minutes of work that
+could not be used, ending in an errno naming a path the owner had never heard
+of. `preflight.py` is now the first statement in `run()`, and placement is the
+feature: called after the research, it would be a nicer-looking way to waste
+the same minutes.
+
+Two rules keep a preflight credible. Every check is **conditional on the
+configuration** — a Pexels key matters only when Pexels is the footage source,
+ComfyUI only when ComfyUI is drawing — because one that fires on things a run
+could survive is one people learn to run past. And every blocker owes **what,
+why and the fix**; a message that stops at the first is the errno again in a
+nicer font. The dashboard asks the same question against the environment the
+CHILD would get (`os.environ` plus the saved settings), not its own, and
+withholds the render button rather than greying it out: a disabled control
+invites a second click, a reason invites a fix.
+
 ## Writing tests here
 
 Tests run with no GPU, no ComfyUI, no API keys, and no network. Mock at the HTTP

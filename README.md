@@ -605,6 +605,28 @@ want it pinned, same as the existing CTA-comment note.
 
 ---
 
+## Before you spend anything
+
+```bash
+python scripts/preflight.py      # can this configuration produce a video at all?
+python scripts/health_check.py   # the broad survey of the setup
+```
+
+The first is the narrow question and `main.py` asks it for itself before the
+first byte goes out: is there anything about **this** configuration that means
+this run cannot reach a finished video. It answers in milliseconds and names
+what is missing, why the run needs it, and the exact command that fixes it.
+
+Every check is conditional on what you actually selected — a Pexels key matters
+only when Pexels is the footage source, ComfyUI only when ComfyUI is drawing,
+YouTube credentials only when the run would really upload. A preflight that
+fires on things a run could survive is one you learn to run past.
+
+The dashboard asks the same question before offering the last click, against
+the environment the render would actually get rather than its own.
+
+---
+
 ## What this is made of, and what you may do with it
 
 Rufus assembles a video out of other people's work: a text model writes the

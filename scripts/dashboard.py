@@ -5413,6 +5413,45 @@ def _wizard_voice(p: dict) -> str:
         f'<div style="margin:10px 0">{_regen(p["id"], "voice")}</div>{cards}')
 
 
+def _run_blockers() -> list:
+    """Why a render started right now could not finish — checked against the
+    environment the CHILD would get, not this one.
+
+    The distinction is the whole point. _launch_run layers config/settings on
+    top of the dashboard's own environment before spawning main.py, so a
+    picture engine chosen in Settings hours ago is a fact about the run and not
+    about the web server — asking os.environ would check the wrong machine's
+    configuration and clear a render that is about to fail.
+
+    Fails open to no blockers: a preflight that cannot answer must cost the
+    warning, never the button. main.py runs the same check for itself a
+    moment later and is the one that actually refuses.
+    """
+    try:
+        import preflight
+        env = os.environ.copy()
+        env.update(_load_settings())
+        return preflight.blockers(env, skip_upload=False)
+    except Exception as e:
+        print(f"[dashboard] preflight unavailable: {e}")
+        return []
+
+
+def _blocker_panel(found: list) -> str:
+    """The blockers as something a person can act on without a terminal."""
+    if not found:
+        return ""
+    rows = ""
+    for b in found:
+        rows += (f'<div class="card" style="width:100%;margin-bottom:8px">'
+                 f'<strong>{_esc(b.what)}</strong>'
+                 f'<div class="muted" style="margin-top:4px">{_esc(b.why)}</div>'
+                 f'<div style="margin-top:6px">{_esc(b.fix)}</div></div>')
+    return (f'<div class="msg error">A render started now could not finish. '
+            f'Nothing below has been spent &mdash; these are checked before '
+            f'anything is.</div>{rows}')
+
+
 def _caption_choices(selected: str = "") -> str:
     """The subtitle looks, as radio buttons with the trade-off written out.
 
@@ -5436,6 +5475,21 @@ def _caption_choices(selected: str = "") -> str:
 
 
 def _wizard_render(p: dict) -> str:
+    # EVERYTHING IS CHOSEN IS NOT THE SAME AS EVERYTHING IS READY. This is the
+    # click that commits hours of the GPU, and it used to be offered whatever
+    # state the machine was in — a missing key or a stopped ComfyUI produced a
+    # subprocess that researched, wrote and drew before discovering it could
+    # not finish. The button is withheld rather than disabled: a greyed control
+    # invites a second click, a reason invites a fix.
+    stopped = _run_blockers()
+    if stopped:
+        return (
+            '<h2 style="margin-top:22px">Not yet</h2>'
+            + _blocker_panel(stopped)
+            + '<p class="muted">Everything you chose is kept. Fix the above '
+              'and reload this page &mdash; the button comes back on its own.'
+              '</p>'
+            + _wizard_decided(p))
     return (
         '<h2 style="margin-top:22px">Everything is chosen</h2>'
         '<p class="muted">Nothing below gets regenerated &mdash; the script you '
@@ -6202,6 +6256,14 @@ def create_render(project_id: int):
     if missing:
         return redirect(f"/create?project={project_id}&error=" + _urlquote(
             f"still needs {', '.join(missing)}"))
+    # Withholding the button is what a page does; refusing the POST is what
+    # makes it true — same reason create_new checks rather than trusting that
+    # nobody kept a stale tab open.
+    stopped = _run_blockers()
+    if stopped:
+        return redirect(f"/create?project={project_id}&error=" + _urlquote(
+            f"A render started now could not finish: {stopped[0].what}. "
+            f"{stopped[0].fix}"))
     take = next((t for t in dbm.voice_takes(set_id=p["gallery_id"], limit=10)
                  if t["id"] == p["voice_id"]), None)
     # The last two decisions, and the only ones on this page. Both are

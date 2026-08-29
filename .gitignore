@@ -41,6 +41,10 @@ rufus.lock*
 
 # Seed deduplication history (runtime state, not source code)
 config/used_seeds.json
+# and the filelock beside it, which every run creates and no run reads
+# back — it appeared in `git status` on a clean checkout the first time
+# anybody ran the pipeline from a fresh clone.
+config/used_seeds.lock
 config/script_embeddings.json
 config/topic_embeddings.json
 config/recent_image_prompts.json

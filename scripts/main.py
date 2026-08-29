@@ -1484,6 +1484,16 @@ def _all_scheduled_niches() -> list[str]:
 def run(skip_upload: bool = False, niche_override: str = None, output_dir: Path = None,
         channel_id: str = None, topic: str = None, lock_wait: float = 0,
         script_file: str = None):
+    # NOTHING IS SPENT UNTIL THE RUN CAN FINISH. A fresh install with no
+    # config/keys.json used to research for minutes — a dozen feeds, four
+    # rejected seeds, eight Wikipedia fetches — and then stop at step 4 with a
+    # raw errno for a file the person had never heard of. Every one of those
+    # minutes bought work that could not be used, and the missing thing was
+    # knowable before the first byte went out. Same principle as the fact gate
+    # running before FLUX time, one level up. See preflight.py.
+    import preflight
+    preflight.check_or_exit(skip_upload=skip_upload)
+
     # Channel resolution FIRST (read-only) so the instance lock can be
     # per-channel — see _acquire_lock. Legacy installs without channels.json
     # get a synthesized "main_en" channel — behavior unchanged.
