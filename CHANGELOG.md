@@ -51,6 +51,12 @@ to a clean URL, the access log is filtered before it is written, and
 `logscrub.py` finds and removes the ones already on disk. If you have run this
 dashboard before, scan once and rotate — rewriting a file revokes nothing.
 
+**An acceptance test that runs rather than checks.** `smoke.py` encodes a real
+second of H.264, builds a real subtitle file, writes and reads a real row and
+serves a real page — the cases it catches (an ffmpeg without libx264, a
+filesystem that refuses WAL) all pass a presence check and fail a video. It
+spends nothing, and both setup scripts now finish with it.
+
 **You can take your work out.** `export_data.py` writes everything as CSV and
 plain text — including `decisions.csv`, every choice you made paired with what
 you chose it over, which is not a row anywhere in the database but the shape of

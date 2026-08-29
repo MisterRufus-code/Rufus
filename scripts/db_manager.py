@@ -1593,6 +1593,21 @@ def update_title(video_id: int, title: str):
         c.execute("UPDATE videos SET title=? WHERE id=?", (title, video_id))
 
 
+def journal_mode() -> str:
+    """Which journal SQLite actually gave us, lowercase.
+
+    _conn asks for WAL on every connection; asking is not getting. Some
+    filesystems — network shares most of all — refuse it and fall back to the
+    delete journal without complaint, and the difference is invisible until the
+    dashboard tries to read while a run is writing and gets a locked database
+    instead. So it is a question worth being able to ask, and the smoke test
+    and the support surface both ask it.
+    """
+    with _conn() as c:
+        row = c.execute("PRAGMA journal_mode").fetchone()
+    return str(row[0]).lower() if row else ""
+
+
 def video_by_id(video_id: int) -> dict | None:
     """One video row by id, or None.
 

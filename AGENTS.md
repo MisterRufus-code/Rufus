@@ -347,6 +347,27 @@ stopped matching. And a scrub always ends by saying **rotate anyway**: a secret
 that sat in a file may already have been copied, rewriting revokes nothing, and
 a clean scan that reads as safety is worse than no scan.
 
+**Present is not the same as working, and only one of the three checks proves
+it.** `health_check` surveys the setup and `preflight` asks whether this
+configuration could finish a run; both establish that pieces exist. `smoke.py`
+runs them: a real second of H.264, a real ASS file through `build_ass`, a row
+written and read back, the front page served. The cases that motivated it all
+pass a presence check and fail a video — an ffmpeg compiled without libx264, a
+Pillow that imports and dies at the first draw, a filesystem that refuses WAL
+without complaint so the dashboard locks the first time it reads during a run.
+
+Two rules keep it worth running. It spends **nothing** — no model call, no
+picture, no voice — because a check nobody can afford to run is a check nobody
+runs; a test asserts that it never reaches for those. And a skip is not a
+failure: a machine that has not chosen an engine is not a broken machine, and
+reporting it as one teaches people the test is noise. Every passing check
+reports *what it did* ("1s H.264, 4096 bytes"), because "ok" is not evidence.
+
+When a check needs to observe something awkward, add the real API rather than a
+test-only seam. `db_manager.journal_mode()` exists because `_conn` *asks* for
+WAL on every connection and asking is not getting; it is a question worth being
+able to put, and it made the failure branch testable as a side effect.
+
 ## Writing tests here
 
 Tests run with no GPU, no ComfyUI, no API keys, and no network. Mock at the HTTP

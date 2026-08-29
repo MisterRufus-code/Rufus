@@ -59,6 +59,14 @@ fi
 echo "=== [7/7] Health check ==="
 "$VENV_DIR/bin/python" "$REPO_DIR/scripts/health_check.py" || true
 
+# PRESENT IS NOT THE SAME AS WORKING, and a setup script that ends on a
+# presence check has not finished the job. This encodes a real second of
+# H.264, builds a real subtitle file, writes and reads a real row and serves a
+# real page — in a few seconds, and without spending a penny.
+echo
+echo "=== Does it actually work? ==="
+"$VENV_DIR/bin/python" "$REPO_DIR/scripts/smoke.py" || true
+
 cat <<EOF
 
 === Setup complete ===

@@ -721,9 +721,25 @@ least two builds have enough videos behind them to mean anything.
 ## Before you spend anything
 
 ```bash
+python scripts/smoke.py          # does this installation actually work?
 python scripts/preflight.py      # can this configuration produce a video at all?
 python scripts/health_check.py   # the broad survey of the setup
 ```
+
+**`smoke.py` is the acceptance test.** The other two ask whether the *pieces*
+are present, and present is not the same as working: an ffmpeg on PATH built
+without libx264 encodes nothing, a Pillow that imports fine fails at the first
+draw, and an sqlite on a filesystem that refuses a write-ahead log looks perfect
+until the dashboard reads while a run writes. All three pass a presence check
+and fail a video.
+
+So this one *runs* things — one second of real H.264, a real subtitle file
+through the render path, a row written and read back, the front page actually
+served. Seconds, and it spends nothing: no model call, no picture, no voice.
+Both setup scripts finish with it.
+
+A pass means the installation can encode, caption, store and serve. It says
+nothing about whether the videos are any good — that is measured on the channel.
 
 The first is the narrow question and `main.py` asks it for itself before the
 first byte goes out: is there anything about **this** configuration that means

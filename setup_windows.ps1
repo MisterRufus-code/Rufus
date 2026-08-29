@@ -97,5 +97,13 @@ Write-Host ""
 Write-Host "Running health check..." -ForegroundColor Cyan
 python scripts\health_check.py
 
+# PRESENT IS NOT THE SAME AS WORKING, and a setup script that ends on a
+# presence check has not finished the job. This encodes a real second of
+# H.264, builds a real subtitle file, writes and reads a real row and serves a
+# real page — seconds, and no money spent.
+Write-Host ""
+Write-Host "Does it actually work?" -ForegroundColor Cyan
+python scripts\smoke.py
+
 Write-Host ""
 Write-Host "Setup done. Daily run:  .\run.bat" -ForegroundColor Green
