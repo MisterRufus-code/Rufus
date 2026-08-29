@@ -573,6 +573,67 @@ def score_by_version(min_videos: int = MIN_VIDEOS_PER_VERSION) -> list[dict]:
             for r in rows if (r[1] or 0) >= int(min_videos)]
 
 
+# The three places a dollar is recorded, and the column that dates each. One
+# list, because "which tables carry cost" is a fact about the schema and a
+# second copy of it is the one that stops being updated when a fourth is added.
+COST_TABLES = (
+    ("proposals", "created_at", "topic proposals"),
+    ("script_candidates", "created_at", "script candidates"),
+    ("script_attempts", "ts", "writer attempts"),
+)
+
+
+def spend(days: int = 30) -> dict:
+    """What the model calls cost over a window, and what that is per video.
+
+    THE QUESTION A BUSINESS ASKS FIRST AND THIS COULD NOT ANSWER. Cost was
+    already recorded in three places and nothing ever added them up, so "what
+    does one video cost me" was answered by opening the OpenAI dashboard and
+    guessing which charges belonged to which channel.
+
+    Three limits, stated rather than smoothed over, because a confident wrong
+    number here is worse than an honest partial one:
+
+      · API SPEND ONLY. The pictures are drawn on the owner's own GPU and the
+        voice is local or free; those cost electricity and hours, not dollars,
+        and folding an estimate of them in would make the figure impossible to
+        reconcile with any bill.
+      · WORK THAT WAS THROWN AWAY IS INCLUDED, and should be. Three scripts
+        written so a person could choose one cost three scripts; charging the
+        video only for the one that shipped would make the number look better
+        than the bank statement.
+      · PER VIDEO IS SPEND ÷ VIDEOS FINISHED IN THE SAME WINDOW — an average
+        over a period, not a cost attached to a particular video. Proposals and
+        candidates are not linked to the video that eventually came out of
+        them, so anything more precise would be invented.
+    """
+    since = f"-{max(1, int(days))} days"
+    parts: dict = {}
+    with _conn() as c:
+        for table, when, label in COST_TABLES:
+            try:
+                row = c.execute(
+                    f"SELECT COALESCE(SUM(cost_usd), 0) FROM {table} "
+                    f"WHERE {when} >= datetime('now', ?)", (since,)).fetchone()
+                parts[label] = round(float(row[0] or 0.0), 4)
+            except Exception:
+                # An older database without one of these tables should still
+                # report the two it has, not nothing at all.
+                parts[label] = 0.0
+        videos = c.execute(
+            "SELECT COUNT(*) FROM videos WHERE created_at >= "
+            "datetime('now', ?)", (since,)).fetchone()[0]
+
+    total = round(sum(parts.values()), 4)
+    return {
+        "days": int(days),
+        "parts": parts,
+        "total_usd": total,
+        "videos": videos,
+        "per_video_usd": round(total / videos, 4) if videos else None,
+    }
+
+
 def videos_without_a_version() -> int:
     """Rows from before builds were recorded. Named rather than hidden: the
     comparison above is silent about them, and "why does this only cover

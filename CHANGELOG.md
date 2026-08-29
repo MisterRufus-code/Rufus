@@ -51,6 +51,13 @@ to a clean URL, the access log is filtered before it is written, and
 `logscrub.py` finds and removes the ones already on disk. If you have run this
 dashboard before, scan once and rotate — rewriting a file revokes nothing.
 
+**What a video costs.** Spend was recorded in three tables and nothing added it
+up, so the answer came from opening the OpenAI dashboard and guessing which
+charges belonged to which channel. The Measure page now says it, with what the
+figure excludes printed beside it rather than buried: model calls only, work you
+threw away counted, and an average over a period rather than a cost attached to
+any one video.
+
 **An acceptance test that runs rather than checks.** `smoke.py` encodes a real
 second of H.264, builds a real subtitle file, writes and reads a real row and
 serves a real page — the cases it catches (an ffmpeg without libx264, a

@@ -3182,11 +3182,70 @@ def _performance_body():
        checked rather than remembered &mdash; which is the one thing this
        project has never been able to do.</p>
     {version_html}
+    <h2 style="margin-top:22px">What it costs</h2>
+    {_spend_panel()}
     <h2>Videos (last 90 days)</h2>
     {filt_html}
     {table_html}
     """
     return body
+
+
+def _spend_panel(days: int = 30) -> str:
+    """API spend over a window, and what that comes to per video.
+
+    THE FIRST QUESTION ANYONE ASKS ABOUT A BUSINESS, and it was recorded in
+    three tables that nothing ever added up — so it was answered by opening the
+    OpenAI dashboard and guessing which charges belonged to which channel.
+
+    What is NOT in the number is said on the page rather than buried in a
+    docstring, because a figure people quote has to carry its own limits: the
+    pictures are drawn on this machine's own GPU and the voice is local, so
+    they cost electricity and hours rather than dollars, and the per-video
+    figure is an average over a period rather than a cost attached to any
+    particular video.
+    """
+    try:
+        import db_manager as dbm
+        s = dbm.spend(days)
+    except Exception as e:
+        print(f"[dashboard] spend unavailable: {e}")
+        return '<p class="muted">Spend could not be read.</p>'
+
+    if not s["total_usd"] and not s["videos"]:
+        return (f'<p class="muted">Nothing recorded in the last {s["days"]} '
+                f'days. Cost is written down as each topic, script and writer '
+                f'attempt is paid for, so this fills in as you make videos.'
+                f'</p>')
+
+    per = s["per_video_usd"]
+    headline = (f'<div style="font-size:26px;margin:6px 0">'
+                f'${per:.2f}<span class="muted" style="font-size:14px"> '
+                f'per video</span></div>' if per is not None else
+                f'<p class="muted">${s["total_usd"]:.2f} spent, and no video '
+                f'finished in the same window &mdash; so there is no per-video '
+                f'figure yet rather than a misleading one.</p>')
+
+    rows = ""
+    for label, amount in s["parts"].items():
+        rows += (f'<div class="shot-h" style="justify-content:space-between">'
+                 f'<span>{_esc(label)}</span>'
+                 f'<span class="muted">${amount:.2f}</span></div>')
+
+    return (
+        f'{headline}'
+        f'<p class="muted">${s["total_usd"]:.2f} of model calls over '
+        f'{s["days"]} days, across {s["videos"]} finished video(s).</p>'
+        f'{rows}'
+        f'<p class="muted" style="margin-top:10px">Model calls only. The '
+        f'pictures are drawn on this machine and the voice is local, so those '
+        f'cost electricity and hours rather than dollars &mdash; folding an '
+        f'estimate of them in would make this impossible to reconcile with a '
+        f'bill. Scripts written so you could choose between them are counted, '
+        f'because you paid for all three. And this is spend divided by videos '
+        f'over the same period, not a cost attached to any one video: a '
+        f'proposal is not linked to the video that eventually came out of it, '
+        f'so anything more precise would be invented.</p>')
 
 
 @app.route("/licence")
