@@ -368,6 +368,33 @@ test-only seam. `db_manager.journal_mode()` exists because `_conn` *asks* for
 WAL on every connection and asking is not getting; it is a question worth being
 able to put, and it made the failure branch testable as a side effect.
 
+**Defusing is not re-planning, and a shot that is ABOUT its lettering cannot
+be defused.** `_DETEXT_CLAUSE` blanks every markable surface because drawn
+lettering comes back garbled, and that is right for a newspaper on a desk. It
+is wrong when the shot IS the document: "a hand pointing at a graph showing a
+steep decline" becomes a hand pointing at an empty rectangle. A live run
+planned ten such shots out of fifteen and the next planned twelve of
+seventeen — the owner reported it as a wall of blank white signs, and
+`run_review` had already printed the reason nobody had read. `storyboard.
+_reground` re-plans them instead, in the idiom `_revary` established: the
+conflict is invisible in any single prompt and only exists once the sequence
+does, so measure the finished plan and ask again for the offending shots.
+
+Two things that pass has to get right, both found by running the detector over
+a real sequence rather than over invented examples. **A prop in the background
+is not the subject** — the first version replaced "hands typing on a keyboard,
+with the screen visible behind", a perfectly good shot of hands — and the whole
+background CLAUSE has to be dropped, not the text after the marker, because
+"with the screen visible in the background" names the screen before it says
+where it is. And **plurals count**: "warning signs … charts pinned on walls"
+was the worst shot in the run and the set held only singulars.
+
+**Two lists about one hazard need a test that fails when they disagree.** The
+re-plan nouns and `main._TEXT_PROP_RE` describe the same thing from two
+directions, so a test asserts every noun in the first is matched by the second.
+It failed the moment it was written and found three real gaps in the defusal —
+`diagram`, `notice` and `pamphlet` were never being blanked at all.
+
 ## Writing tests here
 
 Tests run with no GPU, no ComfyUI, no API keys, and no network. Mock at the HTTP

@@ -1471,7 +1471,47 @@ def fetch_wikipedia_story(niche_name: str, used_ids: set | None = None) -> dict 
     return None
 
 
-def fetch_wikipedia_by_title(query: str) -> dict | None:
+# Words that carry no subject. A topic is identified by what is left when
+# these go, so "The 1920s Florida Land Boom" is {1920s, florida, land, boom}
+# and an article has to account for most of that, not for one word of it.
+_TOPIC_FILLER = frozenset("""
+a an and as at be by for from how in into is it of on or that the this to
+what when where which who why with
+""".split())
+
+
+def _topic_words(text: str) -> set[str]:
+    """The words in a phrase that say what it is about."""
+    words = re.findall(r"[a-z0-9']+", (text or "").lower())
+    return {w for w in words if len(w) > 1 and w not in _TOPIC_FILLER}
+
+
+def _answers_the_topic(article: dict, query: str) -> float:
+    """How much of what was ASKED FOR this article actually accounts for.
+
+    Matched against the title AND the opening extract, because a correct
+    answer often renames the subject: "The South Sea Bubble & Isaac Newton's
+    Loss" resolves to the article "South Sea Company", whose title shares two
+    words out of six and whose first paragraph shares nearly all of them.
+    Title-only scoring would have thrown that away.
+    """
+    asked = _topic_words(query)
+    if not asked:
+        return 1.0                      # nothing was asked; nothing to fail
+    have = _topic_words(article.get("title", "")) | _topic_words(
+        (article.get("content") or "")[:1200])
+    return len(asked & have) / len(asked)
+
+
+# Below this, the article is about something else. Calibrated on the runs that
+# produced this guard: "1920s Florida land boom" scored 0.25 against "AI boom"
+# (one word, "boom") and 0.25 against "DeLand, Florida" (one word, "florida"),
+# while "The South Sea Bubble & Isaac Newton's Loss" scores well past this
+# against "South Sea Company" because the body names the Bubble and Newton.
+TOPIC_MATCH_FLOOR = 0.4
+
+
+def fetch_wikipedia_by_title(query: str, *, must_match: bool = True) -> dict | None:
     """Grounded seed from a USER-CHOSEN topic instead of the automatic pool —
     still real Wikipedia facts, never invented text, so the fact-gate and
     hook-grounding checks work exactly the same as an auto-picked topic (a
@@ -1539,10 +1579,49 @@ def fetch_wikipedia_by_title(query: str) -> dict | None:
         print(f"[research] Wikipedia search failed for '{query}': {e}")
         return None
 
+    # THE FIRST HIT IS NOT THE ANSWER, and taking it is what put a video about
+    # the AI boom under a request for "1920s Florida land boom" — twice, and a
+    # third run landed on "DeLand, Florida" for "The Florida Land boom 1920".
+    # Each shares exactly one word with what was asked. The run then spent an
+    # hour and a half of GPU making a video about the wrong subject, and
+    # nothing in the log said anything was wrong: the line reads "using YOUR
+    # topic →" whichever article it picked.
+    #
+    # This tree already knew the hazard. _trend_is_usable exists because Google
+    # matched "gold standard" to a whey protein and a live run resolved it into
+    # "Sprint (running)"; the docstring there says the guard was against the
+    # ABSENCE of an article and never against the wrong one. The path where the
+    # owner TYPES the subject — the one place the intent is unambiguous — had no
+    # guard at all.
+    #
+    # So score every hit and take the best, rather than the first.
+    scored = []
     for hit in hits:
         result = _try_title(hit.get("title", ""))
-        if result:
+        if not result:
+            continue
+        score = _answers_the_topic(result, query)
+        scored.append((score, result))
+        if not must_match:
             return result
+    scored.sort(key=lambda pair: pair[0], reverse=True)
+
+    if scored and scored[0][0] >= TOPIC_MATCH_FLOOR:
+        score, best = scored[0]
+        if best["title"].strip().lower() != query.strip().lower():
+            print(f"[research] '{query}' → \"{best['title']}\" "
+                  f"({score:.0%} of the topic's words)")
+        return best
+
+    if scored:
+        # Name what it FOUND and refuse it. "No article" would send somebody
+        # rewording a topic whose article exists; the truth is that Wikipedia
+        # answered and the answer was about something else.
+        near = ", ".join(f"\"{r['title']}\" ({s:.0%})" for s, r in scored[:3])
+        print(f"[research] nothing on Wikipedia is about '{query}' — the "
+              f"closest were {near}, and none accounts for enough of it. "
+              f"Try the article's own name.")
+        return None
 
     print(f"[research] no Wikipedia article found for topic '{query}'")
     return None

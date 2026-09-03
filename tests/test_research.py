@@ -403,15 +403,37 @@ def test_fetch_wikipedia_by_title_empty_query_returns_none_no_network():
 
 
 def test_fetch_wikipedia_by_title_rejects_short_extract_then_tries_search():
+    """The fallback that turns a partial query into a real article.
+
+    The query and the article have to be ABOUT the same thing now — this used
+    to resolve "some query" into "Real Article" and pass, which is precisely
+    the shape of the live failure: an unrelated article accepted because it
+    happened to come back first. See the topic-match tests below.
+    """
     short = "Too short."
-    search_hit = _wiki_search_response([{"title": "Real Article"}])
-    good = _wiki_response("A real, long enough extract about the topic. " * 10,
-                          title="Real Article")
+    search_hit = _wiki_search_response([{"title": "Bretton Woods Conference"}])
+    good = _wiki_response("The Bretton Woods Conference gathered delegates in "
+                          "1944 to agree a monetary order. " * 6,
+                          title="Bretton Woods Conference")
     with patch.object(research.httpx, "get",
                       side_effect=[_wiki_response(short), search_hit, good]):
-        seed = research.fetch_wikipedia_by_title("some query")
+        seed = research.fetch_wikipedia_by_title("bretton woods")
     assert seed is not None
-    assert seed["title"] == "Real Article"
+    assert seed["title"] == "Bretton Woods Conference"
+
+
+def test_the_search_fallback_refuses_an_article_about_something_else():
+    """The same path, with the wrong answer in it. This is what a live run got
+    three times: Wikipedia answered, and the answer was about something else."""
+    short = "Too short."
+    search_hit = _wiki_search_response([{"title": "AI boom"}])
+    wrong = _wiki_response("An AI boom is a period of rapid growth in the "
+                          "field of artificial intelligence. " * 6,
+                          title="AI boom")
+    with patch.object(research.httpx, "get",
+                      side_effect=[_wiki_response(short), search_hit, wrong]):
+        seed = research.fetch_wikipedia_by_title("1920s Florida land boom")
+    assert seed is None, "a video was made about the AI boom instead"
 
 
 # ── Full-article grounding corpus ─────────────────────────────────────────────
@@ -1265,3 +1287,110 @@ def test_a_chosen_topic_resolving_onto_a_disambiguation_page_falls_through(monke
     assert seed is not None
     assert seed["title"] == "Bretton Woods Conference"
     assert "1944" in seed["content"]
+
+
+# ── the topic you asked for, or nothing ──────────────────────────────────────
+#
+# WHAT HAPPENED. The owner ran --topic "The 1920s Florida Land Boom" and the
+# log said:
+#
+#     [research] using YOUR topic → Wikipedia: "AI boom"
+#
+# Twice. A third run with "The Florida Land boom 1920" landed on "DeLand,
+# Florida". Each shares exactly ONE word with what was asked, and the article
+# "Florida land boom of the 1920s" exists. One of those runs then spent an hour
+# and a half of GPU making a video about the wrong subject, and nothing in the
+# log said anything was wrong — the line reads "using YOUR topic →" whichever
+# article it picked.
+#
+# The resolver took the first search hit whose extract was long enough. This
+# tree already knew that hazard: _trend_is_usable exists because Google matched
+# "gold standard" to a whey protein and a live run resolved it into "Sprint
+# (running)". The path where the owner TYPES the subject — the one place the
+# intent is unambiguous — had no guard at all.
+
+def _article(title, body=""):
+    return {"title": title, "content": body}
+
+
+def test_the_article_that_shares_one_word_is_not_the_topic():
+    """"AI boom" for "1920s Florida land boom" shares "boom" and nothing
+    else."""
+    q = "1920s Florida land boom"
+    ai = _article("AI boom", "An AI boom is a period of rapid growth in the "
+                             "field of artificial intelligence.")
+    assert research._answers_the_topic(ai, q) < research.TOPIC_MATCH_FLOOR
+
+
+def test_the_article_that_is_the_topic_scores_full_marks():
+    q = "1920s Florida land boom"
+    real = _article("Florida land boom of the 1920s",
+                    "The Florida land boom of the 1920s was Florida's first "
+                    "real estate bubble.")
+    assert research._answers_the_topic(real, q) == 1.0
+
+
+def test_a_town_that_merely_shares_a_state_is_refused():
+    """"DeLand, Florida" matched "Land" and "Florida" out of a request about a
+    land boom in 1920."""
+    q = "The Florida Land boom 1920"
+    deland = _article("DeLand, Florida", "DeLand is a city in and the county "
+                                         "seat of Volusia County, Florida.")
+    assert research._answers_the_topic(deland, q) < research.TOPIC_MATCH_FLOOR
+
+
+def test_a_correct_answer_that_renames_the_subject_still_passes():
+    """THE CASE THAT RULES OUT TITLE-ONLY SCORING. "The South Sea Bubble &
+    Isaac Newton's Loss" resolves to the article "South Sea Company" — two
+    shared words out of six in the title, nearly all of them in the first
+    paragraph. That run worked, and a stricter guard would have broken it."""
+    q = "The South Sea Bubble & Isaac Newton's Loss"
+    company = _article("South Sea Company",
+                       "The South Sea Company was a British joint-stock "
+                       "company. The South Sea Bubble ruined investors; "
+                       "Isaac Newton lost money in it.")
+    assert research._answers_the_topic(company, q) >= research.TOPIC_MATCH_FLOOR
+
+
+def test_a_partial_query_still_reaches_its_article():
+    """The behaviour the resolver was built for — "bretton woods" →
+    "Bretton Woods Conference" — must survive the guard."""
+    q = "bretton woods"
+    conf = _article("Bretton Woods Conference",
+                    "The Bretton Woods Conference was a gathering of "
+                    "delegates in July 1944.")
+    assert research._answers_the_topic(conf, q) >= research.TOPIC_MATCH_FLOOR
+
+
+def test_filler_words_do_not_count_as_the_subject():
+    """"The", "of" and "in" are in every article ever written; scoring them
+    would let anything clear the bar."""
+    assert research._topic_words("The Fall of the House of Medici") == {
+        "fall", "house", "medici"}
+
+
+def test_the_best_hit_is_taken_and_not_the_first():
+    """Wikipedia's ranking is not this channel's ranking — the wrong article
+    came back first in all three live runs. Whichever order search returns
+    them in, the one that answers the question has to win."""
+    q = "1920s Florida land boom"
+    hits = [
+        _article("AI boom", "An AI boom is rapid growth in artificial "
+                            "intelligence."),
+        _article("Florida land boom of the 1920s",
+                 "The Florida land boom of the 1920s was a real estate "
+                 "bubble."),
+    ]
+    best = max(hits, key=lambda a: research._answers_the_topic(a, q))
+    assert best["title"] == "Florida land boom of the 1920s"
+
+
+def test_refusing_is_better_than_a_video_about_something_else():
+    """get_seed raises when nothing matches, which is the contract
+    fetch_wikipedia_by_title's own docstring already promised: "a failed manual
+    request should be obvious, not swapped out". It was not obvious — it was
+    swapped out silently, and an hour and a half of GPU went with it."""
+    with patch.object(research, "fetch_wikipedia_by_title", return_value=None):
+        with pytest.raises(RuntimeError) as e:
+            research.get_seed("money_history", topic="1920s Florida land boom")
+    assert "No Wikipedia article" in str(e.value)

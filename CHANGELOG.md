@@ -51,6 +51,20 @@ to a clean URL, the access log is filtered before it is written, and
 `logscrub.py` finds and removes the ones already on disk. If you have run this
 dashboard before, scan once and rotate — rewriting a file revokes nothing.
 
+**The topic you typed, or nothing.** `--topic "1920s Florida land boom"`
+resolved to the Wikipedia article **"AI boom"** — twice — and "The Florida Land
+boom 1920" to "DeLand, Florida". Each shares one word with what was asked, and
+one of those runs spent an hour and a half of GPU on a video about the wrong
+subject while the log said "using YOUR topic →". The resolver took the first
+search hit; it now scores every hit against what you asked for and refuses
+rather than substituting.
+
+**Fewer blank rectangles.** The storyboard kept making documents, screens and
+signs the SUBJECT of shots — ten of fifteen in one run, twelve of seventeen in
+the next — and the de-text clause then blanked them, leaving figures gesturing
+at empty shapes. Those shots are now re-planned into what the document does to
+someone: a foreclosure notice becomes a family carrying boxes out of a door.
+
 **What a video costs.** Spend was recorded in three tables and nothing added it
 up, so the answer came from opening the OpenAI dashboard and guessing which
 charges belonged to which channel. The Measure page now says it, with what the

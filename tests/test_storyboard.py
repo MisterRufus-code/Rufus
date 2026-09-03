@@ -1522,3 +1522,206 @@ def test_grounding_runs_before_the_run_breaker_sees_the_distances():
     third = shots[2]
     assert not third.startswith(sb._FRAMINGS["close"]), (
         "three closes in a row is the run the breaker exists to stop")
+
+
+# ── shots that survive having their lettering removed ────────────────────────
+#
+# WHAT THE OWNER SAW: a wall of blank white signs. His own run review said why
+# before anybody read it —
+#
+#     10 of 15 prompts needed the blank-surfaces defusal, which means the
+#     storyboard keeps reaching for signs, screens and documents.
+#
+# and the next run said 12 of 17. The defusal is not the bug; it is correct,
+# because drawn lettering comes back garbled. The bug is that these shots are
+# ABOUT the lettering, so removing it removes the shot: "a hand pointing at a
+# graph showing a steep decline" becomes a hand pointing at an empty rectangle.
+#
+# Defusing was the wrong verb. These want re-planning, and this file already
+# knew how — _revary does exactly this for a repeated subject, for the same
+# reason: the conflict is invisible in any single prompt and only exists once
+# the sequence does.
+
+def test_a_shot_about_a_document_is_caught():
+    """Every one of these is from the live sequence that produced the
+    complaint."""
+    for visual in (
+        "Close shot. A hand pointing at a graph showing a steep decline.",
+        "Close shot. The screen shows a leaderboard of the most visited sites.",
+        "Close shot. Close-up of a personal ledger, figures now bleak.",
+        "Wide shot of the room showing ignored warning signs, such as "
+        "unheeded charts pinned on walls.",
+    ):
+        assert storyboard._undrawable_subject(visual), visual
+
+
+def test_a_document_in_the_background_is_left_alone():
+    """THE FALSE POSITIVE THE FIRST VERSION HAD. This is a shot of HANDS. The
+    de-text clause blanking a screen behind them is exactly right, and
+    re-planning it would spend a call to replace a good shot."""
+    visual = ("Medium shot. A pair of hands typing frenetically on a "
+              "keyboard, with the digital screen visible in the background.")
+    assert storyboard._undrawable_subject(visual) == ""
+
+
+def test_the_whole_background_clause_is_dropped_not_the_tail():
+    """"with the digital screen visible in the background" names the screen
+    BEFORE it says where it is, so cutting at the marker left the word behind
+    and the shot was still flagged."""
+    visual = ("Medium shot. A family carrying boxes out of a doorway, a "
+              "notice on the wall behind them.")
+    assert storyboard._undrawable_subject(visual) == ""
+
+
+def test_plurals_count():
+    """THE FALSE NEGATIVE THE FIRST VERSION HAD, and it was the worst shot in
+    the run: "warning signs ... charts pinned on walls" is a whole wall of
+    blank rectangles, and the set held only singulars."""
+    assert storyboard._undrawable_subject("Wide shot of unheeded charts "
+                                          "pinned on walls.")
+    assert storyboard._undrawable_subject("A row of protest signs held up.")
+
+
+def test_the_replacements_this_asks_for_are_not_documents():
+    """The test the prompt sets: delete every word from the picture, is
+    anything still happening? These are the four examples it gives."""
+    for visual in (
+        "Medium shot. A family carrying boxes out of a doorway.",
+        "Close shot. A man sitting down heavily on a stone step.",
+        "Wide shot. A queue stretching around a corner.",
+        "Close shot. Hands closing an empty till.",
+    ):
+        assert storyboard._undrawable_subject(visual) == "", visual
+
+
+def test_a_sequence_with_one_or_two_documents_is_left_alone(monkeypatch):
+    """A ledger closing or a letter arriving is a real choice. The pass is
+    aimed at the run that made ten of fifteen, and one that fires on a
+    deliberate shot is one that costs a call every run."""
+    calls = []
+
+    class _Client:
+        class chat:
+            class completions:
+                @staticmethod
+                def create(**kw):
+                    calls.append(kw)
+                    raise AssertionError("should not have been called")
+
+    visuals = ["Close shot. A hand closing a ledger."] + [
+        f"Wide shot. People walking away from a doorway, take {i}."
+        for i in range(9)]
+    out = storyboard._reground(_Client(), "m", "script", [""] * 10, visuals)
+    assert out == visuals
+    assert calls == []
+
+
+def test_a_sequence_that_is_mostly_documents_is_re_planned(monkeypatch):
+    """Ten of fifteen was the live number."""
+    asked = {}
+
+    class _Msg:
+        content = json.dumps({"shots": [
+            {"n": 4, "visual": "Wide shot. A queue stretching around a corner "
+                               "as people turn away from a shuttered door."},
+            {"n": 5, "visual": "Close shot. Hands closing an empty till, the "
+                               "drawer sliding shut."},
+        ]})
+
+    class _Choice:
+        message = _Msg()
+
+    class _Resp:
+        choices = [_Choice()]
+
+    class _Client:
+        class chat:
+            class completions:
+                @staticmethod
+                def create(**kw):
+                    asked.update(kw)
+                    return _Resp()
+
+    visuals = [f"Close shot. A ledger of losses, page {i}." for i in range(8)]
+    out = storyboard._reground(_Client(), "m", "script", [""] * 8, visuals)
+    assert asked, "the pass never asked"
+    assert out[3] != visuals[3] and out[4] != visuals[4]
+    assert "till" in out[4]
+    assert out[0] == visuals[0], "the earliest ones are kept"
+
+
+def test_a_replacement_that_is_another_document_is_refused():
+    """Swapping a ledger for a certificate and reporting success is the
+    failure shape this file keeps meeting."""
+    class _Msg:
+        content = json.dumps({"shots": [
+            {"n": 6, "visual": "Close shot. A framed certificate hanging "
+                               "crookedly on an office wall, dust on it."},
+        ]})
+
+    class _Choice:
+        message = _Msg()
+
+    class _Resp:
+        choices = [_Choice()]
+
+    class _Client:
+        class chat:
+            class completions:
+                @staticmethod
+                def create(**kw):
+                    return _Resp()
+
+    visuals = [f"Close shot. A ledger of losses, page {i}." for i in range(8)]
+    out = storyboard._reground(_Client(), "m", "script", [""] * 8, visuals)
+    assert out == visuals, "a certificate is not a replacement for a ledger"
+
+
+def test_a_broken_reply_leaves_the_plan_alone():
+    """Fail open in every direction — a repair pass must never cost the run."""
+    class _Client:
+        class chat:
+            class completions:
+                @staticmethod
+                def create(**kw):
+                    raise RuntimeError("no")
+
+    visuals = [f"Close shot. A ledger of losses, page {i}." for i in range(8)]
+    assert storyboard._reground(_Client(), "m", "s", [""] * 8, visuals) == visuals
+
+
+def test_the_replacement_keeps_the_distance_it_was_planned_at():
+    """The variety across the sequence was chosen once; a replacement that
+    arrives without a framing silently spends that choice."""
+    class _Msg:
+        content = json.dumps({"shots": [
+            {"n": 6, "visual": "Hands closing an empty till."}]})
+
+    class _Choice:
+        message = _Msg()
+
+    class _Resp:
+        choices = [_Choice()]
+
+    class _Client:
+        class chat:
+            class completions:
+                @staticmethod
+                def create(**kw):
+                    return _Resp()
+
+    prefix = list(storyboard._FRAMINGS.values())[0]
+    visuals = [f"{prefix}. A ledger of losses, page {i}." for i in range(8)]
+    out = storyboard._reground(_Client(), "m", "s", [""] * 8, visuals)
+    assert out[5].startswith(prefix), out[5]
+
+
+def test_the_subject_list_agrees_with_the_defusal_it_exists_for():
+    """Two lists about the same hazard drift, and the one that drifts is the
+    one nobody notices has stopped matching. Every noun here has to be
+    something main.py's de-text clause would actually blank — otherwise this
+    pass re-plans shots that were going to render fine."""
+    import main
+    for noun in storyboard._UNDRAWABLE_SUBJECTS:
+        assert main._TEXT_PROP_RE.search(noun), (
+            f"{noun!r} is re-planned here but never defused there")

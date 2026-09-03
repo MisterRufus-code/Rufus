@@ -1450,6 +1450,190 @@ def _revary(client, model: str, script: str, beats: list[str],
     return out
 
 
+# Things this style cannot draw as the SUBJECT of a shot, because the only
+# thing that makes them legible is the writing on them — and the writing is
+# exactly what the de-text clause removes before the renderer sees it.
+#
+# A NOUN LIST AND NOT main._TEXT_PROP_RE, deliberately, though a test keeps the
+# two from disagreeing. That regex is a DEFUSAL trigger: it fires on anything
+# that could carry a mark anywhere in the frame, including "classroom" and
+# "protest", and blanking a background prop is right. This is a different
+# question — is the shot ABOUT one — and a shot set in a classroom is not a
+# shot about a blackboard.
+_UNDRAWABLE_SUBJECTS = frozenset("""
+banner billboard blackboard board certificate chart contract diagram document
+graph headline invoice label ledger letter map marquee menu monitor newspaper
+note notice page pamphlet placard plaque poster receipt scoreboard screen
+scroll sign signboard signpost statement ticker whiteboard
+""".split())
+
+# Above this share, the sequence is mostly blank rectangles. A shot or two
+# about a document is a real choice — a ledger closing, a letter arriving —
+# and the pass is aimed at the run that made ten of fifteen.
+_UNDRAWABLE_SHARE = 0.25
+
+
+# Where the shot stops being about its subject. A screen "visible in the
+# background" is scenery and the de-text clause is the right answer for it;
+# only a screen the shot is ABOUT renders as an empty rectangle. Without this
+# split the pass replaced "hands typing on a keyboard, with the screen visible
+# behind" — a perfectly good shot of hands.
+_BACKGROUND_RE = re.compile(
+    r"(?i)\b(?:in|into|against)\s+the\s+(?:background|distance|far\s+\w+)"
+    r"|\bbehind\s+(?:them|him|her|it)\b"
+    r"|\bvisible\s+(?:in|behind)\b"
+    r"|\bon\s+the\s+wall")
+
+
+def _undrawable_subject(visual: str) -> str:
+    """The markable thing this shot is ABOUT, or "" if it is about something
+    else.
+
+    Two refinements the first version needed, both found by running it over a
+    real sequence. It flagged "a pair of hands typing on a keyboard, with the
+    digital screen visible in the background" — a shot of HANDS — because the
+    word appeared anywhere; and it missed "warning signs, such as unheeded
+    charts pinned on walls", the worst case in the run, because the nouns were
+    plural and the set holds singulars.
+    """
+    # THE WHOLE CLAUSE GOES, not the text after the marker. "with the digital
+    # screen visible in the background" names the screen BEFORE it says where
+    # it is, so cutting at the marker left the word behind and the shot was
+    # still flagged. Split on the joins a storyboard actually writes.
+    kept = [part for part in re.split(r",|\bwith\b", visual)
+            if not _BACKGROUND_RE.search(part)]
+    words = _subject_of(" ".join(kept))
+    # Crude singularisation, which is all this needs: the set is nouns, and
+    # "signs"/"charts"/"documents" are how a storyboard actually writes them.
+    for word in sorted(words):
+        if word in _UNDRAWABLE_SUBJECTS:
+            return word
+        if word.endswith("s") and word[:-1] in _UNDRAWABLE_SUBJECTS:
+            return word[:-1]
+    return ""
+
+
+def _reground(client, model: str, script: str, beats: list[str],
+              visuals: list[str]) -> list[str]:
+    """Re-plan the shots whose subject is a thing that will render blank.
+
+    WHAT THE OWNER SAW. A wall of blank white signs, and his own run review
+    said why before anybody read it:
+
+        10 of 15 prompts needed the blank-surfaces defusal, which means the
+        storyboard keeps reaching for signs, screens and documents.
+
+    The defusal is doing its job. "A hand pointing at a graph showing a steep
+    decline" has its graph blanked because a drawn graph comes back garbled —
+    and what is left is a hand pointing at an empty rectangle. Same for "the
+    screen shows a leaderboard", "close-up of a personal ledger", "warning
+    signs, such as unheeded charts pinned on walls". Every one of those shots
+    is ABOUT the writing, so removing the writing removes the shot.
+
+    Defusing was the wrong verb. These want re-planning, and this file already
+    knows how — _revary does exactly this for a repeated subject, for the same
+    reason: the conflict is invisible in any single prompt and only shows up
+    once the whole sequence exists.
+
+    Costs one extra call on the runs that need it, and fails open in every
+    direction: any error, any malformed reply, any replacement still about a
+    markable thing, and the original shot stands.
+    """
+    if not repair_enabled() or len(visuals) < 5:
+        return visuals
+    hits = [(i, _undrawable_subject(v)) for i, v in enumerate(visuals)]
+    hits = [(i, w) for i, w in hits if w]
+    if len(hits) <= max(1, round(len(visuals) * _UNDRAWABLE_SHARE)):
+        return visuals
+
+    # Keep the earliest few — the ones where the object is introduced and
+    # probably earns its shot — and re-plan the surplus.
+    budget = max(1, round(len(visuals) * _UNDRAWABLE_SHARE))
+    targets = [i for i, _w in hits[budget:]]
+    named = sorted({w for _i, w in hits})
+    print(f"[storyboard] {len(hits)} of {len(visuals)} shots are ABOUT "
+          f"something only its lettering makes legible "
+          f"({', '.join(named[:4])}) — those render blank. "
+          f"Re-planning {len(targets)}.")
+    try:
+        resp = client.chat.completions.create(
+            model=model,
+            messages=[{"role": "user",
+                       "content": _reground_prompt(script, beats, visuals,
+                                                   named, targets)}],
+            temperature=0.9, max_tokens=1500, timeout=90,
+            response_format={"type": "json_object"},
+        )
+        raw = json.loads(resp.choices[0].message.content or "{}")
+    except Exception as e:
+        print(f"[storyboard] re-ground skipped (non-fatal): {e}")
+        return visuals
+
+    out = list(visuals)
+    changed = 0
+    for entry in (raw.get("shots") or []):
+        if not isinstance(entry, dict):
+            continue
+        try:
+            i = int(entry.get("n", 0)) - 1
+        except (TypeError, ValueError):
+            continue
+        new = _strip_abstraction(str(entry.get("visual", "")).strip())
+        if i not in targets or len(new) < MIN_VISUAL_CHARS:
+            continue
+        # A replacement about another document is not a replacement. Without
+        # this the pass swaps a ledger for a certificate and reports success —
+        # the failure shape this file keeps meeting.
+        if _undrawable_subject(new):
+            continue
+        keep = _framing_prefix_of(visuals[i])
+        if keep and not _framing_prefix_of(new):
+            new = f"{keep}. {new}"
+        out[i] = new
+        changed += 1
+    left = sum(1 for v in out if _undrawable_subject(v))
+    if changed:
+        print(f"[storyboard] re-grounded {changed} shot(s); "
+              f"{left} of {len(out)} still turn on lettering")
+    else:
+        print("[storyboard] re-ground returned nothing usable — keeping the "
+              "original shots")
+    return out
+
+
+def _reground_prompt(script: str, beats: list[str], visuals: list[str],
+                     named: list[str], targets: list[int]) -> str:
+    """Ask for shots that survive having their lettering removed."""
+    lines = "\n".join(
+        f"{i + 1}. LINE: {beats[i] if i < len(beats) else ''}\n"
+        f"   CURRENT SHOT: {visuals[i]}" for i in targets)
+    return (
+        f"You planned a {len(visuals)}-shot sequence for this narration. The "
+        f"shots below are ABOUT things whose only content is writing "
+        f"({', '.join(named)}). This style draws every markable surface BLANK, "
+        f"because drawn lettering comes back garbled — so each of these "
+        f"renders as a person gesturing at an empty rectangle.\n\n"
+        f"FULL NARRATION:\n{script}\n\n"
+        f"REPLACE ONLY THESE SHOTS. Each must still be a picture of ITS OWN "
+        f"LINE, and it must SURVIVE having every word removed from the "
+        f"frame:\n{lines}\n\n"
+        f"THE TEST FOR EACH REPLACEMENT: if you deleted all the writing from "
+        f"the picture, would anything still be happening? Show the "
+        f"CONSEQUENCE of what the document says, not the document. A "
+        f"foreclosure notice becomes a family carrying boxes out of a door. A "
+        f"collapsing graph becomes a man sitting down heavily on a step. A "
+        f"leaderboard becomes a queue stretching around a corner. A ledger of "
+        f"losses becomes hands closing an empty till.\n"
+        f"Every replacement must have a VERB in it — something being done. "
+        f"The document may still be somewhere in frame; it must not be what "
+        f"the shot is about.\n"
+        f"Keep the same house rules: no lettering, no words printed in frame, "
+        f"no camera or lens language, no named emotions — draw the face and "
+        f"the posture instead. Two or three plain sentences each.\n\n"
+        f'Reply with ONLY this JSON: {{"shots": [{{"n": <shot number>, '
+        f'"visual": "..."}}, ...]}}')
+
+
 def _subject_of(visual: str) -> set[str]:
     try:
         from run_review import _subject_words
@@ -1581,6 +1765,12 @@ def plan(script: str, beats: list[str], era_tags: list[str] | None = None,
             # mistake that once made a run look like it was about "market,
             # cobblestone, bright".
             visuals = _revary(client, _model(), script, beats, visuals)
+            # AFTER _revary and for the same reason it runs at all: both
+            # defects are invisible in any single shot and only exist once the
+            # sequence does. Second, because a shot _revary replaces can
+            # itself come back as a document, and this is the pass that
+            # catches that.
+            visuals = _reground(client, _model(), script, beats, visuals)
             name, short = _character(niche)
             pinned = [_pin_character(v, name, short) for v in visuals]
             n_fixed = sum(1 for a, b in zip(visuals, pinned) if a != b)

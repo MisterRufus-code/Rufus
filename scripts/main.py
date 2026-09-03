@@ -718,7 +718,13 @@ def _split_one(beat: str, min_words: int):
 _TEXT_PROP_RE = re.compile(
     r"(?i)\b(newspaper|headline|calendar|screen|display|smartphone|phone|laptop|"
     r"monitor|button|sign|signage|label|poster|banner|placard|document|ledger|"
+    # diagram / notice / pamphlet were missing, and the gap was found by the
+    # storyboard's re-plan list disagreeing with this one — "chart|graph" was
+    # here without "diagram", "note" without "notice", "poster|placard"
+    # without "pamphlet". All three are writing with a shape around it, so a
+    # drawn one comes back garbled exactly like the rest.
     r"letter|scroll|parchment|statement|contract|certificate|chart|graph|"
+    r"diagram|notice|pamphlet|"
     r"ticker|keyboard|billboard|menu|book|page|note|"
     # scenes that are made of lettering even when no object is named
     r"protest|protesters|demonstration|rally|march|picket|strike|"
