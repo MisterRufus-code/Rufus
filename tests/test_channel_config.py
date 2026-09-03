@@ -58,7 +58,7 @@ def _write_channels(tmp_path) -> Path:
         },
     }
     p = tmp_path / "channels.json"
-    p.write_text(json.dumps(cfg))
+    p.write_text(json.dumps(cfg), encoding="utf-8")
     return p
 
 
@@ -122,3 +122,59 @@ def test_niche_override_wins_over_base(monkeypatch, tmp_path):
     assert merged["accent_color"] == "#000000"      # override won
     # untouched base keys survive (finance has a style_suffix in niches.json)
     assert "style_suffix" in merged
+
+
+# ── when a video goes live ───────────────────────────────────────────────────
+
+def test_the_default_is_public(monkeypatch):
+    """CHANGED ON REQUEST, and it changes what becomes publicly visible.
+
+    The old default was `private`, which was never really "keep it hidden": a
+    private upload also carried a publishAt of the next peak hour, so YouTube
+    published it anyway. What it actually did was make publishing depend on
+    the timezone database resolving — and on Windows that is a pip package
+    nobody had installed, so the schedule degraded to no publishAt at all and
+    finished videos sat private forever.
+
+    Nothing uploads on its own: main.py needs RUFUS_AUTO_UPLOAD=1 and a score
+    over the bar, and the dashboard needs a human to press approve. Public is
+    what happens after somebody has already decided to publish.
+    """
+    monkeypatch.delenv("RUFUS_PRIVACY", raising=False)
+    assert cc.DEFAULT_UPLOAD["privacy"] == "public"
+    assert cc.load_channel().upload["privacy"] == "public"
+
+
+def test_the_dashboard_choice_wins(monkeypatch):
+    monkeypatch.setenv("RUFUS_PRIVACY", "private")
+    assert cc.load_channel().upload["privacy"] == "private"
+
+
+@pytest.mark.parametrize("value", ["public", "private", "unlisted"])
+def test_every_youtube_privacy_value_is_accepted(monkeypatch, value):
+    monkeypatch.setenv("RUFUS_PRIVACY", value)
+    assert cc.load_channel().upload["privacy"] == value
+
+
+def test_a_nonsense_value_is_loud_and_ignored(monkeypatch, capsys):
+    """Silently rendering the default from a typo'd setting is
+    indistinguishable from the setting not working."""
+    monkeypatch.setenv("RUFUS_PRIVACY", "publik")
+    assert cc.load_channel().upload["privacy"] == "public"
+    assert "is not one of" in capsys.readouterr().out
+
+
+def test_the_override_reaches_a_channels_json_install(tmp_path, monkeypatch):
+    """A box with channels.json must obey the button too, or it looks broken
+    on exactly the installs that configured the most."""
+    cfg = tmp_path / "channels.json"
+    cfg.write_text(json.dumps({
+        "default_channel": "c1",
+        "channels": {"c1": {"display_name": "C1",
+                            "upload": {"privacy": "unlisted"}}},
+    }), encoding="utf-8")
+    monkeypatch.setattr(cc, "CHANNELS_FILE", cfg)
+    monkeypatch.delenv("RUFUS_PRIVACY", raising=False)
+    assert cc.load_channel().upload["privacy"] == "unlisted"
+    monkeypatch.setenv("RUFUS_PRIVACY", "public")
+    assert cc.load_channel().upload["privacy"] == "public"

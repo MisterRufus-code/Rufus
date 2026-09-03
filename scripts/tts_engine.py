@@ -2,59 +2,423 @@
 """
 tts_engine.py — Pluggable text-to-speech for Rufus.
 
-Two backends, selected via the RUFUS_TTS environment variable:
+Four backends, selected via the RUFUS_TTS environment variable:
 
-  RUFUS_TTS=edge   (default) — Microsoft Edge TTS. Free, fast, cloud, no GPU.
-                               Slightly synthetic but reliable.
-  RUFUS_TTS=xtts             — Coqui XTTS v2. Free forever, runs locally on a
-                               GTX 1060 6GB (~3GB VRAM), near-ElevenLabs quality,
-                               supports voice cloning from a 6-second sample.
+  RUFUS_TTS=edge        (default) — Microsoft Edge TTS. Free, fast, cloud, no
+                                    GPU. Reliable but reads slightly flat.
+  RUFUS_TTS=kokoro                — Kokoro-82M (Apache 2.0). Free, runs locally
+                                    on CPU in real time. Voice quality between
+                                    Edge and ElevenLabs — the best free local
+                                    voice for narration with no GPU needed.
+                                    Install: pip install kokoro soundfile
+  RUFUS_TTS=xtts                  — Coqui XTTS v2. Free, local GPU (~3GB VRAM),
+                                    near-ElevenLabs quality, voice cloning.
+  RUFUS_TTS=elevenlabs            — ElevenLabs cloud. Most natural, ~$0.10/video.
+                                    Needs "elevenlabs" key in config/keys.json.
+
+Quality ranking: elevenlabs > kokoro > xtts > edge
+Ease ranking:    edge > kokoro > elevenlabs > xtts
+
+Every backend falls back to Edge TTS on any failure so renders never break.
+
+Kokoro tuning (optional):
+  RUFUS_KOKORO_VOICE=am_adam   # default: deep American male narration voice
+                               # options: am_michael, bf_emma, af_heart, af_sky
+  RUFUS_KOKORO_SPEED=1.0       # playback speed (applies to both kokoro + kokoro_api)
+  Kokoro has no SSML/prosody control, so delivery comes from punctuation: the
+  local backend inserts a silence after each line sized to its trailing
+  punctuation (longest after em-dash/ellipsis "beats", shortest after commas) —
+  pair with script_writer's punctuation-as-pacing guidance for the best result.
 
 XTTS voice cloning (optional):
   RUFUS_TTS_VOICE=/path/to/reference.wav   # 6-30s clean speech sample to clone
-  If unset, XTTS uses a built-in studio speaker.
 
-Both backends write to the exact output path requested (mp3). XTTS synthesizes
-wav internally then transcodes to mp3 so the downstream Whisper/FFmpeg path is
-identical regardless of backend. Any XTTS failure falls back to Edge TTS so a
-render never breaks over a voice issue.
+ElevenLabs tuning (optional):
+  RUFUS_ELEVEN_VOICE=<voice_id>   # default: James (lUTamkMw7gOzZbFIwmq4)
+  RUFUS_ELEVEN_MODEL=<model_id>   # default: eleven_turbo_v2_5
+
+All backends write to the exact output path requested (mp3).
 """
 
 import asyncio
+import json
 import os
+import re
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 
-# Edge TTS defaults. Andrew is the deep "documentary" multilingual-neural voice
-# the community consistently rates most natural for narration; override with
-# RUFUS_EDGE_VOICE (e.g. en-US-BrianMultilingualNeural, en-US-ChristopherNeural).
+sys.path.insert(0, str(Path(__file__).parent))
+import text_repair
+
+CONFIG_DIR = Path(__file__).parent.parent / "config"
+KEYS_FILE  = CONFIG_DIR / "keys.json"
+
+# Edge TTS defaults
 EDGE_VOICE = os.environ.get("RUFUS_EDGE_VOICE", "en-US-AndrewMultilingualNeural")
 EDGE_RATE  = os.environ.get("RUFUS_EDGE_RATE", "+6%")
 
+# Kokoro defaults — am_adam is the deep American male voice built for narration
+KOKORO_VOICE = os.environ.get("RUFUS_KOKORO_VOICE", "am_adam")
+# Kokoro-FastAPI (the Docker HTTP service) — used by the kokoro_api backend.
+# Cross-platform: no native `kokoro` pip install needed (ideal on Windows 11).
+KOKORO_API_URL = os.environ.get("KOKORO_API_URL", "http://localhost:8880").rstrip("/")
+KOKORO_SPEED   = os.environ.get("RUFUS_KOKORO_SPEED", "1.0")
+
 # XTTS defaults
-XTTS_MODEL    = "tts_models/multilingual/multi-dataset/xtts_v2"
-XTTS_LANGUAGE = os.environ.get("RUFUS_TTS_LANG", "en")
-# Built-in studio speaker used when no reference clip is provided.
+XTTS_MODEL           = "tts_models/multilingual/multi-dataset/xtts_v2"
+XTTS_LANGUAGE        = os.environ.get("RUFUS_TTS_LANG", "en")
 XTTS_DEFAULT_SPEAKER = os.environ.get("RUFUS_XTTS_SPEAKER", "Damien Black")
 
-_xtts_model = None   # lazy singleton — loading the model is expensive
+# ElevenLabs defaults
+ELEVEN_VOICE = os.environ.get("RUFUS_ELEVEN_VOICE", "lUTamkMw7gOzZbFIwmq4")  # James
+ELEVEN_MODEL = os.environ.get("RUFUS_ELEVEN_MODEL", "eleven_turbo_v2_5")
+
+_xtts_model   = None   # lazy singleton
+_kokoro_pipe  = None   # lazy singleton
 
 
 def _backend() -> str:
-    return os.environ.get("RUFUS_TTS", "edge").strip().lower()
+    explicit = os.environ.get("RUFUS_TTS", "").strip().lower()
+    if explicit:
+        return explicit
+    # Auto-select best available, matching the documented quality ranking:
+    # ElevenLabs (most natural, key configured = user opted in and pays for
+    # it — use it) > Kokoro (human-quality, free) > Edge (robotic).
+    if _eleven_key():
+        return "elevenlabs"
+    try:
+        import kokoro  # noqa: F401
+        return "kokoro"
+    except ImportError:
+        return "edge"
+
+
+# ── Kokoro TTS ────────────────────────────────────────────────────────────────
+
+def _pause_seconds(chunk_text: str) -> float:
+    """How long a silence to insert AFTER this chunk, based on its trailing
+    punctuation. Kokoro has no SSML/prosody control — punctuation is the only
+    delivery cue it reads, so this is where "detailed direction" for a free
+    local voice actually lives. Tuned for narration pace, not real speech:
+    dramatic beats (em-dash/ellipsis) get the longest gap, full stops next,
+    commas the shortest — anything unrecognized defaults to a light beat."""
+    t = chunk_text.rstrip()
+    if not t:
+        return 0.15
+    if t.endswith("...") or t.endswith("—") or t.endswith("–"):
+        return 0.32
+    if t[-1] in "?!":
+        return 0.30
+    if t[-1] == ".":
+        return 0.26
+    if t[-1] in ",;:":
+        return 0.14
+    return 0.15
+
+
+def _tone_pause(tone: str) -> float:
+    """Extra silence this beat's tone earns, on top of its punctuation.
+
+    Imported lazily so tts_engine keeps working standalone if emotional_map is
+    ever absent — the voice is not allowed to depend on the creative layer.
+    """
+    try:
+        import emotional_map
+        return emotional_map.pause_after(tone)
+    except Exception:
+        return 0.0
+
+
+KOKORO_REQUIREMENTS = ("numpy", "soundfile", "kokoro")
+
+
+def _missing_kokoro_deps() -> list[str]:
+    """Which of Kokoro's imports are absent, ALL of them, in one pass.
+
+    Python reports only the first missing import, and _kokoro's imports happen
+    to run soundfile before kokoro — so a box missing both was told "No module
+    named 'soundfile'", the owner installed exactly that, reran a whole
+    pipeline, and got "No module named 'kokoro'" for their trouble. One round
+    trip per missing package is a bad trade when listing them costs nothing."""
+    import importlib.util
+    return [m for m in KOKORO_REQUIREMENTS
+            if importlib.util.find_spec(m) is None]
+
+
+def _kokoro_speed_for(tones: list[str] | None, base: float) -> float:
+    """The one speed this Kokoro call should run at.
+
+    Applied only when every supplied tone agrees. One call carries one speed,
+    so a script whose beats differ would otherwise have whichever tone won the
+    tie decide the pace of all of them; that case keeps the inter-beat pauses
+    it always had. A take is a single beat, which is exactly the uniform case.
+
+    Split out of _kokoro so it can be tested without numpy, soundfile and the
+    kokoro package present — the decision is arithmetic, and pinning it should
+    not require the model.
+    """
+    if not tones:
+        return base
+    wanted = {t for t in tones if t}
+    if len(wanted) != 1:
+        return base
+    try:
+        import emotional_map
+        return emotional_map.kokoro_speed(wanted.pop(), base)
+    except Exception:
+        return base
+
+
+def _kokoro(script: str, out_path: Path,
+            tones: list[str] | None = None) -> None:
+    """Synthesize with Kokoro-82M (Apache 2.0, runs on CPU). Outputs mp3."""
+    global _kokoro_pipe
+    missing = _missing_kokoro_deps()
+    if missing:
+        raise RuntimeError(
+            f"missing {', '.join(missing)} — install with: "
+            f"pip install {' '.join(missing)}")
+    import numpy as np
+    import soundfile as sf
+    from kokoro import KPipeline
+
+    if _kokoro_pipe is None:
+        _kokoro_pipe = KPipeline(lang_code="a")   # 'a' = American English
+        print(f"[tts] Kokoro pipeline loaded (voice: {KOKORO_VOICE})")
+
+    try:
+        speed = float(KOKORO_SPEED)
+    except ValueError:
+        speed = 1.0
+
+    # THE TONE HAD EXACTLY ONE WAY INTO THIS VOICE AND IT WAS INAUDIBLE.
+    #
+    # Below, a tone adds silence AFTER a chunk — and only between chunks, so a
+    # text short enough to be one chunk gets nothing at all. A hook is one
+    # chunk. Three "different" reads of an opening line came back identical
+    # because of it: the emotional map was live in the grade and in the pauses
+    # and silent in the actual speech.
+    #
+    # Kokoro exposes one knob, speed, so the rate half of the tone can reach
+    # it. Applied only when every supplied tone agrees — one call carries one
+    # speed, and a script whose beats differ would otherwise have its loudest
+    # beat decide the pace of all of them. That case still gets the pauses,
+    # which is what it had before; the uniform case (a take, a single beat)
+    # gets a voice that actually changes.
+    speed = _kokoro_speed_for(tones, speed)
+
+    def _as_numpy(audio):
+        """Kokoro yields torch Tensors; everything below here is numpy.
+
+        Without this, `np.zeros(gap, dtype=seg_audio.dtype)` is handed
+        torch.float32 and raises "Cannot interpret 'torch.float32' as a data
+        type" — which reads exactly like a numpy-2 incompatibility and was
+        misdiagnosed as one for a long time. It is not: it reproduces on
+        numpy 1.26.4, and it fires ONLY when the script splits into more than
+        one chunk, because a single chunk never reaches the inter-chunk gap.
+        That is why every one-sentence smoke test passed while every real
+        script silently fell back to the flat Edge voice."""
+        detach = getattr(audio, "detach", None)
+        return detach().cpu().numpy() if detach is not None else np.asarray(audio)
+
+    # Generator yields (graphemes, phonemes, audio_array) per chunk (split on
+    # blank lines by default). Keep the source text alongside each chunk so we
+    # can size the gap that follows it from its own punctuation.
+    chunks = [(g, _as_numpy(audio)) for g, _, audio in
+              _kokoro_pipe(script, voice=KOKORO_VOICE, speed=speed)]
+    if not chunks:
+        raise RuntimeError("Kokoro returned no audio segments")
+
+    sample_rate = 24000   # Kokoro native sample rate
+    pieces = []
+    for i, (graphemes, seg_audio) in enumerate(chunks):
+        pieces.append(seg_audio)
+        if i < len(chunks) - 1:
+            # Punctuation earns the base gap; the beat's tone adds to it. A
+            # held beat before the turn is the only prosody a voice with no
+            # SSML can be given, and it is free. Tones are positional against
+            # Kokoro's own chunking, so a mismatch just means no bonus rather
+            # than a pause landing in the wrong place.
+            seconds = _pause_seconds(graphemes)
+            if tones and i < len(tones):
+                seconds += _tone_pause(tones[i])
+            gap = int(seconds * sample_rate)
+            if gap > 0:
+                pieces.append(np.zeros(gap, dtype=seg_audio.dtype))
+
+    audio = np.concatenate(pieces) if len(pieces) > 1 else pieces[0]
+
+    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tf:
+        wav_path = tf.name
+    try:
+        sf.write(wav_path, audio, sample_rate)
+        r = subprocess.run(
+            ["ffmpeg", "-y", "-loglevel", "error", "-i", wav_path,
+             "-c:a", "libmp3lame", "-b:a", "192k", str(out_path)],
+            capture_output=True, text=True, timeout=60,
+        )
+        if r.returncode != 0 or not out_path.exists() or out_path.stat().st_size < 5_000:
+            raise RuntimeError(f"Kokoro mp3 transcode failed: {r.stderr[-300:]}")
+    finally:
+        Path(wav_path).unlink(missing_ok=True)
+
+
+# ── Kokoro-FastAPI (HTTP) ───────────────────────────────────────────────────────
+
+def _kokoro_api(script: str, out_path: Path) -> None:
+    """Synthesize via the Kokoro-FastAPI Docker service (OpenAI-compatible route).
+
+    POST /v1/audio/speech → mp3 bytes written to out_path. Just an HTTP call, so it
+    sidesteps the fragile native `kokoro` pip install on Windows. Raises on failure
+    so synthesize() falls back to Edge.
+    """
+    import requests
+
+    try:
+        speed = float(KOKORO_SPEED)
+    except ValueError:
+        speed = 1.0
+
+    r = requests.post(
+        f"{KOKORO_API_URL}/v1/audio/speech",
+        json={"model": "kokoro", "input": script, "voice": KOKORO_VOICE,
+              "response_format": "mp3", "speed": speed},
+        timeout=180,
+    )
+    if r.status_code != 200:
+        raise RuntimeError(f"Kokoro-FastAPI HTTP {r.status_code}: {r.text[:200]}")
+    out_path.write_bytes(r.content)
+    if not out_path.exists() or out_path.stat().st_size < 5_000:
+        raise RuntimeError("Kokoro-FastAPI returned an empty/too-small audio file")
 
 
 # ── Edge TTS ──────────────────────────────────────────────────────────────────
 
-async def _edge_async(script: str, out_path: Path) -> None:
+async def _edge_async(script: str, out_path: Path,
+                      prosody: dict | None = None) -> None:
     import edge_tts
-    comm = edge_tts.Communicate(script, EDGE_VOICE, rate=EDGE_RATE)
+    kw = dict(prosody) if prosody else {"rate": EDGE_RATE}
+    comm = edge_tts.Communicate(script, EDGE_VOICE, **kw)
     await comm.save(str(out_path))
 
 
-def _edge(script: str, out_path: Path) -> None:
-    asyncio.run(_edge_async(script, out_path))
+def _edge_base_rate_pct() -> int:
+    """RUFUS_EDGE_RATE as a plain integer, so a tone delta can be added to it.
+
+    Returns 0 rather than raising on anything unparseable: an owner who set
+    RUFUS_EDGE_RATE to "fast" should get a working voice at the default speed,
+    not a failed render.
+    """
+    try:
+        return int(EDGE_RATE.strip().rstrip("%"))
+    except (ValueError, AttributeError):
+        return 0
+
+
+def _silence_mp3(seconds: float, path: Path) -> bool:
+    """An mp3 of nothing, `seconds` long. False if ffmpeg would not make it.
+
+    Byte-wise mp3 concatenation is what joins the beats (see _elevenlabs for
+    why that works), and a gap has to be a real mp3 to take part in it.
+    """
+    if seconds <= 0:
+        return False
+    try:
+        r = subprocess.run(
+            ["ffmpeg", "-y", "-v", "error", "-f", "lavfi",
+             "-i", f"anullsrc=r=24000:cl=mono", "-t", f"{seconds:.3f}",
+             "-c:a", "libmp3lame", "-b:a", "128k", str(path)],
+            capture_output=True, text=True)
+        return r.returncode == 0 and path.exists() and path.stat().st_size > 0
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
+def _edge(script: str, out_path: Path,
+          tones: list[str] | None = None,
+          beats: list[str] | None = None) -> None:
+    """Edge TTS, one request per beat when the beats are meant to sound
+    different, one request for the whole script when they are not.
+
+    WHY THIS BRANCHES RATHER THAN ALWAYS SPLITTING. Per-beat costs one network
+    round trip per beat, and the tone list fails open to all-neutral — no edit
+    plan, a short plan, junk in the plan. Paying ten round trips to apply a
+    delta of zero would be a cost with nothing to show for it, so the
+    single-request path stays exactly as it was and is still what most runs
+    take.
+
+    NO SSML. The edge_tts library builds its own SSML and escapes the text it
+    is given, so markup passed through here is spoken aloud, character by
+    character. rate/pitch/volume per call is the supported route to the same
+    place.
+    """
+    import emotional_map
+
+    # SAY WHICH VOICE THIS RUN GOT. The two paths sound different and log
+    # identically, so "the narration is flat" has never been answerable from a
+    # run's own output — the owner had to read this function to learn that the
+    # single-request path is what most runs take. A per-beat voice that
+    # silently degrades to one flat request is the same shape of failure as a
+    # style probe reporting the wrong style: the feature is built, the run does
+    # not get it, and nothing says so.
+    reason = ""
+    if not beats:
+        reason = "no beat split"
+    elif len(beats) < 2:
+        reason = "one beat"
+    elif not tones or len(tones) < len(beats):
+        reason = "no tone plan (edit_director returned nothing usable)"
+    elif emotional_map.voice_is_neutral(tones[:len(beats)]):
+        reason = "every beat came back neutral"
+    if reason:
+        print(f"[tts] flat voice — {reason}")
+        asyncio.run(_edge_async(script, out_path))
+        return
+    print(f"[tts] per-beat voice over {len(beats)} beats: "
+          f"{emotional_map.describe(tones[:len(beats)])}")
+
+    base = _edge_base_rate_pct()
+    tmp = out_path.parent / f".{out_path.stem}.beats"
+    tmp.mkdir(parents=True, exist_ok=True)
+    parts: list[Path] = []
+    try:
+        for i, beat in enumerate(beats):
+            text = (beat or "").strip()
+            if not text:
+                continue
+            tone = tones[i]
+            piece = tmp / f"{i:03d}.mp3"
+            asyncio.run(_edge_async(text, piece,
+                                    emotional_map.voice(tone, base)))
+            parts.append(piece)
+            if i >= len(beats) - 1:
+                continue
+            # Punctuation earns the base gap and the tone adds to it — the
+            # same arithmetic _kokoro does, so the two backends pause alike.
+            gap = _pause_seconds(text) + _tone_pause(tone)
+            silence = tmp / f"{i:03d}.gap.mp3"
+            if _silence_mp3(gap, silence):
+                parts.append(silence)
+
+        if not parts:
+            raise RuntimeError("no beats produced audio")
+        with open(out_path, "wb") as f:
+            for piece in parts:
+                f.write(piece.read_bytes())
+        print(f"[tts] Edge: {len(beats)} beats, "
+              f"{emotional_map.describe(tones[:len(beats)])}")
+    finally:
+        for piece in parts:
+            try:
+                piece.unlink()
+            except OSError:
+                pass
+        try:
+            tmp.rmdir()
+        except OSError:
+            pass
 
 
 # ── XTTS v2 (Coqui) ─────────────────────────────────────────────────────────────
@@ -108,15 +472,219 @@ def _xtts(script: str, out_path: Path) -> None:
         Path(wav_path).unlink(missing_ok=True)
 
 
+# ── ElevenLabs (cloud) ──────────────────────────────────────────────────────────
+
+def _eleven_key() -> str:
+    """Read the ElevenLabs key from config/keys.json. '' if unset/placeholder."""
+    try:
+        key = json.loads(KEYS_FILE.read_text(encoding="utf-8")).get("elevenlabs", "")
+    except Exception:
+        return ""
+    if not key or key.startswith("YOUR_") or key.startswith("FILL_"):
+        return ""
+    return key
+
+
+# ElevenLabs refuses a single request past this many characters. A 40-second
+# Short is ~650 and never came near it; a nine-minute script is ~7,500 and
+# would have been rejected outright — the format change turning a working
+# voice into a failed render, on the one stage with no fallback of its own.
+ELEVEN_MAX_CHARS = 4800
+
+
+def _paragraph_batches(script: str, limit: int) -> list[str]:
+    """Split on paragraph breaks, packing as much into each request as fits.
+
+    ON PARAGRAPHS, never mid-sentence. A join at a sentence boundary is
+    inaudible; a join mid-clause is a stutter the listener hears and cannot
+    explain. The long-form writer already separates its sections with blank
+    lines, so the seams this cuts on are the ones the outline chose.
+    """
+    paras = [p.strip() for p in script.split("\n\n") if p.strip()]
+    if not paras:
+        return [script]
+    out, cur = [], ""
+    for para in paras:
+        if cur and len(cur) + len(para) + 2 > limit:
+            out.append(cur)
+            cur = para
+        elif cur:
+            cur = f"{cur}\n\n{para}"
+        else:
+            cur = para
+        # A single paragraph over the limit still has to go somewhere; send it
+        # and let the API decide rather than cutting a sentence in half.
+        while len(cur) > limit and "\n\n" not in cur:
+            out.append(cur[:limit])
+            cur = cur[limit:]
+    if cur:
+        out.append(cur)
+    return out
+
+
+def _elevenlabs(script: str, out_path: Path) -> None:
+    """Synthesize with ElevenLabs → mp3 written directly to out_path.
+
+    Voice settings tuned for narration with life: lower stability = more
+    expressive delivery (pauses, emphasis), high similarity keeps the timbre
+    consistent across a video, style adds intonation. speaker_boost adds presence.
+    """
+    import httpx
+
+    key = _eleven_key()
+    if not key:
+        raise RuntimeError("no ElevenLabs key in config/keys.json")
+
+    # LONGER THAN ONE REQUEST ALLOWS? Say it in pieces and glue the mp3s.
+    # mp3 frames concatenate byte-wise, which is why every simple "cat *.mp3"
+    # works — no re-encode, no quality loss, and the joins land on paragraph
+    # breaks the writer already chose.
+    batches = _paragraph_batches(script, ELEVEN_MAX_CHARS)
+    if len(batches) > 1:
+        print(f"[tts] {len(script)} characters — sending as {len(batches)} "
+              f"requests, joined at paragraph breaks")
+        parts = []
+        try:
+            for i, part in enumerate(batches):
+                piece = out_path.with_suffix(f".part{i}.mp3")
+                _elevenlabs_once(part, piece)
+                parts.append(piece)
+            with open(out_path, "wb") as f:
+                for piece in parts:
+                    f.write(piece.read_bytes())
+        finally:
+            for piece in parts:
+                try:
+                    piece.unlink()
+                except OSError:
+                    pass
+        return
+    _elevenlabs_once(script, out_path)
+
+
+def _elevenlabs_once(script: str, out_path: Path) -> None:
+    """One request. Raises on any non-200, with the cause distilled."""
+    import httpx
+
+    key = _eleven_key()
+    if not key:
+        raise RuntimeError("no ElevenLabs key in config/keys.json")
+
+    url = (f"https://api.elevenlabs.io/v1/text-to-speech/{ELEVEN_VOICE}"
+           f"?output_format=mp3_44100_128")
+    payload = {
+        "text": script,
+        "model_id": ELEVEN_MODEL,
+        "voice_settings": {
+            "stability": 0.45,          # lower = more expressive, less monotone
+            "similarity_boost": 0.8,
+            "style": 0.35,              # intonation/emphasis for a human read
+            "use_speaker_boost": True,
+        },
+    }
+    headers = {"xi-api-key": key, "Content-Type": "application/json"}
+
+    with httpx.stream("POST", url, json=payload, headers=headers, timeout=120) as r:
+        if r.status_code != 200:
+            body = r.read()[:300].decode("utf-8", "ignore")
+            if r.status_code == 402 and "paid_plan_required" in body:
+                # Distilled, actionable — the raw 300-char JSON dump buried
+                # the actual cause every run: a "library" voice (a premade
+                # ElevenLabs voice, not a cloned one) is blocked from the API
+                # entirely on the free tier. No retry or code change fixes
+                # this; it's an account-tier limit. Same UX pattern as the
+                # Kokoro numpy-2 message below — name the fix, not the wire
+                # protocol.
+                raise RuntimeError(
+                    f"ElevenLabs voice {ELEVEN_VOICE} is a library (premade) "
+                    f"voice — free accounts cannot use those via the API "
+                    f"(only a cloned voice, or a paid plan). Either upgrade "
+                    f"ElevenLabs, or clone your own voice and set "
+                    f"RUFUS_ELEVEN_VOICE to its id.")
+            raise RuntimeError(f"ElevenLabs HTTP {r.status_code}: {body}")
+        with open(out_path, "wb") as f:
+            for chunk in r.iter_bytes():
+                if chunk:
+                    f.write(chunk)
+
+    if not out_path.exists() or out_path.stat().st_size < 5_000:
+        raise RuntimeError("ElevenLabs returned an empty/too-small audio file")
+
+
 # ── Public API ────────────────────────────────────────────────────────────────
 
-def synthesize(script: str, out_path: Path) -> None:
+def _sanitize_for_speech(script: str) -> str:
+    """Strip text artifacts a TTS voice would read out loud. GPT occasionally
+    leaks markdown emphasis (**word**), stray asterisks, or bracketed stage
+    directions into a script — every backend received the text verbatim, so
+    the voice would literally say 'asterisk' or read '[pause]'. Cheap, safe,
+    and idempotent on clean scripts.
+
+    Mis-decoded text is handled first and separately. A CTA read out of a UTF-8
+    config under the wrong code page arrives here as Hebrew letters glued to
+    punctuation debris, and a TTS backend pronounces exactly what it is given —
+    that shipped in the audio of a finished English short while every gate
+    downstream reported pass. text_repair reverses the decode where it can and
+    drops what it cannot, saying so either way."""
+    s = text_repair.clean_for_speech(script, label="script")
+    s = re.sub(r"\*{1,3}([^*]*)\*{1,3}", r"\1", s)   # **bold** / *italic* → bare text
+    s = re.sub(r"[\[\(]\s*(pause|beat|sfx|music|silence)[^\]\)]*[\]\)]", "", s,
+               flags=re.IGNORECASE)                    # [pause], (beat) stage directions
+    s = s.replace("*", "").replace("#", "").replace("`", "")
+    s = re.sub(r"[ \t]{2,}", " ", s)
+    return s.strip()
+
+
+def synthesize(script: str, out_path: Path,
+               tones: list[str] | None = None,
+               beats: list[str] | None = None) -> None:
     """Generate speech for `script` at `out_path` (mp3). Backend per RUFUS_TTS.
 
-    XTTS failures fall back to Edge TTS so a render never breaks over the voice.
+    `tones` is one tone per beat and `beats` the text those tones describe.
+    Given both, the Edge backend says each beat at its own rate, pitch and
+    volume; given neither, or an all-neutral tone list, it says the whole
+    script in one request exactly as it always has.
+
+    Every backend falls back to Edge TTS on any failure so a render never breaks
+    over the voice.
     """
+    script   = _sanitize_for_speech(script)
     out_path = Path(out_path)
     backend  = _backend()
+
+    if backend == "kokoro_api":
+        try:
+            print(f"[tts] backend: Kokoro-FastAPI ({KOKORO_VOICE} @ {KOKORO_API_URL})")
+            _kokoro_api(script, out_path)
+            return
+        except Exception as e:
+            print(f"[tts] Kokoro-FastAPI failed ({e}) — falling back to Edge TTS")
+            _edge(script, out_path, tones, beats)
+            return
+
+    if backend == "elevenlabs":
+        try:
+            print(f"[tts] backend: ElevenLabs ({ELEVEN_MODEL})")
+            _elevenlabs(script, out_path)
+            return
+        except Exception as e:
+            print(f"[tts] ElevenLabs failed ({e}) — falling back to Kokoro")
+
+    if backend in ("elevenlabs", "kokoro"):
+        try:
+            print(f"[tts] backend: Kokoro ({KOKORO_VOICE})")
+            _kokoro(script, out_path, tones)
+            return
+        except Exception as e:
+            print(f"[tts] Kokoro failed ({e}) — falling back to Edge TTS")
+            if "cannot interpret" in str(e).lower() and "data type" in str(e).lower():
+                # This USED to print "install numpy<2". It was wrong, and the
+                # wrong hint cost two rounds of chasing the environment: the
+                # real cause was Kokoro handing back torch Tensors where the
+                # gap-padding expected numpy (fixed in _kokoro). If it shows up
+                # again it is a NEW dtype leak, not a numpy version.
+                print("[tts]   a torch dtype reached numpy — this is a code "
+                      "bug in _kokoro, not a package version")
 
     if backend == "xtts":
         try:
@@ -124,9 +692,25 @@ def synthesize(script: str, out_path: Path) -> None:
             _xtts(script, out_path)
             return
         except Exception as e:
-            print(f"[tts] XTTS failed ({e}) — falling back to Edge TTS")
+            print(f"[tts] XTTS failed ({e}) — falling back to Kokoro")
+        try:
+            print(f"[tts] backend: Kokoro ({KOKORO_VOICE})  [XTTS fallback]")
+            _kokoro(script, out_path, tones)
+            return
+        except Exception as e:
+            print(f"[tts] Kokoro failed ({e}) — falling back to Edge TTS")
+            if "cannot interpret" in str(e).lower() and "data type" in str(e).lower():
+                # This USED to print "install numpy<2". It was wrong, and the
+                # wrong hint cost two rounds of chasing the environment: the
+                # real cause was Kokoro handing back torch Tensors where the
+                # gap-padding expected numpy (fixed in _kokoro). If it shows up
+                # again it is a NEW dtype leak, not a numpy version.
+                print("[tts]   a torch dtype reached numpy — this is a code "
+                      "bug in _kokoro, not a package version")
 
-    _edge(script, out_path)
+    if backend not in ("elevenlabs", "kokoro", "xtts"):
+        print(f"[tts] backend: Edge TTS ({EDGE_VOICE})")
+    _edge(script, out_path, tones, beats)
 
 
 if __name__ == "__main__":

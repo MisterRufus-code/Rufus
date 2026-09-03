@@ -2,6 +2,7 @@ import React from 'react';
 import {
   AbsoluteFill,
   Audio,
+  Img,
   Loop,
   OffthreadVideo,
   interpolate,
@@ -13,6 +14,7 @@ import {
 import {continueRender, delayRender} from 'remotion';
 import {TransitionSeries, linearTiming} from '@remotion/transitions';
 import {fade} from '@remotion/transitions/fade';
+import {slide} from '@remotion/transitions/slide';
 
 // Self-hosted Anton (staged into public/fonts/ by remotion_renderer.py) — no
 // network dependency at render time. Falls back to Arial Black if missing.
@@ -30,6 +32,10 @@ if (typeof document !== 'undefined') {
 }
 
 export const FPS = 30;
+// The DEFAULT shape, not the only one. Python's video_format profile decides
+// what a run actually renders at (1080x1920 for a Short, 1920x1080 for
+// long-form) and passes it in props; Root's calculateMetadata applies it. These
+// stay as the fallback for a props-less preview in the Remotion studio.
 export const WIDTH = 1080;
 export const HEIGHT = 1920;
 
@@ -39,30 +45,152 @@ const MUSIC_VOL = 0.14;
 
 export type Word = {text: string; start: number; end: number};
 
+// What the edit director decided for one beat. Optional throughout: a run
+// without a plan renders exactly as it always did.
+export type BeatDirection = {
+  n: number;
+  motion: 'push_in' | 'pull_back' | 'hold_still' | 'drift_left' | 'drift_right' | 'rise';
+  intensity: 'subtle' | 'normal' | 'strong';
+  emphasis: string[];
+};
+
+export type EditPlan = {
+  peak_beat: number;
+  beats: BeatDirection[];
+};
+
+// One word-synced cutaway. `at` is the second the narrator SAYS the word, taken
+// from the same Whisper pass that drives the captions — see insert_director.py.
+export type Insert = {
+  word: string;
+  at: number;
+  hold: number;
+  file: string; // filename inside public/<job>/
+};
+
 export type ShortProps = {
   job: string;
   clips: string[]; // filenames inside public/<job>/
   clipDurations?: (number | null)[]; // seconds per clip (for looping short sources)
+  // [start, end] in seconds for each clip, from the narration's own word
+  // timings. Absent → every shot gets an equal slice of the runtime, which is
+  // what this composition always did.
+  beatSpans?: [number, number][] | null;
   voice: string; // voice mp3 filename inside public/<job>/
   music: string | null; // optional music filename inside public/<job>/
   words: Word[];
   durationInSeconds: number;
+  edit?: EditPlan | null; // per-beat direction; null = use the default cycle
+  // Words the edit director marked for the captions to hit hardest.
+  // Empty or absent = the regex highlighting this always had.
+  emphasis?: string[] | null;
+  inserts?: Insert[] | null; // word-synced cutaways; absent = the old look
+  width?: number; // from video_format; absent = the vertical default
+  height?: number;
 };
 
 const HIGHLIGHT = /[\d$%]/;
 
+// ── Word-synced insert ───────────────────────────────────────────────────────
+// The format this serves: the narrator says "palace" and a palace appears on
+// the word. Not a transition — the scene underneath does not change, an object
+// lands on top of it and leaves. That is why it pops rather than fades, and why
+// the sound under it is a blip and not a whoosh.
+const INSERT_FRACTION = 0.42; // of frame width — big enough to read, small
+                              // enough that the beat behind it still reads
+const InsertLayer: React.FC<{inserts: Insert[]; job: string}> = ({inserts, job}) => {
+  const frame = useCurrentFrame();
+  const {fps, width, height} = useVideoConfig();
+
+  return (
+    <>
+      {inserts.map((ins, i) => {
+        const startFrame = Math.round(ins.at * fps);
+        const holdFrames = Math.max(1, Math.round((ins.hold || 0.7) * fps));
+        const local = frame - startFrame;
+        if (local < 0 || local > holdFrames) return null;
+
+        // Spring in, hard cut out. An insert that fades away competes for
+        // attention with the next word; one that simply stops does not.
+        const scale = spring({
+          frame: local,
+          fps,
+          config: {damping: 12, mass: 0.5, stiffness: 190},
+          from: 0.55,
+          to: 1,
+        });
+        // Alternate sides so twenty of them do not stack in one place, and
+        // keep them clear of the caption band at the vertical centre.
+        const left = i % 2 === 0;
+        const size = width * INSERT_FRACTION;
+
+        return (
+          <AbsoluteFill key={`ins-${i}-${ins.word}`} style={{pointerEvents: 'none'}}>
+            <div
+              style={{
+                position: 'absolute',
+                width: size,
+                height: size,
+                left: left ? width * 0.06 : width - size - width * 0.06,
+                top: i % 4 < 2 ? height * 0.16 : height * 0.62,
+                transform: `scale(${scale}) rotate(${left ? -3 : 3}deg)`,
+                borderRadius: 18,
+                overflow: 'hidden',
+                boxShadow: '0 18px 48px rgba(0,0,0,0.55)',
+                border: '6px solid #fff',
+                backgroundColor: '#fff',
+              }}
+            >
+              <Img
+                src={staticFile(`${job}/${ins.file}`)}
+                style={{width: '100%', height: '100%', objectFit: 'cover'}}
+              />
+            </div>
+          </AbsoluteFill>
+        );
+      })}
+    </>
+  );
+};
+
 // ── One background clip with Ken Burns motion ────────────────────────────────
+// The director's vocabulary, expressed as the motion this component already
+// speaks. Kept beside the fallback cycle on purpose: both must stay in the
+// same units, or a directed beat would move at a different scale from an
+// undirected one in the same video.
+const MOTION_PATTERNS: Record<string, {zoomIn: boolean; dx: number; dy: number}> = {
+  push_in:     {zoomIn: true,  dx: 0,   dy: 0},
+  pull_back:   {zoomIn: false, dx: 0,   dy: 0},
+  drift_left:  {zoomIn: true,  dx: -26, dy: 0},
+  drift_right: {zoomIn: true,  dx: 26,  dy: 0},
+  rise:        {zoomIn: true,  dx: 0,   dy: -24},
+  // hold_still is handled separately: it is the ABSENCE of motion, and the
+  // director's most valuable instruction. A number or a reveal lands hardest
+  // on a frame that does not move, and a video where every beat drifts has no
+  // emphasis anywhere. A hair of scale keeps it from reading as a freeze.
+  hold_still:  {zoomIn: true,  dx: 0,   dy: 0},
+};
+
+const INTENSITY_SCALE: Record<string, number> = {
+  subtle: 0.5,
+  normal: 1,
+  strong: 1.6,
+};
+
 const KenBurnsClip: React.FC<{
   src: string;
   index: number;
   clipFrames: number;
   sourceDurationSec?: number | null;
-}> = ({src, index, clipFrames, sourceDurationSec}) => {
+  direction?: BeatDirection | null;
+}> = ({src, index, clipFrames, sourceDurationSec, direction}) => {
   const frame = useCurrentFrame();
   const {fps} = useVideoConfig();
   const t = Math.min(1, frame / Math.max(1, clipFrames));
   // 6 zoom+drift patterns (vs the old %2/%3 combo that repeated every 6 clips
   // with only 3 distinct drifts) — consecutive clips always move differently.
+  // This is now the FALLBACK: the same cycle, in the same order, for every
+  // video ever rendered, which is what the director exists to replace.
   const KB_PATTERNS = [
     {zoomIn: true,  dx: -22, dy: 12},  // push in, drift left-down
     {zoomIn: false, dx: 22,  dy: -16}, // pull back, drift right-up
@@ -71,10 +199,18 @@ const KenBurnsClip: React.FC<{
     {zoomIn: true,  dx: 0,   dy: -24}, // push in, rise
     {zoomIn: false, dx: -26, dy: 0},   // pull back, slide left
   ];
-  const p = KB_PATTERNS[index % KB_PATTERNS.length];
+  const directed = direction ? MOTION_PATTERNS[direction.motion] : undefined;
+  const base = directed ?? KB_PATTERNS[index % KB_PATTERNS.length];
+  const still = direction?.motion === 'hold_still';
+  const k = still ? 0.12 : INTENSITY_SCALE[direction?.intensity ?? 'normal'] ?? 1;
+  const p = {zoomIn: base.zoomIn, dx: base.dx * k, dy: base.dy * k};
+  // 0.12 of the usual travel on a hold_still, 1.6x on a strong push. The base
+  // 1.04 -> 1.16 stays the reference so a directed beat and an undirected one
+  // in the same video move at comparable scale.
+  const zoomTravel = 0.12 * k;
   const scale = p.zoomIn
-    ? interpolate(t, [0, 1], [1.04, 1.16])
-    : interpolate(t, [0, 1], [1.16, 1.04]);
+    ? interpolate(t, [0, 1], [1.04, 1.04 + zoomTravel])
+    : interpolate(t, [0, 1], [1.04 + zoomTravel, 1.04]);
   const driftX = interpolate(t, [0, 1], [0, p.dx]);
   const driftY = interpolate(t, [0, 1], [0, p.dy]);
 
@@ -112,10 +248,24 @@ const KenBurnsClip: React.FC<{
 };
 
 // ── Animated word caption (Hormozi style: one word, spring pop) ──────────────
-const Captions: React.FC<{words: Word[]}> = ({words}) => {
+const Captions: React.FC<{words: Word[]; emphasis?: string[] | null}> = ({
+  words,
+  emphasis,
+}) => {
   const frame = useCurrentFrame();
-  const {fps} = useVideoConfig();
+  const {fps, width, height} = useVideoConfig();
   const t = frame / fps;
+
+  // SIZED FROM THE FRAME, not from 1080x1920. fontSize 96 and paddingBottom
+  // 700 were right for a phone: big words, lifted clear of the Shorts UI that
+  // covers the bottom fifth. On a 1080-tall landscape frame the same two
+  // numbers are a caption floating 65% up the picture. The portrait ratios
+  // below reproduce 96 and 700 exactly, so nothing about the existing channel
+  // moves; landscape gets broadcast proportions instead — smaller, and near
+  // the bottom edge where no app UI has to be avoided.
+  const portrait = height >= width;
+  const fontSize = Math.round(height * (portrait ? 0.05 : 0.055));
+  const paddingBottom = Math.round(height * (portrait ? 0.3646 : 0.07));
 
   const active = words.find((w) => t >= w.start && t < w.end);
   if (!active) return null;
@@ -128,24 +278,38 @@ const Captions: React.FC<{words: Word[]}> = ({words}) => {
     durationInFrames: 8,
   });
   const scale = interpolate(pop, [0, 1], [1.32, 1]);
-  const color = HIGHLIGHT.test(active.text) ? '#00FF44' : '#FFFFFF';
+  // The same three tests the FFmpeg path applies, in the same order: a figure,
+  // then the words the edit director marked. Both renderers ship this channel,
+  // and captions accented on one and not the other is a difference that only
+  // shows up to whoever watches both.
+  const marked =
+    !!emphasis?.length &&
+    active.text
+      .split(/\s+/)
+      .some((w) => emphasis.includes(w.replace(/[^A-Za-z']/g, '').toUpperCase()));
+  const color = HIGHLIGHT.test(active.text) || marked ? '#00FF44' : '#FFFFFF';
 
   return (
     <AbsoluteFill
       style={{
         justifyContent: 'flex-end',
         alignItems: 'center',
-        paddingBottom: 700,
+        paddingBottom,
         pointerEvents: 'none',
       }}
     >
       <div
         style={{
           fontFamily,
-          fontSize: 96,
+          fontSize,
           fontWeight: 900,
           color,
-          textTransform: 'uppercase',
+          // Capitals carry at phone size and read as emphasis for forty
+          // seconds. For nine minutes on a screen the viewer is sitting back
+          // from, they read as shouting — and the text arriving here is
+          // already cased by audio_gen._cluster_words, so forcing it up would
+          // overrule the decision the profile already made.
+          textTransform: portrait ? 'uppercase' : 'none',
           transform: `scale(${scale})`,
           textShadow:
             '0 0 18px rgba(0,0,0,0.9), 4px 4px 0 #000, -4px 4px 0 #000, 4px -4px 0 #000, -4px -4px 0 #000',
@@ -162,9 +326,18 @@ const Captions: React.FC<{words: Word[]}> = ({words}) => {
 };
 
 // ── Thin retention progress bar ───────────────────────────────────────────────
+//
+// A Shorts device: on a forty-second vertical video the sweep says "almost
+// done, stay". Under a nine-minute landscape video it sits directly above the
+// scrubber YouTube already draws, where it is not a retention trick but a
+// template's signature. Read off the frame shape for the same reason the
+// caption size is — the two formats are the two orientations, and a second
+// switch here could disagree with the profile. video_format's retention_bar
+// says the same thing on the Python side, and a test asserts they agree.
 const ProgressBar: React.FC = () => {
   const frame = useCurrentFrame();
-  const {durationInFrames} = useVideoConfig();
+  const {durationInFrames, width, height} = useVideoConfig();
+  if (height < width) return null;
   const pct = (frame / Math.max(1, durationInFrames - 1)) * 100;
   return (
     <div
@@ -201,9 +374,13 @@ export const Short: React.FC<ShortProps> = ({
   job,
   clips,
   clipDurations,
+  beatSpans,
   voice,
   music,
   words,
+  edit,
+  emphasis,
+  inserts,
 }) => {
   const frame = useCurrentFrame();
   const {fps, durationInFrames} = useVideoConfig();
@@ -211,7 +388,58 @@ export const Short: React.FC<ShortProps> = ({
   const n = Math.max(1, clips.length);
   const transFrames = Math.round(XFADE_SEC * fps);
   // TransitionSeries: total = n*seq − (n−1)*transition → solve for seq
-  const seqFrames = Math.ceil((durationInFrames + (n - 1) * transFrames) / n);
+  const evenFrames = Math.ceil((durationInFrames + (n - 1) * transFrames) / n);
+
+  // ONE SHOT PER BEAT, ON THE BEAT.
+  //
+  // Sequences in a TransitionSeries OVERLAP by the transition, so sequence i
+  // begins at Σ(d_j − trans) for j<i. To make shot i appear at t_i:
+  //
+  //     d_i = (t_{i+1} − t_i) + trans      for every shot but the last
+  //     d_last = total − t_last            so the chain ends where audio does
+  //
+  // Without spans every shot got `evenFrames`, so a two-second sentence and a
+  // six-second one were on screen the same length and the picture drifted
+  // further from the voice the longer the video ran.
+  //
+  // Guarded rather than trusted: a span list of the wrong length, or one that
+  // produces a shot too short to survive its own crossfade, falls back to the
+  // even division whole. Half-applied timing is worse than uniform timing.
+  const spanFrames: number[] | null = (() => {
+    if (!beatSpans || beatSpans.length !== n) return null;
+    const out: number[] = [];
+    for (let i = 0; i < n; i++) {
+      const [start, end] = beatSpans[i];
+      if (!(end > start)) return null;
+      const frames =
+        i === n - 1
+          ? durationInFrames - Math.round(start * fps)
+          : Math.round((beatSpans[i + 1][0] - start) * fps) + transFrames;
+      if (frames <= transFrames) return null;
+      out.push(frames);
+    }
+    return out;
+  })();
+
+  const framesFor = (i: number) => spanFrames?.[i] ?? evenFrames;
+
+  // ONE TRANSITION THAT IS NOT LIKE THE OTHERS.
+  //
+  // edit.peak_beat — the beat where the story turns — has been computed for
+  // every run and declared in this file's own types since the director was
+  // written, and never used. Every cut got the same 0.35s crossfade, so the
+  // turn arrived the same way the fourth piece of evidence did.
+  //
+  // The argument is the one already made in comfy_client for hero motion: one
+  // moving shot among stills reads as a deliberate accent, where the same
+  // move on every shot reads as wallpaper the viewer stops noticing by beat
+  // three. So exactly one transition differs, and it is the one into the turn.
+  //
+  // peak_beat is 1-based; transition i sits between clip i and clip i+1, and
+  // clip i+1 is beat i+2. So the transition INTO the peak is at i = peak − 2.
+  // A peak on the first beat has no transition before it and correctly
+  // matches nothing.
+  const peakTransition = edit?.peak_beat != null ? edit.peak_beat - 2 : -1;
 
   const musicVolume = music
     ? interpolate(
@@ -232,17 +460,19 @@ export const Short: React.FC<ShortProps> = ({
           index={0}
           clipFrames={durationInFrames}
           sourceDurationSec={clipDurations?.[0]}
+          direction={edit?.beats?.[0]}
         />
       ) : (
         <TransitionSeries>
           {clips.flatMap((clip, i) => {
             const items = [
-              <TransitionSeries.Sequence key={`seq-${i}`} durationInFrames={seqFrames}>
+              <TransitionSeries.Sequence key={`seq-${i}`} durationInFrames={framesFor(i)}>
                 <KenBurnsClip
                   src={asset(clip)}
                   index={i}
-                  clipFrames={seqFrames}
+                  clipFrames={framesFor(i)}
                   sourceDurationSec={clipDurations?.[i]}
+                  direction={edit?.beats?.[i]}
                 />
               </TransitionSeries.Sequence>,
             ];
@@ -250,7 +480,9 @@ export const Short: React.FC<ShortProps> = ({
               items.push(
                 <TransitionSeries.Transition
                   key={`trans-${i}`}
-                  presentation={fade()}
+                  presentation={
+                    i === peakTransition ? slide({direction: 'from-bottom'}) : fade()
+                  }
                   timing={linearTiming({durationInFrames: transFrames})}
                 />,
               );
@@ -260,7 +492,9 @@ export const Short: React.FC<ShortProps> = ({
         </TransitionSeries>
       )}
 
-      <Captions words={words} />
+      {inserts && inserts.length ? <InsertLayer inserts={inserts} job={job} /> : null}
+
+      <Captions words={words} emphasis={emphasis} />
       <ProgressBar />
       <EdgeFade />
 

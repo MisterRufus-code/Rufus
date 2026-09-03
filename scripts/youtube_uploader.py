@@ -29,12 +29,18 @@ NICHES_FILE     = CONFIG_DIR / "niches.json"
 CLIENT_SECRETS  = CONFIG_DIR / "client_secrets.json"
 TOKEN_FILE      = CONFIG_DIR / "youtube_token.json"
 
-# force-ssl is needed for commentThreads().insert (the post-upload CTA comment).
+# force-ssl is needed for commentThreads().insert (the post-upload CTA comment);
+# yt-analytics.readonly lets analytics_fetcher reuse the SAME token — it used to
+# declare its own 3-scope list against the same token file, so the first
+# scheduled run after an uploader auth hit an interactive OAuth prompt and hung
+# the Task Scheduler job forever (run_scheduled.bat runs analytics BEFORE main).
+# One superset, declared once, imported by analytics_fetcher.
 # NOTE: adding a scope invalidates the old token — delete config/youtube_token.json
 # and run one manual upload to re-OAuth (one time only).
 SCOPES = [
     "https://www.googleapis.com/auth/youtube.upload",
     "https://www.googleapis.com/auth/youtube.force-ssl",
+    "https://www.googleapis.com/auth/yt-analytics.readonly",
 ]
 
 # YouTube category IDs by niche (overridable via niches.json "youtube_category_id")
@@ -44,9 +50,14 @@ DEFAULT_CATEGORIES = {
     "mindset":              "27",   # Education
     "business":             "27",   # Education
     "personal_development": "27",   # Education
+    "money_history":        "27",   # Education
 }
 
 PEAK_HOURS_ET = [8, 12, 17, 20]  # US Eastern hours
+
+# The publishAt of the most recent upload, or "" when it went up visible.
+# See the note where it is set: a fact about the upload, not a return value.
+LAST_PUBLISH_AT = ""
 
 NICHE_HASHTAGS = {
     "finance":              ["#finance", "#investing", "#wealth", "#money", "#stockmarket", "#Shorts"],
@@ -54,6 +65,7 @@ NICHE_HASHTAGS = {
     "mindset":              ["#mindset", "#psychology", "#selfimprovement", "#mentalhealth", "#Shorts"],
     "business":             ["#business", "#entrepreneur", "#startup", "#hustle", "#success", "#Shorts"],
     "personal_development": ["#personaldevelopment", "#habits", "#growth", "#selfimprovement", "#Shorts"],
+    "money_history":        ["#history", "#money", "#economics", "#historyfacts", "#didyouknow", "#Shorts"],
 }
 
 
@@ -67,10 +79,31 @@ def _next_peak_utc(peak_hours: list[int] = None, tz_name: str = None) -> str:
     """Return ISO 8601 UTC timestamp for the next peak hour, ≥5 min from now.
     Peak hours/timezone come from the channel config (US-ET defaults).
     Uses zoneinfo so DST is automatic — no hardcoded UTC offset."""
-    from zoneinfo import ZoneInfo
+    from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
     peaks   = peak_hours or PEAK_HOURS_ET
-    tz      = ZoneInfo(tz_name or "America/New_York")
     now_utc = datetime.now(tz=timezone.utc)
+    try:
+        tz = ZoneInfo(tz_name or "America/New_York")
+    except ZoneInfoNotFoundError:
+        # WINDOWS HAS NO IANA DATABASE. zoneinfo reads the system tz files,
+        # which exist on Linux and macOS and do not exist on Windows at all —
+        # there, the `tzdata` package IS the database, and it was in no
+        # requirements file. Live, this surfaced as
+        #
+        #     Upload failed (not uploaded, safe to retry):
+        #     'No time zone found with key America/New_York'
+        #
+        # on a finished, rendered video: a scheduling nicety refusing to
+        # publish work that was ready. The schedule is worth having and is not
+        # worth the upload, so this says exactly what to install and puts the
+        # video up now instead of holding it hostage.
+        import paths
+        print(f"[youtube] ⚠ no timezone database for "
+              f"{tz_name or 'America/New_York'} — Windows has none of its own. "
+              f"Install it with `{paths.pip_hint('tzdata')}`.")
+        print(f"[youtube]   uploading WITHOUT a scheduled publish time; the "
+              f"video goes up private and you publish it yourself.")
+        return ""
     now_loc = now_utc.astimezone(tz)
 
     for day_delta in range(3):
@@ -100,8 +133,18 @@ def get_authenticated_service(channel=None):
 
     if not creds or not creds.valid:
         if creds and creds.expired and creds.refresh_token:
-            creds.refresh(Request())
-        else:
+            try:
+                creds.refresh(Request())
+            except Exception as e:
+                # Revoked/expired refresh token — don't crash a cron run on it.
+                # Park the stale token and fall through to interactive re-auth.
+                print(f"[youtube] token refresh failed ({e}) — re-auth required")
+                try:
+                    token_file.replace(token_file.with_suffix(".json.stale"))
+                except OSError:
+                    pass
+                creds = None
+        if not creds or not creds.valid:
             if not client_secrets.exists():
                 raise FileNotFoundError(
                     f"Missing {client_secrets}\n"
@@ -109,23 +152,60 @@ def get_authenticated_service(channel=None):
                     "APIs & Services → Credentials → Download JSON"
                 )
             flow = InstalledAppFlow.from_client_secrets_file(str(client_secrets), SCOPES)
-            creds = flow.run_local_server(port=0)
+            try:
+                creds = flow.run_local_server(port=0)
+            except Exception as e:
+                raise RuntimeError(
+                    f"YouTube re-authentication needs a browser and none is available "
+                    f"({e}). Run `python scripts/youtube_uploader.py <video> '<script>'` "
+                    f"once interactively to regenerate {token_file}."
+                ) from e
 
         token_file.parent.mkdir(parents=True, exist_ok=True)
-        token_file.write_text(creds.to_json())
+        token_file.write_text(creds.to_json(), encoding="utf-8")
 
     return build("youtube", "v3", credentials=creds)
 
 
 def load_niche():
-    niches = json.loads(NICHES_FILE.read_text())
+    niches = json.loads(NICHES_FILE.read_text(encoding="utf-8"))
     active = os.environ.get("RUFUS_NICHE_OVERRIDE") or niches["active"]
     return niches["niches"][active], active
 
 
-def build_metadata(script: str, niche_name: str, niche_cfg: dict) -> dict:
-    """GPT-optimized title/description/tags (metadata_writer), legacy on failure."""
-    hashtags = NICHE_HASHTAGS.get(niche_name, ["#Shorts"])
+def _hashtags_for(niche_name: str) -> list[str]:
+    """The niche's hashtags, minus the one that would miscategorise the video.
+
+    EVERY LIST ENDS IN #Shorts, and that was right while every video was one.
+    YouTube reads that tag as a declaration of format: a nine-minute landscape
+    upload carrying it is asking to be filed as something it is not, shown in
+    a feed it cannot compete in, and measured against retention curves that do
+    not apply to it. The tag is not decoration, it is a category, and it is the
+    kind of mistake that is invisible in the pipeline and obvious in the
+    analytics three weeks later.
+    """
+    tags = list(NICHE_HASHTAGS.get(niche_name, ["#Shorts"]))
+    try:
+        import video_format
+        if video_format.is_long():
+            tags = [t for t in tags if t.lower() != "#shorts"]
+            if not tags:
+                tags = ["#documentary"]
+    except Exception:
+        pass
+    return tags
+
+
+def build_metadata(script: str, niche_name: str, niche_cfg: dict,
+                   chapters: str = "") -> dict:
+    """GPT-optimized title/description/tags (metadata_writer), legacy on failure.
+
+    `chapters` is the already-formatted timestamp block, or "" — see
+    chapters.py. It goes in ABOVE the hashtags and the CTA because YouTube
+    reads the list from the description text and a viewer skimming for what is
+    inside should not have to scroll past a wall of tags to find it.
+    """
+    hashtags = _hashtags_for(niche_name)
     category = niche_cfg.get("youtube_category_id") or DEFAULT_CATEGORIES.get(niche_name, "22")
 
     try:
@@ -139,6 +219,20 @@ def build_metadata(script: str, niche_name: str, niche_cfg: dict) -> dict:
             "description": f"{script}\n\n{' '.join(hashtags)}\n\n{niche_cfg.get('cta', '')}",
             "tags":        [t.lstrip("#") for t in hashtags],
         }
+
+    if chapters:
+        # After the opening paragraph, before everything else. Not at the very
+        # top — the first two lines of a description are what search and the
+        # watch page show, and spending them on "0:00 Intro" throws away the
+        # copy metadata_writer wrote to earn the click. Not at the bottom
+        # either, under the hashtags, where nobody scrolls. The rule YouTube
+        # actually enforces is about the first TIMESTAMP being 0:00, not the
+        # first line. Guarded so a re-run cannot stack two copies.
+        desc = str(meta.get("description") or "")
+        if "0:00 " not in desc:
+            opening, sep, rest = desc.partition("\n\n")
+            meta["description"] = (f"{opening}\n\n{chapters}\n\n{rest}".strip()
+                                   if sep else f"{desc}\n\n{chapters}".strip())
 
     meta["categoryId"] = category
     return meta
@@ -163,10 +257,40 @@ def post_cta_comment(youtube, video_id: str, niche_cfg: dict) -> None:
         print(f"[youtube] CTA comment skipped: {e}")
 
 
+def post_source_comment(youtube, video_id: str, source_url: str,
+                        seed_source: str = None) -> None:
+    """Post a comment citing the real source the script was grounded in
+    (a Wikipedia article, a Stack Exchange question, ...) — trust/
+    differentiation lever against generic "AI slop" history channels, not
+    just an engagement CTA. Same API limitation as post_cta_comment: the
+    public YouTube Data API has no endpoint to PIN a comment, only to post
+    one — pinning stays a manual step (see the daily checklist). A no-op
+    when there's no URL (older rows from before seed_url existed, or a
+    seed type — the wisdom pool — that never carried one). Never raises."""
+    if not source_url:
+        return
+    label = f" ({seed_source})" if seed_source else ""
+    text = f"Source for this one{label}: {source_url}"
+    try:
+        youtube.commentThreads().insert(
+            part="snippet",
+            body={"snippet": {
+                "videoId": video_id,
+                "topLevelComment": {"snippet": {"textOriginal": text}},
+            }},
+        ).execute()
+        print(f"[youtube] source comment posted: {source_url}")
+    except Exception as e:
+        print(f"[youtube] source comment skipped: {e}")
+
+
 def upload(video_path: Path, script: str, thumbnail_path: Path = None,
-           metadata: dict = None) -> tuple[str, str]:
+           metadata: dict = None, source_url: str = None,
+           seed_source: str = None) -> tuple[str, str]:
     """Upload video (+ optional thumbnail); return (video_url, video_id).
-    Pass `metadata` to reuse a pre-built dict (avoids a second GPT call)."""
+    Pass `metadata` to reuse a pre-built dict (avoids a second GPT call).
+    Pass `source_url` (+ optionally `seed_source` for a nicer label) to also
+    post a source-citation comment — see post_source_comment()."""
     from googleapiclient.http import MediaFileUpload
 
     channel               = _channel()
@@ -181,11 +305,32 @@ def upload(video_path: Path, script: str, thumbnail_path: Path = None,
     privacy = channel.upload.get("privacy")
     if privacy not in ("private", "unlisted", "public"):
         privacy = "private"
-    status = {"privacyStatus": privacy, "selfDeclaredMadeForKids": False}
+    # Every Rufus video is 100% synthetic — GPT script, FLUX/SVD-generated
+    # imagery and motion, synthesized voice — so this is unconditionally True,
+    # never a per-niche knob. YouTube's altered/synthetic-content disclosure
+    # policy (API support added 2024-10-30) requires self-declaring this for
+    # realistic AI-generated content; the API returns it back once set but
+    # never infers it — an undisclosed synthetic-media channel risks a strike
+    # or removal once it's actually public, not just a style choice.
+    status = {"privacyStatus": privacy, "selfDeclaredMadeForKids": False,
+             "containsSyntheticMedia": True}
     if privacy == "private":
-        # publishAt is only valid on private uploads (YouTube then auto-publishes)
-        status["publishAt"] = _next_peak_utc(channel.upload.get("peak_hours"),
-                                             channel.upload.get("timezone"))
+        # publishAt is only valid on private uploads (YouTube then auto-publishes).
+        # "" means the timezone database is missing and _next_peak_utc already
+        # said so — upload now rather than lose a finished render to a
+        # scheduling nicety.
+        when = _next_peak_utc(channel.upload.get("peak_hours"),
+                              channel.upload.get("timezone"))
+        if when:
+            status["publishAt"] = when
+
+    # WHEN THIS ONE GOES LIVE, for whoever writes the row afterwards. A module
+    # global rather than a third return value because upload()'s signature is
+    # shared by main.py and the dashboard's approve, and this is a fact about
+    # the upload rather than a result anyone renders from — the same reasoning
+    # as audio_gen.LAST_CUTS. "" means it is already visible (public/unlisted)
+    # or it is private with no schedule.
+    globals()["LAST_PUBLISH_AT"] = status.get("publishAt", "")
 
     print(f"[youtube] channel: {channel.id}")
     print(f"[youtube] uploading: {video_path.name}")
@@ -216,9 +361,9 @@ def upload(video_path: Path, script: str, thumbnail_path: Path = None,
 
     response = None
     while response is None:
-        status, response = request.next_chunk()
-        if status:
-            print(f"\r[youtube] {int(status.progress() * 100)}%", end="", flush=True)
+        progress, response = request.next_chunk()   # don't shadow the status dict above
+        if progress:
+            print(f"\r[youtube] {int(progress.progress() * 100)}%", end="", flush=True)
 
     print()
     video_id  = response["id"]
@@ -237,6 +382,7 @@ def upload(video_path: Path, script: str, thumbnail_path: Path = None,
             print(f"[youtube] thumbnail upload skipped: {e}")
 
     post_cta_comment(youtube, video_id, niche_cfg)
+    post_source_comment(youtube, video_id, source_url, seed_source)
 
     return video_url, video_id
 

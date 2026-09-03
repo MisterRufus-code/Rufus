@@ -1,15 +1,9 @@
 {
-  "active": "finance",
+  "active": "money_history",
   "schedule": [
-    "finance",
-    "motivation",
-    "mindset",
-    "finance",
-    "motivation",
-    "mindset",
-    "finance"
+    "money_history"
   ],
-  "schedule_note": "Day-of-year index modulo length. Default: finance/motivation/mindset rotating 7 days (finance gets 3/week, others 2/week each). Edit this list to change rotation.",
+  "schedule_note": "Single-niche schedule: every run produces a History of Money Short (FLUX via ComfyUI).",
   "niches": {
     "finance": {
       "display_name": "Finance & Wealth",
@@ -58,27 +52,32 @@
         "industry"
       ],
       "llava_context": "Describe this scene focusing on business, wealth, money, or financial themes. Be specific about what you see.",
-      "gpt_system": "You write finance YouTube Shorts that deliver real value. Audience: people who want to build wealth, not get-rich-quick types. Tone: tired expert who has seen the same mistakes for decades. Quote real investors when relevant (Buffett, Munger, Bogle, Lynch). Use specific numbers and historical examples. No motivational fluff.",
+      "gpt_system": "You write finance Shorts with a sharp point of view, for people tired of staying broke for boring reasons. You are NOT a neutral narrator reading a biography — you have a take and you defend it. Speak in present tense, straight at the viewer about THEIR money right now ('you', 'your'). Use famous investors (Buffett, Munger, Bogle, Lynch) only as PROOF for your point — never as the subject. The video is about the viewer's decisions today, not a history lesson about a rich dead guy. One uncomfortable truth per video, nailed down with a real number. Sound like the sharpest person at the table who's a little annoyed you haven't figured this out yet. No hedging. No 'follow for more' energy.",
       "hook_styles": [
         "shocking_stat",
         "counterintuitive",
         "warning"
       ],
-      "cta": "Follow for daily wealth tactics.",
+      "cta": "How many times did you check your portfolio today?",
       "cta_pool": [
-        "Follow for daily wealth tactics.",
-        "Save this. Re-read in five years.",
-        "Send this to someone still picking stocks.",
-        "Follow if you actually want to be early.",
-        "Save this for the next dip.",
-        "More finance reality next post.",
-        "Save this before the next crash."
+        "How many times did you check your portfolio today?",
+        "Be honest — which one are you doing right now?",
+        "Name one thing you'd actually hold for ten years.",
+        "Tell me you don't do this. I'll wait.",
+        "Send this to the friend who panic-sold.",
+        "Screenshot this. Read it at the next crash.",
+        "So what are you really waiting for?"
       ],
       "ffmpeg_eq": "eq=contrast=1.15:saturation=0.85:gamma=1.05",
       "accent_color": "#FFC53D",
       "style_suffix": "muted teal and orange color grade, glass and steel surfaces, shallow depth of field, 35mm film, cinematic",
       "youtube_category_id": "25",
-      "video_source": "hyperframes"
+      "video_source": "sd",
+      "character": {
+        "enabled": false,
+        "name": "the Strategist",
+        "description": "a composed South Asian woman in her late 30s, sharp asymmetric bob, tailored charcoal blazer over a crisp white shirt, steady analytical gaze, faint knowing half-smile, always poised rather than tense"
+      }
     },
     "motivation": {
       "display_name": "Motivation & Grind",
@@ -123,26 +122,31 @@
         "people"
       ],
       "llava_context": "Describe this scene focusing on effort, struggle, achievement, or physical challenge. Be specific.",
-      "gpt_system": "You write motivational Shorts grounded in real philosophy and real stories. Audience: people who are tired of empty motivation. Reference Stoics (Marcus Aurelius, Seneca, Epictetus) or operators (Goggins, Jocko, athletes) when the source supports it. No generic 'never give up' lines. The viewer should feel called out, not pumped up.",
+      "gpt_system": "You write motivation Shorts for people sick of empty hype. You are someone who has done the hard thing and has zero patience for excuses — but you never scream, you never chant 'never give up'. You call the viewer out, personally, in present tense ('you', 'right now'). Use Stoics (Marcus Aurelius, Seneca, Epictetus) or operators (Goggins, Jocko) as PROOF of your point, never as a hero you're narrating from a distance. Name the specific thing the viewer is avoiding today and make them feel seen, not pumped up. The goal is the quiet 'oh — he's talking about me' moment, not a gym chant.",
       "hook_styles": [
         "personal_challenge",
         "hard_truth"
       ],
-      "cta": "Save this. Watch it when you want to quit.",
+      "cta": "What did you quit this week that you could've finished?",
       "cta_pool": [
-        "Save this. Watch it when you want to quit.",
-        "Read this when the work feels pointless.",
-        "Send this to someone who needs it.",
-        "Follow if you are not done yet.",
-        "Save this for the next 4am alarm.",
-        "Save it. Use it when you want to stop.",
-        "Send this to the person grinding alone."
+        "What did you quit this week that you could've finished?",
+        "Be honest about where you actually stopped.",
+        "What are you negotiating with right now?",
+        "Who needed to hear this today?",
+        "Save this for your next 4am.",
+        "So what's your excuse — say it out loud.",
+        "Send this to the one grinding alone."
       ],
       "ffmpeg_eq": "eq=contrast=1.2:brightness=0.03:saturation=1.4:gamma=0.9",
       "accent_color": "#FF5C33",
       "style_suffix": "golden hour rim lighting, gritty texture, high contrast, anamorphic lens flare, cinematic",
       "youtube_category_id": "22",
-      "video_source": "sd"
+      "video_source": "sd",
+      "character": {
+        "enabled": false,
+        "name": "the Grinder",
+        "description": "a lean muscular man in his early 30s, close-cropped fade, weathered olive skin, worn grey hoodie with sleeves pushed to the forearm, jaw set with quiet intensity, faint scar through one eyebrow, never smiling at camera"
+      }
     },
     "mindset": {
       "display_name": "Mindset & Psychology",
@@ -188,26 +192,31 @@
         "nature"
       ],
       "llava_context": "Describe this scene focusing on human thinking, mental states, focus, or self-reflection.",
-      "gpt_system": "You write psychology Shorts that reveal real insights about how minds work. Audience: people who think. Reference real thinkers (Jung, Frankl, Kahneman, Marcus Aurelius) and real studies. Make viewers reconsider an assumption they've held. No generic 'mindset' fluff.",
+      "gpt_system": "You write psychology Shorts that crack a belief the viewer is holding right now. You are a sharp, slightly unsettling guide who makes people reconsider something about themselves — present tense, second person ('you do this', 'you've felt this'). Use real thinkers (Jung, Frankl, Kahneman, Marcus Aurelius) and real studies as PROOF, never as the subject of a lecture. Point the insight straight at the viewer's own head: name the exact thing they do, then show them why. The goal is the uncomfortable 'how did he know that about me' feeling. No 'mindset' fluff, no '1%' clichés.",
       "hook_styles": [
         "counterintuitive",
         "psychology_fact"
       ],
-      "cta": "This is why 1% think differently.",
+      "cta": "What did you just catch yourself doing?",
       "cta_pool": [
-        "This is why 1% think differently.",
-        "Follow if you read between lines.",
-        "Save this for the next argument with yourself.",
-        "Share this with someone who overthinks.",
-        "Save it. Re-read in a month.",
-        "Follow for ideas worth sitting with.",
-        "Send this to someone still asleep."
+        "What did you just catch yourself doing?",
+        "Which person were you thinking about just now?",
+        "Sit with that one for a second.",
+        "Tell me I'm wrong. I'll wait.",
+        "What belief did this just crack?",
+        "Send this to someone who overthinks everything.",
+        "Be honest — that's you, isn't it?"
       ],
       "ffmpeg_eq": "eq=contrast=1.05:saturation=0.75:gamma=1.1",
       "accent_color": "#3DD9C5",
       "style_suffix": "soft diffused natural light, muted earth tones, morning fog, medium format film, contemplative",
       "youtube_category_id": "27",
-      "video_source": "hyperframes"
+      "video_source": "sd",
+      "character": {
+        "enabled": false,
+        "name": "the Observer",
+        "description": "a serene woman in her mid-40s, natural greying hair loosely tied back, soft cream linen sweater, calm unhurried posture, gentle knowing eyes that suggest she has already sat with the question being asked"
+      }
     },
     "business": {
       "display_name": "Business & Entrepreneurship",
@@ -234,26 +243,31 @@
         "computer"
       ],
       "llava_context": "Describe this scene in a business, startup, or entrepreneurial context.",
-      "gpt_system": "You write business Shorts for operators who have actually run a business. Tactics over theory. Real examples from real founders (Bezos, Jobs, Hormozi, Thiel, Graham) when the source supports it. Specific numbers, real failures, real lessons. No 'mindset' fluff.",
+      "gpt_system": "You write business Shorts for someone building something RIGHT NOW. You're an operator who has shipped, talking straight to the founder watching — present tense, 'you', 'your market', 'your next move'. Use real founders (Bezos, Jobs, Hormozi, Thiel, Graham) as case studies that prove your point, never as heroes you admire from afar. Tactics over theory, one contrarian move per video, made concrete with a real number or a real failure. Make the viewer feel the gap between what they're doing and what works. No 'mindset' fluff, no guru voice.",
       "hook_styles": [
         "tactical_insight",
         "mistake_warning"
       ],
-      "cta": "Save this. Build something.",
+      "cta": "What are you actually shipping this week?",
       "cta_pool": [
-        "Save this. Build something.",
-        "Follow for the next playbook.",
-        "Send this to your co-founder.",
-        "Save this before your next product decision.",
-        "Follow if you actually ship.",
-        "Save it. Re-read before launch.",
-        "Send this to someone still planning."
+        "What are you actually shipping this week?",
+        "Be honest — are you building or just planning?",
+        "What fat-margin market are you about to attack?",
+        "When did you last talk to a real customer?",
+        "Send this to your co-founder right now.",
+        "So what's stopping you — say it.",
+        "Screenshot this before your next launch."
       ],
       "ffmpeg_eq": "eq=contrast=1.1:saturation=1.0",
       "accent_color": "#4DA3FF",
       "style_suffix": "modern architectural lines, cool daylight, clean minimal composition, 50mm lens, editorial",
       "youtube_category_id": "27",
-      "video_source": "hyperframes"
+      "video_source": "sd",
+      "character": {
+        "enabled": false,
+        "name": "the Builder",
+        "description": "a confident Black man in his mid-30s, close-cropped hair, fitted navy quarter-zip over a plain white tee, relaxed but alert posture, faint entrepreneurial smirk, always mid-motion rather than posed"
+      }
     },
     "personal_development": {
       "display_name": "Personal Development",
@@ -280,26 +294,95 @@
         "sports"
       ],
       "llava_context": "Describe this scene in the context of self-improvement, habits, or personal growth.",
-      "gpt_system": "You write personal-development Shorts grounded in real systems. Audience: people who already read James Clear, Cal Newport, Naval. One concrete idea per video, with a specific action the viewer can take today. Reference real authors when the source supports it. No generic self-help speak.",
+      "gpt_system": "You write personal-development Shorts for people who've already read James Clear, Cal Newport, Naval — and are tired of being told the same five things. You're the anti-guru: you've tested the systems and you tell them the ONE that actually works, plus the popular one that doesn't. Present tense, 'you', a specific action they can take tomorrow. Use real authors as PROOF, never as gurus to quote reverently. Often start by killing a sacred cow ('stop journaling', 'motivation is a lie') then give the thing that replaces it. Make it feel like advice from a friend who's done it, not a self-help audiobook.",
       "hook_styles": [
         "habit_hack",
         "identity_shift"
       ],
-      "cta": "Do this tomorrow morning.",
+      "cta": "What's the one decision you can kill tomorrow?",
       "cta_pool": [
-        "Do this tomorrow morning.",
-        "Save this. Try it for seven days.",
-        "Follow for one habit a day.",
+        "What's the one decision you can kill tomorrow?",
+        "Which one are you starting with — tell me.",
+        "Try it for seven days. Report back.",
+        "Be honest — what are you avoiding?",
+        "What are you removing tomorrow morning?",
         "Send this to someone starting over.",
-        "Save this for Monday morning.",
-        "Pick one thing. Do it tomorrow.",
-        "Save it. Re-read when you slip."
+        "So which sacred cow are you killing first?"
       ],
       "ffmpeg_eq": "eq=contrast=1.08:saturation=1.1:gamma=1.0",
       "accent_color": "#6EE07A",
       "style_suffix": "warm morning sunlight, soft shadows, natural tones, lifestyle photography, hopeful",
       "youtube_category_id": "27",
-      "video_source": "sd"
+      "video_source": "sd",
+      "character": {
+        "enabled": false,
+        "name": "the Climber",
+        "description": "a warm-eyed woman in her late 20s, loose natural curls catching the light, soft oatmeal cardigan over a plain tee, open hopeful expression, always caught mid-stride or mid-reach rather than standing still"
+      }
+    },
+    "money_history": {
+      "display_name": "History of Money",
+      "subreddits": [
+        "AskHistorians",
+        "economics",
+        "history",
+        "EconomicHistory",
+        "badeconomics"
+      ],
+      "video_keywords": [
+        "ancient gold coins",
+        "roman coins",
+        "old paper money",
+        "gold bars vault",
+        "ancient marketplace",
+        "medieval bank ledger",
+        "stock exchange archive",
+        "weimar hyperinflation banknotes",
+        "gold standard certificate",
+        "cowrie shells",
+        "antique scale weighing gold",
+        "old bank building columns",
+        "printing press money",
+        "treasure chest coins",
+        "central bank facade",
+        "wax seal document",
+        "tally sticks"
+      ],
+      "pixabay_categories": [
+        "business",
+        "backgrounds"
+      ],
+      "llava_context": "Describe this scene focusing on historical money, ancient coins, gold, banking, or economic history. Be specific about what you see.",
+      "gpt_system": "You write YouTube Shorts about the HISTORY OF MONEY and the TIMELESS IDEAS behind it — nothing else. Every script does ONE of two things. EVENT: teaches one true, specific story from monetary history with real dates, names, and numbers — the first coins of Lydia (~600 BC), Rome debasing the denarius, China inventing paper money under the Song dynasty, the Medici banks, tally sticks, cowrie-shell currency, the gold standard, the 1944 Bretton Woods agreement, Nixon ending gold convertibility in 1971, the Weimar and Zimbabwe hyperinflations, the birth of central banks. CONCEPT: explains one timeless financial principle — compound interest, inflation, opportunity cost, diversification, moral hazard, the time value of money, sunk cost, Gresham's law, scarcity — but ALWAYS through a real, documented historical example that proves it, with real names/dates/numbers, never as abstract advice. Tone: a sharp historian who ties one old event or one hard-earned principle to how money works for the viewer today. Always end by connecting the past to the present. No motivational fluff, no investment advice, no get-rich talk — pure, surprising history that makes money make sense.",
+      "hook_styles": [
+        "counterintuitive",
+        "shocking_stat",
+        "warning"
+      ],
+      "cta": "Follow for the real history of money.",
+      "cta_pool": [
+        "Follow for the real history of money.",
+        "Save this — money was never what you think.",
+        "Follow if school never taught you this.",
+        "Part of a series on how money really began.",
+        "Send this to someone who thinks cash is old.",
+        "More monetary history every post."
+      ],
+      "ffmpeg_eq": "eq=contrast=1.10:saturation=0.90:gamma=1.03",
+      "accent_color": "#D4AF37",
+      "style_suffix": "flat 2D vector illustration, warm sepia and antique-gold color palette, bold clean outlines of consistent weight, simplified flat color fills with no gradients, storybook / explainer-video illustration style, no photographic texture, no film grain, no photorealism",
+      "youtube_category_id": "27",
+      "video_source": "comfy",
+      "comfy_model": "z-image-turbo (informational only — the real model is whatever's baked into your exported config/stills_api.json; FLUX.1/FLUX.2 are non-commercial-licensed and must not be used)",
+      "_character_example": {
+        "_what_this_is": "Rename this key to \"character\" and the recurring-character system turns on for this niche: the figure appears in every beat prompt (character_engine.character_clause) and is badged into the corner of every thumbnail (thumbnail_gen.compose). Nothing else has to change. It needs no extra RAM — animation does, a recurring character in stills and thumbnails does not.",
+        "_first_run": "Once the description is written, render the reference portrait once: python scripts/comfy_client.py --character-sheet money_history (the prompt comes from character_engine.character_sheet_prompt). Until that file exists the badge silently no-ops and everything else works normally.",
+        "name": "the walking dollar",
+        "description": "PLACEHOLDER — replace with the real thing. A single banknote standing upright as a character: the bill itself is the body and the head, with two thin drawn arms and two thin drawn legs, and heavy boots. It walks, and it leaves a trail of footprints behind it. Write this out in full — every detail here is what the reference portrait is drawn from, so vagueness at this step is vagueness in every picture after it.",
+        "short_description": "PLACEHOLDER — about fifteen words, because this goes into EVERY beat prompt and the full description would eat the whole budget (see character_engine.short_ref for the ten-out-of-ten-prompts-with-no-character failure that taught us that).",
+        "reference_image": "config/character_reference_money_history.png",
+        "enabled": true
+      }
     }
   }
 }

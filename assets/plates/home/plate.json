@@ -1,0 +1,25 @@
+{
+  "name": "a plain home interior",
+  "when": null,
+  "keywords": [
+    "home",
+    "family",
+    "household",
+    "rent",
+    "kitchen",
+    "table",
+    "meal",
+    "bread",
+    "children",
+    "wife",
+    "husband",
+    "afford"
+  ],
+  "light": "one window, plain daylight",
+  "ground_y": 0.74,
+  "figure_height": 0.44,
+  "safe_x": [
+    0.3,
+    0.72
+  ]
+}

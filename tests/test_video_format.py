@@ -1,0 +1,480 @@
+"""One format was written into seven places, and none of them mentioned the
+others.
+
+1080×1920 lived in audio_gen, in Short.tsx and in sd_client. A 115-word cap
+lived in script_standards.json. A 10–30 beat range lived in main. A 1.6-second
+minimum shot lived in audio_gen. A 180-second "broken render" ceiling lived in
+qc_check. Nothing was wrong with any of them — they simply all encoded ONE
+format, so asking for a second was not asking for a setting. It was asking
+seven numbers to move together, which they can only do if they live in one
+place first.
+"""
+
+import importlib
+import sys
+from pathlib import Path
+
+import pytest
+
+sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
+
+import video_format  # noqa: E402
+
+
+def test_short_is_the_default_and_is_unchanged():
+    """The existing channel must not move because a second format exists."""
+    p = video_format.profile("short")
+    assert (p["width"], p["height"]) == (1080, 1920)
+    assert (p["words_min"], p["words_max"]) == (80, 115)
+    assert (p["beats_min"], p["beats_max"]) == (10, 30)
+    assert p["min_seg_s"] == 1.6
+    assert p["qc_max_s"] == 180.0
+    assert video_format.name() == "short"
+
+
+def test_long_is_landscape_and_calmer():
+    p = video_format.profile("long")
+    assert (p["width"], p["height"]) == (1920, 1080)
+    assert p["min_seg_s"] > video_format.profile("short")["min_seg_s"]
+    assert p["qc_max_s"] > 900
+
+
+def test_the_beat_rule_is_one_rule_with_two_sets_of_constants():
+    """A 105-word Short and a 1,350-word explainer are the same arithmetic."""
+    assert video_format.target_beats(105, "short") == 21
+    assert video_format.target_beats(1350, "long") == 150
+
+
+def test_the_floors_and_ceilings_hold():
+    assert video_format.target_beats(3, "short") == 10
+    assert video_format.target_beats(100_000, "short") == 30
+    assert video_format.target_beats(10, "long") == 40
+    assert video_format.target_beats(100_000, "long") == 220
+
+
+def test_an_unknown_format_is_loud_and_falls_back(monkeypatch, capsys):
+    """A typo that silently changed the aspect ratio of a nine-minute render
+    would be an expensive way to learn about it."""
+    monkeypatch.setenv("RUFUS_FORMAT", "vertical-ish")
+    assert video_format.name() == "short"
+    assert "is not a known format" in capsys.readouterr().out
+
+
+def test_an_empty_setting_is_the_default_and_is_silent(monkeypatch, capsys):
+    monkeypatch.setenv("RUFUS_FORMAT", "  ")
+    assert video_format.name() == "short"
+    assert capsys.readouterr().out == ""
+
+
+# ── the readers ──────────────────────────────────────────────────────────────
+
+@pytest.mark.parametrize("fmt,dims,min_seg,qc_max", [
+    ("short", (1080, 1920), 1.6, 180.0),
+    ("long", (1920, 1080), 2.5, 1500.0),
+])
+def test_every_reader_follows_the_profile(monkeypatch, fmt, dims, min_seg, qc_max):
+    """The point of the exercise: the seven numbers move together, or the
+    long-form render comes out cropped to portrait with a 'broken render'
+    warning on a video that is exactly as long as it was asked to be."""
+    monkeypatch.setenv("RUFUS_FORMAT", fmt)
+    import audio_gen, qc_check, sd_client
+    for mod in (audio_gen, qc_check, sd_client):
+        importlib.reload(mod)
+    assert (audio_gen.W, audio_gen.H) == dims
+    assert (sd_client.OUT_W, sd_client.OUT_H) == dims
+    assert audio_gen.MIN_SEG == min_seg
+    assert qc_check.MAX_DUR == qc_max
+
+
+def test_the_frame_fit_is_no_longer_named_for_one_shape():
+    """`_fit_to_portrait` was never portrait-specific except in its name, and
+    a function called that is one nobody would think to call for a landscape
+    render."""
+    import comfy_client
+    assert hasattr(comfy_client, "_fit_to_frame")
+    assert not hasattr(comfy_client, "_fit_to_portrait")
+
+
+def test_the_run_can_say_which_shape_it_is_making():
+    assert "1080×1920" in video_format.describe()
+
+
+# ── the frame is not the only thing that changes shape ──────────────────────
+
+@pytest.mark.parametrize("fmt,size,margin", [
+    ("short", 140, 600),
+    ("long", 58, 70),
+])
+def test_captions_follow_the_format(monkeypatch, fmt, size, margin):
+    """140px and MarginV 600 are right for a phone at arm's length with the
+    Shorts UI covering the bottom fifth. On a 1080-tall landscape frame the
+    same numbers are 13% of the height with the words halfway up the
+    picture."""
+    monkeypatch.setenv("RUFUS_FORMAT", fmt)
+    import audio_gen
+    importlib.reload(audio_gen)
+    assert audio_gen.FONTSIZE == size
+    assert audio_gen.MARGIN_V == margin
+
+
+def test_the_caption_is_a_sane_share_of_the_frame_in_both():
+    """The check that would have caught this by arithmetic instead of by
+    watching a video: a caption over a tenth of the frame height is a caption
+    that IS the video."""
+    for fmt in ("short", "long"):
+        p = video_format.profile(fmt)
+        share = p["caption_size"] / p["height"]
+        assert 0.04 <= share <= 0.09, (fmt, round(share, 3))
+
+
+def test_the_caption_sits_inside_the_frame_in_both():
+    for fmt in ("short", "long"):
+        p = video_format.profile(fmt)
+        assert p["caption_margin_v"] + p["caption_size"] < p["height"], fmt
+
+
+def test_an_insert_never_swallows_the_frame():
+    """460 of 1080 is 43% of the width — fine on a phone, and on a landscape
+    frame it would cover most of the shot it is meant to annotate."""
+    for fmt in ("short", "long"):
+        p = video_format.profile(fmt)
+        assert p["insert_w"] / p["width"] < 0.5, fmt
+
+
+@pytest.mark.parametrize("fmt", ["short", "long"])
+def test_inserts_stay_in_the_upper_third_of_either_frame(monkeypatch, fmt):
+    """The rule is "upper third, three staggered rows, clear of the caption
+    band", and that rule is the same whatever the frame — so unlike the
+    caption SIZE, this one really is proportional. As fixed pixels, 560 on a
+    1080-tall landscape frame is an insert parked at mid-picture."""
+    monkeypatch.setenv("RUFUS_FORMAT", fmt)
+    import audio_gen
+    importlib.reload(audio_gen)
+    assert all(0 < y < audio_gen.H / 3 for y in audio_gen.INSERT_YS)
+    assert len(set(audio_gen.INSERT_YS)) == 3, "staggered, not stacked"
+
+
+def test_the_shorts_pixels_come_back_out_exactly(monkeypatch):
+    """A refactor that moves the existing channel by a pixel is a refactor
+    that has to be explained to somebody watching the videos."""
+    monkeypatch.setenv("RUFUS_FORMAT", "short")
+    import audio_gen
+    importlib.reload(audio_gen)
+    assert audio_gen.INSERT_YS == (300, 560, 430)
+    assert (audio_gen.W, audio_gen.H) == (1080, 1920)
+    assert audio_gen.FONTSIZE == 140 and audio_gen.MARGIN_V == 600
+    assert audio_gen.MIN_SEG == 1.6
+
+
+# ── the backends that were still holding the old pair ────────────────────────
+#
+# audio_gen, Short.tsx, sd_client and qc_check were the four the search for
+# "1080" found first. These two are the ones it found last, and they are worse
+# in one way: they are ALTERNATIVE renderers, chosen by an env var, so a
+# long-form run that happened to pick either would have produced portrait
+# stills for a landscape render with every other module doing its job
+# correctly.
+
+@pytest.mark.parametrize("fmt,size", [("short", (1080, 1920)),
+                                      ("long",  (1920, 1080))])
+def test_diffusers_generates_at_the_format_size(monkeypatch, fmt, size):
+    """RUFUS_VIDEO_SOURCE=diffusers asks the model for W×H and writes the Ken
+    Burns clip at W×H — one pair used twice, so a stale literal here is a
+    portrait still AND a portrait clip."""
+    monkeypatch.setenv("RUFUS_FORMAT", fmt)
+    import diffusers_client
+    importlib.reload(diffusers_client)
+    assert (diffusers_client.W, diffusers_client.H) == size
+
+
+@pytest.mark.parametrize("fmt,size", [("short", (1080, 1920)),
+                                      ("long",  (1920, 1080))])
+def test_hyperframes_builds_the_page_at_the_format_size(monkeypatch, fmt, size):
+    """Here the number is not only a dimension — it is written into the prompt
+    in words, so a hard-coded pair instructs the model to build a 1080×1920
+    page for a 1920×1080 video and it will do exactly that."""
+    monkeypatch.setenv("RUFUS_FORMAT", fmt)
+    import hyperframes_client
+    importlib.reload(hyperframes_client)
+    assert (hyperframes_client.OUT_W, hyperframes_client.OUT_H) == size
+
+
+@pytest.mark.parametrize("fmt,size", [("short", (1080, 1920)),
+                                      ("long",  (1920, 1080))])
+def test_the_thumbnail_takes_the_video_shape(monkeypatch, fmt, size):
+    """thumbnail_gen RESIZES the extracted frame to this size without
+    preserving aspect, so a fixed portrait pair does not letterbox a long-form
+    thumbnail — it squeezes it, on the one image that decides the click."""
+    monkeypatch.setenv("RUFUS_FORMAT", fmt)
+    import thumbnail_gen
+    importlib.reload(thumbnail_gen)
+    assert (thumbnail_gen.THUMB_W, thumbnail_gen.THUMB_H) == size
+    # Whatever the format, the composed thumbnail clears YouTube's documented
+    # 1280×720 minimum on its long edge.
+    assert max(size) >= 1280
+
+
+def test_the_manual_image_tool_offers_the_real_frame(monkeypatch):
+    """The dashboard's second shape is captioned "video frame". A fixed
+    1080×1920 there made that caption a false statement on a long-form
+    channel — and YouTube's own thumbnail shape stays 1280×720 either way,
+    because that one is not the video's business."""
+    monkeypatch.setenv("RUFUS_FORMAT", "long")
+    import image_gen
+    importlib.reload(image_gen)
+    assert (image_gen.FRAME_W, image_gen.FRAME_H) == (1920, 1080)
+    assert (image_gen.THUMB_W, image_gen.THUMB_H) == (1280, 720)
+
+
+def test_no_module_still_writes_the_frame_size_down_itself():
+    """The sweep, as a test, so the eighth place cannot be added quietly.
+
+    Every module that needs the frame size imports it. This parses each script
+    and looks for an ASSIGNMENT holding both numbers — the exact shape all
+    seven original copies had (`W, H = 1080, 1920`). Parsing rather than
+    grepping is what makes it usable: the literals also appear in docstrings
+    and in UI labels, where they are prose, and a check that reports those
+    every time is a check people learn to ignore.
+
+    It found four on its first run, two of which were live defects.
+    """
+    import ast as _ast
+    scripts = Path(__file__).parent.parent / "scripts"
+    frame = {1080, 1920}
+    offenders = []
+    for py in sorted(scripts.glob("*.py")):
+        if py.name == "video_format.py":
+            continue
+        try:
+            tree = _ast.parse(py.read_text(encoding="utf-8"))
+        except SyntaxError:                     # not this test's business
+            continue
+        for node in _ast.walk(tree):
+            if not isinstance(node, (_ast.Assign, _ast.AnnAssign)) or node.value is None:
+                continue
+            nums = {v.value for v in _ast.walk(node.value)
+                    if isinstance(v, _ast.Constant) and isinstance(v.value, int)}
+            if frame <= nums:
+                offenders.append(f"{py.name}:{node.lineno}")
+    assert not offenders, ("the frame size is written down again in "
+                           + ", ".join(offenders)
+                           + " — import it from video_format instead")
+
+
+# ── the clamp that was a guillotine ──────────────────────────────────────────
+
+@pytest.mark.parametrize("fmt,cap,floor", [("short", 60.0, 30.0),
+                                           ("long", 1500.0, 240.0)])
+def test_the_render_clamps_to_the_format_not_to_sixty_seconds(monkeypatch, fmt, cap, floor):
+    """audio_gen does `min(audio_dur, MAX_DUR)` after transcription, so this
+    number does not warn — it TRUNCATES, and it truncates narration that has
+    already been written, judged, voiced and paid for. At a fixed 60.0 a
+    nine-minute script came out sixty seconds long, ending mid-sentence, and
+    QC then reported the file as broken for being 60s when the format wanted
+    240 — a true complaint about entirely the wrong thing."""
+    monkeypatch.setenv("RUFUS_FORMAT", fmt)
+    import audio_gen
+    importlib.reload(audio_gen)
+    assert audio_gen.MAX_DUR == cap
+    assert audio_gen.MIN_DUR == floor
+
+
+def test_the_renderers_clamp_to_the_same_number(monkeypatch):
+    """remotion_renderer reads audio_gen.MAX_DUR rather than keeping its own,
+    which is the only reason both paths move together."""
+    monkeypatch.setenv("RUFUS_FORMAT", "long")
+    import audio_gen, remotion_renderer
+    importlib.reload(audio_gen)
+    importlib.reload(remotion_renderer)
+    src = (Path(__file__).parent.parent / "scripts" / "remotion_renderer.py").read_text(encoding="utf-8")
+    assert "audio_gen.MAX_DUR" in src and "audio_gen.MIN_DUR" in src
+
+
+def test_the_clamp_never_cuts_a_render_qc_would_have_accepted():
+    """A ceiling below the QC band would hand QC a file it is guaranteed to
+    reject, and the log would blame the length rather than the clamp."""
+    for fmt in ("short", "long"):
+        p = video_format.profile(fmt)
+        assert p["render_max_s"] <= p["qc_max_s"], fmt
+        assert p["render_min_s"] >= p["qc_min_s"], fmt
+
+
+@pytest.mark.parametrize("fmt,dur", [("short", 64.0), ("long", 240.0)])
+def test_the_music_bed_is_long_enough_to_not_be_a_ringtone(monkeypatch, fmt, dur):
+    """64s cleared the Shorts ceiling so a Short never loops its bed. The same
+    64s under a nine-minute video is eight chords repeated eight times."""
+    monkeypatch.setenv("RUFUS_FORMAT", fmt)
+    import music_gen
+    importlib.reload(music_gen)
+    assert music_gen.BED_DUR == dur
+
+
+def test_a_short_still_never_loops_its_bed(monkeypatch):
+    monkeypatch.setenv("RUFUS_FORMAT", "short")
+    import audio_gen, music_gen
+    importlib.reload(audio_gen)
+    importlib.reload(music_gen)
+    assert music_gen.BED_DUR > audio_gen.MAX_DUR
+
+
+# ── three devices that are the Shorts look, not the channel's look ───────────
+
+@pytest.mark.parametrize("fmt,words,upper,bar", [
+    ("short", 1, True, True),
+    ("long",  4, False, False),
+])
+def test_the_caption_style_is_the_formats_and_not_hormozis(monkeypatch, fmt, words, upper, bar):
+    """One ALL-CAPS word at a time with a colour sweep along the bottom is
+    three deliberate choices for a phone at arm's length. Over nine minutes
+    they are 1,350 flashes, nine minutes of shouting, and a bar sitting on top
+    of the scrubber YouTube already draws."""
+    monkeypatch.setenv("RUFUS_FORMAT", fmt)
+    import audio_gen
+    importlib.reload(audio_gen)
+    assert audio_gen.CLUSTER_SIZE == words
+    assert audio_gen.CAPTION_UPPER is upper
+    assert audio_gen.RETENTION_BAR is bar
+
+
+@pytest.mark.parametrize("fmt", ["short", "long"])
+def test_dropping_the_bar_does_not_break_the_filter_chain(monkeypatch, fmt):
+    """Every stage of an ffmpeg filtergraph hands a labelled stream to the
+    next. Removing an overlay by deleting its line removes the link as well,
+    and the render then fails with a label error rather than a missing bar."""
+    monkeypatch.setenv("RUFUS_FORMAT", fmt)
+    import audio_gen
+    importlib.reload(audio_gen)
+    parts: list[str] = ["[x]null[vcat]"]
+    audio_gen._finish_video(parts, 40.0, "eq=contrast=1.1", "a.ass",
+                            "fonts", "#FFC53D")
+    body = "\n".join(parts)
+    assert "[vg]" in body and "[vout]" in body
+    assert ("[bar]" in body) is (fmt == "short")
+
+
+@pytest.mark.parametrize("fmt,expected", [("short", "HELLO"),
+                                          ("long", "Hello there")])
+def test_the_captions_read_the_way_the_format_asked(monkeypatch, fmt, expected):
+    monkeypatch.setenv("RUFUS_FORMAT", fmt)
+    import audio_gen
+    importlib.reload(audio_gen)
+
+    class W:
+        def __init__(self, word, start, end):
+            self.word, self.start, self.end = word, start, end
+
+    class Seg:
+        words = [W("Hello", 0.0, 0.4), W("there", 0.4, 0.8)]
+
+    out = list(audio_gen._cluster_words([Seg()], 10.0))
+    assert out[0][2] == expected
+
+
+def test_both_renderers_caption_the_same_script_the_same_way():
+    """remotion_renderer built its own word list with its own .upper() until
+    the two formats made them disagree — same script, two renderers, two
+    different sets of captions, and nobody watches both."""
+    src = (Path(__file__).parent.parent / "scripts" / "remotion_renderer.py").read_text(encoding="utf-8")
+    assert "audio_gen._cluster_words" in src
+    assert ".upper()" not in src, "the casing decision belongs to one function"
+
+
+def test_the_tsx_agrees_with_the_profile_about_the_two_devices():
+    """Short.tsx reads the frame shape rather than importing the profile, so
+    this is the test the hand-copy rule asks for: the two must not be able to
+    disagree about which format gets a bar and which gets capitals."""
+    tsx = (Path(__file__).parent.parent / "remotion" / "src" / "Short.tsx").read_text(encoding="utf-8")
+    assert "if (height < width) return null;" in tsx, "landscape still draws the bar"
+    assert "textTransform: portrait ? 'uppercase' : 'none'" in tsx
+    for fmt in ("short", "long"):
+        p = video_format.profile(fmt)
+        landscape = p["width"] > p["height"]
+        assert p["retention_bar"] is not landscape, fmt
+        assert p["caption_upper"] is not landscape, fmt
+
+
+def test_every_module_still_imports_under_either_format():
+    """The cheapest guard against the next profile field.
+
+    Most readers pull their number at IMPORT time — `MAX_DUR = _vf.get(...)`
+    at module scope — so a key that does not exist, or a typo in one, is an
+    exception thrown before the pipeline does anything at all. Under `short`
+    it would be caught by the whole suite; under `long` nothing else here
+    imports the alternative renderers at all.
+
+    A subprocess because importing sixty modules in-process would leave a
+    Flask app and several caches behind for whatever test ran next.
+    """
+    import subprocess
+    scripts = Path(__file__).parent.parent / "scripts"
+    code = (
+        "import importlib, pathlib, sys\n"
+        f"sys.path.insert(0, {str(scripts)!r})\n"
+        "bad = []\n"
+        f"for f in sorted(pathlib.Path({str(scripts)!r}).glob('*.py')):\n"
+        "    try:\n"
+        "        importlib.import_module(f.stem)\n"
+        "    except Exception as e:\n"
+        "        bad.append(f'{f.name}: {type(e).__name__}: {e}')\n"
+        "print('\\n'.join(bad))\n"
+    )
+    for fmt in ("short", "long"):
+        import os
+        env = {**os.environ, "RUFUS_FORMAT": fmt}
+        r = subprocess.run([sys.executable, "-c", code], capture_output=True,
+                           text=True, timeout=300, env=env)
+        assert r.returncode == 0, r.stderr[-2000:]
+        assert not r.stdout.strip(), f"{fmt}:\n{r.stdout}"
+
+
+# ── the profile cannot ask for a video that cannot be cut ────────────────────
+
+# This channel's narration pace, and the figure the long-form word counts were
+# derived from: ~150 words a minute.
+WORDS_PER_SECOND = 2.5
+
+
+def test_the_pictures_a_script_earns_fit_in_the_time_it_takes_to_say_it():
+    """Every picture is a GPU render, and the cut planner will not place one
+    below min_seg_s. Ask for more pictures than the narration has room for and
+    the extras are rendered, paid for, and then dropped with a one-line
+    warning — an hour of a 3090's evening for frames nobody sees.
+
+    The arithmetic is the profile's own, so it can be checked without running
+    anything: at words_max, do target_beats pictures at min_seg_s each still
+    fit inside the seconds that many words takes to speak?
+    """
+    for fmt in ("short", "long"):
+        p = video_format.profile(fmt)
+        for words in (p["words_min"], p["words_max"]):
+            beats = video_format.target_beats(words, fmt)
+            need = beats * p["min_seg_s"]
+            have = words / WORDS_PER_SECOND
+            assert need <= have, (
+                f"{fmt} at {words} words: {beats} pictures need {need:.0f}s of "
+                f"video and the narration is {have:.0f}s long")
+
+
+def test_the_beat_ceiling_fits_inside_the_render_ceiling():
+    """The other end of the same sum: beats_max pictures at the floor length
+    must still be a video the clamp will not cut."""
+    for fmt in ("short", "long"):
+        p = video_format.profile(fmt)
+        assert p["beats_max"] * p["min_seg_s"] <= p["render_max_s"], fmt
+
+
+def test_a_full_length_script_really_does_cut_into_that_many_pictures(monkeypatch):
+    """The arithmetic above, run through the actual planner. 150 pictures over
+    nine minutes is the shape long-form asks for, and a planner that quietly
+    returned ninety would mean sixty rendered images going in the bin."""
+    monkeypatch.setenv("RUFUS_FORMAT", "long")
+    import audio_gen
+    importlib.reload(audio_gen)
+    duration = 1350 / WORDS_PER_SECOND
+    # A sentence every ~15 words, which is ordinary narration prose.
+    ends = [round(i * 6.0, 2) for i in range(1, int(duration / 6.0))]
+    n = video_format.target_beats(1350, "long")
+    cuts = audio_gen._plan_cuts(ends, duration, n, ["neutral"] * n)
+    assert len(cuts) >= n - 1, f"{len(cuts)} cuts for {n} pictures"
+    marks = [0.0] + cuts + [duration]
+    assert min(b - a for a, b in zip(marks, marks[1:])) >= audio_gen.MIN_SEG - 0.01

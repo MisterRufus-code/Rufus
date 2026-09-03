@@ -18,13 +18,16 @@ import hashlib
 import json
 import os
 import random
+import subprocess
 from pathlib import Path
+
+import paths
 
 import requests
 
 ROOT       = Path(__file__).parent.parent
 CONFIG_DIR = ROOT / "config"
-MUSIC_DIR  = ROOT / "media_library" / "music"
+MUSIC_DIR  = paths.media_root() / "music"
 KEYS_FILE  = CONFIG_DIR / "keys.json"
 
 MOOD_MAP = {
@@ -33,18 +36,38 @@ MOOD_MAP = {
     "mindset":              ["calm lofi", "ambient focus", "peaceful instrumental"],
     "business":             ["corporate", "upbeat business", "ambient professional"],
     "personal_development": ["calm lofi", "ambient focus", "inspirational soft"],
+    "money_history":        ["cinematic documentary", "epic historical orchestral", "ambient tension"],
 }
 DEFAULT_MOODS = ["ambient", "instrumental", "calm"]
 
-MIN_TRACK_BYTES = 200_000
+MIN_TRACK_BYTES  = 200_000
+MIN_TRACK_SECS   = 55.0   # reject tracks shorter than this — Shorts are ~60s
 
 # archive.org throttles/rejects the default python-requests UA — identify properly.
 _UA = {"User-Agent": "Rufus-Shorts/1.0 (autonomous video pipeline; contact via repo)"}
 
 
+def _check_audio_duration(path: Path, min_secs: float = MIN_TRACK_SECS) -> bool:
+    """Return True if the audio file is at least min_secs long."""
+    try:
+        r = subprocess.run(
+            ["ffprobe", "-v", "quiet", "-print_format", "json",
+             "-show_streams", str(path)],
+            capture_output=True, text=True, timeout=15,
+        )
+        info = json.loads(r.stdout)
+        for stream in info.get("streams", []):
+            dur = float(stream.get("duration", 0))
+            if dur >= min_secs:
+                return True
+        return False
+    except Exception:
+        return True   # if ffprobe unavailable, don't reject the track
+
+
 def _load_jamendo_key() -> str:
     try:
-        return json.loads(KEYS_FILE.read_text()).get("jamendo_client_id", "")
+        return json.loads(KEYS_FILE.read_text(encoding="utf-8")).get("jamendo_client_id", "")
     except (json.JSONDecodeError, OSError):
         return ""
 
@@ -86,7 +109,7 @@ def _jamendo(mood: str) -> Path | None:
                 "search":        mood,
                 "audioformat":   "mp31",
                 "license_cc":    "1",
-                "minDuration":   25,
+                "minDuration":   60,  # Shorts are ~60s; 25s tracks loop badly
                 "boost":         "popularity_month",
             },
             timeout=10,
@@ -107,7 +130,13 @@ def _jamendo(mood: str) -> Path | None:
             return dest
 
         print(f"[music] Jamendo: \"{track.get('name','?')}\" by {track.get('artist_name','?')}")
-        return dest if _download(audio_url, dest) else None
+        if not _download(audio_url, dest):
+            return None
+        if not _check_audio_duration(dest):
+            print(f"[music] Jamendo: track too short (<{MIN_TRACK_SECS:.0f}s) — skipping")
+            dest.unlink(missing_ok=True)
+            return None
+        return dest
     except Exception as e:
         print(f"[music] Jamendo failed: {e}")
         return None
@@ -118,10 +147,15 @@ def _archive_music(mood: str) -> Path | None:
         r = requests.get(
             "https://archive.org/advancedsearch.php",
             params={
-                # subject/title match + opensource_audio = CC-licensed uploads;
-                # the old licenseurl:creativecommons term matched nothing
-                # (licenseurl is a full-URL field, not a keyword field).
-                "q":      f'({mood}) AND mediatype:(audio) AND collection:(opensource_audio) AND format:(MP3)',
+                # Require a music subject and exclude spoken-word formats so we
+                # don't pull podcasts/interviews/lectures/audiobooks (which the
+                # broad opensource_audio collection is full of).
+                "q":      (f'({mood}) AND mediatype:(audio) AND format:(MP3) '
+                           f'AND subject:(music) '
+                           f'AND -subject:(podcast) AND -subject:(speech) '
+                           f'AND -subject:(interview) AND -subject:(sermon) '
+                           f'AND -subject:(lecture) AND -subject:(audiobook) '
+                           f'AND -subject:(poetry) AND -subject:(talk)'),
                 "fl":     "identifier",
                 "rows":   20,
                 "output": "json",
@@ -161,7 +195,10 @@ def _archive_music(mood: str) -> Path | None:
                     return dest
                 print(f"[music] archive.org: {identifier}/{chosen['name']}")
                 if _download(audio_url, dest):
-                    return dest
+                    if _check_audio_duration(dest):
+                        return dest
+                    print(f"[music] archive.org: track too short — skipping")
+                    dest.unlink(missing_ok=True)
             except Exception as e:
                 print(f"[music] archive.org {identifier} failed: {e}")
                 continue
@@ -173,21 +210,33 @@ def _archive_music(mood: str) -> Path | None:
 def fetch_music(niche: str) -> Path | None:
     """Return path to a music track for the niche, or None for voice-only.
 
-    Streaming providers first (real produced tracks), then the synthesized
-    local bed — so a render virtually always has music under the voice.
+    Provider chain (best-to-worst quality):
+      1. Jamendo — real produced tracks with proper mood tagging (needs free key)
+      2. MusicGen — AI-generated from a niche-specific text prompt (always on-tone)
+      3. Synthesized local bed — deterministic mood bed (fallback, always works)
+      4. archive.org — last resort (unpredictable; speech-filtered query)
     """
     MUSIC_DIR.mkdir(parents=True, exist_ok=True)
     moods = MOOD_MAP.get(niche, DEFAULT_MOODS)
 
+    # 1. Jamendo — real, produced, mood-tagged INSTRUMENTAL music (free key).
     for mood in moods:
         track = _jamendo(mood)
         if track:
             return track
-        track = _archive_music(mood)
+
+    # 2. MusicGen — AI-generated from a niche text description.
+    #    Output is literally written for the niche's emotional tone: finance gets
+    #    "cinematic dark ambient, documentary strings", not a random podcast track.
+    try:
+        from musicgen_gen import generate_music
+        track = generate_music(niche)
         if track:
             return track
+    except Exception as e:
+        print(f"[music] MusicGen failed: {e}")
 
-    # No platform reachable — synthesize a bed locally (zero APIs, cached).
+    # 3. Synthesized local bed — mood-matched and instrumental, always available.
     try:
         from music_gen import ensure_music
         track = ensure_music(niche)
@@ -195,6 +244,12 @@ def fetch_music(niche: str) -> Path | None:
             return track
     except Exception as e:
         print(f"[music] local synthesis failed: {e}")
+
+    # 4. archive.org — last resort only (unpredictable; query is speech-filtered).
+    for mood in moods:
+        track = _archive_music(mood)
+        if track:
+            return track
 
     print("[music] all sources failed — proceeding voice-only")
     return None

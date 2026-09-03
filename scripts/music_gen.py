@@ -21,7 +21,11 @@ ROOT      = Path(__file__).parent.parent
 MUSIC_DIR = ROOT / "assets" / "music_synth"
 
 SAMPLE_RATE = 48000
-BED_DUR     = 64.0    # > MAX_DUR(60s) so the renderer never hits a loop seam
+# Per-format, and the number carried its own reason in a comment that could
+# not check itself: "> MAX_DUR(60s)" was true of one format and a hand-copy of
+# another module's constant. See video_format.PROFILES for what each is for.
+import video_format as _vf
+BED_DUR     = float(_vf.get("music_bed_s", 64.0))
 CHORD_DUR   = 8.0     # seconds per chord
 MIN_BYTES   = 500_000
 
@@ -52,6 +56,10 @@ NICHE_BEDS = {
     "personal_development": {  # G – Em – C – D warm, no pulse
         "chords": [[_G2, _B2, _D3], [_E2, _G2, _B2], [_C3, _E3, _G3], [_D3, _F3 * 2**(1/6), _A3]],
         "bpm": None,
+    },
+    "money_history": {     # Dm – Bb – F – C, solemn documentary, slow pulse
+        "chords": [[_D3, _F3, _A3], [_BB2, _D3, _F3], [_F2, _A2, _C3], [_C3, _E3, _G3]],
+        "bpm": 72,
     },
 }
 DEFAULT_BED = NICHE_BEDS["mindset"]
@@ -92,7 +100,8 @@ def _music_cmd(niche: str, out_path: Path) -> list[str]:
     tail = (
         "lowpass=f=1800,"
         "aecho=0.6:0.3:46|92:0.35|0.25,"
-        f"volume=0.85,aresample={SAMPLE_RATE}"
+        f"volume=0.85,aresample={SAMPLE_RATE},"
+        "aformat=channel_layouts=stereo"
     )
 
     bpm = bed.get("bpm")
@@ -103,14 +112,14 @@ def _music_cmd(niche: str, out_path: Path) -> list[str]:
         fc = (
             f"[0:a]{tail}[pad];"
             f"[1:a]lowpass=f=400,tremolo=f={bpm / 60:.3f}:d=0.85,volume=0.35,"
-            f"aresample={SAMPLE_RATE}[pulse];"
+            f"aresample={SAMPLE_RATE},aformat=channel_layouts=stereo[pulse];"
             "[pad][pulse]amix=inputs=2:duration=first:normalize=0[a]"
         )
         cmd += ["-filter_complex", fc, "-map", "[a]"]
     else:
         cmd += ["-af", tail]
 
-    cmd += ["-ac", "1", "-t", f"{BED_DUR:g}", str(out_path)]
+    cmd += ["-ac", "2", "-t", f"{BED_DUR:g}", str(out_path)]
     return cmd
 
 

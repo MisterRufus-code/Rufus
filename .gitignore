@@ -5,22 +5,62 @@ config/channels/
 config/youtube_token.json
 config/tiktok_token.json
 config/client_secrets.json
+config/google_oauth.json
 
 # Generated media
-media_library/cache/
-media_library/output/
-media_library/temp/
-media_library/music/
+#
+# NAMED ONE AT A TIME, AND THAT IS HOW SIX OF THEM GOT MISSED. This list grew
+# a line per directory as each was invented, so every directory invented since
+# — bench sheets, style previews, thumbnails, and the three the choose-from-
+# several pipeline writes — was tracked by default. The owner opened Source
+# Control and found ~180 generated files staged, including hundreds of PNGs
+# from two workflow benches.
+#
+# So the rule is inverted: everything under media_library/ is generated unless
+# it is a checked-in fixture, and the two that are get un-ignored below. A new
+# directory is ignored the day it is created rather than the day somebody
+# notices it in a commit.
+media_library/
 assets/sfx/
 assets/music_synth/
+
+# Scratch output from manual testing — same class, different place.
+test_*.mp4
+test_*.png
+test_*.mp3
+kokoro_test.mp3
+run_log.txt
+*.patch
 
 # Runtime logs and database
 logs/
 rufus.db
 rufus.db-*
+# Snapshots, and the database a restore moved aside. Both are copies of
+# the file above and belong on the machine, never in the history —
+# committing one would put every published id and every human decision
+# into a repository that may be handed to somebody.
+backups/
+rufus.replaced-*.db
+# And an export, for the same reason: it is the same content in a friendlier
+# shape, so committing one would put every script and every decision into the
+# history just as surely.
+rufus-export-*/
+rufus.*.lock*
+rufus.lock*
 
 # Seed deduplication history (runtime state, not source code)
 config/used_seeds.json
+# and the filelock beside it, which every run creates and no run reads
+# back — it appeared in `git status` on a clean checkout the first time
+# anybody ran the pipeline from a fresh clone.
+config/used_seeds.lock
+config/script_embeddings.json
+config/topic_embeddings.json
+config/recent_image_prompts.json
+config/recent_image_hashes.json
+config/dashboard_settings.json
+config/dashboard_url.txt
 
 # Python
 __pycache__/
@@ -37,3 +77,7 @@ Thumbs.db
 remotion/node_modules/
 remotion/public/job_*/
 remotion/out/
+.aider*
+
+# Dashboard access tokens — real credentials, never commit
+config/users.json

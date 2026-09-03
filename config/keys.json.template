@@ -1,5 +1,6 @@
 {
   "openai":              "sk-...",
+  "elevenlabs":          "YOUR_ELEVENLABS_API_KEY",
   "pexels":              "YOUR_PEXELS_API_KEY",
   "vimeo":               "YOUR_VIMEO_ACCESS_TOKEN",
   "pixabay":             "YOUR_PIXABAY_KEY",

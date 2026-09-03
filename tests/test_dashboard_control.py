@@ -1,0 +1,1644 @@
+"""The dashboard as the control surface, not a read-only window.
+
+THE OWNER'S INSTRUCTION: the software is run from the dashboard, not from a
+terminal. Running a video the way this channel now runs it meant seven `$env:`
+lines in PowerShell before every run, and getting one wrong — a cmd `set` in a
+PowerShell prompt, a stale RUFUS_BEAT_MOTION from an earlier experiment — is
+invisible until the video comes out wrong.
+"""
+
+import json
+import os
+import re
+import sys
+import time
+from pathlib import Path
+
+import pytest
+
+sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
+
+import dashboard  # noqa: E402
+
+
+@pytest.fixture
+def client(tmp_path, monkeypatch):
+    monkeypatch.setattr(dashboard, "SETTINGS_FILE", tmp_path / "settings.json")
+    dashboard.app.config["TESTING"] = True
+    with dashboard.app.test_client() as c:
+        yield c
+
+
+# ── every knob is reachable ─────────────────────────────────────────────────
+
+def test_the_settings_that_shaped_recent_runs_are_all_present():
+    """Each of these was set by hand in PowerShell for a real run."""
+    keys = {k for k, _l, _kind, _h in dashboard.SETTINGS_SCHEMA}
+    for needed in ("RUFUS_STYLE", "RUFUS_STILLS_ONLY", "RUFUS_BEAT_MOTION",
+                   "RUFUS_FRAMES_PER_BEAT", "SD_CLIPS", "RUFUS_INSERTS",
+                   "RUFUS_INSERT_MODE", "RUFUS_DISCORD_WEBHOOK",
+                   "RUFUS_BUBBLE_GAIN", "RUFUS_TTS"):
+        assert needed in keys, needed
+
+
+def test_every_setting_belongs_to_exactly_one_group():
+    flat = [k for _t, _b, rows in dashboard.SETTINGS_GROUPS for k, *_ in rows]
+    assert len(flat) == len(set(flat)), "a setting is listed twice"
+    assert len(flat) == len(dashboard.SETTINGS_SCHEMA)
+
+
+def test_every_setting_explains_itself():
+    """A form of thirty bare variable names is not a control surface."""
+    for key, label, kind, help_text in dashboard.SETTINGS_SCHEMA:
+        assert label and help_text, key
+        assert len(help_text) > 25, key
+
+
+# ── the fields render as something usable ───────────────────────────────────
+
+def test_a_webhook_gets_a_text_box_not_a_dropdown():
+    """The old page made every setting a <select>, so a URL or a beat count
+    could not be entered at all."""
+    field = dashboard._setting_field("RUFUS_DISCORD_WEBHOOK", "secret", "")
+    assert "<input" in field and "password" in field
+
+    number = dashboard._setting_field("SD_CLIPS", "number", "24")
+    assert "<input" in number and 'value="24"' in number
+
+
+def test_a_bool_still_offers_three_states():
+    """"Don't override" is not the same as "off" — one leaves the pipeline
+    default in place and the other forces it off."""
+    field = dashboard._setting_field("RUFUS_SFX", "bool", "")
+    assert field.count("<option") == 3
+    assert "don&#x27;t override" in field or "don't override" in field
+
+
+def test_a_stored_secret_is_shown_as_set(client):
+    """A password box that renders empty for a stored value is how people
+    paste the same webhook in twice and never know which one is live."""
+    dashboard._save_settings({"RUFUS_DISCORD_WEBHOOK": "https://x/y"})
+    page = client.get("/settings").get_data(as_text=True)
+    assert "https://x/y" in page
+
+
+# ── saving ──────────────────────────────────────────────────────────────────
+
+def test_saving_writes_only_the_filled_fields(client):
+    client.post("/settings/save", data={"RUFUS_STYLE": "stickman",
+                                        "SD_CLIPS": "", "RUFUS_SFX": "1"})
+    saved = json.loads(dashboard.SETTINGS_FILE.read_text(encoding="utf-8"))
+    assert saved == {"RUFUS_STYLE": "stickman", "RUFUS_SFX": "1"}
+
+
+def test_a_number_that_is_not_a_number_is_refused_out_loud(client):
+    """Left to reach the run, it becomes an env var whose reader falls back to
+    its default silently — the owner sets a value, sees no error, and gets the
+    old behaviour with nothing in the log to explain it."""
+    r = client.post("/settings/save", data={"SD_CLIPS": "twenty-four"})
+    assert "error=" in r.headers["Location"]
+    saved = json.loads(dashboard.SETTINGS_FILE.read_text(encoding="utf-8"))
+    assert "SD_CLIPS" not in saved
+
+
+def test_reset_clears_every_override(client):
+    dashboard._save_settings({"RUFUS_STYLE": "stickman", "SD_CLIPS": "24"})
+    client.get("/settings?reset=1")
+    assert json.loads(dashboard.SETTINGS_FILE.read_text(encoding="utf-8")) == {}
+
+
+def test_saved_settings_reach_the_run_as_environment(client):
+    """The whole point: what is set here is what the run sees."""
+    src = Path(dashboard.__file__).read_text(encoding="utf-8")
+    assert "env.update(_load_settings())" in src
+
+
+# ── logs ────────────────────────────────────────────────────────────────────
+
+def test_the_logs_page_lists_both_naming_schemes():
+    """rufus_YYYYMMDD.log is a run.bat run; dashboard_run_<epoch>.log is one
+    started from this page. Reading one would hide half the runs."""
+    src = Path(dashboard.__file__).read_text(encoding="utf-8")
+    assert "dashboard_run_" in src and "*.log" in src
+
+
+def test_a_log_read_cannot_escape_the_logs_directory():
+    """The filename arrives from a query string."""
+    assert dashboard._read_log("../config/keys.json") == ""
+    assert dashboard._read_log("../../etc/passwd") == ""
+
+
+def test_a_long_log_is_tailed_and_says_so():
+    assert dashboard.LOG_TAIL_BYTES > 100_000
+    src = Path(dashboard.__file__).read_text(encoding="utf-8")
+    assert "showing the last" in src
+
+
+def test_logs_are_in_the_nav():
+    assert any(href == "/logs" for href, _label, _perm in dashboard.NAV_ITEMS)
+
+
+# ── proving the notification works without a 25-minute run ──────────────────
+
+def test_a_test_notification_can_be_sent_from_the_form(client, monkeypatch):
+    """A webhook is exactly the kind of value that is wrong in a way nothing
+    reveals until a run finishes: a trailing space, a channel link copied
+    instead of the webhook, a webhook deleted months ago."""
+    sent = {}
+
+    import notify
+
+    def _fake_send(title, body, *, url=None, priority="normal"):
+        sent["title"] = title
+        return True
+
+    monkeypatch.setattr(notify, "configured", lambda: ["discord"])
+    monkeypatch.setattr(notify, "send", _fake_send)
+    monkeypatch.setattr(notify, "_dashboard_url", lambda: "")
+    monkeypatch.setattr("importlib.reload", lambda m: m)
+
+    r = client.post("/settings/test-notify",
+                    data={"RUFUS_DISCORD_WEBHOOK": "https://discord/api/x"})
+    assert "msg=" in r.headers["Location"]
+    assert "test" in sent.get("title", "").lower()
+
+
+def test_testing_with_nothing_configured_says_so(client, monkeypatch):
+    import notify
+    monkeypatch.setattr(notify, "configured", lambda: [])
+    monkeypatch.setattr("importlib.reload", lambda m: m)
+    r = client.post("/settings/test-notify", data={})
+    assert "error=" in r.headers["Location"]
+
+
+def test_the_test_uses_what_is_on_screen_not_only_what_is_saved(client):
+    """The button sits inside the settings form, so someone who pastes a
+    webhook and reaches for "test" before "save" tests the one they pasted."""
+    src = Path(dashboard.__file__).read_text(encoding="utf-8")
+    block = src.split('def settings_test_notify')[1].split("@app.route")[0]
+    assert "request.form.get(key" in block
+
+
+def test_the_environment_is_restored_after_a_test(client, monkeypatch):
+    """The test layers settings onto os.environ to match what a run sees. This
+    Flask process outlives the test, so leaving them set would silently change
+    every later launch."""
+    import os
+    monkeypatch.delenv("RUFUS_DISCORD_WEBHOOK", raising=False)
+    import notify
+    monkeypatch.setattr(notify, "configured", lambda: [])
+    monkeypatch.setattr("importlib.reload", lambda m: m)
+    client.post("/settings/test-notify",
+                data={"RUFUS_DISCORD_WEBHOOK": "https://leak/me"})
+    assert os.environ.get("RUFUS_DISCORD_WEBHOOK") is None
+
+
+def test_the_dashboard_url_is_settable_so_alerts_can_deep_link():
+    keys = {k for k, _l, _kind, _h in dashboard.SETTINGS_SCHEMA}
+    assert "RUFUS_DASHBOARD_URL" in keys
+
+
+# ── insights ────────────────────────────────────────────────────────────────
+
+def test_insights_is_reachable_as_a_section():
+    """REACHABLE, WHICH IS NOW A DIFFERENT ASSERTION THAN IT WAS.
+
+    This page is a SECTION of /measure rather than a tab of its own — four
+    pages asking variations of "what does the data say" was four places to
+    look for one answer. What has to stay true is that the section is reachable
+    and that the old link still leads to it, because a tidy-up that breaks
+    every bookmark is not a tidy-up.
+    """
+    assert any(href == "/measure" for href, _l, _p in dashboard.NAV_ITEMS)
+    assert ("what-goes-wrong", "What keeps going wrong", "_insights_body") in dashboard._MEASURE_SECTIONS
+
+
+def test_insights_says_what_to_do_when_nothing_is_measured_yet(client, monkeypatch):
+    """An empty page that does not say how to fill it is a dead end."""
+    import run_review
+    monkeypatch.setattr(run_review, "patterns", lambda limit=30: {
+        "runs_reviewed": 0, "recurring": [], "rows": []})
+    page = client.get("/measure").get_data(as_text=True)
+    assert "run_review.py --all" in page
+
+
+def test_insights_shows_recurring_findings_before_single_runs(client, monkeypatch):
+    """The whole reason to keep these across runs: four of six is a code
+    change, one of six is a bad seed."""
+    import run_review
+    monkeypatch.setattr(run_review, "patterns", lambda limit=30: {
+        "runs_reviewed": 6,
+        "recurring": [{"id": "setting_clause_everywhere", "runs": 4, "share": 0.67}],
+        "rows": [{"run_id": "20260816-a", "beats": 24,
+                  "clauses": {"thread_share": 0.33, "setting_share": 0.54},
+                  "dominant_subject": {"word": "tonic", "share": 0.25},
+                  "cuts": {"longest_hold_s": 6.4},
+                  "findings": [{"severity": "high", "text": "half the shots"}]}],
+    })
+    page = client.get("/measure").get_data(as_text=True)
+    assert page.index("What keeps happening") < page.index("Run by run")
+    assert "setting_clause_everywhere" in page
+    assert "4 of 6 runs" in page
+    assert "20260816-a" in page
+
+
+def test_a_review_failure_does_not_break_the_page(client, monkeypatch):
+    import run_review
+    def _boom(limit=30):
+        raise RuntimeError("no debug folder")
+    monkeypatch.setattr(run_review, "patterns", _boom)
+    page = client.get("/measure")
+    assert page.status_code == 200
+    assert "no debug folder" in page.get_data(as_text=True)
+
+
+# ── the look ────────────────────────────────────────────────────────────────
+
+def test_colours_are_defined_once_as_tokens():
+    """The old stylesheet hardcoded #171a21 and #2a2d34 across a dozen rules
+    and patched light mode with a dozen one-off media queries, so every new
+    component had to remember to bring its own override — and the ones that
+    forgot were unreadable on a white page."""
+    style = dashboard.PAGE_STYLE
+    assert "--surface:" in style and "--border:" in style and "--accent:" in style
+    # The light palette is a redefinition of the same tokens, not a second set
+    # of rules.
+    light = style.split("prefers-color-scheme: light")[1][:400]
+    assert "--bg:" in light and "--surface:" in light
+
+
+def test_no_component_hardcodes_the_dark_surface_colour():
+    """A hardcoded dark background on a light page is the exact bug this
+    replaced: the log viewer rendered a near-black block on white."""
+    src = Path(dashboard.__file__).read_text(encoding="utf-8")
+    body = src.split("</style></head><body>", 1)[1]
+    for literal in ("#171a21", "#0b0d12", "#2a2d34"):
+        assert literal not in body, literal
+
+
+def test_the_review_queue_is_usable_from_a_phone():
+    """The owner reviews from a phone; the default 10px tap target is not
+    enough for approve/reject."""
+    style = dashboard.PAGE_STYLE
+    mobile = style.split("max-width: 760px")[-1]
+    assert ".btn { padding: 12px" in mobile
+
+
+def test_the_front_page_leads_with_what_to_change(client, monkeypatch):
+    """The page opened on a topic box, which assumes the answer to "what now"
+    is always "make another video" — and when most recent runs share a defect,
+    another video is precisely the wrong move."""
+    monkeypatch.setattr(dashboard, "_advice_now", lambda: (
+        [{"title": "Pictures are held too long", "severity": "high"},
+         {"title": "second thing", "severity": "medium"}],
+        {"state": "needs work", "detail": "Pictures are held too long"}))
+    page = client.get("/").get_data(as_text=True)
+    # The advice card went with the minimal rebuild; the tile carries the line
+    # itself now. A box labelled "what to change" that does not say what to
+    # change is a signpost to a signpost.
+    assert "Pictures are held too long" in page
+    assert "and 1 more" in page
+    tile = page.split('class="tile t-measure"', 1)[1].split("</a>", 1)[0]
+    assert "Pictures are held too long" in tile
+
+
+def test_a_broken_advisor_never_breaks_the_front_page(client, monkeypatch):
+    def _boom():
+        raise RuntimeError("nope")
+    monkeypatch.setattr(dashboard, "_advice_now", _boom)
+    assert client.get("/").status_code == 200
+
+
+# ── starting up ─────────────────────────────────────────────────────────────
+
+def test_a_busy_port_is_explained_not_just_reported():
+    """run.bat starts a dashboard of its own, so the ordinary way to reach the
+    startup path is with one already running — and what Flask prints then is
+    WinError 10048 about socket addresses, which does not tell the reader that
+    the thing they wanted is already open in another window."""
+    # Whitespace-normalised: the message is a wrapped f-string, so a literal
+    # search would be asserting on where the lines happen to break.
+    src = " ".join(Path(dashboard.__file__).read_text(encoding="utf-8").split())
+    src = src.replace('" f"', "").replace('" "', "")
+    assert "already in use" in src
+    assert "that IS this dashboard" in src
+    assert "RUFUS_DASHBOARD_PORT" in src
+
+
+def test_the_port_check_does_not_raise_on_a_free_port():
+    """It runs before Flask binds, so it must never be the thing that stops a
+    working start."""
+    assert dashboard._port_taken("127.0.0.1", 59999) is False
+
+
+def test_the_launcher_shows_the_reason_it_exited():
+    """Everything the dashboard prints goes to the log, because a scheduled
+    task has no console. A person running the bat at a prompt therefore got a
+    silent return and no hint at all — which happened: it refused to start
+    because the port was held, said so clearly, and said it into a file nobody
+    was reading. A launcher that exists to make failure debuggable has to put
+    the failure where the person is."""
+    bat = (Path(dashboard.__file__).parent.parent / "run_dashboard.bat")
+    text = bat.read_text(encoding="utf-8", errors="replace")
+    assert "Get-Content" in text and "-Tail" in text
+    assert 'if not "%RC%"=="0"' in text
+    # And the success path must NOT dump the log — a working start would then
+    # end with twenty lines of noise every time.
+    tail = text.split('set "RC=%ERRORLEVEL%"')[1]
+    assert tail.index('if not "%RC%"=="0"') < tail.index("Get-Content")
+
+
+# ── the format switch, and picking a look by looking at it ───────────────────
+
+def test_the_format_switch_is_in_the_header_on_every_page(client):
+    """Not in Settings. It decides aspect ratio, script length, picture count
+    and how long the GPU is busy, and it is the one thing the owner wants to
+    change per video rather than per channel. A setting three pages deep that
+    changes everything is a setting people forget is set — SD_CLIPS proved
+    that on this dashboard already."""
+    body = client.get("/").data.decode()
+    assert 'action="/format"' in body
+    assert "Shorts" in body and "Long-form" in body
+
+
+def test_switching_format_persists_for_every_launch_path(client, tmp_path,
+                                                         monkeypatch):
+    """A header button that only changed THIS process would be the
+    settings-page-obeyed-by-one-launcher bug wearing a nicer hat."""
+    monkeypatch.setattr(dashboard, "SETTINGS_FILE", tmp_path / "s.json")
+    r = client.post("/format", data={"format": "long"})
+    assert r.status_code in (302, 303)
+    assert dashboard._load_settings()["RUFUS_FORMAT"] == "long"
+    import os as _os
+    assert _os.environ["RUFUS_FORMAT"] == "long"
+    # Leave the process as we found it: an env var set by one test decides
+    # the aspect ratio for every test after it.
+    _os.environ.pop("RUFUS_FORMAT", None)
+
+
+def test_an_unknown_format_changes_nothing(client, tmp_path, monkeypatch):
+    monkeypatch.setattr(dashboard, "SETTINGS_FILE", tmp_path / "s.json")
+    client.post("/format", data={"format": "vertical-ish"})
+    assert "RUFUS_FORMAT" not in dashboard._load_settings()
+
+
+def test_the_style_page_lists_every_preset(client):
+    import comfy_client
+    body = client.get("/styles").data.decode()
+    for sid in comfy_client.style_presets():
+        assert sid in body
+
+
+def test_a_style_with_no_preview_says_so_rather_than_faking_one(client):
+    """Nothing here pretends to show art it has not produced."""
+    body = client.get("/styles").data.decode()
+    assert "no preview yet" in body
+
+
+def test_picking_a_style_persists_it(client, tmp_path, monkeypatch):
+    monkeypatch.setattr(dashboard, "SETTINGS_FILE", tmp_path / "s.json")
+    client.post("/styles/use", data={"style": "storybook"})
+    assert dashboard._load_settings()["RUFUS_STYLE"] == "storybook"
+
+
+def test_an_unknown_style_is_refused(client, tmp_path, monkeypatch):
+    monkeypatch.setattr(dashboard, "SETTINGS_FILE", tmp_path / "s.json")
+    client.post("/styles/use", data={"style": "../../etc/passwd"})
+    assert "RUFUS_STYLE" not in dashboard._load_settings()
+
+
+def test_the_preview_scene_is_the_same_for_every_style():
+    """A picker where each card shows a different subject compares subjects,
+    not styles. The only variable between these frames must be the style
+    block."""
+    import inspect
+    src = inspect.getsource(dashboard.styles_preview)
+    assert "STYLE_PREVIEW_SCENE" in src
+    assert "add_detail=False" in src, (
+        "the automatic suffix is whatever RUFUS_STYLE already is — a picker "
+        "that previewed the style you already have is a picker in name only")
+
+
+def test_a_preview_that_does_not_exist_is_a_404_not_a_traceback(client):
+    assert client.get("/styles/preview/not_a_style").status_code == 404
+
+
+# ── sixteen links is not a navigation, it is an inventory ────────────────────
+#
+# Flat, they wrapped to two rows on a laptop and filled an entire phone screen
+# before any content appeared — on a dashboard whose review queue is worked
+# from a phone. NAV_ITEMS stays the flat registry (a page is registered by
+# adding one line to it, and four tests unpack it); NAV_GROUPS is a view.
+#
+# The invariant worth enforcing is coverage. A page that exists and is
+# unreachable is worse than one that was never written, and the failure mode
+# is silent: you add a route, add its NAV_ITEMS line, and it renders nowhere.
+
+def test_every_registered_page_is_reachable_from_the_nav():
+    registered = {href for href, _l, _p in dashboard.NAV_ITEMS}
+    grouped = {h for _title, hrefs in dashboard.NAV_GROUPS for h in hrefs}
+    assert registered - grouped == set(), "registered but in no group"
+    assert grouped - registered == set(), "grouped but not registered"
+
+
+def test_the_primary_links_are_real_pages():
+    registered = {href for href, _l, _p in dashboard.NAV_ITEMS}
+    assert set(dashboard.NAV_PRIMARY) <= registered
+
+
+def test_no_page_is_in_two_groups():
+    """Two homes for one page means the reader has to learn which one you
+    meant, which is the problem the grouping exists to remove."""
+    seen = [h for _t, hrefs in dashboard.NAV_GROUPS for h in hrefs]
+    assert len(seen) == len(set(seen))
+
+
+def test_the_menu_needs_no_javascript_to_open():
+    """This dashboard is deliberately self-contained with no build step, and a
+    menu that needs a script to open is a menu that does not open when the
+    script fails."""
+    src = Path(dashboard.__file__).read_text(encoding="utf-8")
+    assert '<details class="navmore">' in src
+
+
+# ── the front page says what needs you ──────────────────────────────────────
+#
+# A FINISHED VIDEO ANNOUNCES ITSELF: it lands in the pending list with a
+# thumbnail and the count above it goes up. A run that DIED announces nothing —
+# Step 6 is what writes the `videos` row, so a run that fell over before it
+# leaves no row at all, and the front page looks exactly the way it looked
+# yesterday. The owner reads an unchanged screen as "nothing ran last night",
+# which is the opposite of what happened.
+
+def _failed(run_id="run-x", ago=120.0, **over):
+    p = {"run_id": run_id, "channel": "main_en", "status": "failed",
+         "step": 1, "total": 7, "label": "failed",
+         "detail": "no seed: every source refused",
+         "updated_at": time.time() - ago, "stale": False}
+    p.update(over)
+    return p
+
+
+def test_a_crashed_run_is_reported_on_the_front_page(client, monkeypatch):
+    monkeypatch.setattr(dashboard.run_progress, "read_all", lambda: [_failed()])
+    monkeypatch.setattr(dashboard, "_orphaned_debug_runs", lambda limit=40: [])
+    # Reported beside the queue it concerns, rather than on a front page that
+    # is now four blocks long.
+    page = client.get("/review").get_data(as_text=True)
+    assert "run-x" in page
+    assert "no seed: every source refused" in page
+    assert "step 1/7" in page
+
+
+def test_a_run_that_is_still_going_is_not_called_a_crash(client, monkeypatch):
+    """A live run has no `videos` row either — its debug folder is an orphan
+    right up until Step 6. Without excluding it, every visit during a run would
+    report the run in progress as a failure."""
+    live = _failed("run-live", status="running", label="writing the script")
+    monkeypatch.setattr(dashboard.run_progress, "read_all", lambda: [live])
+    monkeypatch.setattr(dashboard, "_orphaned_debug_runs", lambda limit=40: [
+        {"run_id": "run-live", "mtime": time.time(),
+         "files": [], "preview": ""}])
+    assert dashboard._recent_failures() == []
+
+
+def test_a_stalled_run_counts_even_though_it_never_said_so(monkeypatch):
+    """`stale` means the process died without reaching its finally-block, so
+    the file still claims "running" forever. That is a failure that will never
+    report itself."""
+    stuck = _failed("run-stuck", status="running", stale=True, step=5)
+    monkeypatch.setattr(dashboard.run_progress, "read_all", lambda: [stuck])
+    monkeypatch.setattr(dashboard, "_orphaned_debug_runs", lambda limit=40: [])
+    found = dashboard._recent_failures()
+    assert [f["run_id"] for f in found] == ["run-stuck"]
+    assert found[0]["stalled"] is True
+
+
+def test_a_cancelled_run_is_not_a_failure(monkeypatch):
+    """Somebody pressed stop. Reporting a person's own decision back to them as
+    a problem is how a notice area becomes something you scroll past."""
+    monkeypatch.setattr(dashboard.run_progress, "read_all",
+                        lambda: [_failed("run-c", status="cancelled")])
+    monkeypatch.setattr(dashboard, "_orphaned_debug_runs", lambda limit=40: [])
+    assert dashboard._recent_failures() == []
+
+
+def test_an_old_crash_stops_shouting(monkeypatch):
+    """A banner that is always on is a banner nobody reads."""
+    old = _failed("run-old", ago=dashboard.FAILURE_WINDOW_SECONDS + 3600)
+    monkeypatch.setattr(dashboard.run_progress, "read_all", lambda: [old])
+    monkeypatch.setattr(dashboard, "_orphaned_debug_runs", lambda limit=40: [
+        {"run_id": "run-old",
+         "mtime": time.time() - dashboard.FAILURE_WINDOW_SECONDS - 3600,
+         "files": [], "preview": ""}])
+    assert dashboard._recent_failures() == []
+
+
+def test_a_hard_kill_that_wrote_no_progress_is_still_noticed(monkeypatch):
+    """Killed hard enough that the finally-block never ran, so the only trace
+    is a debug folder with no matching row. That is the case /failures was
+    written for; the front page should not need you to go looking."""
+    monkeypatch.setattr(dashboard.run_progress, "read_all", lambda: [])
+    monkeypatch.setattr(dashboard, "_orphaned_debug_runs", lambda limit=40: [
+        {"run_id": "run-killed", "mtime": time.time() - 300,
+         "files": ["script.txt"], "preview": ""}])
+    found = dashboard._recent_failures()
+    assert [f["run_id"] for f in found] == ["run-killed"]
+
+
+def test_one_dead_run_is_reported_once(monkeypatch):
+    """Most crashes leave BOTH a failed progress file and an orphan folder.
+    Counting them separately would say two runs failed when one did."""
+    monkeypatch.setattr(dashboard.run_progress, "read_all",
+                        lambda: [_failed("run-both")])
+    monkeypatch.setattr(dashboard, "_orphaned_debug_runs", lambda limit=40: [
+        {"run_id": "run-both", "mtime": time.time() - 120,
+         "files": [], "preview": ""}])
+    assert [f["run_id"] for f in dashboard._recent_failures()] == ["run-both"]
+
+
+def test_a_quiet_week_shows_a_quiet_page(client, monkeypatch):
+    monkeypatch.setattr(dashboard.run_progress, "read_all", lambda: [])
+    monkeypatch.setattr(dashboard, "_orphaned_debug_runs", lambda limit=40: [])
+    assert dashboard._failure_notice() == ""
+
+
+def test_a_broken_failure_lookup_never_breaks_the_front_page(client, monkeypatch):
+    def _boom():
+        raise RuntimeError("nope")
+    monkeypatch.setattr(dashboard.run_progress, "read_all", _boom)
+    monkeypatch.setattr(dashboard, "_orphaned_debug_runs", _boom)
+    assert client.get("/").status_code == 200
+
+
+def test_what_needs_you_is_the_first_thing_on_the_page(client, monkeypatch):
+    """The topic box used to open this page, which answers "what now" with
+    "make another video" before anybody has said whether the last four are any
+    good. The greeting band carries that now: the hour and the name on the
+    left, and what is actually waiting — each part a link — filling the rest,
+    because the largest element on the page should not be spending itself on
+    the time of day."""
+    monkeypatch.setattr(dashboard, "_flow_counts",
+                        lambda: {"/scripts": 3, "/galleries": 1, "/voice": 0})
+    monkeypatch.setattr(dashboard, "_stats",
+                        lambda *a, **k: {"pending": 75, "uploaded": 25,
+                                         "rejected": 0, "avg_score": 5.8})
+    body = client.get("/").get_data(as_text=True).split("</header>", 1)[1]
+    band = body.split('class="hi"', 1)[1].split("</section>", 1)[0]
+    assert "3 scripts" in band and 'href="/scripts"' in band
+    assert "1 gallery" in band, "one is singular"
+    assert "gallerys" not in band, "the plural is per word, not an appended s"
+    assert "0 " not in band, "a zero is not something waiting on you"
+    assert "75 to review" in band and 'href="/review"' in band
+    assert body.index('class="hi"') < body.index('class="tiles"')
+
+
+def test_an_empty_day_says_so_rather_than_showing_nothing(client, monkeypatch):
+    """Knowing there is nothing to do is worth as much as a list of things."""
+    monkeypatch.setattr(dashboard, "_flow_counts", lambda: {})
+    monkeypatch.setattr(dashboard, "_stats",
+                        lambda *a, **k: {"pending": 0, "uploaded": 0,
+                                         "rejected": 0, "avg_score": 0})
+    body = client.get("/").get_data(as_text=True)
+    assert "Nothing is waiting on you" in body
+
+
+def test_the_greeting_uses_the_name_of_whoever_is_signed_in(monkeypatch):
+    """The point of it, now that two people share this."""
+    monkeypatch.setattr(dashboard.auth, "current_user",
+                        lambda: {"name": "Daniel", "role": "owner"})
+    assert "Daniel" in dashboard._greeting()
+    monkeypatch.setattr(dashboard.auth, "current_user", lambda: None)
+    got = dashboard._greeting()
+    assert "Good " in got and "None" not in got, (
+        "nobody signed in gets the greeting without a name, not a placeholder")
+
+def test_an_empty_queue_says_so_instead_of_showing_a_bare_zero(client, monkeypatch):
+    monkeypatch.setattr(dashboard, "_recent_videos",
+                        lambda limit=60, channel=None, status=None: [])
+    page = client.get("/review").get_data(as_text=True)
+    assert "Nothing is waiting on you" in page
+
+
+# ── the review page is in the order the review happens ──────────────────────
+
+def test_the_decision_buttons_stack_on_a_phone():
+    """Three buttons sharing one 390px row give each about a thumb's width,
+    and two of the three are irreversible."""
+    mobile = dashboard.PAGE_STYLE.split("max-width: 760px")[-1]
+    assert ".actions { flex-direction: column" in mobile
+
+
+# ── the stylesheet is one system, not eleven ────────────────────────────────
+
+def _root_tokens() -> set:
+    """Only the tokens on bare :root. A token defined ONLY inside the light
+    media query exists in light mode and nowhere else, which is a bug that
+    hides from anyone whose phone is in dark mode."""
+    block = dashboard.PAGE_STYLE.split(":root {", 1)[1].split("}", 1)[0]
+    return set(re.findall(r"(--[a-z0-9-]+)\s*:", block))
+
+
+def _rule(selector: str) -> str:
+    """Everything this selector gets, whitespace removed.
+
+    EVERY matching rule, not the first. A grouped selector — `.card,
+    .thumbcard, .orphan { transition: ... }` — made the old version return
+    that one rule for `.orphan` and report the panel treatment missing, when
+    in fact it is set two rules earlier. A test that reads only the first
+    mention of a selector is guessing about the cascade.
+    """
+    # Comments stripped first: the head captured before a `{` runs back to the
+    # previous `}`, so a /* ... */ note above a rule ends up glued to its
+    # selector and nothing matches by equality.
+    css = re.sub(r"/\*.*?\*/", " ", dashboard.PAGE_STYLE, flags=re.S)
+    out = []
+    for m in re.finditer(r"([^{}]+)\{([^{}]*)\}", css):
+        head = m.group(1)
+        if "@" in head:            # at-rule prelude, not a selector list
+            continue
+        heads = [h.strip() for h in head.replace("\n", " ").split(",")]
+        heads = [h.split()[-1] if h.split() else "" for h in heads]
+        if any(h == selector or h.startswith(selector + ":") for h in heads):
+            out.append(m.group(2))
+    assert out, f"no rule for {selector}"
+    return re.sub(r"\s+", "", " ".join(out))
+
+
+def test_every_token_a_rule_asks_for_actually_exists():
+    """CSS DROPS A DECLARATION WHOSE var() DOES NOT RESOLVE, SILENTLY.
+
+    Four names were in use that :root never defined — --line, --card, --muted,
+    --fg — all of them near-synonyms of tokens that did exist under another
+    name. `border: 1px solid var(--line)` is not a wrong border, it is NO
+    border: the grouped nav menu floated over the page with no edge at all,
+    and the style cards had none either. Nothing errors, nothing logs, and the
+    only symptom is that the page looks slightly wrong in a way you cannot
+    grep for. Which is the same shape as every other bug this file has had:
+    fail-open without fail-loud is fail-silent."""
+    src = Path(dashboard.__file__).read_text(encoding="utf-8")
+    used = set(re.findall(r"var\((--[a-z0-9-]+)", src))
+    missing = used - _root_tokens()
+    assert missing == set(), f"used but never defined: {sorted(missing)}"
+
+
+def test_corners_come_from_the_radius_tokens():
+    """Five different corner radii were in play — 7, 8, 10 and 12px plus the
+    pills — which reads as carelessness rather than as a choice. Two tokens:
+    panels and controls. The rest are shapes, not corners."""
+    found = {r.strip() for r in
+             re.findall(r"border-radius:\s*([^;}]+)", dashboard.PAGE_STYLE)}
+    allowed = {"var(--radius)", "var(--radius-sm)",
+               "999px",   # pills — badges, dots, the progress bar
+               "50%",     # the status dots are circles
+               "4px"}     # inline code and focus rings
+    assert found <= allowed, sorted(found - allowed)
+
+
+def test_the_stylesheet_uses_one_type_scale():
+    sizes = {float(x) for x in
+             re.findall(r"font-size:\s*([0-9.]+)px", dashboard.PAGE_STYLE)}
+    assert sizes <= {11.0, 12.0, 13.0, 14.0, 15.0, 18.0, 26.0}, sorted(sizes)
+
+
+def test_every_panel_is_the_same_panel():
+    """A card, a table, a log block, a script block and the status bar are all
+    the same idea — content raised off the background — and each had arrived
+    at its own combination of the four properties that say so."""
+    # #livebar is deliberately NOT in this list any more. It stopped being a
+    # panel when it was pinned to the bottom of the window: it now spans edge
+    # to edge with a top border only, which is what chrome looks like. A
+    # rounded, shadowed, four-sided card floating over the bottom of the page
+    # would read as content that had come loose.
+    for selector in (".card", ".orphan", ".thumbcard", ".style-card",
+                     "table", "pre", ".script"):
+        rule = _rule(selector)
+        for expected in ("background:var(--surface)", "1pxsolidvar(--border)",
+                         "border-radius:var(--radius)", "box-shadow:var(--shadow)"):
+            assert expected in rule, f"{selector} is missing {expected}"
+
+
+def test_the_status_bar_is_pinned_and_the_page_clears_it():
+    """A strip you glance at while reading something else cannot be a strip
+    that scrolls away — and a fixed bar with no matching body padding hides
+    the last row of every long page underneath itself."""
+    bar = _rule("#livebar")
+    assert "position:fixed" in bar and "bottom:0" in bar
+    assert "border-top:1pxsolidvar(--border)" in bar
+    body = _rule("body")
+    assert "padding-bottom:" in body, "the page has to clear the fixed bar"
+
+
+def test_the_light_palette_redefines_every_colour_it_needs_to():
+    """A token whose dark value survives into light mode is the log viewer bug
+    again: a near-black block on a white page."""
+    style = dashboard.PAGE_STYLE
+    light = style.split("prefers-color-scheme: light", 1)[1].split("}", 1)[0]
+    for token in ("--bg", "--surface", "--border", "--text", "--dim"):
+        assert f"{token}:" in light, token
+
+
+def test_the_space_between_blocks_sits_on_one_grid():
+    """Gaps were 2, 4, 8, 10, 12, 14, 20 and 22px — seven values for one idea.
+    Component PADDING is deliberately not covered by this: those numbers are
+    tap targets tuned against a real phone, and rounding a working ergonomic
+    to a tidier number is a downgrade dressed up as a system."""
+    found = set()
+    for m in re.finditer(r"gap:\s*([^;}]+)", dashboard.PAGE_STYLE):
+        found.update(m.group(1).strip().split())
+    assert found <= {"0", "4px", "8px", "12px", "16px", "20px"}, sorted(found)
+
+
+# ── the port was held for ten hours and nothing named the holder ────────────
+
+def test_the_two_port_failures_do_not_share_a_message():
+    """"The port is taken" was reported as "a dashboard is already running —
+    open it", and for ten hours that advice pointed at a python that had
+    stopped serving. The health check that disproves it lives one file away and
+    was never asked."""
+    src = Path(dashboard.__file__).read_text(encoding="utf-8")
+    block = src.split('if _port_taken(host, port):', 1)[1].split("db_manager.init_db()")[0]
+    assert "_answers_healthz" in block, "the two states are still one message"
+    assert "port_owner.describe" in block, "the holder is still not named"
+
+
+def test_the_two_port_failures_do_not_share_an_exit_code():
+    """The watchdog acts on the exit code, and it cannot act differently on the
+    same number: 3 is "a healthy dashboard is already there, leave it alone",
+    4 is "something is squatting and serving nothing"."""
+    src = Path(dashboard.__file__).read_text(encoding="utf-8")
+    block = src.split('if _port_taken(host, port):', 1)[1].split("db_manager.init_db()")[0]
+    assert "sys.exit(3)" in block and "sys.exit(4)" in block
+
+
+def test_an_unidentified_holder_is_never_offered_up_to_be_killed():
+    """The suggested Stop-Process line is only printed for a process positively
+    identified as a Rufus dashboard. Telling somebody to kill pid 1888 when
+    1888 might be their own work is worse than telling them nothing."""
+    src = Path(dashboard.__file__).read_text(encoding="utf-8")
+    block = src.split('if _port_taken(host, port):', 1)[1].split("db_manager.init_db()")[0]
+    kill_at = block.index("Stop-Process")
+    guard_at = block.index("port_owner.is_rufus_dashboard")
+    assert guard_at < kill_at
+
+
+def test_healthz_is_probed_on_the_loopback_when_bound_to_all_interfaces():
+    """0.0.0.0 is an address to bind, not one to connect to — the same
+    correction _port_taken already makes."""
+    assert dashboard._answers_healthz("0.0.0.0", 1) is False
+
+
+# ── the interpreter that no launcher chose ─────────────────────────────────
+
+def test_the_venv_interpreter_is_not_complained_about(monkeypatch, tmp_path):
+    venv = tmp_path / ".venv" / ("Scripts" if os.name == "nt" else "bin")
+    venv.mkdir(parents=True)
+    exe = venv / ("python.exe" if os.name == "nt" else "python")
+    exe.write_text("", encoding="utf-8")
+    monkeypatch.setattr(dashboard, "ROOT", tmp_path)
+    monkeypatch.setattr(dashboard.sys, "executable", str(exe))
+    assert dashboard._wrong_interpreter() == ""
+
+
+def test_a_different_interpreter_is_named_out_loud(monkeypatch, tmp_path):
+    """The python that squatted on port 8765 for ten hours was the SYSTEM one.
+    Both launchers refuse to use it — so something started this outside a
+    launcher, and nothing anywhere said a word."""
+    venv = tmp_path / ".venv" / ("Scripts" if os.name == "nt" else "bin")
+    venv.mkdir(parents=True)
+    (venv / ("python.exe" if os.name == "nt" else "python")).write_text("", encoding="utf-8")
+    monkeypatch.setattr(dashboard, "ROOT", tmp_path)
+    monkeypatch.setattr(dashboard.sys, "executable", "/usr/bin/python3")
+    msg = dashboard._wrong_interpreter()
+    assert "/usr/bin/python3" in msg and ".venv" in msg
+
+
+def test_no_venv_means_nothing_to_be_wrong_about(monkeypatch, tmp_path):
+    monkeypatch.setattr(dashboard, "ROOT", tmp_path)
+    monkeypatch.setattr(dashboard.sys, "executable", "/usr/bin/python3")
+    assert dashboard._wrong_interpreter() == ""
+
+
+def test_the_notice_can_be_turned_off_by_someone_who_means_it(monkeypatch, tmp_path):
+    venv = tmp_path / ".venv" / ("Scripts" if os.name == "nt" else "bin")
+    venv.mkdir(parents=True)
+    (venv / ("python.exe" if os.name == "nt" else "python")).write_text("", encoding="utf-8")
+    monkeypatch.setattr(dashboard, "ROOT", tmp_path)
+    monkeypatch.setattr(dashboard.sys, "executable", "/usr/bin/python3")
+    monkeypatch.setenv("RUFUS_ALLOW_ANY_PYTHON", "1")
+    assert dashboard._wrong_interpreter() == ""
+
+
+def test_it_is_a_notice_and_not_a_refusal():
+    """The .bat files refuse because the venv is MISSING, which nothing
+    downstream recovers from. Here it exists and another interpreter was
+    chosen, which may be deliberate — a second dashboard on another port, a
+    debugger. Refusing breaks those; saying nothing is how this happened."""
+    src = Path(dashboard.__file__).read_text(encoding="utf-8")
+    block = src.split("wrong = _wrong_interpreter()", 1)[1].split("app.run(")[0]
+    assert "sys.exit" not in block
+
+
+def test_the_interpreter_shows_up_in_the_status_api(client):
+    body = client.get("/api/status").get_json()
+    assert "interpreter_warning" in body
+
+
+# ── the dashboard was waiting on itself ────────────────────────────────────
+
+def test_the_gallery_asks_for_a_downscaled_image():
+    """The generated-images gallery sent the FULL png into a 220px card: 36
+    cards averaging ~1MB is ~35 megabytes fetched to draw postage stamps, and
+    fetched again next visit because nothing said it could be cached. That is
+    what "the dashboard is slow" meant on that page."""
+    src = Path(dashboard.__file__).read_text(encoding="utf-8")
+    block = src.split("def thumbnails_page", 1)[1].split("def thumbnails_generate")[0]
+    img = [ln for ln in block.splitlines() if "<img src=" in ln]
+    assert img, "no gallery image tag found"
+    assert "?w=" in img[0], "the gallery still asks for the full-size file"
+
+
+def test_the_downscale_width_must_be_one_of_a_fixed_set():
+    """An open ?w= lets anyone fill the disk with cache entries."""
+    folder = Path(dashboard.__file__).parent
+    assert dashboard._thumb_of(folder, "x.png", 137) is None
+    assert 480 in dashboard._THUMB_WIDTHS
+
+
+def test_saving_to_the_phone_still_gets_the_real_file():
+    """"Save to phone" that hands over a 480px jpg is worse than useless — the
+    whole point of the link is the actual image."""
+    src = Path(dashboard.__file__).read_text(encoding="utf-8")
+    block = src.split("def thumbnail_file", 1)[1].split("def _setting_field")[0]
+    assert "if not download:" in block, "the download path may be downscaled"
+
+
+def test_both_image_routes_tell_the_browser_it_can_keep_them(client):
+    """Rendered stills are written once and never edited. Without a cache
+    header every scroll re-fetches megabytes the browser already has."""
+    src = Path(dashboard.__file__).read_text(encoding="utf-8")
+    for name, nxt in (("def thumbnail_file", "def _setting_field"),
+                      ("def debug_file", "def download_video")):
+        block = src.split(name, 1)[1].split(nxt)[0]
+        assert "_IMAGE_MAX_AGE" in block, f"{name} sends no cache header"
+
+
+def test_the_env_mutation_is_what_is_locked_not_the_whole_server():
+    """threaded=False said "nothing anywhere may overlap" to protect ONE
+    route's env mutation, and every keyframe request in the app queued behind
+    a single thread for it. The lock says the true, smaller thing."""
+    src = Path(dashboard.__file__).read_text(encoding="utf-8")
+    block = src.split("def _scoped_env", 1)[1].split("def _redirect_detail")[0]
+    assert "_ENV_LOCK.acquire()" in block
+    assert "threaded=True" in src
+
+
+def test_the_environment_is_restored_before_the_lock_is_released():
+    """Releasing first lets another approval acquire, apply its overrides, and
+    have them overwritten by this block's restore — the exact interleaving the
+    lock exists to prevent, moved four lines later."""
+    src = Path(dashboard.__file__).read_text(encoding="utf-8")
+    block = src.split("def _scoped_env", 1)[1].split("def _redirect_detail")[0]
+    tail = block.split("finally:", 1)[1]
+    assert tail.index("os.environ") < tail.index("_ENV_LOCK.release()")
+
+
+def test_two_overlapping_scoped_envs_cannot_interleave():
+    """The property, not just the shape of the code."""
+    import threading as _t
+    seen, errors = [], []
+
+    def worker(value):
+        try:
+            with dashboard._scoped_env(RUFUS_TEST_CHANNEL=value):
+                time.sleep(0.02)
+                seen.append((value, os.environ.get("RUFUS_TEST_CHANNEL")))
+        except Exception as e:                      # pragma: no cover
+            errors.append(e)
+
+    threads = [_t.Thread(target=worker, args=(f"ch{i}",)) for i in range(6)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert not errors
+    assert all(asked == got for asked, got in seen), seen
+    assert "RUFUS_TEST_CHANNEL" not in os.environ
+
+
+# ── the thumbnails page makes thumbnails now ───────────────────────────────
+
+@pytest.fixture
+def thumbs(tmp_path, monkeypatch):
+    """A thumbnails dir with one background in it, wired everywhere it is read."""
+    import image_gen
+    from PIL import Image
+    d = tmp_path / "thumbs"
+    d.mkdir()
+    monkeypatch.setattr(dashboard.paths, "thumbnails_dir", lambda: d)
+    monkeypatch.setattr(image_gen.paths, "thumbnails_dir", lambda: d)
+    png = d / "1700000000_hourglass.png"
+    Image.new("RGB", (1280, 720), (26, 40, 68)).save(png)
+    png.with_suffix(".txt").write_text("PROMPT: a cracked hourglass\nSEED: 7\n",
+                                       encoding="utf-8")
+    return png
+
+
+def test_drawing_a_thumbnail_does_not_render_in_the_request(client, monkeypatch):
+    """It called image_gen.generate_image() inline and the page waited for it —
+    and the code SAID so ("that wait freezes the dashboard for everyone")
+    without doing anything about it. A browser tab holding an open connection
+    for ninety seconds is still silly on a threaded server, and it cannot draw
+    three variants at once."""
+    import image_gen
+    def _boom(*a, **k):                              # pragma: no cover
+        raise AssertionError("rendered inside the request")
+    monkeypatch.setattr(image_gen, "generate_image", _boom)
+    launched = {}
+    monkeypatch.setattr(dashboard, "_launch_thumb",
+                        lambda *a, **k: (launched.setdefault("args", (a, k)),
+                                         Path("logs/thumb_1.log"))[1:])
+    monkeypatch.setattr(dashboard, "_channels", lambda: [])
+    r = client.post("/thumbnails/generate",
+                    data={"prompt": "a cracked hourglass", "headline": "Gold",
+                          "count": "3"})
+    assert r.status_code == 302
+    assert launched, "the render was never launched"
+
+
+def test_the_style_override_reaches_the_child_and_not_this_process(monkeypatch):
+    """The run style is whatever the videos are being made in. Asking for a
+    thumbnail must not quietly change it — and _scoped_env cannot help here
+    because the value has to reach a CHILD process."""
+    seen = {}
+
+    class _Proc:
+        pid = 1
+
+    def _popen(cmd, **kw):
+        seen["env"] = kw["env"]
+        seen["cmd"] = cmd
+        return _Proc()
+
+    monkeypatch.setattr(dashboard.subprocess, "Popen", _popen)
+    monkeypatch.setenv("RUFUS_STYLE", "stickman")
+    dashboard._launch_thumb("a coin", "Gold", 2, style="thumbnail")
+    assert seen["env"]["RUFUS_STYLE"] == "thumbnail"
+    assert os.environ["RUFUS_STYLE"] == "stickman", "the process style changed"
+    assert "--count" in seen["cmd"] and "2" in seen["cmd"]
+    assert "--headline" in seen["cmd"]
+
+
+def test_a_literal_detail_override_cannot_outrank_the_chosen_look(monkeypatch):
+    """RUFUS_STILLS_DETAIL beats RUFUS_STYLE in comfy_client._detail_suffix,
+    so leaving it set would silently ignore the look picked on the form."""
+    class _Proc:
+        pid = 1
+    seen = {}
+    monkeypatch.setattr(dashboard.subprocess, "Popen",
+                        lambda cmd, **kw: (seen.update(env=kw["env"]), _Proc())[1])
+    monkeypatch.setenv("RUFUS_STILLS_DETAIL", "something else entirely")
+    dashboard._launch_thumb("a coin", "", 1, style="thumbnail")
+    assert "RUFUS_STILLS_DETAIL" not in seen["env"]
+
+
+def test_retyping_the_headline_never_touches_the_gpu(client, thumbs, monkeypatch):
+    """Drawing the picture is seconds of GPU; drawing the words on it is a
+    tenth of a second of Pillow. One button for both meant every headline you
+    wanted to try cost another render, so nobody tried a second one."""
+    import image_gen
+    def _boom(*a, **k):                              # pragma: no cover
+        raise AssertionError("called ComfyUI to change some words")
+    monkeypatch.setattr(image_gen, "generate_image", _boom)
+    r = client.post("/thumbnails/compose",
+                    data={"name": thumbs.name, "headline": "Rome ran out"})
+    assert r.status_code == 302
+    assert image_gen.composed_path(thumbs).exists()
+
+
+def test_the_headline_is_remembered_so_the_box_is_not_empty_next_time(client, thumbs):
+    import image_gen
+    client.post("/thumbnails/compose",
+                data={"name": thumbs.name, "headline": "Rome ran out"})
+    assert image_gen.recent_images()[0]["headline"] == "Rome ran out"
+
+
+def test_the_card_shows_the_composed_thumbnail_not_the_bare_background(client, thumbs):
+    """A card showing the raw picture is showing something that will never go
+    on YouTube."""
+    import image_gen
+    client.post("/thumbnails/compose",
+                data={"name": thumbs.name, "headline": "Rome ran out"})
+    page = client.get("/thumbnails").get_data(as_text=True)
+    assert image_gen.composed_path(thumbs).name in page
+
+
+def test_the_page_shows_it_at_the_size_it_competes_at(client, thumbs):
+    """168x94 is the mobile feed. The page showed one size, full width, which
+    is the size nobody ever sees it at."""
+    client.post("/thumbnails/compose",
+                data={"name": thumbs.name, "headline": "Rome ran out"})
+    page = client.get("/thumbnails").get_data(as_text=True)
+    assert "width:168px;height:94px" in page
+
+
+def test_an_unknown_image_name_cannot_reach_the_filesystem(client, thumbs):
+    r = client.post("/thumbnails/compose",
+                    data={"name": "../../etc/passwd", "headline": "x"})
+    assert r.status_code == 302
+    assert "No%20such%20image" in r.headers["Location"]
+
+
+# ── "I am working, not dead" ───────────────────────────────────────────────
+
+def test_a_long_operation_declares_itself(monkeypatch, tmp_path):
+    """The watchdog can now END a process, and that is only safe if it can
+    tell working from dead. An upload of a 25MB file answers nothing for
+    minutes; from outside that is indistinguishable from a wedged process, and
+    the wrong guess loses the upload."""
+    marker = tmp_path / ".dashboard_busy"
+    monkeypatch.setattr(dashboard, "BUSY_MARKER", marker)
+    with dashboard._busy("uploading video #7"):
+        assert marker.exists()
+        assert "uploading video #7" in marker.read_text(encoding="utf-8")
+    assert not marker.exists()
+
+
+def test_the_marker_is_cleared_even_when_the_operation_fails(monkeypatch, tmp_path):
+    """A marker left behind by an exception would tell the watchdog to keep
+    waiting on a dashboard that is not doing anything."""
+    marker = tmp_path / ".dashboard_busy"
+    monkeypatch.setattr(dashboard, "BUSY_MARKER", marker)
+    with pytest.raises(RuntimeError):
+        with dashboard._busy("uploading"):
+            raise RuntimeError("upload failed")
+    assert not marker.exists()
+
+
+def test_a_marker_that_cannot_be_written_does_not_break_the_operation(monkeypatch):
+    """Best-effort in both directions: no marker just means the watchdog falls
+    back to its other guards. An upload must never fail because a status file
+    could not be written."""
+    monkeypatch.setattr(dashboard, "BUSY_MARKER", Path("/nonexistent/x/.busy"))
+    with dashboard._busy("uploading"):
+        pass
+
+
+def test_the_upload_is_what_declares_itself_busy():
+    """It is the longest thing this process does on a request thread, and the
+    one whose loss actually costs something."""
+    src = Path(dashboard.__file__).read_text(encoding="utf-8")
+    block = src.split("def approve_video", 1)[1].split("def ")[0]
+    assert "_busy(" in block
+
+
+# ── redrawing a beat stopped freezing the dashboard ────────────────────────
+
+@pytest.fixture
+def regenable(client, tmp_path, monkeypatch):
+    """A pending video with one beat still and its prompt sidecar.
+
+    Points DEBUG_ROOT and the database at tmp_path itself: this file's `client`
+    fixture only isolates SETTINGS_FILE, so without this the test writes a run
+    folder and a video row into the developer's real media_library and
+    rufus.db. It did, once, while this was being written.
+    """
+    import db_manager
+    from PIL import Image
+    monkeypatch.setattr(db_manager, "DB_FILE", tmp_path / "test.db")
+    db_manager.init_db()
+    monkeypatch.setattr(dashboard, "DEBUG_ROOT", tmp_path / "debug")
+    run = dashboard.DEBUG_ROOT / "run-regen"
+    run.mkdir(parents=True)
+    Image.new("RGB", (108, 192), (20, 20, 20)).save(run / "03.png")
+    (run / "03.txt").write_text("FLUX PROMPT: a cracked hourglass\n", encoding="utf-8")
+    vid = db_manager.save_video(niche="money_history", script_hook="h",
+                                scene_desc="s", video_file="v.mp4", score=9,
+                                run_id="run-regen")
+    monkeypatch.setattr(dashboard, "_run_in_progress", lambda c: False)
+    return vid, run
+
+
+def test_redrawing_a_beat_does_not_render_in_the_request(client, regenable,
+                                                         monkeypatch):
+    """A GPU render is tens of seconds to minutes. On a request thread that
+    means /healthz cannot answer, the watchdog reads it as death, and it starts
+    a second dashboard into the port this one still holds — the ten-hour
+    outage, reachable by pressing Regen."""
+    import comfy_client
+    vid, _run = regenable
+    monkeypatch.setattr(comfy_client, "render_one_beat", lambda *a, **k:
+                        (_ for _ in ()).throw(AssertionError("rendered inline")))
+    launched = {}
+    monkeypatch.setattr(dashboard, "_launch_regen",
+                        lambda *a, **k: (launched.setdefault("k", k),
+                                         Path("logs/regen.log"))[1:])
+    r = client.post(f"/video/{vid}/beat/3/regen")
+    assert r.status_code == 302
+    assert launched
+
+
+def test_the_prompt_reaches_the_child_in_a_file_not_in_argv(client, regenable,
+                                                            monkeypatch):
+    """Beat prompts run to several hundred characters, Windows caps a command
+    line at 32,767, and quoting a multi-line prompt through cmd is a class of
+    bug worth not having."""
+    vid, run = regenable
+    seen = {}
+
+    class _Proc:
+        pid = 1
+
+    monkeypatch.setattr(dashboard.subprocess, "Popen",
+                        lambda cmd, **kw: (seen.update(cmd=cmd), _Proc())[1])
+    long_prompt = "a cracked hourglass " * 60
+    client.post(f"/video/{vid}/beat/3/regen", data={"prompt": long_prompt})
+    assert "--prompt-file" in seen["cmd"]
+    assert long_prompt not in " ".join(seen["cmd"])
+    handoff = Path(seen["cmd"][seen["cmd"].index("--prompt-file") + 1])
+    assert handoff.read_text(encoding="utf-8").strip() == long_prompt.strip()
+
+
+def test_the_sidecar_is_only_rewritten_when_a_human_edited_it(client, regenable,
+                                                              monkeypatch):
+    """An unedited prompt is already in the sidecar; rewriting it touches the
+    file for no reason, and the run's record should mean something."""
+    vid, _run = regenable
+    seen = {}
+
+    class _Proc:
+        pid = 1
+
+    monkeypatch.setattr(dashboard.subprocess, "Popen",
+                        lambda cmd, **kw: (seen.update(cmd=cmd), _Proc())[1])
+    client.post(f"/video/{vid}/beat/3/regen")
+    assert "--sidecar" not in seen["cmd"]
+    client.post(f"/video/{vid}/beat/3/regen", data={"prompt": "something else"})
+    assert "--sidecar" in seen["cmd"]
+
+
+def test_a_failed_launch_does_not_leave_the_handoff_behind(client, regenable,
+                                                           monkeypatch):
+    """Nothing will ever read it, and a stray file in the run folder is one
+    more thing to wonder about later."""
+    vid, run = regenable
+    monkeypatch.setattr(dashboard.subprocess, "Popen",
+                        lambda *a, **k: (_ for _ in ()).throw(OSError("nope")))
+    r = client.post(f"/video/{vid}/beat/3/regen", data={"prompt": "x"})
+    assert r.status_code == 302
+    assert not list(run.glob("*.regen-prompt.txt"))
+
+
+def test_the_row_niche_wins_over_whatever_the_dashboard_is_set_to(client,
+                                                                  regenable,
+                                                                  monkeypatch):
+    """Redrawing last week's money_history beat from a machine now pointed at
+    another niche would fetch the wrong look — the same reasoning _launch_recut
+    already carries."""
+    vid, _run = regenable
+    seen = {}
+
+    class _Proc:
+        pid = 1
+
+    monkeypatch.setattr(dashboard.subprocess, "Popen",
+                        lambda cmd, **kw: (seen.update(env=kw["env"]), _Proc())[1])
+    monkeypatch.setenv("RUFUS_NICHE_OVERRIDE", "finance")
+    client.post(f"/video/{vid}/beat/3/regen")
+    assert seen["env"]["RUFUS_NICHE_OVERRIDE"] == "money_history"
+
+
+# ── colour, and things that respond ────────────────────────────────────────
+
+def test_each_job_has_its_own_hue():
+    """The nav groups into Make / Review / Measure / System. One accent for
+    all four is tidy and tells you nothing about where you are."""
+    for token in ("--make", "--review", "--measure", "--system"):
+        assert token in _root_tokens(), token
+
+
+def test_the_stat_cards_do_not_all_look_the_same(client, monkeypatch):
+    """Four identical grey boxes made you read four labels. The numbers mean
+    four different things and the palette already has a colour for each."""
+    monkeypatch.setattr(dashboard, "_recent_videos",
+                        lambda limit=60, channel=None, status=None: [])
+    page = client.get("/").get_data(as_text=True)
+    for cls in ("t-pending", "t-ok", "t-bad", "t-info"):
+        assert cls in page, cls
+
+
+def test_a_scoped_token_still_resolves_outside_its_scope():
+    """--tone is set by .card.t-* and h2.s-*. Without a root default, a use
+    that escapes resolves to nothing and CSS drops the whole declaration
+    silently — the --line/--card bug again, one commit later."""
+    assert "--tone" in _root_tokens()
+
+
+# ── the phone stopped scrolling sideways ───────────────────────────────────
+
+def test_a_wide_table_scrolls_inside_itself(client, monkeypatch):
+    """Six columns on a 390px screen dragged the whole document sideways: the
+    status bar ran off the right edge and the Status column — the one saying
+    whether a video is waiting on you — was not on screen at all, with nothing
+    to suggest it existed."""
+    rows = [{"id": 1, "score": 9, "title": "t", "script_hook": "",
+             "niche": "money_history", "upload_status": "pending", "run_id": "",
+             "created_at": "2026-08-21 09:30:00", "uploaded_at": None}]
+    assert '<div class="tablewrap">' in dashboard._videos_table(rows)
+    assert "overflow-x:auto" in _rule(".tablewrap")
+
+
+def test_grid_children_are_allowed_to_shrink():
+    """A grid item defaults to min-width:auto — "never shrink below your
+    content" — so a 1fr column holding a six-column table stayed as wide as the
+    table wanted, even with the table in an overflow:auto wrapper, because the
+    wrapper could not shrink either. Measured at 20px of document overflow on a
+    390px viewport."""
+    css = re.sub(r"/\*.*?\*/", " ", dashboard.PAGE_STYLE, flags=re.S)
+    assert re.search(r"\.grid2\s*>\s*\*\s*\{[^}]*min-width:\s*0", css)
+    assert "min-width:0" in _rule(".navgroup")
+
+
+def test_the_two_columns_that_say_nothing_on_a_phone_are_hidden():
+    """The preview strip is a row of em-dashes until a run has keyframes, and
+    the niche is the same word on every row of a single-channel queue."""
+    mobile = dashboard.PAGE_STYLE.split("max-width: 760px")[-1]
+    assert ".c-preview, .c-niche { display: none; }" in mobile
+
+
+def test_the_hidden_columns_are_marked_by_class_not_by_position(client):
+    """`previews` changes how many columns the table has, so an nth-child rule
+    would hide the wrong one depending on which page you were looking at."""
+    rows = [{"id": 1, "score": 9, "title": "t", "script_hook": "",
+             "niche": "money_history", "upload_status": "pending", "run_id": "",
+             "created_at": "2026-08-21 09:30:00", "uploaded_at": None}]
+    for previews in (True, False):
+        html = dashboard._videos_table(rows, previews=previews)
+        assert 'class="c-niche"' in html
+    css = re.sub(r"/\*.*?\*/", " ", dashboard.PAGE_STYLE, flags=re.S)
+    assert "nth-child" not in css.split("max-width: 760px")[-1]
+
+
+# ── a button that looks dead gets clicked twice ────────────────────────────
+
+def test_a_submitted_button_shows_it_heard_you():
+    """Approve, Draw them, Re-cut and Regen all hand off to something that
+    takes real time, and until the page navigated there was no evidence the
+    click landed. On Approve a second click is a second upload attempt."""
+    assert "btn.classList.add('working')" in dashboard.INTERACT_JS
+    assert "btn.disabled = true" in dashboard.INTERACT_JS
+
+
+def test_the_button_is_disabled_after_the_form_is_sent_not_before():
+    """A button disabled synchronously inside the submit handler is not
+    included in the POST body, which silently drops any name/value it
+    carried."""
+    block = dashboard.INTERACT_JS.split("addEventListener('submit'", 1)[1]
+    assert "setTimeout(" in block.split("btn.disabled = true")[0]
+
+
+def test_the_page_still_works_without_the_script():
+    """No build step and no framework — and nothing here may be load-bearing.
+    Every behaviour degrades to the page as it was."""
+    assert "<script>" in dashboard.INTERACT_JS
+    # The tail closes main and then the document. It opens with the build
+    # footer, which sits INSIDE main so it inherits the page's width and
+    # padding — a support line hanging off the left edge of a wide screen
+    # would be worse than none.
+    assert "</main>" in dashboard.PAGE_TAIL
+    assert dashboard.PAGE_TAIL.index("</main>") < dashboard.PAGE_TAIL.index(
+        "<script>"), "the script tag belongs after the content it enhances"
+    assert dashboard.PAGE_TAIL.endswith("</body></html>")
+
+
+def test_the_filter_box_does_not_scroll_away_with_its_table():
+    assert "classList.contains('tablewrap')" in dashboard.INTERACT_JS
+
+
+def test_motion_is_dropped_for_anyone_who_asked_for_less_of_it():
+    assert "prefers-reduced-motion" in dashboard.PAGE_STYLE
+
+
+# ── the four decisions, grouped where a person would look for them ──────────
+#
+# The choosing pages shipped filed under Measure, next to the analytics — not
+# because anyone would look there but because a permission test wanted Make to
+# hold nothing a viewer could open. That is a technicality deciding an
+# information architecture, and the owner felt it immediately: "the info is
+# good but not organized".
+
+FLOW = ("/scout", "/scripts", "/galleries", "/voice")
+
+
+def test_the_four_stage_pages_are_queues_rather_than_steps():
+    """THE SHAPE CHANGED WHEN THE WIZARD ARRIVED, and this assertion moved with
+    it. These four used to BE the flow, filed under Make. They are not steps
+    any more — /create walks all five decisions — they are queues: every
+    pending script across every project, every gallery waiting on a base. A
+    different question from "make me a video", which is why seven links under
+    one heading felt wrong before it broke the group-size rule."""
+    groups = dict(dashboard.NAV_GROUPS)
+    for href in FLOW:
+        assert href in groups["Queues"], href
+        assert href not in groups["Measure"], href
+    assert "/create" in groups["Make"]
+
+
+def test_the_flow_reads_in_the_order_it_happens():
+    """A topic becomes scripts, a script becomes galleries, a gallery becomes
+    reads. Listed in any other order it is an alphabet, not a sequence — and
+    that has to hold in three places at once, or one of them is lying about
+    where you are."""
+    assert [h for h in dict(dashboard.NAV_GROUPS)["Queues"] if h in FLOW] \
+        == list(FLOW)
+    assert [h for h, _label in dashboard.FLOW_STEPS] == list(FLOW)
+    assert [s for s, _t in dashboard._WIZARD_STAGES] == [
+        "topic", "script", "gallery", "voice", "render"]
+    assert dashboard._WIZARD_STAGES[-1][0] == "render", (
+        "the expensive irreversible step is last, behind every human judgement")
+
+
+def test_no_group_is_a_list_instead_of_a_group():
+    """Nine links under one heading is not a group. Measure had nine."""
+    for title, hrefs in dashboard.NAV_GROUPS:
+        assert len(hrefs) <= 6, f"{title} has {len(hrefs)}"
+
+
+def test_every_step_of_the_flow_carries_a_count(client):
+    """A nav bar renders four equal words with no order and no state, so you
+    open the last one, find it empty, and cannot tell whether that means
+    "nothing to do" or "you have not done step three yet"."""
+    bar = dashboard._flow_bar("/scripts")
+    for href, label in dashboard.FLOW_STEPS:
+        assert f'href="{href}"' in bar
+        assert label in bar
+    assert bar.count("flow-n") == 4, "a zero is information too"
+    assert 'flow-step here' in bar
+
+
+def test_the_flow_bar_survives_a_database_that_will_not_answer(monkeypatch):
+    """It renders at the top of six pages. A database hiccup must cost the
+    badges, not every page in the dashboard."""
+    import db_manager
+    monkeypatch.setattr(db_manager, "pending_proposal_count",
+                        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("x")))
+    counts = dashboard._flow_counts()
+    assert counts == {"/scout": 0, "/scripts": 0, "/galleries": 0, "/voice": 0}
+
+
+# ── four pages asking variations of one question ────────────────────────────
+
+def test_the_old_links_still_lead_somewhere(client):
+    """A tidy-up that breaks every bookmark and every link in a log line is not
+    a tidy-up. The four routes survive as redirects into their section."""
+    for old, anchor in (("/advice", "what-to-change"),
+                        ("/insights", "what-goes-wrong"),
+                        ("/performance", "does-score-predict"),
+                        ("/tracking", "is-the-loop-closed")):
+        r = client.get(old, follow_redirects=False)
+        assert r.status_code in (301, 302), old
+        assert r.headers["Location"].endswith(f"/measure#{anchor}"), old
+
+
+def test_one_broken_section_does_not_take_the_other_three_down(client,
+                                                               monkeypatch):
+    """Four questions behind one link is only an improvement if a single
+    failing query cannot cost all four — which is exactly what merging them
+    would otherwise buy."""
+    monkeypatch.setattr(dashboard, "_insights_body",
+                        lambda: (_ for _ in ()).throw(RuntimeError("boom")))
+    page = client.get("/measure").get_data(as_text=True)
+    assert "boom" in page
+    for anchor in ("what-to-change", "does-score-predict", "is-the-loop-closed"):
+        assert f'id="{anchor}"' in page
+
+
+def test_the_measure_page_leads_with_the_actionable_section(client):
+    """What should I do, what keeps breaking, do the numbers agree, is there
+    any data at all — the order a person actually asks."""
+    order = [a for a, _t, _fn in dashboard._MEASURE_SECTIONS]
+    assert order[0] == "what-to-change"
+    page = client.get("/measure").get_data(as_text=True)
+    body = page.split("</header>", 1)[1]
+    assert body.index('id="what-to-change"') < body.index('id="is-the-loop-closed"')
+
+
+def test_no_section_keeps_its_own_back_link(client):
+    """Four "← back" links stacked down one page is the seam showing."""
+    page = client.get("/measure").get_data(as_text=True)
+    body = page.split("</header>", 1)[1]
+    assert body.count('class="back"') == 1
+
+
+def test_no_log_path_is_built_by_hand():
+    """AGENTS.md: never hardcode a path paths.py already resolves.
+
+    dashboard.py had ten `ROOT / "logs"` sites next to two paths.log_dir()
+    ones — including the three launchers added most recently, which copied the
+    older pattern instead of the documented rule. On a box with RUFUS_LOG_DIR
+    set, every dashboard-launched run wrote its log somewhere the owner was
+    not looking, and the page told them to go and read it there."""
+    src = (Path(dashboard.__file__)).read_text(encoding="utf-8")
+    assert 'ROOT / "logs"' not in src, (
+        "a log path is being built by hand again; paths.log_dir() resolves it "
+        "and honours RUFUS_LOG_DIR")
+
+
+# ── a home page rather than the top of a long scroll ────────────────────────
+#
+# The index was the review queue with everything else stacked underneath: a
+# flow bar, a banner, advice, the queue, a topic form, filters, stat cards, a
+# sparkline and two tables. Every block earns its place and none of them
+# answers the question somebody opening the dashboard actually has, which is
+# "where do I go".
+
+def test_the_home_page_opens_with_somewhere_to_go(client):
+    page = client.get("/").get_data(as_text=True)
+    body = page.split("</header>", 1)[1]
+    assert 'class="hi"' in body and 'class="tiles"' in body
+    # Who you are, then where you can go, then the numbers.
+    assert body.index('class="hi"') < body.index('class="tiles"')
+    assert body.index('class="tiles"') < body.index("Analytics and stats")
+
+
+def test_every_tile_is_a_real_link(client):
+    """Real anchors, so they tab, and so a middle click opens one in a new tab
+    the way a link is expected to."""
+    import re
+    page = client.get("/").get_data(as_text=True)
+    tiles = re.findall(r'<a class="tile[^"]*" href="([^"]+)"', page)
+    # Four, from the owner's sketch. It was ten — every page in the nav, tiled
+    # — which put a launcher above a launcher.
+    assert len(tiles) == 4
+    assert all(h.startswith(("/", "#")) for h in tiles)
+    rules = {r.rule for r in dashboard.app.url_map.iter_rules()}
+    assert all(h in rules for h in tiles if h.startswith("/")), sorted(tiles)
+
+
+def test_every_tile_says_what_it_is_for(client):
+    """A grid of nouns is a menu. What makes it a home page is that each one
+    says what it does before you click it."""
+    import re
+    page = client.get("/").get_data(as_text=True)
+    assert len(re.findall(r'class="tile-b"', page)) == 4
+
+
+def test_a_tile_count_is_in_the_label_and_not_only_in_the_badge():
+    """A badge alone is a fact only sighted users get, so the number goes in
+    the aria-label too — and the label reads as a sentence rather than as a
+    noun with a digit stuck to it."""
+    src = Path(dashboard.__file__).read_text(encoding="utf-8")
+    block = src.split("def _home_tiles(", 1)[1][:2400]
+    assert 'label = f"{title}, {n} waiting"' in block
+    assert "aria-label=" in block
+
+
+def test_the_tiles_use_the_group_hues_the_palette_already_had(client):
+    """The nav has had --make, --review, --measure and --system since it was
+    grouped, and nothing used them at this size. A tile you can find by its
+    colour before reading it is the reason to have four hues rather than one."""
+    page = client.get("/").get_data(as_text=True)
+    for group in ("t-make", "t-review", "t-measure", "t-system"):
+        assert group in page, group
+
+
+def test_a_tile_a_viewer_may_not_open_is_not_offered(client):
+    """The same rule as the nav: a link they would only get a 403 from is
+    worse than no link."""
+    import re
+    src = Path(dashboard.__file__).read_text(encoding="utf-8")
+    block = src.split("def _home_tiles(", 1)[1][:900]
+    assert "auth.can" in block
+
+
+def test_the_shot_line_drops_the_tag_and_the_framing_boilerplate():
+    """The framing sentence is one of a handful of fixed strings, identical on
+    every shot at that distance. Printed in full it is the first ninety
+    characters of every line on the page, so the part that says what THIS
+    picture is of starts past where the strip ends."""
+    out = dashboard._shot_line(
+        "[SHOT=object] Close shot: head and shoulders, or two hands and the "
+        "object they hold, filling most of the frame. A close-up of a hand "
+        "holding a peso note from 1985")
+    assert out == "A close-up of a hand holding a peso note from 1985"
+    assert "[SHOT=" not in out and "Close shot:" not in out
+
+
+def test_the_shot_line_keeps_a_prompt_that_is_only_framing():
+    """Stripping everything would leave the row with no caption at all, which
+    is worse than a repeated one."""
+    only = "Wide shot: the whole place is visible and the figures are small."
+    assert dashboard._shot_line(only) == only
+
+
+def test_the_shot_line_is_cut_to_one_line():
+    out = dashboard._shot_line("A " + "very " * 60 + "long shot", limit=40)
+    assert len(out) == 40 and out.endswith("…")
+
+
+def test_the_gallery_lays_the_draws_two_up_under_one_header():
+    """THE DEFECT THIS PINS. The page was a <table> whose first cell held the
+    number and a 150-character prompt with no width on it, so that cell took
+    whatever it wanted and shoved the pictures — the only thing anybody is
+    actually judging — into a strip at the far right."""
+    src = Path(dashboard.__file__).read_text(encoding="utf-8")
+    page = src.split("def galleries_page", 1)[1].split("\n@app.route", 1)[0]
+    # Comments dropped: this one explains the table it replaced, and a prose
+    # mention of the old markup is not the old markup.
+    code = "\n".join(l for l in page.splitlines()
+                     if not l.lstrip().startswith("#"))
+    assert "<table>" not in code and "<tr>" not in code, (
+        "the gallery is cards now, not a table")
+    assert 'class="shot-h"' in code and 'class="draws"' in code
+    assert 'class="draw' in code
+
+
+def test_the_draws_stay_two_across_at_every_width():
+    """Stacking them on a phone turns one comparison into two acts of memory,
+    which is the one thing this stage exists to avoid."""
+    src = Path(dashboard.__file__).read_text(encoding="utf-8")
+    rule = src.split(".draws {", 1)[1].split("}", 1)[0]
+    assert "repeat(2, 1fr)" in rule
+    assert ".draws" not in src.split("@media", 1)[-1].split(".shot {", 1)[0] \
+        or "repeat(2" in src, "no media query may collapse the pair"
+
+
+def test_the_users_page_can_change_a_role_in_place():
+    """Revoke-and-re-add hands somebody a new sign-in link and kills the one
+    they already have. A role change is not a new person."""
+    src = Path(dashboard.__file__).read_text(encoding="utf-8")
+    assert '/settings/users/role' in src
+    assert "auth.set_role(" in src
+
+
+def test_the_role_route_is_owner_only():
+    """Hiding the control is cosmetic; the route is the enforcement."""
+    src = Path(dashboard.__file__).read_text(encoding="utf-8")
+    body = src.split("def settings_users_role", 1)[1].split("\n@app.route", 1)[0]
+    assert 'auth.require("manage_users")' in body
+
+
+def test_the_last_owner_guard_lives_in_auth_not_in_the_route():
+    """A rule enforced in one of two front doors is a rule the other front
+    door has never heard of. The route must not re-implement it."""
+    src = Path(dashboard.__file__).read_text(encoding="utf-8")
+    body = src.split("def settings_users_role", 1)[1].split("\n@app.route", 1)[0]
+    assert "last_owner" not in body and "only owner" not in body
+    assert "auth.AuthError" in body, "it has to surface auth's refusal"
+
+
+def test_a_message_is_signed_by_whoever_sent_it():
+    """A message into a shared channel that does not say who sent it makes the
+    reader guess, and there are exactly two candidates."""
+    src = Path(dashboard.__file__).read_text(encoding="utf-8")
+    body = src.split("def message_send", 1)[1].split("\n@app.route", 1)[0]
+    assert "_whoami()" in body
+    assert "says" in body, "the title has to carry the name"
+
+
+def test_sending_a_message_needs_more_than_view():
+    """It leaves the machine and lands in a channel other people read. A
+    viewer can look at this dashboard; they should not be able to post to the
+    team from it."""
+    src = Path(dashboard.__file__).read_text(encoding="utf-8")
+    body = src.split("def message_send", 1)[1].split("\n@app.route", 1)[0]
+    assert 'auth.require("generate")' in body
+    perms = dashboard.auth.ROLE_PERMISSIONS
+    assert "generate" not in perms["viewer"]
+    assert "generate" in perms["partner"]
+
+
+def test_the_message_page_says_where_it_will_go(monkeypatch):
+    """Sending into a channel you cannot name is how a private note ends up
+    somewhere public."""
+    import notify
+    monkeypatch.setattr(notify, "configured", lambda: ["Discord", "ntfy"])
+    src = Path(dashboard.__file__).read_text(encoding="utf-8")
+    body = src.split("def message_page", 1)[1].split("\n@app.route", 1)[0]
+    assert "notify.configured()" in body
+    assert "also sends it to" in body
+
+
+def test_an_unconfigured_dashboard_offers_setup_not_a_dead_form(monkeypatch):
+    """A send button with nowhere to send to fails silently at the moment you
+    most need it to have worked."""
+    src = Path(dashboard.__file__).read_text(encoding="utf-8")
+    body = src.split("def message_page", 1)[1].split("\n@app.route", 1)[0]
+    assert 'href="/settings"' in body
+    assert "nothing can be pushed" in body
+    assert "notes still save" in body, (
+        "an unreachable webhook must not cost the note")
+
+
+def test_an_empty_message_is_refused():
+    src = Path(dashboard.__file__).read_text(encoding="utf-8")
+    body = src.split("def message_send", 1)[1].split("\n@app.route", 1)[0]
+    assert "Type something first" in body
+
+
+def test_the_priority_is_validated_not_trusted():
+    """It goes into an ntfy header. Whatever arrives from the form is not a
+    priority until this says it is."""
+    src = Path(dashboard.__file__).read_text(encoding="utf-8")
+    body = src.split("def message_send", 1)[1].split("\n@app.route", 1)[0]
+    assert '("low", "normal", "high")' in body

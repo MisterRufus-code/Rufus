@@ -1,0 +1,28 @@
+{
+  "name": "a modern trading floor",
+  "when": [
+    1970,
+    2030
+  ],
+  "keywords": [
+    "market",
+    "trader",
+    "stock",
+    "crash",
+    "index",
+    "shares",
+    "sold",
+    "bought",
+    "panic",
+    "exchange",
+    "broker",
+    "screen"
+  ],
+  "light": "flat electric light",
+  "ground_y": 0.74,
+  "figure_height": 0.44,
+  "safe_x": [
+    0.3,
+    0.72
+  ]
+}

@@ -7,6 +7,10 @@ Usage:
     python scripts/review_scripts.py --all     # all scripts
     python scripts/review_scripts.py --id 5    # single script by ID
     python scripts/review_scripts.py -n 20     # latest 20
+
+Prints the rubric's own reasoning under each script, which is where "why did
+this score 3" is actually recorded — per-criterion marks, how many attempts it
+took, and any hold reason.
 """
 
 import argparse
@@ -57,6 +61,32 @@ def _print_video(row):
     if seed_type:
         snippet = (seed_content[:150] + "…") if len(seed_content) > 150 else seed_content
         print(f"  Seed:    [{seed_type}] {seed_source} — {snippet}")
+
+    # WHY THE SCORE IS THE SCORE. The rubric writes down its reasoning and
+    # its per-criterion marks at scoring time, and until now nothing printed
+    # them — so "why did the last four scripts all come back 3 or 4" had a
+    # recorded answer that no tool would show. A score with no reasoning next
+    # to it is a number to argue with; with the reasoning it is a note about
+    # what to change.
+    crits = [(k, _safe(row, f"score_{k}", None)) for k in
+             ("specificity", "hook", "compression", "loop", "human")]
+    have = [(k, v) for k, v in crits if v is not None]
+    if have:
+        print(f"  Rubric:  " + "  ".join(f"{k} {v}/3" for k, v in have))
+    attempts = _safe(row, "attempts_used", None)
+    if attempts:
+        temp = _safe(row, "final_temperature", None)
+        tail = f" at temperature {temp}" if temp else ""
+        print(f"  Took:    {attempts} attempt(s){tail}")
+    hold = _safe(row, "hold_reason", "")
+    if hold:
+        print(f"  Held:    {hold}")
+    why = _safe(row, "score_reasoning", "")
+    if why:
+        print(SEP)
+        print("  WHY THIS SCORE")
+        for line in str(why).strip().splitlines():
+            print(f"  {line}")
 
     print(SEP)
     script = _safe(row, "script_full", "") or _safe(row, "script_hook", "") or "(no script saved)"

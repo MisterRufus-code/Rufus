@@ -14,7 +14,9 @@ Covers:
 """
 
 import json
+import os
 import sys
+import time
 import types
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -117,7 +119,7 @@ def test_load_used_seeds_handles_corrupted_json(tmp_path, capsys):
     original = research.USED_SEEDS_FILE
     try:
         research.USED_SEEDS_FILE = tmp_path / "used_seeds.json"
-        research.USED_SEEDS_FILE.write_text("{ broken json !!!")
+        research.USED_SEEDS_FILE.write_text("{ broken json !!!", encoding="utf-8")
         result = research._load_used_seeds()
         assert result == []
         captured = capsys.readouterr()
@@ -187,7 +189,12 @@ def test_sd_client_returns_empty_when_unavailable():
 
 
 def test_sd_client_skips_failed_images():
-    """generate_clips must skip a clip and continue when _generate_image fails."""
+    """generate_clips must skip a clip and continue when _generate_image fails.
+
+    A failed generation is retried (transient 6GB-GPU OOM is common) up to
+    MAX_DUP_RETRIES+1 times per clip, then the clip is skipped — no exception.
+    """
+    import sd_client
     from sd_client import generate_clips
     call_count = {"n": 0}
 
@@ -200,7 +207,8 @@ def test_sd_client_skips_failed_images():
         result = generate_clips(["query1", "query2"], n=2)
 
     assert result == []
-    assert call_count["n"] == 2   # tried both, skipped both — no exception
+    # Both clips attempted; each retried the full budget before being skipped.
+    assert call_count["n"] == 2 * (sd_client.MAX_DUP_RETRIES + 1)
 
 
 def test_sd_query_to_prompt_contains_query():
@@ -224,6 +232,137 @@ def test_sd_upscale_lanczos_fallback():
     big = _upscale_lanczos(small)
     big_img = Image.open(io.BytesIO(big))
     assert big_img.size == (1152, 2048)
+
+
+# ── Cross-run image freshness ─────────────────────────────────────────────────
+
+def test_image_prompt_history_roundtrip_and_channel_scoping(tmp_path, monkeypatch):
+    """Prompts remembered for one channel must come back for that channel only —
+    two channels must never censor each other's visual ideas."""
+    import main
+    monkeypatch.setattr(main, "RECENT_PROMPTS_FILE", tmp_path / "recent.json")
+
+    monkeypatch.setenv("RUFUS_CHANNEL", "main_en")
+    main._remember_image_prompts(["a coin on a desk", "a 1948 street market"])
+    monkeypatch.setenv("RUFUS_CHANNEL", "other_ch")
+    main._remember_image_prompts(["a rocket launch"])
+
+    monkeypatch.setenv("RUFUS_CHANNEL", "main_en")
+    got = main._recent_image_prompts()
+    assert "a coin on a desk" in got
+    assert "a rocket launch" not in got
+
+
+def test_image_prompt_history_is_capped(tmp_path, monkeypatch):
+    import main
+    monkeypatch.setattr(main, "RECENT_PROMPTS_FILE", tmp_path / "recent.json")
+    monkeypatch.setenv("RUFUS_CHANNEL", "main_en")
+
+    for i in range(30):   # far past the 24-run cap
+        main._remember_image_prompts([f"prompt {i}"])
+
+    data = json.loads((tmp_path / "recent.json").read_text(encoding="utf-8"))
+    assert len(data["runs"]) == 24
+    # oldest runs dropped, newest kept
+    assert data["runs"][-1]["prompts"] == ["prompt 29"]
+
+
+def test_freshness_block_empty_on_first_run(tmp_path, monkeypatch):
+    import main
+    monkeypatch.setattr(main, "RECENT_PROMPTS_FILE", tmp_path / "missing.json")
+    assert main._freshness_block() == ""
+
+
+def test_freshness_block_lists_recent_prompts(tmp_path, monkeypatch):
+    import main
+    monkeypatch.setattr(main, "RECENT_PROMPTS_FILE", tmp_path / "recent.json")
+    monkeypatch.setenv("RUFUS_CHANNEL", "main_en")
+    main._remember_image_prompts(["a wheelbarrow of banknotes on a cobbled street"])
+
+    block = main._freshness_block()
+    assert "DO NOT REPEAT" in block
+    assert "wheelbarrow of banknotes" in block
+
+
+def test_comfy_prior_hashes_roundtrip_and_cap(tmp_path, monkeypatch):
+    """Accepted-image hashes must persist across runs (capped) so the dup
+    check can regen a new image that looks like one from a previous video."""
+    import comfy_client
+    monkeypatch.setattr(comfy_client, "FRESH_HASH_FILE", tmp_path / "hashes.json")
+
+    comfy_client._save_hashes(list(range(200)))         # over the 120 cap
+    got = comfy_client._load_prior_hashes()
+    assert len(got) == comfy_client.FRESH_HASH_CAP
+    assert got[-1] == 199                                # newest kept, oldest dropped
+
+
+def test_comfy_prior_hashes_missing_file_is_empty(tmp_path, monkeypatch):
+    import comfy_client
+    monkeypatch.setattr(comfy_client, "FRESH_HASH_FILE", tmp_path / "nope.json")
+    assert comfy_client._load_prior_hashes() == []
+
+
+def test_fresh_images_env_kill_switch(monkeypatch):
+    import comfy_client
+    monkeypatch.delenv("RUFUS_FRESH_IMAGES", raising=False)
+    assert comfy_client._fresh_images_enabled() is True
+    monkeypatch.setenv("RUFUS_FRESH_IMAGES", "0")
+    assert comfy_client._fresh_images_enabled() is False
+
+
+# ── Ken Burns zoom subtlety (stills-only mode) ────────────────────────────────
+
+def test_kenburns_default_zoom_is_subtle(tmp_path, monkeypatch):
+    """Default zoom must be a small ('tiny') range, not the old 20% swing —
+    a heavy pan/zoom reads as fake on top of already-strong FLUX stills when
+    running with Wan/SVD disabled (RUFUS_WAN=0, RUFUS_IMG2VID=0)."""
+    import importlib
+    import sd_client
+    monkeypatch.delenv("RUFUS_KENBURNS_ZOOM", raising=False)
+    importlib.reload(sd_client)
+    assert sd_client.KENBURNS_ZOOM_RANGE == pytest.approx(0.06)
+    assert sd_client.KENBURNS_ZOOM_RANGE < 0.20   # meaningfully subtler than the old default
+    importlib.reload(sd_client)  # restore module state for later tests
+
+
+def test_kenburns_zoom_env_override(monkeypatch):
+    import importlib
+    import sd_client
+    monkeypatch.setenv("RUFUS_KENBURNS_ZOOM", "0.02")
+    importlib.reload(sd_client)
+    try:
+        assert sd_client.KENBURNS_ZOOM_RANGE == pytest.approx(0.02)
+    finally:
+        monkeypatch.delenv("RUFUS_KENBURNS_ZOOM", raising=False)
+        importlib.reload(sd_client)
+
+
+def test_animate_to_clip_uses_subtle_zoom_in_ffmpeg_filter(tmp_path, monkeypatch):
+    """The actual ffmpeg zoompan filter passed to subprocess must cap at the
+    configured zoom (not the old hardcoded 1.20)."""
+    import importlib
+    import sd_client
+    monkeypatch.delenv("RUFUS_KENBURNS_ZOOM", raising=False)
+    importlib.reload(sd_client)
+
+    img = tmp_path / "still.png"
+    from PIL import Image
+    Image.new("RGB", (1080, 1920), color=(10, 20, 30)).save(img)
+    out = tmp_path / "clip.mp4"
+
+    captured = {}
+    def fake_run(cmd, **kwargs):
+        captured["cmd"] = cmd
+        out.write_bytes(b"x" * 100_000)
+        return types.SimpleNamespace(returncode=0, stderr="")
+
+    with patch("sd_client.subprocess.run", side_effect=fake_run):
+        sd_client._animate_to_clip(img, out, duration=2.0, idx=0)
+
+    vf = captured["cmd"][captured["cmd"].index("-vf") + 1]
+    assert "1.0600" in vf
+    assert "1.20" not in vf
+    importlib.reload(sd_client)
 
 
 # ── tts_engine guards ─────────────────────────────────────────────────────────
@@ -263,7 +402,11 @@ def test_tts_engine_xtts_fallback_on_import_error(tmp_path):
     def fake_xtts(script, path):
         raise ImportError("TTS package not installed")
 
-    def fake_edge(script, path):
+    def fake_edge(script, path, *args, **kwargs):
+        # *args because _edge also takes the beat tones now. What this test
+        # pins is that the fallback FIRES, not how many arguments it fires
+        # with — a stub that must be edited whenever a signature grows is a
+        # test that starts failing for the wrong reason.
         edge_called["n"] += 1
         path.write_bytes(b"\x00" * 100)  # dummy mp3
 
@@ -387,10 +530,523 @@ def test_wisdom_quote_author_uniform(monkeypatch, tmp_path):
     quotes = [{"text": f"buffett wisdom {i}", "author": "Warren Buffett"} for i in range(28)]
     quotes += [{"text": f"munger wisdom {i}", "author": "Charlie Munger"} for i in range(2)]
     f = tmp_path / "finance.json"
-    f.write_text(_json.dumps({"quotes": quotes}))
+    f.write_text(_json.dumps({"quotes": quotes}), encoding="utf-8")
     monkeypatch.setattr(research, "WISDOM_DIR", tmp_path)
     import random as _random
     _random.seed(7)
     authors = [research.pick_wisdom_quote("finance")["source"] for _ in range(200)]
     munger_share = authors.count("Charlie Munger") / len(authors)
     assert 0.3 < munger_share < 0.7   # ~0.5 expected; would be ~0.07 with plain choice
+
+
+# ── Per-channel instance lock (multi-channel concurrency) ────────────────────
+
+def test_acquire_lock_is_per_channel(tmp_path, monkeypatch):
+    """Two DIFFERENT channels must be able to hold their locks concurrently;
+    a second run of the SAME channel must be refused. This is the Phase-1
+    scaling unlock: the old global lock serialized all channels."""
+    import main
+
+    monkeypatch.setattr(main, "ROOT", tmp_path)
+
+    # Channel A acquires
+    main._acquire_lock("main_en")
+    lock_a = main._INSTANCE_LOCK
+    assert lock_a.is_locked
+    assert "main_en" in str(lock_a.lock_file)
+
+    # A different channel is NOT blocked (separate lock file)
+    from filelock import FileLock
+    lock_b = FileLock(str(tmp_path / "rufus.spanish.lock") + ".lock")
+    lock_b.acquire(timeout=0)          # must not raise
+    assert lock_b.is_locked
+    lock_b.release()
+
+    # Same channel IS blocked → sys.exit(1)
+    import subprocess, sys as _sys
+    r = subprocess.run(
+        [_sys.executable, "-c", (
+            "import sys; sys.path.insert(0, r'%s');\n"
+            "import main\n"
+            "from pathlib import Path\n"
+            "main.ROOT = Path(r'%s')\n"
+            "main._acquire_lock('main_en')\n"
+        ) % (str(Path(__file__).parent.parent / "scripts"), str(tmp_path))],
+        capture_output=True, text=True, timeout=30,
+    )
+    assert r.returncode == 1
+    assert "main_en" in r.stdout
+
+    lock_a.release()
+
+
+def test_sweep_run_temp_only_removes_own_pid_files(tmp_path, monkeypatch):
+    """The exit sweep must delete THIS pid's clip temps and never touch a
+    concurrent run's files (identified by a different pid in the stamp)."""
+    import os
+    import main
+
+    monkeypatch.setenv("RUFUS_MEDIA_DIR", str(tmp_path / "media_library"))
+    monkeypatch.setattr(main, "ROOT", tmp_path)
+    comfy = tmp_path / "media_library" / "temp" / "comfy"
+    comfy.mkdir(parents=True)
+
+    mine   = comfy / f"1751234567_{os.getpid()}_3.png"
+    theirs = comfy / "1751234567_99999_3.png"
+    mine.write_bytes(b"x")
+    theirs.write_bytes(b"x")
+
+    main._sweep_run_temp()
+
+    assert not mine.exists()
+    assert theirs.exists()
+
+
+def test_ensure_media_root_renames_stray_file(tmp_path, monkeypatch):
+    """media_library existing as a FILE (AV quarantine restore, interrupted
+    download, manual slip) makes every downstream .mkdir(parents=True,
+    exist_ok=True) call hard-crash with WinError 183/FileExistsError, since
+    exist_ok only suppresses the error when the existing entry is_dir().
+    The startup guard must move it aside so a real directory can be created."""
+    import main
+
+    monkeypatch.setenv("RUFUS_MEDIA_DIR", str(tmp_path / "media_library"))
+    monkeypatch.setattr(main, "ROOT", tmp_path)
+    stray = tmp_path / "media_library"
+    stray.write_bytes(b"oops, not a folder")
+
+    main._ensure_media_root()
+
+    assert not stray.exists() or stray.is_dir()
+    backups = list(tmp_path.glob("media_library.bak-*"))
+    assert len(backups) == 1
+    assert backups[0].read_bytes() == b"oops, not a folder"
+
+
+def test_ensure_media_root_noop_when_already_a_directory(tmp_path, monkeypatch):
+    import main
+
+    monkeypatch.setattr(main, "ROOT", tmp_path)
+    real_dir = tmp_path / "media_library"
+    real_dir.mkdir()
+    (real_dir / "keep.txt").write_text("keep", encoding="utf-8")
+
+    main._ensure_media_root()
+
+    assert real_dir.is_dir()
+    assert (real_dir / "keep.txt").exists()
+    assert not list(tmp_path.glob("media_library.bak-*"))
+
+
+def test_ensure_media_root_noop_when_missing(tmp_path, monkeypatch):
+    import main
+
+    monkeypatch.setattr(main, "ROOT", tmp_path)
+    main._ensure_media_root()   # must not raise when media_library doesn't exist yet
+    assert not (tmp_path / "media_library").exists()
+
+
+# ── Debug-mode artifacts (RUFUS_DEBUG) ────────────────────────────────────────
+
+def test_housekeeping_never_deletes_debug(tmp_path, monkeypatch):
+    """media_library/debug/ is the permanent quality-review record (every
+    run's script/voiceover/keyframes) — it must survive housekeeping
+    regardless of age, unlike the rolling cache/temp/log cleanup."""
+    import main
+
+    monkeypatch.setenv("RUFUS_MEDIA_DIR", str(tmp_path / "media_library"))
+    monkeypatch.setattr(main, "ROOT", tmp_path)
+    monkeypatch.setattr(main, "LOG_DIR", tmp_path / "logs")
+
+    debug_dir = tmp_path / "media_library" / "debug"
+    old_run   = debug_dir / "20260101-old"
+    old_run.mkdir(parents=True)
+
+    old_file = old_run / "script.txt"
+    old_file.write_text("old", encoding="utf-8")
+
+    old_time = time.time() - 400 * 86400   # over a year old
+    os.utime(old_file, (old_time, old_time))
+
+    main._housekeeping()
+
+    assert old_file.exists()
+    assert old_run.exists()
+
+
+def test_save_debug_artifacts_saves_even_when_debug_off(tmp_path, monkeypatch):
+    """Every run's script/voiceover gets logged now, not just RUFUS_DEBUG=1
+    runs — the quality-review workflow needs every run's artifacts, not an
+    opt-in subset a reviewer has to remember to enable."""
+    import audio_gen as ag
+    monkeypatch.delenv("RUFUS_DEBUG", raising=False)
+    monkeypatch.setenv("RUFUS_MEDIA_DIR", str(tmp_path / "media_library"))
+    monkeypatch.setattr(ag, "ROOT", tmp_path)
+
+    mp3 = tmp_path / "voice.mp3"
+    mp3.write_bytes(b"x")
+    ag._save_debug_artifacts("a script", mp3)
+
+    assert (tmp_path / "media_library" / "debug").exists()
+
+
+def test_save_debug_artifacts_saves_script_and_voiceover(tmp_path, monkeypatch):
+    import audio_gen as ag
+    monkeypatch.setenv("RUFUS_DEBUG", "1")
+    monkeypatch.setenv("RUFUS_DEBUG_RUN_ID", "20260710-abc123")
+    monkeypatch.setenv("RUFUS_MEDIA_DIR", str(tmp_path / "media_library"))
+    monkeypatch.setattr(ag, "ROOT", tmp_path)
+
+    mp3 = tmp_path / "voice.mp3"
+    mp3.write_bytes(b"fake mp3 bytes")
+    ag._save_debug_artifacts("Hook.\nBody.\nCTA.", mp3)
+
+    out = tmp_path / "media_library" / "debug" / "20260710-abc123"
+    assert (out / "script.txt").read_text(encoding="utf-8") == "Hook.\nBody.\nCTA."
+    assert (out / "voiceover.mp3").read_bytes() == b"fake mp3 bytes"
+
+
+def test_save_debug_artifacts_failure_is_non_fatal(tmp_path, monkeypatch):
+    """A debug-save failure (disk full, permissions, whatever) must never
+    break the actual render — render() calls this with no error handling
+    of its own, so the function itself must swallow everything."""
+    import audio_gen as ag
+    monkeypatch.setenv("RUFUS_DEBUG", "1")
+    monkeypatch.setenv("RUFUS_MEDIA_DIR", str(tmp_path / "media_library"))
+    monkeypatch.setattr(ag, "ROOT", tmp_path)
+    monkeypatch.setattr(ag.shutil, "copy2",
+                        lambda *a, **k: (_ for _ in ()).throw(OSError("disk full")))
+
+    mp3 = tmp_path / "voice.mp3"
+    mp3.write_bytes(b"x")
+    ag._save_debug_artifacts("script", mp3)   # must not raise
+
+
+# ── TTS speech sanitizer (voice was reading markdown out loud) ────────────────
+
+def test_sanitize_for_speech_strips_markdown_and_stage_directions():
+    import tts_engine as t
+    dirty = "**Nixon** shocked the *world*.\n[pause] Then came (beat) the crash. #history"
+    clean = t._sanitize_for_speech(dirty)
+    assert "*" not in clean and "#" not in clean
+    assert "pause" not in clean.lower() and "beat" not in clean.lower()
+    assert "Nixon shocked the world." in clean
+    assert "Then came" in clean and "the crash." in clean
+
+
+def test_sanitize_for_speech_idempotent_on_clean_text():
+    import tts_engine as t
+    clean = "In 1971, Nixon ended the gold standard.\nYour money changed forever."
+    assert t._sanitize_for_speech(clean) == clean
+
+
+# ── TTS auto-selection (ElevenLabs preferred when key configured) ─────────────
+
+def test_tts_auto_prefers_elevenlabs_when_key_present(monkeypatch):
+    """A configured ElevenLabs key means the user opted into the paid, best
+    voice — auto-selection must use it, not silently pick Kokoro/Edge."""
+    import tts_engine
+    monkeypatch.delenv("RUFUS_TTS", raising=False)
+    monkeypatch.setattr(tts_engine, "_eleven_key", lambda: "sk-real-key")
+    assert tts_engine._backend() == "elevenlabs"
+
+
+def test_tts_auto_without_key_falls_through(monkeypatch):
+    import tts_engine
+    monkeypatch.delenv("RUFUS_TTS", raising=False)
+    monkeypatch.setattr(tts_engine, "_eleven_key", lambda: "")
+    assert tts_engine._backend() in ("kokoro", "edge")
+
+
+def test_tts_explicit_env_still_wins_over_key(monkeypatch):
+    import tts_engine
+    monkeypatch.setenv("RUFUS_TTS", "edge")
+    monkeypatch.setattr(tts_engine, "_eleven_key", lambda: "sk-real-key")
+    assert tts_engine._backend() == "edge"
+
+
+# ── Beat splitting & prompt echo (Greenback-run bugs) ─────────────────────────
+
+def test_split_beats_does_not_break_on_abbreviations():
+    """'...saw the U.S. government issue...' was split at 'U.S.' into two
+    broken beats (seen live) — abbreviation periods must not end a beat."""
+    import main
+    script = ("During the Civil War, 1862 saw the U.S. government issue "
+              "United States Notes. People clutched these notes tightly. "
+              "Mr. Chase signed every one of them.")
+    beats = main._split_beats(script)
+    assert len(beats) == 3
+    assert "U.S. government issue" in beats[0]
+    assert beats[2].startswith("Mr. Chase")
+
+
+def test_split_beats_normal_sentences_unchanged():
+    import main
+    script = "First sentence here now. Second sentence follows it. Third one closes."
+    assert len(main._split_beats(script)) == 3
+
+
+def test_strip_beat_echo_removes_full_echo():
+    """GPT prefixed prompts with the beat's narration verbatim (seen live) —
+    the deterministic guard must cut it and keep the visual description."""
+    import main
+    beat = "During the Civil War, 1862 saw the U.S. government issue Greenbacks."
+    line = ("During the Civil War, 1862 saw the U.S. government issue Greenbacks. "
+            "A medium portrait of soldiers being paid in fresh green notes.")
+    out = main._strip_beat_echo(line, beat)
+    assert out.startswith("A medium portrait")
+    assert "Civil War, 1862 saw" not in out
+
+
+def test_strip_beat_echo_leaves_clean_prompt_alone():
+    import main
+    beat = "During the Civil War, 1862 saw the U.S. government issue Greenbacks."
+    line = ("A medium portrait of Civil War soldiers being paid in fresh green "
+            "notes, dusk light through the tent canvas.")
+    assert main._strip_beat_echo(line, beat) == line
+
+
+def test_strip_beat_echo_never_leaves_a_stub():
+    """If stripping would leave nothing usable, keep the original line."""
+    import main
+    beat = "People clutched these notes tightly in the market."
+    line = "People clutched these notes tightly in the market. Close-up."
+    assert main._strip_beat_echo(line, beat) == line
+
+
+# ── Audit fixes: lock re-acquire (--rotate), unified OAuth scopes ─────────────
+
+def test_lock_release_allows_reacquire_in_same_process(tmp_path, monkeypatch):
+    """Audit C1: filelock's FileLock is NOT reentrant across instances — in
+    --rotate, run() #2 re-acquired the same per-channel lock file and died,
+    so rotate could only ever produce its first video. run() now releases on
+    normal completion; this verifies the release actually unblocks a fresh
+    acquire in the same process."""
+    import main
+    monkeypatch.setattr(main, "ROOT", tmp_path)
+    monkeypatch.setattr(main, "_INSTANCE_LOCK", None, raising=False)
+
+    main._acquire_lock("chan_x")      # run #1 acquires
+    main._release_lock()              # run #1 completes normally
+    main._acquire_lock("chan_x")      # run #2 must NOT sys.exit
+    main._release_lock()
+
+
+def test_analytics_and_uploader_share_one_scope_list():
+    """Audit C3: analytics_fetcher declared its own scope list against the
+    SAME token file the uploader writes — the mismatch forced an interactive
+    OAuth flow that hung unattended scheduled runs forever (analytics runs
+    BEFORE main.py in run_scheduled.bat)."""
+    import analytics_fetcher
+    import youtube_uploader
+    assert analytics_fetcher.SCOPES is youtube_uploader.SCOPES
+    assert "https://www.googleapis.com/auth/yt-analytics.readonly" in youtube_uploader.SCOPES
+
+
+# ── Audit H5: output/ housekeeping (never grew before) ────────────────────────
+
+def test_housekeep_output_deletes_old_approved_but_protects_pending(tmp_path, monkeypatch):
+    """output/ was never cleaned — at 5/day it grew forever. Now old approved/
+    rejected videos are swept, but a PENDING video (awaiting review) is never
+    deleted regardless of age — the reviewer still needs it."""
+    import main, db_manager, time as _t
+    monkeypatch.setattr(main, "OUTPUT_DIR", tmp_path / "output")
+    monkeypatch.setattr(db_manager, "DB_FILE", tmp_path / "test.db")
+    db_manager.init_db()
+    (tmp_path / "output").mkdir()
+
+    old = _t.time() - 40 * 86400
+    def mk(name, status):
+        f = tmp_path / "output" / name
+        f.write_bytes(b"video")
+        (tmp_path / "output" / name.replace(".mp4", ".thumb.jpg")).write_bytes(b"t")
+        os.utime(f, (old, old))
+        db_manager.save_video(niche="finance", script_hook="h", scene_desc="s",
+                              video_file=str(f), score=9, upload_status=status)
+        return f
+
+    approved = mk("short_1.mp4", "approved")
+    pending  = mk("short_2.mp4", "pending")
+
+    removed = main._housekeep_output(max_output_days=14)
+    assert removed >= 1
+    assert not approved.exists()                 # old + approved → swept
+    assert not approved.with_suffix(".thumb.jpg").exists()
+    assert pending.exists()                      # pending → protected even though old
+
+
+def test_housekeep_output_keeps_recent_videos(tmp_path, monkeypatch):
+    import main, db_manager
+    monkeypatch.setattr(main, "OUTPUT_DIR", tmp_path / "output")
+    monkeypatch.setattr(db_manager, "DB_FILE", tmp_path / "test.db")
+    db_manager.init_db()
+    (tmp_path / "output").mkdir()
+    f = tmp_path / "output" / "short_new.mp4"
+    f.write_bytes(b"video")                       # fresh mtime
+    db_manager.save_video(niche="finance", script_hook="h", scene_desc="s",
+                          video_file=str(f), score=9, upload_status="approved")
+    main._housekeep_output(max_output_days=14)
+    assert f.exists()                             # within window → kept
+
+
+def test_housekeep_output_skips_when_db_unavailable(tmp_path, monkeypatch, capsys):
+    import main, db_manager
+    monkeypatch.setattr(main, "OUTPUT_DIR", tmp_path / "output")
+    (tmp_path / "output").mkdir()
+    (tmp_path / "output" / "short_x.mp4").write_bytes(b"v")
+    monkeypatch.setattr(db_manager, "_conn",
+                        lambda: (_ for _ in ()).throw(RuntimeError("locked")))
+    assert main._housekeep_output(max_output_days=1) == 0   # fail-safe: no deletions
+
+
+# ── Audit H4: scheduled runs wait for the lock instead of dropping the slot ────
+
+def test_acquire_lock_waits_when_wait_seconds_given(tmp_path, monkeypatch):
+    """A scheduled run must WAIT for a held lock (up to wait_seconds), not
+    sys.exit(1) instantly — otherwise overlapping 5/day triggers silently
+    lose slots. Verifies the timeout is actually passed through to filelock."""
+    import main
+    monkeypatch.setattr(main, "ROOT", tmp_path)
+    monkeypatch.setattr(main, "_INSTANCE_LOCK", None, raising=False)
+
+    captured = {}
+    class FakeLock:
+        def __init__(self, path): captured["path"] = path
+        def acquire(self, timeout=0): captured["timeout"] = timeout
+        def release(self): pass
+        @property
+        def is_locked(self): return True
+    monkeypatch.setattr(main, "FileLock", FakeLock)
+
+    main._acquire_lock("chan_x", wait_seconds=1800)
+    assert captured["timeout"] == 1800
+
+
+def test_acquire_lock_default_is_nonblocking(tmp_path, monkeypatch):
+    """A manual (non-scheduled) run keeps the old fail-fast behavior."""
+    import main
+    monkeypatch.setattr(main, "ROOT", tmp_path)
+    monkeypatch.setattr(main, "_INSTANCE_LOCK", None, raising=False)
+    captured = {}
+    class FakeLock:
+        def __init__(self, path): pass
+        def acquire(self, timeout=0): captured["timeout"] = timeout
+        def release(self): pass
+        @property
+        def is_locked(self): return True
+    monkeypatch.setattr(main, "FileLock", FakeLock)
+    main._acquire_lock("chan_x")
+    assert captured["timeout"] == 0
+
+
+# ── Crash notification (every entry point, not just --scheduled) ────────────
+
+def test_run_or_notify_calls_notify_on_crash_then_reraises(monkeypatch):
+    import main
+    import notify
+
+    def boom(**kwargs):
+        raise RuntimeError("comfy server unreachable")
+
+    monkeypatch.setattr(main, "run", boom)
+    calls = []
+    monkeypatch.setattr(notify, "notify_run_failed",
+                        lambda reason, **kw: calls.append((reason, kw)))
+
+    with pytest.raises(RuntimeError, match="comfy server unreachable"):
+        main._run_or_notify("finance", channel_id="main_en")
+
+    assert len(calls) == 1
+    reason, kw = calls[0]
+    assert "comfy server unreachable" in reason
+    assert kw == {"niche": "finance", "channel": "main_en"}
+
+
+def test_run_or_notify_does_not_notify_on_sys_exit(monkeypatch):
+    """sys.exit(1) paths already print their own reason — must not double-page."""
+    import main
+    import notify
+
+    def exits(**kwargs):
+        raise SystemExit(1)
+
+    monkeypatch.setattr(main, "run", exits)
+    calls = []
+    monkeypatch.setattr(notify, "notify_run_failed",
+                        lambda reason, **kw: calls.append((reason, kw)))
+
+    with pytest.raises(SystemExit):
+        main._run_or_notify("finance")
+    assert calls == []
+
+
+def test_run_or_notify_survives_notify_itself_failing(monkeypatch):
+    """A broken notification path must never mask the real crash."""
+    import main
+    import notify
+
+    def boom(**kwargs):
+        raise RuntimeError("original failure")
+
+    monkeypatch.setattr(main, "run", boom)
+    monkeypatch.setattr(notify, "notify_run_failed",
+                        lambda reason, **kw: (_ for _ in ()).throw(OSError("network down")))
+
+    with pytest.raises(RuntimeError, match="original failure"):
+        main._run_or_notify("finance")
+
+
+def test_run_or_notify_passes_through_on_success(monkeypatch):
+    import main
+    calls = []
+    monkeypatch.setattr(main, "run", lambda **kwargs: calls.append(kwargs))
+    main._run_or_notify("finance", channel_id="main_en")   # must not raise
+    assert calls == [{"niche_override": "finance", "channel_id": "main_en"}]
+
+
+# ── Both renderers must survive a missing CUDA DLL ──────────────────────────
+# audio_gen._transcribe wraps transcribe() with a GPU→CPU fallback, and its own
+# docstring says why: ctranslate2 lazy-loads cuBLAS, so a missing
+# cublas64_12.dll only surfaces on the FIRST transcribe() call, never at model
+# construction. remotion_renderer called the model directly and skipped that
+# wrapper — so the same DLL the FFmpeg path had been shrugging off for weeks
+# aborted the entire Remotion render, fell back to FFmpeg, and re-ran the voice
+# from scratch.
+
+def test_every_transcribe_call_goes_through_the_cpu_fallback():
+    from pathlib import Path as _P
+    scripts = _P(__file__).parent.parent / "scripts"
+    offenders = []
+    for py in scripts.glob("*.py"):
+        if py.name == "audio_gen.py":
+            continue            # the wrapper itself is where the raw call lives
+        if "_whisper().transcribe" in py.read_text(encoding="utf-8"):
+            offenders.append(py.name)
+    assert not offenders, (
+        f"{offenders} call the whisper model directly — use "
+        f"audio_gen._transcribe(mp3), which falls back to CPU")
+
+
+def test_the_remotion_path_transcribes_through_the_wrapper():
+    from pathlib import Path as _P
+    src = (_P(__file__).parent.parent / "scripts" / "remotion_renderer.py").read_text(encoding="utf-8")
+    assert "audio_gen._transcribe(mp3)" in src
+
+
+# ── a publish you cannot record is a publish you cannot retract ─────────────
+
+def test_auto_upload_is_refused_when_the_database_save_failed():
+    """save_video is deliberately non-fatal — a database problem should not
+    throw away a rendered video — but db_id stays None when it fails, and
+    nothing downstream checked it. An unattended RUFUS_AUTO_UPLOAD=1 run whose
+    save failed put a video on the channel with no local row: no audit trail,
+    no run to trace it to, and update_youtube_id skipped (it is guarded by
+    `if db_id`), so not even the video id was kept."""
+    src = (Path(__file__).parent.parent / "scripts" / "main.py"
+           ).read_text(encoding="utf-8")
+    guard = "if auto_upload and db_id is None:"
+    assert guard in src, "nothing stops an unrecordable publish"
+    after = src.split(guard, 1)[1][:400]
+    assert "auto_upload = False" in after, "the guard must actually disarm it"
+    # And it must sit BEFORE the branch that uploads, not after it.
+    assert src.index(guard) < src.index("RUFUS_AUTO_UPLOAD=1, uploading")

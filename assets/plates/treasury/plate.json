@@ -1,0 +1,28 @@
+{
+  "name": "a royal treasury",
+  "when": [
+    300,
+    1800
+  ],
+  "keywords": [
+    "treasury",
+    "king",
+    "queen",
+    "crown",
+    "tribute",
+    "tax",
+    "hoard",
+    "royal",
+    "coffer",
+    "empire",
+    "throne",
+    "levy"
+  ],
+  "light": "lamplight on stone",
+  "ground_y": 0.74,
+  "figure_height": 0.44,
+  "safe_x": [
+    0.3,
+    0.72
+  ]
+}

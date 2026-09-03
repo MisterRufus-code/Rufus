@@ -14,7 +14,11 @@ never depend on this call succeeding.
 
 import json
 import re
+import sys
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parent))
+import text_repair
 
 CONFIG_DIR = Path(__file__).parent.parent / "config"
 KEYS_FILE  = CONFIG_DIR / "keys.json"
@@ -29,6 +33,11 @@ NICHE_KEYWORDS = {
     "mindset":              ["mindset", "psychology", "habits"],
     "business":             ["business", "entrepreneur", "startup"],
     "personal_development": ["habits", "self improvement", "growth"],
+    # The ACTIVE scheduled niche — its absence made the fallback [niche_name]
+    # kick in, so the title prompt literally instructed GPT to "include the
+    # keyword 'money_history' naturally" and underscore tokens leaked into
+    # real video titles.
+    "money_history":        ["money", "history", "gold", "inflation", "currency"],
 }
 
 
@@ -45,7 +54,7 @@ def _legacy_metadata(script: str, niche_name: str, niche_cfg: dict,
 
 def _load_key() -> str:
     try:
-        key = json.loads(KEYS_FILE.read_text()).get("openai", "")
+        key = json.loads(KEYS_FILE.read_text(encoding="utf-8")).get("openai", "")
         if key and not key.startswith("YOUR_") and not key.startswith("FILL_"):
             return key
     except Exception:
@@ -67,11 +76,33 @@ def _clamp_title(title: str, hook: str) -> str:
     return title
 
 
+def _surface() -> str:
+    """Which YouTube surface this video is for.
+
+    A title competing in a swipe feed and a title competing in search results
+    are different jobs — the first fights for a thumb that is already moving,
+    the second for a query somebody typed. One brief cannot be right for both.
+    """
+    try:
+        import video_format
+        return ("long-form YouTube video" if video_format.is_long()
+                else "YouTube Shorts")
+    except Exception:
+        return "YouTube Shorts"
+
+
 def generate_metadata(script: str, niche_name: str, niche_cfg: dict,
                       hashtags: list[str] | None = None,
                       language: str = "en") -> dict:
     """Return {"title", "description", "tags"} — GPT-optimized, legacy on failure."""
     hashtags = hashtags or ["#Shorts"]
+    # A title written for a phone feed and a title written for a search result
+    # are different jobs; saying which one this is costs nothing.
+    # The CTA and script reach the YouTube description and the pinned comment.
+    # Repair only — no stripping — because `language` may legitimately be a
+    # non-Latin one, and a description is not read aloud.
+    script    = text_repair.repair_mojibake(script)
+    niche_cfg = {**niche_cfg, "cta": text_repair.repair_mojibake(str(niche_cfg.get("cta", "")))}
     legacy   = _legacy_metadata(script, niche_name, niche_cfg, hashtags)
     hook     = script.strip().split("\n")[0]
 
@@ -90,8 +121,8 @@ def generate_metadata(script: str, niche_name: str, niche_cfg: dict,
             messages=[{
                 "role": "user",
                 "content": (
-                    "You write YouTube Shorts metadata that maximizes click-through "
-                    "without clickbait.\n\n"
+                    f"You write {_surface()} metadata that maximizes "
+                    f"click-through without clickbait.\n\n"
                     f"NICHE: {niche_name} (search keywords: {keywords})\n"
                     f"SCRIPT (the video's narration):\n{script}\n\n"
                     "Rules:\n"

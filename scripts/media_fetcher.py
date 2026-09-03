@@ -14,13 +14,15 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
+import paths
+
 import requests
 
 ROOT             = Path(__file__).parent.parent
 CONFIG_DIR       = ROOT / "config"
 NICHES_FILE      = CONFIG_DIR / "niches.json"
 KEYS_FILE        = CONFIG_DIR / "keys.json"
-CACHE_DIR        = ROOT / "media_library" / "cache"
+CACHE_DIR        = paths.media_root() / "cache"
 USED_VIDEOS_FILE = CONFIG_DIR / "used_videos.json"
 
 MIN_FILE_SIZE = 100_000   # 100 KB minimum – reject corrupt/tiny downloads
@@ -33,7 +35,7 @@ def _load_used_ids(source: str) -> set:
         if not USED_VIDEOS_FILE.exists():
             return set()
         try:
-            return set(json.loads(USED_VIDEOS_FILE.read_text()).get(source, []))
+            return set(json.loads(USED_VIDEOS_FILE.read_text(encoding="utf-8")).get(source, []))
         except (json.JSONDecodeError, OSError):
             return set()
 
@@ -43,26 +45,26 @@ def _mark_used(source: str, video_id) -> None:
         data: dict = {}
         if USED_VIDEOS_FILE.exists():
             try:
-                data = json.loads(USED_VIDEOS_FILE.read_text())
+                data = json.loads(USED_VIDEOS_FILE.read_text(encoding="utf-8"))
             except (json.JSONDecodeError, OSError):
                 pass
         ids = data.get(source, [])
         if video_id not in ids:
             ids.append(video_id)
         data[source] = ids
-        USED_VIDEOS_FILE.write_text(json.dumps(data, indent=2))
+        USED_VIDEOS_FILE.write_text(json.dumps(data, indent=2), encoding="utf-8")
 
 
 # ── Config ──────────────────────────────────────────────────────────────────────
 
 def _load_niche():
-    data   = json.loads(NICHES_FILE.read_text())
+    data   = json.loads(NICHES_FILE.read_text(encoding="utf-8"))
     active = os.environ.get("RUFUS_NICHE_OVERRIDE") or data["active"]
     return data["niches"][active], active
 
 
 def _load_keys():
-    return json.loads(KEYS_FILE.read_text())
+    return json.loads(KEYS_FILE.read_text(encoding="utf-8"))
 
 
 # ── Source fetchers (return direct MP4 URL) ─────────────────────────────────────
@@ -237,7 +239,10 @@ def fetch_video() -> Path:
     cache_dir.mkdir(parents=True, exist_ok=True)
 
     ordered = SOURCES[:]
-    random.shuffle(ordered[:2])
+    # Rotate which of the first two sources leads. (Audit fix: the old
+    # `random.shuffle(ordered[:2])` shuffled a slice COPY — a silent no-op,
+    # so the intended source rotation never actually happened.)
+    ordered[:2] = random.sample(ordered[:2], k=min(2, len(ordered)))
 
     for name, fetcher in ordered:
         try:

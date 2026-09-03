@@ -1,0 +1,592 @@
+<title>Rufus — ביקורת לוגים מלאה</title>
+<style>
+:root{
+  --ground:#f2f4f7;
+  --surface:#ffffff;
+  --surface-2:#e9edf2;
+  --ink:#141b24;
+  --ink-2:#4d5967;
+  --ink-3:#78848f;
+  --rule:#d5dbe3;
+  --lamp:#a8681c;
+  --lamp-soft:#f5e7d2;
+  --crit:#a33325;
+  --crit-soft:#f8e3e0;
+  --warn:#8a6410;
+  --warn-soft:#f7ecd4;
+  --ok:#1f6b4e;
+  --ok-soft:#dcefe5;
+  --log-bg:#171e28;
+  --log-ink:#c9d4e0;
+  --log-dim:#6f7d8d;
+}
+@media (prefers-color-scheme:dark){
+  :root:not([data-theme="light"]){
+    --ground:#0e141c;
+    --surface:#161e28;
+    --surface-2:#1d2733;
+    --ink:#e7ecf2;
+    --ink-2:#a3b0bd;
+    --ink-3:#7c8896;
+    --rule:#2a3542;
+    --lamp:#e0a34e;
+    --lamp-soft:#2e2415;
+    --crit:#e77a6b;
+    --crit-soft:#33201d;
+    --warn:#d6a444;
+    --warn-soft:#2e2616;
+    --ok:#5cb98c;
+    --ok-soft:#16291f;
+    --log-bg:#080c11;
+    --log-ink:#c9d4e0;
+    --log-dim:#66727f;
+  }
+}
+:root[data-theme="dark"]{
+  --ground:#0e141c;
+  --surface:#161e28;
+  --surface-2:#1d2733;
+  --ink:#e7ecf2;
+  --ink-2:#a3b0bd;
+  --ink-3:#7c8896;
+  --rule:#2a3542;
+  --lamp:#e0a34e;
+  --lamp-soft:#2e2415;
+  --crit:#e77a6b;
+  --crit-soft:#33201d;
+  --warn:#d6a444;
+  --warn-soft:#2e2616;
+  --ok:#5cb98c;
+  --ok-soft:#16291f;
+  --log-bg:#080c11;
+  --log-ink:#c9d4e0;
+  --log-dim:#66727f;
+}
+
+*{box-sizing:border-box}
+html{-webkit-text-size-adjust:100%}
+body{
+  direction:rtl;
+  margin:0;
+  background:var(--ground);
+  color:var(--ink);
+  font-family:system-ui,-apple-system,"Segoe UI","Noto Sans Hebrew","Arial Hebrew",Arial,sans-serif;
+  font-size:17px;
+  line-height:1.72;
+  -webkit-font-smoothing:antialiased;
+}
+.wrap{max-width:800px;margin:0 auto;padding:0 24px 96px}
+
+/* ── masthead ───────────────────────────────────────────── */
+.mast{padding:64px 0 40px;border-bottom:2px solid var(--ink)}
+.eyebrow{
+  font-family:ui-monospace,"SF Mono","Cascadia Code",Consolas,monospace;
+  font-size:12px;letter-spacing:.14em;text-transform:uppercase;
+  color:var(--lamp);margin:0 0 18px;
+}
+h1{
+  font-size:clamp(30px,5.5vw,46px);line-height:1.12;font-weight:700;
+  letter-spacing:-.02em;text-wrap:balance;margin:0 0 18px;
+}
+.standfirst{font-size:19px;line-height:1.62;color:var(--ink-2);margin:0;max-width:60ch}
+
+/* ── instrument panel ───────────────────────────────────── */
+.panel{
+  display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));
+  gap:1px;background:var(--rule);border:1px solid var(--rule);
+  margin:36px 0 8px;
+}
+.cell{background:var(--surface);padding:18px 20px}
+.cell dt{
+  font-family:ui-monospace,"SF Mono",Consolas,monospace;
+  font-size:11px;letter-spacing:.1em;text-transform:uppercase;
+  color:var(--ink-3);margin:0 0 8px;
+}
+.cell dd{
+  margin:0;font-size:30px;font-weight:700;letter-spacing:-.02em;
+  font-variant-numeric:tabular-nums;line-height:1;
+}
+.cell .unit{font-size:13px;font-weight:500;color:var(--ink-3);margin-inline-start:6px}
+.cell.crit dd{color:var(--crit)}
+.cell.ok dd{color:var(--ok)}
+.cell.lamp dd{color:var(--lamp)}
+
+/* ── sections ───────────────────────────────────────────── */
+section{margin-top:64px}
+h2{
+  font-size:26px;font-weight:700;letter-spacing:-.015em;line-height:1.25;
+  margin:0 0 6px;text-wrap:balance;
+}
+.sub{color:var(--ink-2);margin:0 0 28px;font-size:16px;max-width:62ch}
+h3{font-size:19px;font-weight:650;line-height:1.35;margin:0 0 10px;letter-spacing:-.01em}
+p{margin:0 0 16px;max-width:66ch}
+strong{font-weight:650}
+em{font-style:normal;background:var(--lamp-soft);padding:0 4px;border-radius:2px}
+
+/* ── finding record ─────────────────────────────────────── */
+.rec{
+  background:var(--surface);border:1px solid var(--rule);
+  border-right:4px solid var(--rule);
+  padding:22px 24px;margin:0 0 16px;
+}
+.rec.crit{border-right-color:var(--crit)}
+.rec.warn{border-right-color:var(--warn)}
+.rec.ok{border-right-color:var(--ok)}
+.tags{display:flex;flex-wrap:wrap;gap:8px;margin:0 0 12px;align-items:center}
+.tag{
+  font-family:ui-monospace,"SF Mono",Consolas,monospace;
+  font-size:11px;letter-spacing:.07em;text-transform:uppercase;
+  padding:3px 8px;border-radius:2px;white-space:nowrap;
+}
+.tag.crit{background:var(--crit-soft);color:var(--crit)}
+.tag.warn{background:var(--warn-soft);color:var(--warn)}
+.tag.ok{background:var(--ok-soft);color:var(--ok)}
+.tag.plain{background:var(--surface-2);color:var(--ink-2)}
+.rec p:last-child{margin-bottom:0}
+.rec .why{color:var(--ink-2);font-size:15.5px}
+
+/* ── log evidence ───────────────────────────────────────── */
+.log{
+  direction:ltr;text-align:left;
+  background:var(--log-bg);color:var(--log-ink);
+  font-family:ui-monospace,"SF Mono","Cascadia Code",Consolas,monospace;
+  font-size:13px;line-height:1.7;
+  padding:16px 18px;margin:14px 0 16px;
+  overflow-x:auto;white-space:pre;
+  border-radius:3px;
+}
+.log .c{color:var(--log-dim)}
+.log .hot{color:#e77a6b}
+.log .good{color:#5cb98c}
+.log .lamp{color:#e0a34e}
+code{
+  direction:ltr;unicode-bidi:embed;
+  font-family:ui-monospace,"SF Mono",Consolas,monospace;
+  font-size:.88em;background:var(--surface-2);padding:1px 5px;border-radius:2px;
+}
+
+/* ── ordered plan ───────────────────────────────────────── */
+ol.plan{list-style:none;counter-reset:step;padding:0;margin:0}
+ol.plan>li{
+  counter-increment:step;position:relative;
+  padding:0 52px 24px 0;border-right:1px solid var(--rule);
+  margin-right:15px;
+}
+ol.plan>li:last-child{border-right-color:transparent;padding-bottom:0}
+ol.plan>li::before{
+  content:counter(step);
+  position:absolute;right:-15px;top:0;
+  width:30px;height:30px;border-radius:50%;
+  background:var(--lamp);color:var(--surface);
+  display:grid;place-items:center;
+  font-family:ui-monospace,Consolas,monospace;font-size:13px;font-weight:700;
+}
+
+ol.plan h3{margin-bottom:6px}
+
+ul.bare{list-style:none;padding:0;margin:0 0 16px}
+ul.bare>li{padding:0 18px 10px 0;position:relative;max-width:66ch}
+ul.bare>li::before{
+  content:"";position:absolute;right:0;top:12px;
+  width:6px;height:6px;background:var(--lamp);border-radius:50%;
+}
+
+.pull{
+  border-top:2px solid var(--ink);border-bottom:2px solid var(--ink);
+  padding:24px 0;margin:32px 0;
+  font-size:21px;line-height:1.5;font-weight:600;letter-spacing:-.01em;
+  max-width:60ch;
+}
+
+table{width:100%;border-collapse:collapse;margin:0 0 16px;font-size:15px}
+th,td{text-align:right;padding:10px 12px;border-bottom:1px solid var(--rule);vertical-align:top}
+th{
+  font-family:ui-monospace,Consolas,monospace;font-size:11px;
+  letter-spacing:.08em;text-transform:uppercase;color:var(--ink-3);font-weight:500;
+}
+td.num{font-variant-numeric:tabular-nums;white-space:nowrap}
+.scroll{overflow-x:auto}
+
+footer{
+  margin-top:72px;padding-top:24px;border-top:1px solid var(--rule);
+  color:var(--ink-3);font-size:14px;
+}
+</style>
+
+<div class="wrap">
+
+<header class="mast">
+  <p class="eyebrow">ביקורת · כל הלוגים · 11.08.2026</p>
+  <h1>שישה באגים שהלוגים הסתירו, ודבר אחד שמסביר את כולם</h1>
+  <p class="standfirst">
+    עברתי על כל לוג ששלחת בסשן הזה, שורה־שורה, והצלבתי מול הקוד.
+    כל באג שמצאתי הוא מאותו סוג בדיוק — לא קריסה, אלא נפילה חלקה למצב גרוע יותר
+    בלי שאף אחד יידע. זה גם מה שחוסם את הפרויקט מלהגיע לפסגה.
+  </p>
+</header>
+
+<dl class="panel">
+  <div class="cell crit"><dt>מערכות מתות</dt><dd>3<span class="unit">חודשים</span></dd></div>
+  <div class="cell lamp"><dt>מקורות תוכן חיים</dt><dd>1<span class="unit">מתוך 3</span></dd></div>
+  <div class="cell ok"><dt>תוקנו היום</dt><dd>6</dd></div>
+  <div class="cell"><dt>טסטים עוברים</dt><dd>1317</dd></div>
+</dl>
+
+<section>
+  <h2>המשפט האחד</h2>
+  <p>
+    הארכיטקטורה של Rufus בנויה על <strong>fail-open</strong>: כל שלב חיצוני נופל
+    לחלופה במקום לזרוק שגיאה. זו הבחירה הנכונה, והיא מה שהופך את הפייפליין לאמין.
+  </p>
+  <div class="pull">
+    אבל fail-open בלי fail-loud הוא פשוט fail-silent. שמונה תת־מערכות בפרויקט הזה
+    בנויות, נבדקות, ולא רצות — או רצות במצב מנוון — ואף אחת מהן לא אומרת את זה.
+  </div>
+  <p>
+    ה-QC בסוף כל ריצה מדפיס <code>all checks passed</code> על סרטון שנוצר עם הקול
+    הלא נכון, בלי עקביות דמות, עם CTA מקולקל, ומתסריט שנכתב על בסיס מקור תוכן יחיד
+    מתוך שלושה. כל בדיקה שהוא עושה באמת עוברת. הוא פשוט לא בודק את הדברים שנשברו.
+  </p>
+</section>
+
+<section>
+  <h2>מה מצאתי ותיקנתי</h2>
+  <p class="sub">כל ממצא מגובה בשורת לוג ששלחת בעצמך.</p>
+
+  <article class="rec crit">
+    <div class="tags">
+      <span class="tag crit">קריטי</span>
+      <span class="tag plain">עברית</span>
+      <span class="tag ok">תוקן</span>
+    </div>
+    <h3>קבצי הקונפיג נקראו כ-cp1255 במקום UTF-8</h3>
+    <p class="why">
+      זה הבאג שרמזת עליו. <code>Path.read_text()</code> בלי encoding משתמש בקוד־פייג'
+      של המערכת — ובוינדוס בעברית זה <strong>cp1255, לא UTF-8</strong>. כל קובץ קונפיג
+      בפרויקט הוא UTF-8, וכמה מהם מכילים מקפים ארוכים.
+    </p>
+    <div class="log"><span class="c"># מה שהקובץ מכיל</span>
+"Save this — money was never what you think."
+
+<span class="c"># מה שהריצה הדפיסה</span>
+[gpt] cta: Save this <span class="hot">╫עΓג¼Γא¥</span> money was never what you think.
+
+<span class="c"># ההוכחה</span>
+>>> "—".encode("utf-8").decode("cp1255")
+'<span class="hot">ג€”</span>'</div>
+    <p class="why">
+      <strong>המחרוזת <code>ג€”</code> כתובה בתוך <code>run.bat</code> שלך</strong>,
+      בהערה שמתארת אותה כ"מוֹחִ'ייבֶּייק קוסמטי בקונסול ש-chcp פותר". היא לא קוסמטית
+      ו-chcp לא נוגע בה: הטקסט כבר מקולקל לפני שהוא מגיע ל-stdout.
+      <code>PYTHONIOENCODING</code> משפיע רק על קלט/פלט, והמתג ששולט על
+      <code>open()</code> הוא <code>PYTHONUTF8</code> — שלא הוגדר בפרויקט מעולם.
+    </p>
+    <p class="why">
+      וה-CTA הזה הוא לא מחרוזת דיבאג. הוא נכתב לתיאור בYouTube ולתגובה המוצמדת.
+      <strong>טקסט מקולקל נשלח לערוץ.</strong>
+    </p>
+    <p class="why">
+      <em>התיקון:</em> כל 62 קריאות <code>read_text</code>, 32 <code>write_text</code>
+      וקריאת <code>open</code> אחת בטקסט מצהירות עכשיו utf-8; שלושת קבצי ההרצה
+      מגדירים <code>PYTHONUTF8=1</code>; וסריקת AST מפילה את חבילת הטסטים אם מישהו
+      יוסיף קריאה חדשה בלי encoding.
+    </p>
+  </article>
+
+  <article class="rec crit">
+    <div class="tags">
+      <span class="tag crit">קריטי</span>
+      <span class="tag plain">נראה בתמונות</span>
+      <span class="tag ok">תוקן</span>
+    </div>
+    <h3>הכרוניקן החליף צבע גלימה בין שוטים</h3>
+    <p class="why">
+      בגריד ששלחת: תמונה 01 גלימה חומה־זהובה, תמונה 05 <strong>שחורה</strong>,
+      תמונה 10 חומה. הפרומפטים מסבירים את זה במדויק.
+    </p>
+    <div class="log"><span class="c">// beat 01 — נכון</span>
+"A hooded figure in a <span class="good">weathered sepia-and-antique-gold cloak</span>..."
+
+<span class="c">// beat 05 — שחור</span>
+"<span class="hot">The hooded figure, the Chronicler, appears again</span>, standing
+ amidst the desolation of a ruined town."</div>
+    <p class="why">
+      מודל התמונות מרנדר כל ביט מרעש, בלי שום זיכרון מהאחרים.
+      <strong>לקרוא לו בשם זה לא לתאר אותו.</strong> הסטוריבורד הוא השלב היחיד
+      שיודע ששוט מאוחר הוא אותו אדם משוט מוקדם, ולכן שם התיקון.
+    </p>
+    <p class="why">
+      <em>הכיול הוא הנתונים עצמם:</em> חפיפה של 0.67 לשוט שעבד, 0.33 ו-0.27 לשניים
+      שנכשלו. הסף נקבע על 0.5 — הוא מפריד ביניהם בדיוק.
+    </p>
+  </article>
+
+  <article class="rec warn">
+    <div class="tags">
+      <span class="tag warn">בינוני</span>
+      <span class="tag plain">נראה בתמונות</span>
+      <span class="tag ok">תוקן</span>
+    </div>
+    <h3>שלטי הפגנה עם הכיתוב "ISSUES" נשלחו לסרטון</h3>
+    <p class="why">
+      סעיף ניטרול הטקסט מופעל על <strong>חפצים</strong> שנושאים כתב — עיתון, פנקס,
+      מסך. שוט 7 תיאר <strong>סצנה</strong> שעשויה מכתב:
+      <code>"a nearby protest of unemployed workers"</code>. אף מילת טריגר לא התאימה,
+      הסעיף לא ירה, והתמונה חזרה עם שלטים מקושקשים — הסימן הכי ברור שמכונה יצרה אותה.
+    </p>
+    <p class="why">
+      <em>התיקון:</em> נוספו טריגרים ברמת הסצנה — הפגנה, עצרת, צעדה, משמרת מחאה,
+      חזית חנות, רצפת מסחר, כיתה, אנדרטה, מפה, תצוגה.
+    </p>
+  </article>
+
+  <article class="rec crit">
+    <div class="tags">
+      <span class="tag crit">קריטי</span>
+      <span class="tag plain">אספקת תוכן</span>
+      <span class="tag ok">תוקן</span>
+    </div>
+    <h3>StackExchange לא יכול היה להחזיר זרע. אף פעם.</h3>
+    <p class="why">
+      השורה הזו מופיעה ב<strong>כל לוג ששלחת אי פעם</strong>:
+    </p>
+    <div class="log">[research] SE history: 60 items, <span class="hot">none passed quality filter</span></div>
+    <p class="why">
+      זה לא מזל רע, וזו בדיוק הקריאה השגויה שאיפשרה לזה לרוץ חודשים. הבקשה הייתה
+      <code>/questions?sort=votes&amp;pagesize=60</code> — בלי שאילתה ובלי עמוד.
+      כלומר <strong>60 השאלות הכי מדורגות בהיסטוריה של האתר, זהות בכל קריאה, לנצח</strong>.
+      ב-history.SE אלה שאלות על מלחמות ואימפריות, וכמעט אף אחת לא על כסף.
+      קלט קבוע שפוגש מסנן קבוע נותן תוצאה קבועה.
+    </p>
+    <p class="why">
+      <em>התיקון:</em> השאילתה מבקשת את הנושא בפועל ומסובבת עמוד בין ריצות, ובאצווה
+      ריקה מודפסת <strong>הסיבה</strong> (<code>58 offtopic</code>) במקום השורה
+      האחידה שנקראה כמזל רע במשך חודשים.
+    </p>
+  </article>
+
+  <article class="rec crit">
+    <div class="tags">
+      <span class="tag crit">קריטי</span>
+      <span class="tag plain">אספקת תוכן</span>
+      <span class="tag warn">דורש פעולה ממך</span>
+    </div>
+    <h3>רדיט לא "לא זמין" — הוא חוסם בקשות לא מאומתות</h3>
+    <div class="log">[research] reddit unreachable for r/economics <span class="c">(Expecting value: line 2 column 5)</span>
+[research] reddit unreachable for r/AskHistorians <span class="c">(...)</span>
+[research] reddit unreachable for r/badeconomics <span class="c">(...)</span>
+<span class="c">× 5 subreddits × כל ריצה × חודשים</span></div>
+    <p class="why">
+      שני חלקי השורה מטעים. רדיט למעלה — הוא מחזיר דף חסימה ב-HTML, ולכן השגיאה היא
+      תמיד כשל פענוח JSON ב<strong>אותו היסט בדיוק</strong> ואף פעם לא timeout.
+      ושום דבר בשורה לא אומר שהפתרון הוא שני מפתחות ב-<code>config/keys.json</code>.
+    </p>
+    <p class="why">
+      <strong>שרשרת ה-fallback עשתה את עבודתה, וזה בדיוק מה שהסתיר את זה.</strong>
+      הריצה התנוונה בשקט למשפך של מקור אחד, תוך שהיא מדפיסה משהו שנקרא כמו תקלת רשת.
+    </p>
+    <p class="why">
+      <em>התיקון בקוד:</em> ההודעה אומרת עכשיו "blocked — no OAuth credentials",
+      ושורה אחת לריצה (לא אחת לכל סאברדיט) נותנת את שני המפתחות, את הקישור ליצירת
+      האפליקציה, ואת המחיר: <strong>5 מקורות חוזרים לחיים, מול ויקיפדיה לבד.</strong>
+    </p>
+  </article>
+
+  <article class="rec warn">
+    <div class="tags">
+      <span class="tag warn">בינוני</span>
+      <span class="tag ok">תוקן</span>
+    </div>
+    <h3>ריצת Remotion התאבדה על DLL ש-ffmpeg בולע כבר שבועות</h3>
+    <div class="log">[ 5 / 7 ]  Rendering Short (remotion)...
+[1/4] Generating voice…              <span class="c"># Kokoro נטען — יקר</span>
+[2/4] Transcribing…
+<span class="hot">⚠ Remotion failed (cublas64_12.dll ...) — falling back to FFmpeg</span>
+[1/4] Generating voice…              <span class="hot"># הכל מההתחלה</span></div>
+    <p class="why">
+      <code>audio_gen._transcribe</code> קיים בדיוק בשביל זה, והתיעוד שלו מסביר למה:
+      ctranslate2 טוען את cuBLAS בעצלתיים, אז DLL חסרה צצה רק בקריאה הראשונה ולא
+      בבניית המודל. <code>remotion_renderer</code> עקף את העטיפה וקרא ישירות למודל.
+    </p>
+    <p class="why">
+      ובנוסף — <code>_add_nvidia_dll_dirs()</code> שאמור לרשום את תיקיות ה-DLL
+      <strong>לא עשה כלום</strong>: <code>nvidia</code> הוא namespace package, ולכן
+      <code>nvidia.__file__</code> הוא <code>None</code>, <code>Path(None)</code> זרק
+      חריגה, ו-<code>except Exception: pass</code> בלע אותה. pip דיווח "already
+      satisfied" בזמן ש-whisper רץ על CPU במשך שבועות — <strong>ושלחתי אותך פעמיים
+      להתקין חבילה שכבר הייתה מותקנת.</strong> זו טעות שלי שנבעה ישירות מהשתיקה הזו.
+    </p>
+  </article>
+</section>
+
+<section>
+  <h2>מה עדיין פתוח</h2>
+  <p class="sub">אובחן, לא תוקן. מסודר לפי כמה זה עולה לך.</p>
+
+  <div class="scroll">
+  <table>
+    <thead>
+      <tr><th>ממצא</th><th>הראיה</th><th>העלות</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><strong>COMPRESSION תמיד 1/2</strong><br>בכל ריצה, בכל ציון</td>
+        <td class="num"><code>comp=1</code><br>#65, #66, #67</td>
+        <td>תקרה שיטתית. סרטון לא יכול לעבור 9/10 כי רכיב אחד אף פעם לא מקבל ניקוד מלא</td>
+      </tr>
+      <tr>
+        <td><strong>שער הקצב הוא שער קשיח</strong><br>העדפה סגנונית, לא נכונות</td>
+        <td class="num"><code>cadence:</code><br><code>3/3 rejected</code></td>
+        <td>שרף מחזור שלם בריצה #66 עד <code>salvaging closest rejected attempt</code>. CLAUDE.md מזהיר על זה במפורש</td>
+      </tr>
+      <tr>
+        <td><strong>מפעל הקרסים ממציא, ושער העובדות עונש</strong></td>
+        <td class="num"><code>3/10 × 2</code><br>ואז נשלח</td>
+        <td>לולאה מבנית: הקרס מתוגמל על הפתעה, השער מעניש הפתעה לא מגובה. בריצת VOC נשלח קרס 3/10 והוא זה שנפסל עובדתית</td>
+      </tr>
+      <tr>
+        <td><strong>רינדור מלא לסרטון שנעצר</strong></td>
+        <td class="num"><code>HELD for<br>review</code></td>
+        <td>~6 דקות GPU על סרטון שכבר ידוע שלא יפורסם. הבדיקה צריכה לקרות לפני הרינדור</td>
+      </tr>
+      <tr>
+        <td><strong>הבלאקליסט גדל מונוטונית</strong></td>
+        <td class="num">104<br>זרעים</td>
+        <td>עם מקור אחד חי, המשפך מצטמצם בכל ריצה. זה מגיע לרעב, לא ל"פחות איכות"</td>
+      </tr>
+      <tr>
+        <td><strong>הסרטון נחתך</strong> — לא אובחן</td>
+        <td class="num">—</td>
+        <td>הריצה שדיווחת עליה מתה לפני הפלט. צריך: באיזו שנייה, ומה המשפט האחרון שנשמע</td>
+      </tr>
+    </tbody>
+  </table>
+  </div>
+</section>
+
+<section>
+  <h2>מה באמת חוסם את הפרויקט</h2>
+  <p class="sub">לא מודל, לא רנדרר, לא כרטיס מסך.</p>
+
+  <p>
+    ההנדסה כאן טובה יותר מרוב הערוצים בקטגוריה. 1317 טסטים, שרשראות fallback מפורשות,
+    שער אישור אנושי, שערי עובדות. אבל <strong>אין שכבה אחת שאומרת מה באמת רץ</strong>.
+  </p>
+
+  <p>כשקוראים את כל הלוגים ביחד, זו התמונה:</p>
+  <ul class="bare">
+    <li>Kokoro נכשל → Edge → סרטון בקול שטוח, בלי שגיאה</li>
+    <li>Reddit נחסם → ויקיפדיה → משפך של מקור אחד, "unreachable"</li>
+    <li>SE ריק תמיד → ויקיפדיה → "none passed quality filter"</li>
+    <li>סטוריבורד קרס → פרומפט לפי ביט → שורת אזהרה אחת</li>
+    <li>Remotion קרס → ffmpeg → עבודה כפולה</li>
+    <li>תבנית דמות חסרה → בלי דמות → שקט מוחלט</li>
+    <li>במאי העריכה מחובר רק ל-Remotion → אתה על ffmpeg → נבנה ולא רץ</li>
+    <li><code>read_text</code> ב-cp1255 → CTA מקולקל → אפילו לא שורת לוג</li>
+  </ul>
+
+  <div class="pull">
+    הדבר היחיד שהכי חסר לפרויקט הזה הוא לא מנוע — זה דוח יכולות.
+    לא QC על קובץ הפלט, אלא "מה בפועל רץ" על כל ריצה.
+  </div>
+
+  <p>
+    איזה מנוע ייצר כל שכבה, מה נפל לחלופה ולמה, ומה הסרטון היה יכול להיות אילו כלום
+    לא היה נופל. שורה אחת בסוף כל ריצה, ופאנל בדשבורד. זה הופך שמונה כשלים שקטים
+    לשמונה שורות שאתה רואה — <strong>וזה מה שמאפשר לך לתקן במקום לגלות אחרי חודשיים.</strong>
+  </p>
+  <p>
+    שים לב שכל באג בסשן הזה נמצא ככה: לא כי משהו קרס, אלא כי הצלבתי לוג מול קוד.
+    הדוח הזה הופך את זה לאוטומטי.
+  </p>
+</section>
+
+<section>
+  <h2>מה שאין להם</h2>
+  <p class="sub">לא איכות לסרטון בודד. משהו שסטודיו מבני־אדם לא יכול לעשות בכלל.</p>
+
+  <p>
+    סטודיו מוציא סרטון אחד מצוין בשבועיים. אתה בונה מכונה שמוציאה עשרה סרטונים טובים
+    בשבוע. אבל היתרון האמיתי הוא לא הקצב — <strong>הוא שהמכונה יכולה למדוד את עצמה
+    ולהשתפר.</strong>
+  </p>
+
+  <p>
+    והדבר המדהים: <strong>המנגנון הזה כבר בנוי אצלך במלואו.</strong>
+    <code>script_writer._novelty_block</code> קורא <code>winning_hooks</code> ו-
+    <code>losing_hooks</code> ומזריק אותם לפרומפט —
+    <code>analytics_fetcher.py</code> מושך צפיות ואחוזי צפייה מ-YouTube,
+    <code>feedback_analyzer.py</code> הופך אותם ללמידות.
+    הלולאה סגורה מקצה לקצה.
+  </p>
+
+  <div class="pull">
+    ומעולם לא הייתה בה נקודת נתונים אחת. אין קובץ learnings בשום מקום בפרויקט,
+    כי שום סרטון לא פורסם.
+  </div>
+
+  <p>
+    66 סרטונים ב-<code>rufus.db</code>, כולם <code>pending</code>. המנוע שהיה הופך
+    את הערוץ למשתפר־מעצמו יושב כבוי, לא בגלל באג — אלא בגלל ששער האישור מעולם לא נלחץ.
+    <strong>סטודיו לא יכול להריץ עשר איטרציות בשבוע על מבנה קרס עם רטנשן מדוד. אתה כן.</strong>
+    זה היתרון המבני היחיד שלך שלא ניתן להעתקה, והוא מחכה לסרטון הראשון שיעלה.
+  </p>
+
+  <p>
+    <strong>והרעיון השני, שאין לאף אחד:</strong> יש לך בסיס נתונים עם כל תסריט שנכתב,
+    ודמות חוזרת שמופיעה בכל סרטון. אף אחד לא משתמש בזה. ערוץ שבו סרטון 40 קורא בחזרה
+    לסרטון 12 — <em>אותו מטבע, אותה פנס ברונזה, אותו כרוניקן</em> — הוא לא אוסף שורטס,
+    הוא <strong>סדרה</strong>. ערוצים חסרי־פנים כמעט אף פעם לא עושים את זה כי מעקב
+    ידני אחרי 40 סרטונים יקר מדי. אצלך זו שאילתת SQL.
+  </p>
+</section>
+
+<section>
+  <h2>סדר הפעולות</h2>
+  <p class="sub">לפי החזר על מאמץ, לא לפי קושי.</p>
+
+  <ol class="plan">
+    <li>
+      <h3>שני מפתחות רדיט</h3>
+      <p>אפליקציית <code>script</code> חינמית ב-reddit.com/prefs/apps, ואז
+      <code>reddit_client_id</code> ו-<code>reddit_client_secret</code> ל-<code>config/keys.json</code>.
+      <strong>3 דקות, ומחזיר 5 מקורות תוכן מהמתים.</strong> זה החזר ההשקעה הגבוה ביותר בפרויקט כרגע.</p>
+    </li>
+    <li>
+      <h3>לאשר סרטון אחד</h3>
+      <p>לחיצה אחת על Approve בדשבורד מתחילה את מחזור הלמידה שיושב כבוי.
+      בלי נתוני יוטיוב, <code>winning_hooks</code> יישאר ריק לנצח והמכונה לא תשתפר לעולם.
+      <strong>הסרטון הראשון שמתפרסם שווה יותר מהעשירי שנרנדר.</strong></p>
+    </li>
+    <li>
+      <h3>דוח היכולות</h3>
+      <p>שורה אחת בסוף כל ריצה שאומרת מה רץ ומה נפל. זו העבודה שלי — תגיד מילה ואני
+      בונה אותה. היא מונעת את הסוג היחיד של באג שנמצא בדוח הזה.</p>
+    </li>
+    <li>
+      <h3>לשחרר את תקרת ה-COMPRESSION</h3>
+      <p><code>comp=1</code> בכל ריצה זה נקודה שנעולה. עם שער הקצב שמורד מ"קשיח" ל"עונש
+      ניקוד", מחזור שלם מפסיק להישרף על העדפה סגנונית.</p>
+    </li>
+    <li>
+      <h3>שרשור התמונות</h3>
+      <p><code>config/shot_chain_api.json</code> — התבנית שתייצא מ-Qwen-Image-Edit.
+      הקוד מוכן ואינרטי; ברגע שהקובץ קיים, שוט 2 נוצר <em>מתוך</em> שוט 1
+      במקום מרעש חדש.</p>
+    </li>
+    <li>
+      <h3>זיכרון בין סרטונים</h3>
+      <p>הסדרה. שאילתה על <code>rufus.db</code> שמזינה לסטוריבורד מה הכרוניקן כבר הראה,
+      כדי שסרטון 40 יוכל לקרוא בחזרה לסרטון 12. זה הדבר שאין להם.</p>
+    </li>
+  </ol>
+</section>
+
+<footer>
+  <p>
+    כל ממצא בדוח מגובה בשורת לוג מהריצות שלך או בקוד עצמו. הקוד לכל התיקונים דחוף
+    ל-<code>claude/automation-work-ohlqyt</code> — 1317 טסטים עוברים.
+  </p>
+</footer>
+
+</div>

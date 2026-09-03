@@ -23,7 +23,7 @@ def _active_niche(data: dict) -> str:
 
 
 def _load_client() -> OpenAI:
-    keys = json.loads((CONFIG_DIR / "keys.json").read_text())
+    keys = json.loads((CONFIG_DIR / "keys.json").read_text(encoding="utf-8"))
     key  = keys.get("openai", "")
     if not key or key.startswith("YOUR_"):
         raise ValueError("OpenAI key not set in config/keys.json")
@@ -42,7 +42,7 @@ def extract_frame(video_path: Path) -> Path:
             "-frames:v", "1", "-q:v", "2",
             tmp.name,
         ]
-        result = subprocess.run(cmd, capture_output=True)
+        result = subprocess.run(cmd, capture_output=True, timeout=60)
         if result.returncode == 0 and Path(tmp.name).stat().st_size > 1000:
             return Path(tmp.name)
 
@@ -53,7 +53,7 @@ def extract_frames(video_path: Path, count: int = 3) -> list[Path]:
     """Extract `count` frames at 20/50/80% of the video's duration."""
     probe = subprocess.run(
         ["ffprobe", "-v", "quiet", "-print_format", "json", "-show_streams", str(video_path)],
-        capture_output=True, text=True,
+        capture_output=True, text=True, timeout=30,
     )
     duration = 15.0
     try:
@@ -64,8 +64,8 @@ def extract_frames(video_path: Path, count: int = 3) -> list[Path]:
                 if d > 0:
                     duration = d
                     break
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"[vision] duration probe failed ({e}) — assuming 15s")
 
     fractions = [0.2, 0.5, 0.8][:count]
     frames: list[Path] = []
@@ -79,7 +79,7 @@ def extract_frames(video_path: Path, count: int = 3) -> list[Path]:
             "-frames:v", "1", "-q:v", "2",
             tmp.name,
         ]
-        result = subprocess.run(cmd, capture_output=True)
+        result = subprocess.run(cmd, capture_output=True, timeout=60)
         if result.returncode == 0 and Path(tmp.name).stat().st_size > 1000:
             frames.append(Path(tmp.name))
 
@@ -157,7 +157,7 @@ def pick_best_video(candidates: list[Path], llava_context: str,
     """
     client = _load_client()
 
-    niches     = json.loads((CONFIG_DIR / "niches.json").read_text())
+    niches     = json.loads((CONFIG_DIR / "niches.json").read_text(encoding="utf-8"))
     active     = _active_niche(niches)
     niche_name = niches["niches"][active]["display_name"]
 
@@ -215,8 +215,12 @@ def pick_best_video(candidates: list[Path], llava_context: str,
         "A market crash story → trading screens with red; a frugality story → tools/repair work; "
         "a discipline story → athlete grinding; a wealth trap story → bills/debt, NOT a yacht.\n"
         "2. CONTRADICT the story if needed: a story about losing wealth should show loss, not luxury.\n"
-        "3. MOOD match: tension/conflict → darker/dramatic footage; inspiration → bright/dynamic.\n"
-        "4. REJECT any video whose visuals directly contradict the story's emotional tone.\n\n"
+        "3. EMOTIONAL ARC over the whole clip: this one video plays under the entire "
+        "setup → turn → payoff, not just the hook. Prefer a clip whose own motion/mood can "
+        "carry that arc (e.g. a slow, tense shot over one that resolves too early or reads "
+        "purely celebratory) over one that only nails the opening frame.\n"
+        "4. MOOD match: tension/conflict → darker/dramatic footage; inspiration → bright/dynamic.\n"
+        "5. REJECT any video whose visuals directly contradict the story's emotional tone.\n\n"
         "Reply with ONLY: NUMBER|REASON (e.g. '3|Trading screens with red — matches the crash story')"
     )
 
@@ -225,12 +229,14 @@ def pick_best_video(candidates: list[Path], llava_context: str,
         messages=[{"role": "user", "content": prompt}],
         temperature=0.3,
         max_tokens=80,
+        timeout=45,
     )
-    answer = resp.choices[0].message.content.strip()
+    answer = (resp.choices[0].message.content or "").strip()
     print(f"[gpt] video pick: {answer}")
 
     try:
-        idx = int(answer.split("|")[0].strip()) - 1
+        raw_idx = answer.split("|")[0].strip()
+        idx = int("".join(c for c in raw_idx if c.isdigit()) or "1") - 1
         idx = max(0, min(idx, len(valid_paths) - 1))
     except Exception:
         idx = 0
@@ -239,7 +245,7 @@ def pick_best_video(candidates: list[Path], llava_context: str,
 
 
 def load_niche_context() -> str:
-    niches = json.loads((CONFIG_DIR / "niches.json").read_text())
+    niches = json.loads((CONFIG_DIR / "niches.json").read_text(encoding="utf-8"))
     active = _active_niche(niches)
     return niches["niches"][active]["llava_context"]
 

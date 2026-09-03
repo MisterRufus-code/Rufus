@@ -1,0 +1,12 @@
+{
+  "_doc": "Channels worth watching. Copy to competitors.json and put 5-15 channel ids in it. A channel id starts with UC — open a channel, view source, search for \"channelId\", or use its /about page URL when it shows one. Handles (@name) do NOT work here; the API wants the id.",
+
+  "_why_named_channels": "An open keyword search finds whatever YouTube feels like surfacing that hour, burns quota, and cannot tell a real trend from one viral fluke. Fifteen channels you chose, watched over weeks, gives every video a baseline: its own channel's median. That is what turns 'this got views' into 'this did something its own audience does not usually reward'.",
+
+  "_who_to_pick": "Channels making what you WANT to make, not the biggest ones in the niche. A 900k-subscriber channel and a 9k one are equally useful here, because everything is scored against its own median — and the 9k one is likelier to be doing something you can copy this month.",
+
+  "channels": [
+    "UCxxxxxxxxxxxxxxxxxxxxxx",
+    "UCyyyyyyyyyyyyyyyyyyyyyy"
+  ]
+}

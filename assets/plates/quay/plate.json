@@ -1,0 +1,28 @@
+{
+  "name": "a harbour quay",
+  "when": [
+    1200,
+    1950
+  ],
+  "keywords": [
+    "ship",
+    "port",
+    "harbour",
+    "harbor",
+    "cargo",
+    "trade",
+    "fleet",
+    "sailed",
+    "dock",
+    "quay",
+    "crate",
+    "voyage"
+  ],
+  "light": "early daylight",
+  "ground_y": 0.74,
+  "figure_height": 0.44,
+  "safe_x": [
+    0.3,
+    0.72
+  ]
+}
